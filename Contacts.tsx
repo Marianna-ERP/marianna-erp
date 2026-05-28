@@ -1,0 +1,1477 @@
+import React, { useState, useMemo, useRef } from "react";
+// xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
+// Available in StackBlitz / Vite / Next without extra config.
+import * as XLSX from "xlsx";
+
+// ─── COMPANY & CONFIG ───────────────────────────────────────────────────────
+const COMPANY = {
+  name: "MARIANNA",
+  person: "Hazem Osman",
+};
+
+const COUNTERPARTY_TYPES = ["Client", "Supplier", "Broker", "Forwarder", "Carrier", "Warehouse", "Other"];
+
+const SERVICES = ["Road", "Sea", "Air", "Rail", "Customs", "Warehousing"];
+// Types that have logistics services. For other types the services field is hidden.
+const TYPES_WITH_SERVICES = new Set(["Forwarder", "Carrier"]);
+
+const ROLES = ["Buyer", "Seller", "Logistics", "Finance", "Director", "Sales", "Operations", "Quality", "Other"];
+
+const PAYMENT_TERMS = [
+  "Advance payment",
+  "Cash on delivery",
+  "Cash against documents",
+  "7 days from invoice date",
+  "14 days from invoice date",
+  "21 days from invoice date",
+  "30 days from invoice date",
+  "Other",
+];
+
+const CURRENCIES = ["PLN", "EUR", "USD"];
+
+const TYPE_COLORS = {
+  Client:         { bg: "#DBEAFE", color: "#2563EB" },
+  Supplier:       { bg: "#DCFCE7", color: "#16A34A" },
+  Broker:         { bg: "#EDE9FE", color: "#7C3AED" },
+  Forwarder:      { bg: "#FFEDD5", color: "#C2410C" },
+  Carrier:        { bg: "#FEF3C7", color: "#D97706" },
+  Warehouse:      { bg: "#E0F2FE", color: "#0284C7" },
+  Other:          { bg: "#F3F4F6", color: "#6B7280" },
+};
+
+// Service tag colors — compact pills shown in lists + detail
+const SERVICE_COLORS = {
+  Road:         { bg: "#FEF3C7", color: "#92400E", icon: "🚛" },
+  Sea:          { bg: "#DBEAFE", color: "#1E40AF", icon: "🚢" },
+  Air:          { bg: "#F3E8FF", color: "#6D28D9", icon: "✈️" },
+  Rail:         { bg: "#E5E7EB", color: "#374151", icon: "🚆" },
+  Customs:      { bg: "#FEE2E2", color: "#991B1B", icon: "🛃" },
+  Warehousing:  { bg: "#DCFCE7", color: "#166534", icon: "📦" },
+};
+
+// ─── SEED DATA — counterparty-first, contacts nested ────────────────────────
+export const INIT_COUNTERPARTIES = [
+  {
+    id: 1, type: "Supplier", name: "Białski Owoc", country: "Poland",
+    address: "ul. Kolejowa 35, 96-230 Biała Rawska",
+    nip: "8351595299", vatEuId: "PL8351595299",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    notes: "Long-term apple supplier — 13kg wooden box format",
+    linkedDocs: ["PO-2025-0468"],
+    contacts: [
+      { id: 1, name: "Aneta Głowala", role: "Sales", email: "aneta@bialskiowoc.pl", phone: "+48 600 111 222", isPrimary: true, notes: "" },
+      { id: 2, name: "Krzysztof Bialski", role: "Director", email: "k.bialski@bialskiowoc.pl", phone: "", isPrimary: false, notes: "Decision maker on pricing" },
+    ],
+  },
+  {
+    id: 2, type: "Supplier", name: "FreshFarm ES", country: "Spain",
+    address: "Calle Major 12, Valencia",
+    nip: "B12345678", vatEuId: "ESB12345678",
+    defaultCurrency: "EUR", paymentTerms: "14 days from invoice date",
+    notes: "Bell peppers — 5kg carton",
+    linkedDocs: ["PO-2026-0112"],
+    contacts: [
+      { id: 1, name: "Carlos Ruiz", role: "Sales", email: "c.ruiz@freshfarmes.com", phone: "+34 961 234 567", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 3, type: "Supplier", name: "AgriTrade MA", country: "Morocco",
+    address: "Route de Casablanca, Agadir",
+    nip: "MA-200123", vatEuId: "",
+    defaultCurrency: "USD", paymentTerms: "Advance payment",
+    notes: "Tomatoes, courgettes — winter season",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Youssef Idrissi", role: "Sales", email: "y.idrissi@agritrade.ma", phone: "", isPrimary: true, notes: "" },
+      { id: 2, name: "Fatima El Khattabi", role: "Quality", email: "quality@agritrade.ma", phone: "+212 528 845 100", isPrimary: false, notes: "Phytosanitary docs" },
+    ],
+  },
+  {
+    id: 4, type: "Client", name: "Biedronka", country: "Poland",
+    address: "ul. Górecka 1, 60-201 Poznań",
+    nip: "7792308495", vatEuId: "PL7792308495",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    notes: "Discount chain — strict delivery windows",
+    linkedDocs: ["SO-2026-0094"],
+    contacts: [
+      { id: 1, name: "Marek Nowak", role: "Buyer", email: "zamowienia@biedronka.pl", phone: "+48 61 850 1000", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 5, type: "Client", name: "Lidl Polska", country: "Poland",
+    address: "ul. Świdnicka 12, 41-508 Chorzów",
+    nip: "6272685925", vatEuId: "PL6272685925",
+    defaultCurrency: "PLN", paymentTerms: "14 days from invoice date",
+    notes: "",
+    linkedDocs: ["SO-2026-0088"],
+    contacts: [
+      { id: 1, name: "Anna Wiśniewska", role: "Buyer", email: "fresh@lidl.pl", phone: "+48 32 604 8000", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 6, type: "Client", name: "Metro Cash & Carry", country: "Poland",
+    address: "ul. Metrobus 1, 02-274 Warszawa",
+    nip: "5210088510", vatEuId: "PL5210088510",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    notes: "",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Piotr Zając", role: "Buyer", email: "p.zajac@metro.pl", phone: "", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 7, type: "Client", name: "Fresco Import GmbH", country: "Germany",
+    address: "Marktstraße 44, 20357 Hamburg",
+    nip: "DE234567890", vatEuId: "DE234567890",
+    defaultCurrency: "EUR", paymentTerms: "30 days from invoice date",
+    notes: "EU reverse-charge VAT applies",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Klaus Weber", role: "Buyer", email: "orders@fresco-import.de", phone: "+49 40 123 456", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 8, type: "Client", name: '"Euro-Papryka" Paweł Myziak', country: "Poland",
+    address: "ul. Piękna 13, 05-555 Tarczyn, Wola Przypkowska",
+    nip: "7981158890", vatEuId: "PL7981158890",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    notes: "",
+    linkedDocs: ["SO-2026-0091"],
+    contacts: [
+      { id: 1, name: "Paweł Myziak", role: "Director", email: "biuro@euro-papryka.pl", phone: "", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 9, type: "Carrier", name: "Trans-Logistics PL", country: "Poland",
+    address: "ul. Transportowa 5, 02-001 Warszawa",
+    nip: "5213456789", vatEuId: "PL5213456789",
+    defaultCurrency: "PLN", paymentTerms: "14 days from invoice date",
+    services: ["Road"],
+    notes: "Direct road carrier — domestic & EU trucking",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Tomasz Mazur", role: "Logistics", email: "dispatch@trans-logistics.pl", phone: "+48 22 555 8800", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 10, type: "Carrier", name: "EuroFreight GmbH", country: "Germany",
+    address: "Hafenstraße 12, 20359 Hamburg",
+    nip: "DE876543210", vatEuId: "DE876543210",
+    defaultCurrency: "EUR", paymentTerms: "30 days from invoice date",
+    services: ["Road"],
+    notes: "German road operator — cross-border PL/DE/BeNeLux",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Lukas Hoffmann", role: "Logistics", email: "ops@eurofreight.de", phone: "+49 40 876 5432", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 15, type: "Forwarder", name: "Raben Logistics PL", country: "Poland",
+    address: "ul. Zbożowa 1, 62-023 Gądki",
+    nip: "7820210577", vatEuId: "PL7820210577",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    services: ["Road", "Sea", "Customs"],
+    notes: "Main forwarder for Gdańsk-routed imports. Books containers + arranges inland trucking + handles customs paperwork.",
+    linkedDocs: ["PO-2026-0118"],
+    contacts: [
+      { id: 1, name: "Joanna Krawczyk", role: "Operations", email: "j.krawczyk@raben.pl", phone: "+48 61 898 5200", isPrimary: true, notes: "Account manager for Marianna" },
+      { id: 2, name: "Bartosz Nowak", role: "Sales", email: "b.nowak@raben.pl", phone: "", isPrimary: false, notes: "Sea freight bookings" },
+    ],
+  },
+  {
+    id: 16, type: "Forwarder", name: "DSV Solutions Polska", country: "Poland",
+    address: "ul. Logistyczna 4, 05-090 Raszyn",
+    nip: "5252222333", vatEuId: "PL5252222333",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    services: ["Road", "Sea", "Air", "Customs", "Warehousing"],
+    notes: "Multi-modal forwarder — used for Hamburg & Algeciras routes. Also offers transit warehousing.",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Piotr Sobieski", role: "Operations", email: "p.sobieski@dsv.pl", phone: "+48 22 333 4400", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 17, type: "Forwarder", name: "Pekaes SA", country: "Poland",
+    address: "ul. Spedycyjna 2, 03-310 Warszawa",
+    nip: "5260250289", vatEuId: "PL5260250289",
+    defaultCurrency: "PLN", paymentTerms: "14 days from invoice date",
+    services: ["Road", "Customs"],
+    notes: "Road forwarder — strong on intra-EU routes, also handles export customs",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Robert Adamski", role: "Operations", email: "r.adamski@pekaes.pl", phone: "+48 22 460 3000", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 18, type: "Carrier", name: "MSC Mediterranean Shipping", country: "Switzerland",
+    address: "Chemin Rieu 12-14, 1208 Geneva",
+    nip: "", vatEuId: "",
+    defaultCurrency: "USD", paymentTerms: "Advance payment",
+    services: ["Sea"],
+    notes: "Direct shipping line — used occasionally when forwarder doesn't have rates",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "MSC Poland Office", role: "Sales", email: "bookings.pl@msc.com", phone: "+48 58 765 4300", isPrimary: true, notes: "Booking through Gdynia office" },
+    ],
+  },
+  {
+    // Multi-role example — same legal entity buys produce from us AND rents us their fleet AND lets us use their cold-storage
+    id: 19, type: "Client", additionalTypes: ["Carrier", "Warehouse"],
+    name: "Polfrost Logistyka", country: "Poland",
+    address: "ul. Mroźna 4, 80-298 Gdańsk",
+    nip: "5832914455", vatEuId: "PL5832914455",
+    defaultCurrency: "PLN", paymentTerms: "21 days from invoice date",
+    services: ["Road", "Warehousing"],
+    finance: { bankName: "mBank SA", accountNumber: "PL12 1140 2004 0000 3502 0987 6543", swift: "BREXPLPW" },
+    notes: "Wears three hats: buys leftover stock from us at discount, runs reefer trucks we sometimes hire, and rents us pallet positions in their Gdańsk cold store.",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Krzysztof Wiśniewski", role: "Director", email: "k.wisniewski@polfrost.pl", phone: "+48 58 712 4400", isPrimary: true, notes: "Single point of contact across all three relationships" },
+      { id: 2, name: "Magdalena Polak", role: "Operations", email: "m.polak@polfrost.pl", phone: "", isPrimary: false, notes: "Day-to-day for warehouse + dispatch" },
+    ],
+  },
+  {
+    id: 11, type: "Broker", name: "CustomsPro Sp. z o.o.", country: "Poland",
+    address: "ul. Celna 4, 02-100 Warszawa",
+    nip: "5252111222", vatEuId: "PL5252111222",
+    defaultCurrency: "PLN", paymentTerms: "14 days from invoice date",
+    notes: "Customs broker — advances phytosanitary fees (37 PLN/cert)",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Magdalena Kowal", role: "Operations", email: "m.kowal@customspro.pl", phone: "+48 22 633 4500", isPrimary: true, notes: "" },
+      { id: 2, name: "Jan Wójcik", role: "Finance", email: "billing@customspro.pl", phone: "", isPrimary: false, notes: "Monthly invoices" },
+    ],
+  },
+  {
+    id: 12, type: "Broker", name: "Hartmann Broker", country: "Germany",
+    address: "Hafenstraße 8, 20359 Hamburg",
+    nip: "DE-9876543", vatEuId: "DE987654321",
+    defaultCurrency: "EUR", paymentTerms: "30 days from invoice date",
+    notes: "Preferred customs broker for Hamburg port",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Stefan Hartmann", role: "Operations", email: "s.hartmann@hartmann-customs.de", phone: "+49 40 123 456", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 13, type: "Warehouse", name: "WH-01 Poznań (Logipark)", country: "Poland",
+    address: "ul. Magazynowa 1, 60-001 Poznań",
+    nip: "7779988877", vatEuId: "PL7779988877",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    notes: "Cold storage — monthly invoice allocated by kg-days",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Roman Lewandowski", role: "Operations", email: "wh01@logipark.pl", phone: "+48 61 800 1234", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 14, type: "Warehouse", name: "WH-02 Warszawa (ColdStore)", country: "Poland",
+    address: "ul. Chłodna 50, 00-872 Warszawa",
+    nip: "5251122334", vatEuId: "PL5251122334",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    notes: "",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Beata Sienkiewicz", role: "Operations", email: "ops@coldstore.pl", phone: "+48 22 887 6543", isPrimary: true, notes: "" },
+    ],
+  },
+];
+
+// ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────
+function Inp({ value, onChange, type, placeholder, style }: any) {
+  const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
+  return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} style={{ ...base, ...style }} />;
+}
+function Sel({ value, onChange, children, style }: any) {
+  const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
+  return <select value={value || ""} onChange={onChange} style={{ ...base, ...style }}>{children}</select>;
+}
+function Lbl({ children }: any) {
+  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
+}
+function TypeBadge({ type }: any) {
+  const s = TYPE_COLORS[type] || TYPE_COLORS["Other"];
+  return (
+    <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+      {type}
+    </span>
+  );
+}
+function Avatar({ label, color, bg, size = 44 }: any) {
+  return (
+    <div style={{ width: size, height: size, borderRadius: "50%", background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.36, fontWeight: 700, color, flexShrink: 0 }}>
+      {(label || "?")[0].toUpperCase()}
+    </div>
+  );
+}
+function ServiceTag({ service, size = "normal" }: any) {
+  const p = SERVICE_COLORS[service];
+  if (!p) return null;
+  const sized = size === "small"
+    ? { fontSize: 10, padding: "1px 6px", gap: 3, iconSize: 10 }
+    : { fontSize: 11, padding: "2px 8px", gap: 4, iconSize: 11 };
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: sized.gap, background: p.bg, color: p.color, padding: sized.padding, borderRadius: 4, fontSize: sized.fontSize, fontWeight: 600, whiteSpace: "nowrap" }}>
+      <span style={{ fontSize: sized.iconSize }}>{p.icon}</span>{service}
+    </span>
+  );
+}
+function ServicesRow({ services, size = "normal", emptyHint = null }: any) {
+  if (!services || services.length === 0) return emptyHint ? <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>{emptyHint}</span> : null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+      {services.map(s => <ServiceTag key={s} service={s} size={size} />)}
+    </div>
+  );
+}
+// True if the counterparty's primary OR any additional type is logistics-related (Forwarder/Carrier).
+function showServicesRow(c) {
+  if (!c.services || c.services.length === 0) return false;
+  const all = [c.type, ...(c.additionalTypes || [])];
+  return all.some(t => TYPES_WITH_SERVICES.has(t));
+}
+
+// ─── HELPERS (for other modules to consume) ─────────────────────────────────
+// Mimics the legacy flat arrays (SUPPLIERS, CLIENTS, …) so Invoices.tsx etc.
+// can switch to a single source of truth later with one-line changes.
+export function getCounterpartiesByType(counterparties, type) {
+  return counterparties.filter(c => c.type === type || (c.additionalTypes || []).includes(type)).map(c => {
+    const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
+    return {
+      id: c.id,
+      name: c.name,
+      country: c.country,
+      nip: c.nip,
+      type: c.type,
+      additionalTypes: c.additionalTypes || [],
+      address: c.address,
+      services: c.services || [],
+      contact: primary?.name || "",
+      email: primary?.email || "",
+    };
+  });
+}
+// For Shipments.tsx — get all logistics providers (Forwarder + Carrier) that can do a given mode.
+// Use when populating carrier dropdowns on a shipment leg.
+export function getLogisticsProvidersByService(counterparties, service) {
+  return counterparties
+    .filter(c => {
+      const allTypes = [c.type, ...(c.additionalTypes || [])];
+      return allTypes.some(t => TYPES_WITH_SERVICES.has(t)) && (c.services || []).includes(service);
+    })
+    .map(c => ({
+      id: c.id, name: c.name, type: c.type, additionalTypes: c.additionalTypes || [], services: c.services,
+      country: c.country,
+    }));
+}
+
+// ─── COUNTERPARTY MODAL — company-level details ─────────────────────────────
+function CounterpartyModal({ counterparty, onSave, onClose }: any) {
+  const defaultFinance = { bankName: "", accountNumber: "", swift: "" };
+  const blank = { type: "Client", additionalTypes: [], name: "", country: "", address: "", nip: "", vatEuId: "", defaultCurrency: "PLN", paymentTerms: "30 days from invoice date", paymentTermsOther: "", services: [], finance: defaultFinance, notes: "" };
+  const [form, setForm] = useState(counterparty ? { additionalTypes: [], services: [], paymentTermsOther: "", ...counterparty, finance: { ...defaultFinance, ...(counterparty.finance || {}) } } : { ...blank, id: null });
+  const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const sff = (k, v) => setForm(f => ({ ...f, finance: { ...(f.finance || {}), [k]: v } }));
+  const toggleService = (s) => setForm(f => ({ ...f, services: (f.services || []).includes(s) ? f.services.filter(x => x !== s) : [...(f.services || []), s] }));
+  const toggleAdditionalType = (t) => setForm(f => ({ ...f, additionalTypes: (f.additionalTypes || []).includes(t) ? f.additionalTypes.filter(x => x !== t) : [...(f.additionalTypes || []), t] }));
+  // Services field is visible if PRIMARY type OR any additional type is logistics-related
+  const allTypes = [form.type, ...(form.additionalTypes || [])];
+  const showServices = allTypes.some(t => TYPES_WITH_SERVICES.has(t));
+  const showOtherTerms = form.paymentTerms === "Other";
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: "min(640px, 96vw)", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+        <div style={{ padding: "16px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{counterparty ? "Edit Counterparty" : "New Counterparty"}</div>
+            <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>Company-level details. Contact people are added on the next step.</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#999" }}>×</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: "22px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 12 }}>COMPANY</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><Lbl>Primary type</Lbl><Sel value={form.type} onChange={e => sf("type", e.target.value)}>{COUNTERPARTY_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
+              <div><Lbl>Company name</Lbl><Inp value={form.name} onChange={e => sf("name", e.target.value)} placeholder="e.g. FreshFarm ES" /></div>
+              <div style={{ gridColumn: "span 2" }}>
+                <Lbl>Also acts as <span style={{ color: "#BBB", fontWeight: 400 }}>(optional — for counterparties wearing multiple hats)</span></Lbl>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {COUNTERPARTY_TYPES.filter(t => t !== form.type && t !== "Other").map(t => {
+                    const active = (form.additionalTypes || []).includes(t);
+                    const palette = TYPE_COLORS[t];
+                    return (
+                      <button key={t} type="button" onClick={() => toggleAdditionalType(t)}
+                        style={{
+                          padding: "4px 10px", borderRadius: 6,
+                          border: `1px solid ${active ? palette.color : "#E5E7EB"}`,
+                          background: active ? palette.bg : "#fff",
+                          color: active ? palette.color : "#888",
+                          fontSize: 11, fontWeight: active ? 600 : 500, cursor: "pointer",
+                        }}>
+                        {active && "✓ "}{t}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div><Lbl>Country</Lbl><Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" /></div>
+              <div><Lbl>NIP / Local Tax ID</Lbl><Inp value={form.nip} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787" /></div>
+              <div style={{ gridColumn: "span 2" }}><Lbl>Address</Lbl><Inp value={form.address} onChange={e => sf("address", e.target.value)} placeholder="Street, City, Postcode" /></div>
+              <div><Lbl>EU VAT number</Lbl><Inp value={form.vatEuId} onChange={e => sf("vatEuId", e.target.value)} placeholder="PL5252842787" /></div>
+              <div><Lbl>Default currency</Lbl><Sel value={form.defaultCurrency} onChange={e => sf("defaultCurrency", e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</Sel></div>
+              <div style={{ gridColumn: "span 2" }}>
+                <Lbl>Default payment terms</Lbl>
+                <Sel value={form.paymentTerms} onChange={e => sf("paymentTerms", e.target.value)}>{PAYMENT_TERMS.map(p => <option key={p}>{p}</option>)}</Sel>
+                {showOtherTerms && (
+                  <div style={{ marginTop: 8 }}>
+                    <Inp value={form.paymentTermsOther} onChange={e => sf("paymentTermsOther", e.target.value)} placeholder='Specify the terms — e.g. "50% advance, 50% on delivery", "L/C at sight"' />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          {showServices && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>
+                SERVICES PROVIDED
+                <span style={{ marginLeft: 8, fontWeight: 400, color: "#BBB", textTransform: "none", letterSpacing: 0 }}>
+                  Tick everything this counterparty can do for you
+                </span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {SERVICES.map(s => {
+                  const active = (form.services || []).includes(s);
+                  const palette = SERVICE_COLORS[s];
+                  return (
+                    <button key={s} type="button" onClick={() => toggleService(s)}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        padding: "6px 12px", borderRadius: 20,
+                        border: `1px solid ${active ? palette.color : "#E5E7EB"}`,
+                        background: active ? palette.bg : "#fff",
+                        color: active ? palette.color : "#666",
+                        fontSize: 12, fontWeight: active ? 600 : 500, cursor: "pointer",
+                      }}>
+                      <span style={{ fontSize: 13 }}>{palette.icon}</span>{s}
+                      {active && <span style={{ fontSize: 10, opacity: 0.7 }}>✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>FINANCE</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ gridColumn: "span 2" }}><Lbl>Bank</Lbl><Inp value={form.finance?.bankName || ""} onChange={e => sff("bankName", e.target.value)} placeholder="e.g. PKO Bank Polski SA" /></div>
+              <div style={{ gridColumn: "span 2" }}><Lbl>Account number (IBAN)</Lbl><Inp value={form.finance?.accountNumber || ""} onChange={e => sff("accountNumber", e.target.value)} placeholder="PL96 1020 1026 0000 1502 0511 6969" /></div>
+              <div><Lbl>SWIFT / BIC</Lbl><Inp value={form.finance?.swift || ""} onChange={e => sff("swift", e.target.value)} placeholder="BPKOPLPW" /></div>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>NOTES</div>
+            <textarea value={form.notes} onChange={e => sf("notes", e.target.value)} rows={3}
+              placeholder="Payment preferences, certifications, special instructions…"
+              style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, outline: "none", fontFamily: "inherit", resize: "vertical", lineHeight: 1.6 }} />
+          </div>
+        </div>
+        <div style={{ padding: "14px 24px", borderTop: "1px solid #F3F4F6", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={onClose} style={{ padding: "8px 20px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+          <button onClick={() => { if (!form.name) return; onSave(form); }}
+            style={{ padding: "8px 22px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: form.name ? "pointer" : "not-allowed", opacity: form.name ? 1 : 0.5 }}>
+            {counterparty ? "Save Changes" : "Add Counterparty"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── INLINE PERSON EDITOR (used inside the detail panel) ────────────────────
+function PersonEditor({ person, onSave, onCancel }: any) {
+  const blank = { name: "", role: "Buyer", email: "", phone: "", isPrimary: false, notes: "" };
+  const [form, setForm] = useState(person ? { ...person } : { ...blank, id: null });
+  const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  return (
+    <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 10, padding: 12, marginBottom: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#888", letterSpacing: "0.06em", marginBottom: 10 }}>{person?.id ? "EDIT PERSON" : "NEW PERSON"}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <div><Lbl>Full name</Lbl><Inp value={form.name} onChange={e => sf("name", e.target.value)} placeholder="e.g. Anna Nowak" /></div>
+        <div><Lbl>Role</Lbl><Sel value={form.role} onChange={e => sf("role", e.target.value)}>{ROLES.map(r => <option key={r}>{r}</option>)}</Sel></div>
+        <div><Lbl>Email</Lbl><Inp value={form.email} onChange={e => sf("email", e.target.value)} type="email" placeholder="name@company.com" /></div>
+        <div><Lbl>Phone</Lbl><Inp value={form.phone} onChange={e => sf("phone", e.target.value)} placeholder="+48 …" /></div>
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <Lbl>Notes (optional)</Lbl>
+        <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="e.g. Decision maker on pricing" />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#555", cursor: "pointer", marginBottom: 10 }}>
+        <input type="checkbox" checked={form.isPrimary} onChange={e => sf("isPrimary", e.target.checked)} />
+        Primary contact for this company
+      </label>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button onClick={onCancel} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+        <button onClick={() => { if (!form.name) return; onSave(form); }} style={{ padding: "6px 16px", borderRadius: 6, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 600, cursor: form.name ? "pointer" : "not-allowed", opacity: form.name ? 1 : 0.5 }}>
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── DETAIL PANEL — counterparty header + person list ───────────────────────
+function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany, onClose, onEmail, onSavePerson, onDeletePerson, onSetPrimary }: any) {
+  const [editingPersonId, setEditingPersonId] = useState(null); // person.id | "new" | null
+  const typeStyle = TYPE_COLORS[counterparty.type] || TYPE_COLORS["Other"];
+
+  function handleSavePerson(p) {
+    onSavePerson(counterparty.id, p);
+    setEditingPersonId(null);
+  }
+
+  return (
+    <div style={{ width: 380, background: "#fff", borderLeft: "1px solid #EBEBEB", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
+      <div style={{ padding: "16px 20px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <TypeBadge type={counterparty.type} />
+        {(counterparty.additionalTypes || []).map(t => (
+          <span key={t} title={`Also acts as ${t}`}
+            style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "2px 8px", borderRadius: 16, fontSize: 10.5, fontWeight: 700 }}>
+            + {t}
+          </span>
+        ))}
+        <div style={{ flex: 1 }} />
+        <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#CCC" }}>×</button>
+      </div>
+
+      <div style={{ overflowY: "auto", flex: 1 }}>
+        {/* Company header */}
+        <div style={{ padding: "20px 20px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+            <Avatar label={counterparty.name} bg={typeStyle.bg} color={typeStyle.color} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#111", lineHeight: 1.2 }}>{counterparty.name}</div>
+              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{counterparty.country || "—"} · {counterparty.defaultCurrency}</div>
+            </div>
+          </div>
+          {[
+            { label: "NIP / Tax ID", value: counterparty.nip },
+            { label: "EU VAT", value: counterparty.vatEuId },
+            { label: "Address", value: counterparty.address },
+            { label: "Payment terms", value: counterparty.paymentTerms === "Other" ? (counterparty.paymentTermsOther || "Other (unspecified)") : counterparty.paymentTerms },
+          ].map(({ label, value }) => value ? (
+            <div key={label} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em", marginBottom: 2 }}>{label.toUpperCase()}</div>
+              <div style={{ fontSize: 13, color: "#333" }}>{value}</div>
+            </div>
+          ) : null)}
+          {showServicesRow(counterparty) && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em", marginBottom: 6 }}>SERVICES</div>
+              <ServicesRow services={counterparty.services} />
+            </div>
+          )}
+        </div>
+
+        {(counterparty.finance?.bankName || counterparty.finance?.accountNumber) && (
+          <div style={{ margin: "0 20px 14px", padding: 12, background: "#F9FAFB", border: "1px solid #F3F4F6", borderRadius: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em", marginBottom: 8 }}>FINANCE</div>
+            {counterparty.finance.bankName && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 10, color: "#999" }}>Bank</div>
+                <div style={{ fontSize: 12.5, color: "#333", fontWeight: 500 }}>{counterparty.finance.bankName}</div>
+              </div>
+            )}
+            {counterparty.finance.accountNumber && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 10, color: "#999" }}>Account</div>
+                <div style={{ fontSize: 11.5, color: "#333", fontFamily: "ui-monospace, Menlo, monospace", wordBreak: "break-all" }}>{counterparty.finance.accountNumber}</div>
+              </div>
+            )}
+            {counterparty.finance.swift && (
+              <div>
+                <div style={{ fontSize: 10, color: "#999" }}>SWIFT / BIC</div>
+                <div style={{ fontSize: 12, color: "#333", fontFamily: "ui-monospace, Menlo, monospace" }}>{counterparty.finance.swift}</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {counterparty.notes && (
+          <div style={{ margin: "0 20px 14px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em", marginBottom: 6 }}>NOTES</div>
+            <div style={{ fontSize: 12.5, color: "#555", lineHeight: 1.6 }}>{counterparty.notes}</div>
+          </div>
+        )}
+
+        {counterparty.linkedDocs?.length > 0 && (
+          <div style={{ margin: "0 20px 14px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em", marginBottom: 6 }}>LINKED DOCUMENTS</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {counterparty.linkedDocs.map(ref => (
+                <span key={ref} style={{ background: "#EFF6FF", color: "#2563EB", fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, fontFamily: "ui-monospace, Menlo, monospace" }}>{ref}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Contact persons */}
+        <div style={{ margin: "0 20px 20px", paddingTop: 10, borderTop: "1px solid #F3F4F6" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>CONTACT PEOPLE ({counterparty.contacts.length})</div>
+            {editingPersonId !== "new" && (
+              <button onClick={() => setEditingPersonId("new")} style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 11, padding: "3px 10px", cursor: "pointer", color: "#555", fontWeight: 600 }}>+ Add</button>
+            )}
+          </div>
+
+          {editingPersonId === "new" && (
+            <PersonEditor onSave={handleSavePerson} onCancel={() => setEditingPersonId(null)} />
+          )}
+
+          {counterparty.contacts.map(p => editingPersonId === p.id ? (
+            <PersonEditor key={p.id} person={p} onSave={handleSavePerson} onCancel={() => setEditingPersonId(null)} />
+          ) : (
+            <div key={p.id} style={{ padding: 12, border: "1px solid #F3F4F6", borderRadius: 10, marginBottom: 8, background: "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{p.name}</div>
+                    {p.isPrimary && <span style={{ fontSize: 9, fontWeight: 700, color: "#16A34A", background: "#DCFCE7", padding: "1px 6px", borderRadius: 4, letterSpacing: "0.04em" }}>PRIMARY</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#888", marginTop: 1 }}>{p.role}</div>
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {p.email && <button onClick={() => onEmail(counterparty, p)} title="Email" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>✉</button>}
+                  {!p.isPrimary && <button onClick={() => onSetPrimary(counterparty.id, p.id)} title="Make primary" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>★</button>}
+                  <button onClick={() => setEditingPersonId(p.id)} title="Edit" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>✎</button>
+                  {counterparty.contacts.length > 1 && (
+                    <button onClick={() => { if (window.confirm(`Remove ${p.name}?`)) onDeletePerson(counterparty.id, p.id); }} title="Delete" style={{ background: "none", border: "1px solid #FECACA", color: "#DC2626", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>🗑</button>
+                  )}
+                </div>
+              </div>
+              {p.email && (
+                <div style={{ fontSize: 12, marginBottom: 2 }}>
+                  <a href={`mailto:${p.email}`} style={{ color: "#2563EB", textDecoration: "none" }}>{p.email}</a>
+                </div>
+              )}
+              {p.phone && <div style={{ fontSize: 12, color: "#555" }}>{p.phone}</div>}
+              {p.notes && <div style={{ fontSize: 11, color: "#888", marginTop: 6, fontStyle: "italic" }}>{p.notes}</div>}
+            </div>
+          ))}
+
+          {counterparty.contacts.length === 0 && editingPersonId !== "new" && (
+            <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12, border: "1px dashed #E5E7EB", borderRadius: 8 }}>
+              No contact people yet. Click <strong>+ Add</strong> above.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ padding: "12px 20px", borderTop: "1px solid #F3F4F6", display: "flex", gap: 8 }}>
+        <button onClick={() => onEditCompany(counterparty)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit company</button>
+        <button onClick={() => { if (window.confirm(`Delete ${counterparty.name} and all ${counterparty.contacts.length} contact(s)?`)) { onDeleteCompany(counterparty.id); onClose(); } }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── EMAIL QUICK MODAL ──────────────────────────────────────────────────────
+function EmailModal({ counterparty, person, onClose }: any) {
+  const [subject, setSubject] = useState(`Message from ${COMPANY.name} — ${new Date().toLocaleDateString("pl-PL")}`);
+  const [body, setBody] = useState(`Dear ${person.name || "Sir/Madam"},\n\nI am writing to you on behalf of ${COMPANY.name}.\n\n\n\nBest regards,\n${COMPANY.person}\n${COMPANY.name}`);
+  const [sent, setSent] = useState(false);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 520, boxShadow: "0 24px 80px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+        <div style={{ padding: "16px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Email · {person.name}</div>
+            <div style={{ fontSize: 11, color: "#999" }}>{counterparty.name}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#999" }}>×</button>
+        </div>
+        {sent ? (
+          <div style={{ padding: "40px 24px", textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>✓</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#16A34A" }}>Email sent!</div>
+          </div>
+        ) : (
+          <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div><Lbl>TO</Lbl><Inp value={person.email} onChange={() => {}} style={{ background: "#F9FAFB", color: "#666" }} /></div>
+            <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
+            <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={8} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, outline: "none", fontFamily: "inherit", resize: "vertical", lineHeight: 1.6 }} /></div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+              <button onClick={() => { setSent(true); setTimeout(onClose, 1800); }} style={{ padding: "8px 20px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Send</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── CSV EXPORT ─────────────────────────────────────────────────────────────
+function exportCSV(rows, filename) {
+  const csv = rows.map(r => r.map(c => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ─── FAKTUROWNIA IMPORT ─────────────────────────────────────────────────────
+// Parses a Fakturownia kontrahenci export (.xls/.xlsx/.csv) and lets the
+// user review + bulk-assign types before committing.
+
+// EU member country prefixes (used to detect EU VAT format)
+const EU_VAT_PREFIXES = new Set([
+  "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "EL", "ES", "FI", "FR", "HR",
+  "HU", "IE", "IT", "LT", "LU", "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+]);
+
+// Country → default counterparty type mapping (the import auto-rules)
+const COUNTRY_TYPE_RULES = {
+  // Producer countries (typically suppliers for fresh produce)
+  Egypt: "Supplier", Jordan: "Supplier", Libya: "Supplier", Morocco: "Supplier",
+  "Saudi Arabia": "Supplier", "United Arab Emirates": "Supplier", Oman: "Supplier",
+  Qatar: "Supplier", Cambodia: "Supplier", Chile: "Supplier", Colombia: "Supplier",
+  Belarus: "Supplier", Ukraine: "Supplier",
+  // EU client countries
+  Germany: "Client", Italy: "Client", Hungary: "Client", Croatia: "Client",
+  France: "Client", Spain: "Client", Greece: "Client", Romania: "Client",
+  Netherlands: "Client", Belgium: "Client", Czechia: "Client", "Czech Republic": "Client",
+  // Poland gets a special rule — see assignDefaultType()
+};
+
+// Smart parse a TAX ID into either a local NIP or an EU VAT id
+function parseTaxId(raw) {
+  if (!raw) return { nip: "", vatEuId: "" };
+  let s = String(raw).trim();
+  // Strip common prefixes like "VAT ID:", "NIP:"
+  s = s.replace(/^(VAT\s*ID:?|NIP:?|VAT:?|Tax\s*ID:?)\s*/i, "").trim();
+  // Strip all whitespace, hyphens, dots for the "compact" form
+  const compact = s.replace(/[\s\-\.]/g, "").toUpperCase();
+  // Detect 2-letter EU prefix
+  if (compact.length >= 4) {
+    const prefix = compact.substring(0, 2);
+    if (EU_VAT_PREFIXES.has(prefix)) {
+      return { nip: "", vatEuId: compact };
+    }
+  }
+  // Special case: all-zeros or placeholder
+  if (/^[0\-\s]+$/.test(s)) return { nip: "", vatEuId: "" };
+  // Otherwise treat as local tax ID
+  return { nip: compact, vatEuId: "" };
+}
+
+// Compose address from Street + Postcode + City
+function composeAddress(street, postcode, city) {
+  const parts = [];
+  if (street) parts.push(String(street).trim());
+  const pc = postcode ? String(postcode).trim() : "";
+  const ct = city ? String(city).trim() : "";
+  if (pc && ct) parts.push(`${pc} ${ct}`);
+  else if (pc) parts.push(pc);
+  else if (ct) parts.push(ct);
+  return parts.join(", ");
+}
+
+// Decide default type for an imported record
+function assignDefaultType({ isCompany, country, hasNip }: any) {
+  // Individuals (Company=False) are Polish farmers/small suppliers
+  if (isCompany === false) return "Supplier";
+  // Apply country rule
+  const rule = COUNTRY_TYPE_RULES[country];
+  if (rule) return rule;
+  // Poland — companies are mixed; default to Client (most B2B records are buyers)
+  if (country === "Poland") return "Client";
+  // Unknown country — leave as Other for the user to assign
+  return "Other";
+}
+
+// Default currency by country
+function defaultCurrencyByCountry(country) {
+  if (!country) return "PLN";
+  const c = String(country).trim();
+  if (c === "Poland") return "PLN";
+  const euCountries = ["Germany", "Italy", "Hungary", "Croatia", "France", "Spain", "Greece", "Netherlands", "Belgium", "Czechia", "Romania", "Slovakia", "Slovenia", "Portugal", "Ireland", "Austria", "Finland", "Estonia"];
+  if (euCountries.includes(c)) return "EUR";
+  return "USD";
+}
+
+// Parse a Fakturownia row into our counterparty shape
+function parseFakturowniaRow(row, existingNips, existingNames) {
+  const taxId = parseTaxId(row["TAX ID"]);
+  const hasNip = !!(taxId.nip || taxId.vatEuId);
+  const isCompany = row["Company"] === true || row["Company"] === "true" || row["Company"] === "True";
+  const country = row["Country"] ? String(row["Country"]).trim() : "";
+  const name = row["Client"] ? String(row["Client"]).trim() : "";
+  const firstName = row["First name"] ? String(row["First name"]).trim() : "";
+  const lastName = row["Last name"] ? String(row["Last name"]).trim() : "";
+  const email = row["E-mail"] ? String(row["E-mail"]).trim() : "";
+  const phone = (row["Phone number"] || row["Mobile phone"] || "");
+  const personName = [firstName, lastName].filter(Boolean).join(" ").trim();
+
+  // Build the primary contact — fall back to a placeholder if no person info
+  const primaryContact = personName
+    ? { id: 1, name: personName, role: "Other", email, phone: String(phone).trim(), isPrimary: true, notes: "" }
+    : email || phone
+      ? { id: 1, name: "—", role: "Other", email, phone: String(phone).trim(), isPrimary: true, notes: "Contact person name unknown" }
+      : null;
+
+  // Dedup detection — match by NIP first, then by exact name
+  let duplicateOf = null;
+  if (taxId.nip && existingNips.has(taxId.nip.replace(/\s/g, ""))) duplicateOf = "nip";
+  else if (taxId.vatEuId && existingNips.has(taxId.vatEuId.replace(/\s/g, ""))) duplicateOf = "vatEuId";
+  else if (existingNames.has(name.toLowerCase())) duplicateOf = "name";
+
+  return {
+    // Importer-only fields (not persisted)
+    _row: row["ID"] || row["__rowNum__"] || "",
+    _selected: !duplicateOf,
+    _duplicate: duplicateOf,
+    // Counterparty fields
+    type: assignDefaultType({ isCompany, country, hasNip }),
+    additionalTypes: [],
+    name,
+    country,
+    address: composeAddress(row["Street"], row["Postcode"], row["City"]),
+    nip: taxId.nip,
+    vatEuId: taxId.vatEuId,
+    defaultCurrency: defaultCurrencyByCountry(country),
+    paymentTerms: "30 days from invoice date",
+    paymentTermsOther: "",
+    services: [],
+    finance: {
+      bankName: row["Bank"] ? String(row["Bank"]).trim() : "",
+      accountNumber: row["Account Number"] ? String(row["Account Number"]).trim() : "",
+      swift: "",
+    },
+    notes: [
+      row["Website"] && `Website: ${row["Website"]}`,
+      row["Additional note"],
+    ].filter(Boolean).join(" · ") || "",
+    contacts: primaryContact ? [primaryContact] : [],
+  };
+}
+
+function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
+  const [stage, setStage] = useState("upload"); // upload | parsing | review
+  const [filename, setFilename] = useState("");
+  const [parsedRows, setParsedRows] = useState([]); // array of parsed counterparty candidates
+  const [filterType, setFilterType] = useState("All");
+  const [filterDup, setFilterDup] = useState("All"); // All | Duplicates | New
+  const [search, setSearch] = useState("");
+  const fileInputRef = useRef(null);
+
+  function handleFile(file) {
+    if (!file) return;
+    setFilename(file.name);
+    setStage("parsing");
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const result = e.target?.result;
+        if (!(result instanceof ArrayBuffer)) {
+          throw new Error("Could not read file as ArrayBuffer");
+        }
+        const data = new Uint8Array(result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+        // Build existing-record indices for dedup
+        const existingNips = new Set();
+        existingCounterparties.forEach(c => {
+          if (c.nip) existingNips.add(c.nip.replace(/\s/g, ""));
+          if (c.vatEuId) existingNips.add(c.vatEuId.replace(/\s/g, ""));
+        });
+        const existingNames = new Set(existingCounterparties.map(c => (c.name || "").toLowerCase()));
+
+        const parsed = rows
+          .filter(r => r["Client"] && String(r["Client"]).trim() && String(r["Client"]).trim() !== "-")
+          .map(r => parseFakturowniaRow(r, existingNips, existingNames));
+        setParsedRows(parsed);
+        setStage("review");
+      } catch (err) {
+        alert("Could not parse file: " + (err instanceof Error ? err.message : String(err)));
+        setStage("upload");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // Bulk operations
+  function setTypeForFiltered(type) {
+    setParsedRows(rows => rows.map(r => visible(r) ? { ...r, type } : r));
+  }
+  function selectAllFiltered(selected) {
+    setParsedRows(rows => rows.map(r => visible(r) ? { ...r, _selected: selected } : r));
+  }
+  function toggleRow(idx, k, v) {
+    setParsedRows(rows => rows.map((r, i) => i === idx ? { ...r, [k]: v } : r));
+  }
+  function visible(r) {
+    if (filterType !== "All" && r.type !== filterType) return false;
+    if (filterDup === "Duplicates" && !r._duplicate) return false;
+    if (filterDup === "New" && r._duplicate) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!`${r.name} ${r.country} ${r.nip} ${r.vatEuId}`.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  }
+
+  const visibleRows = parsedRows.filter(visible);
+  const selectedCount = parsedRows.filter(r => r._selected).length;
+  const duplicateCount = parsedRows.filter(r => r._duplicate).length;
+  const countByType = parsedRows.reduce((acc, r) => { acc[r.type] = (acc[r.type] || 0) + 1; return acc; }, {});
+
+  function commit() {
+    const toImport = parsedRows.filter(r => r._selected).map(r => {
+      // strip internal fields before commit
+      const { _row, _selected, _duplicate, ...clean } = r;
+      return clean;
+    });
+    onImport(toImport);
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: "min(1280px, 98vw)", maxHeight: "94vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+        {/* Header */}
+        <div style={{ padding: "16px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Import contacts from Fakturownia</div>
+            <div style={{ fontSize: 12, color: "#999", marginTop: 2 }}>
+              {stage === "upload" && "Drop the kontrahenci export (.xls / .xlsx / .csv)"}
+              {stage === "parsing" && "Parsing the file…"}
+              {stage === "review" && `${parsedRows.length} records parsed — review and assign types, then import`}
+            </div>
+          </div>
+          <button onClick={onCancel} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+        </div>
+
+        {/* Stage: upload */}
+        {stage === "upload" && (
+          <div style={{ padding: 32, flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+            <div
+              onDragOver={e => { e.preventDefault(); e.currentTarget.style.background = "#F0F9FF"; e.currentTarget.style.borderColor = "#0284C7"; }}
+              onDragLeave={e => { e.currentTarget.style.background = "#FAFAFA"; e.currentTarget.style.borderColor = "#E5E7EB"; }}
+              onDrop={e => { e.preventDefault(); e.currentTarget.style.background = "#FAFAFA"; e.currentTarget.style.borderColor = "#E5E7EB"; const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
+              onClick={() => fileInputRef.current?.click()}
+              style={{ border: "2px dashed #E5E7EB", borderRadius: 12, padding: "60px 40px", textAlign: "center", background: "#FAFAFA", cursor: "pointer", transition: "all 0.15s", width: "100%", maxWidth: 520 }}
+            >
+              <div style={{ fontSize: 44, marginBottom: 12 }}>📊</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: "#111", marginBottom: 6 }}>Drop the Fakturownia export here</div>
+              <div style={{ fontSize: 12.5, color: "#888" }}>Supports .xls / .xlsx / .csv · max ~10 MB</div>
+              <input ref={fileInputRef} type="file" accept=".xls,.xlsx,.csv" style={{ display: "none" }} onChange={e => handleFile(e.target.files?.[0])} />
+            </div>
+            <div style={{ marginTop: 18, padding: "12px 16px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, maxWidth: 520, fontSize: 12, color: "#92400E" }}>
+              <strong>Tip:</strong> in Fakturownia, go to <em>Kontrahenci → Eksport → XLS</em>. The columns we expect are <code>ID, Client, TAX ID, City, Country, Company, E-mail, Bank, Account Number</code> and a few more — the standard export already includes them.
+            </div>
+          </div>
+        )}
+
+        {/* Stage: parsing */}
+        {stage === "parsing" && (
+          <div style={{ padding: 60, flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ width: 48, height: 48, border: "3px solid #E5E7EB", borderTopColor: "#2563EB", borderRadius: "50%", animation: "spin 0.8s linear infinite", marginBottom: 16 }} />
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#111", marginBottom: 4 }}>Parsing {filename}…</div>
+            <div style={{ fontSize: 12, color: "#888" }}>Detecting types, splitting NIP / EU VAT, checking duplicates</div>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        )}
+
+        {/* Stage: review */}
+        {stage === "review" && (
+          <>
+            {/* Summary bar */}
+            <div style={{ padding: "12px 24px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 12, color: "#444" }}>
+                <strong>{selectedCount}</strong> of {parsedRows.length} selected to import
+                {duplicateCount > 0 && <span style={{ color: "#D97706", marginLeft: 8 }}>· {duplicateCount} possible duplicate{duplicateCount !== 1 ? "s" : ""}</span>}
+              </div>
+              <div style={{ marginLeft: "auto", display: "flex", gap: 14, fontSize: 11, color: "#666" }}>
+                {Object.entries(countByType).map(([t, n]) => (
+                  <span key={t}><strong style={{ color: TYPE_COLORS[t]?.color || "#111" }}>{n}</strong> {t}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Filters + bulk actions */}
+            <div style={{ padding: "10px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / NIP / country…" style={{ flex: "1 1 220px", minWidth: 180, border: "1px solid #E5E7EB", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, outline: "none" }} />
+              <div style={{ display: "flex", gap: 4 }}>
+                {["All", "New", "Duplicates"].map(d => (
+                  <button key={d} onClick={() => setFilterDup(d)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: filterDup === d ? "#111" : "#E5E7EB", background: filterDup === d ? "#111" : "#fff", color: filterDup === d ? "#fff" : "#555", fontSize: 11, cursor: "pointer", fontWeight: 500 }}>{d}</button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                {["All", ...COUNTERPARTY_TYPES].map(t => (
+                  <button key={t} onClick={() => setFilterType(t)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: filterType === t ? "#111" : "#E5E7EB", background: filterType === t ? "#111" : "#fff", color: filterType === t ? "#fff" : (t === "All" ? "#555" : TYPE_COLORS[t]?.color), fontSize: 11, cursor: "pointer", fontWeight: 500 }}>{t}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ padding: "8px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", background: "#FAFAFA" }}>
+              <span style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>BULK ON {visibleRows.length} VISIBLE:</span>
+              <button onClick={() => selectAllFiltered(true)} style={bulkStyle("#16A34A")}>✓ Select all</button>
+              <button onClick={() => selectAllFiltered(false)} style={bulkStyle("#6B7280")}>○ Deselect all</button>
+              <span style={{ fontSize: 11, color: "#AAA", margin: "0 4px" }}>· set type:</span>
+              {COUNTERPARTY_TYPES.map(t => (
+                <button key={t} onClick={() => setTypeForFiltered(t)} style={{ padding: "3px 9px", borderRadius: 5, border: `1px solid ${TYPE_COLORS[t]?.color}`, background: "#fff", color: TYPE_COLORS[t]?.color, fontSize: 11, cursor: "pointer", fontWeight: 600 }}>
+                  → {t}
+                </button>
+              ))}
+            </div>
+
+            {/* Table */}
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead style={{ position: "sticky", top: 0, background: "#F9FAFB", zIndex: 1 }}>
+                  <tr style={{ borderBottom: "1px solid #E5E7EB" }}>
+                    {["", "Type", "Company / Person", "Country", "NIP", "EU VAT", "Email", "Bank", "Status"].map((h, i) => (
+                      <th key={i} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.06em" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRows.map((r) => {
+                    const idx = parsedRows.indexOf(r);
+                    return (
+                      <tr key={idx} style={{ borderBottom: "1px solid #F3F4F6", background: r._duplicate ? "#FFFBEB" : (r._selected ? "#fff" : "#FAFAFA") }}>
+                        <td style={{ padding: "8px 10px" }}>
+                          <input type="checkbox" checked={!!r._selected} onChange={e => toggleRow(idx, "_selected", e.target.checked)} />
+                        </td>
+                        <td style={{ padding: "8px 10px" }}>
+                          <select value={r.type} onChange={e => toggleRow(idx, "type", e.target.value)}
+                            style={{ border: `1px solid ${TYPE_COLORS[r.type]?.color || "#E5E7EB"}`, color: TYPE_COLORS[r.type]?.color || "#111", background: TYPE_COLORS[r.type]?.bg || "#fff", borderRadius: 4, padding: "2px 6px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                            {COUNTERPARTY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                        </td>
+                        <td style={{ padding: "8px 10px" }}>
+                          <div style={{ fontWeight: 600, color: "#111", maxWidth: 280, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.name}>{r.name}</div>
+                          {r.address && <div style={{ fontSize: 10.5, color: "#999", maxWidth: 280, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.address}>{r.address}</div>}
+                          {r.contacts[0]?.name && r.contacts[0].name !== "—" && (
+                            <div style={{ fontSize: 10.5, color: "#666" }}>👤 {r.contacts[0].name}</div>
+                          )}
+                        </td>
+                        <td style={{ padding: "8px 10px", color: "#555" }}>{r.country || <span style={{ color: "#CCC" }}>—</span>}</td>
+                        <td style={{ padding: "8px 10px", color: "#555", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11 }}>{r.nip || <span style={{ color: "#CCC" }}>—</span>}</td>
+                        <td style={{ padding: "8px 10px", color: "#555", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11 }}>{r.vatEuId || <span style={{ color: "#CCC" }}>—</span>}</td>
+                        <td style={{ padding: "8px 10px", color: "#2563EB", fontSize: 11, maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.contacts[0]?.email}>{r.contacts[0]?.email || <span style={{ color: "#CCC" }}>—</span>}</td>
+                        <td style={{ padding: "8px 10px", color: "#666", fontSize: 11 }}>
+                          {r.finance.bankName && <div style={{ maxWidth: 120, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.finance.bankName}>{r.finance.bankName}</div>}
+                          {r.finance.accountNumber && <div style={{ color: "#AAA", fontSize: 10, fontFamily: "ui-monospace, Menlo, monospace" }}>✓ acct</div>}
+                        </td>
+                        <td style={{ padding: "8px 10px" }}>
+                          {r._duplicate ? (
+                            <span style={{ background: "#FEF3C7", color: "#92400E", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }} title={`Possible duplicate (match by ${r._duplicate})`}>DUP · {r._duplicate}</span>
+                          ) : (
+                            <span style={{ background: "#DCFCE7", color: "#16A34A", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>NEW</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {visibleRows.length === 0 && (
+                    <tr><td colSpan={9} style={{ padding: "40px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No records match the current filters.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Footer */}
+            <div style={{ padding: "14px 24px", borderTop: "1px solid #F3F4F6", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ fontSize: 12, color: "#666" }}>
+                {selectedCount === 0 ? "Select records to enable import." : `Ready to import ${selectedCount} record${selectedCount !== 1 ? "s" : ""}.`}
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button onClick={onCancel} style={{ padding: "8px 20px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+                <button onClick={commit} disabled={selectedCount === 0}
+                  style={{ padding: "8px 22px", borderRadius: 7, border: "none", background: selectedCount === 0 ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: selectedCount === 0 ? "not-allowed" : "pointer" }}>
+                  Import {selectedCount} record{selectedCount !== 1 ? "s" : ""}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function bulkStyle(color) {
+  return { padding: "3px 9px", borderRadius: 5, border: "1px solid #E5E7EB", background: "#fff", color, fontSize: 11, cursor: "pointer", fontWeight: 600 };
+}
+
+// ─── MAIN ───────────────────────────────────────────────────────────────────
+export default function Contacts({ contacts: extContacts, setContacts: extSetContacts }: any = {}) {
+  // Integration mode: if parent passes state in, use it (shell owns state).
+  // Standalone mode: use local state with the baked-in seed.
+  const [localContacts, setLocalContacts] = useState(INIT_COUNTERPARTIES);
+  const counterparties = extContacts ?? localContacts;
+  const setCounterparties = extSetContacts ?? setLocalContacts;
+  const [search, setSearch] = useState("");
+  const [filterType, setFilterType] = useState("All");
+  const [viewMode, setViewMode] = useState("companies"); // companies | people
+  const [selectedId, setSelectedId] = useState(null);
+  const [modal, setModal] = useState(null); // null | "new" | counterparty-to-edit
+  const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
+  const [showImport, setShowImport] = useState(false);
+  const [importResult, setImportResult] = useState(null); // toast { count } | null
+
+  const selected = counterparties.find(c => c.id === selectedId) || null;
+
+  // ── filtered companies ─────────────────────────────────────────────────
+  const filteredCompanies = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return counterparties.filter(c => {
+      const matchType = filterType === "All" || c.type === filterType || (c.additionalTypes || []).includes(filterType);
+      if (!matchType) return false;
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q)
+        || (c.country || "").toLowerCase().includes(q)
+        || (c.nip || "").toLowerCase().includes(q)
+        || (c.vatEuId || "").toLowerCase().includes(q)
+        || (c.services || []).some(s => s.toLowerCase().includes(q))
+        || c.contacts.some(p =>
+          (p.name || "").toLowerCase().includes(q)
+          || (p.email || "").toLowerCase().includes(q)
+          || (p.role || "").toLowerCase().includes(q));
+    });
+  }, [counterparties, search, filterType]);
+
+  // ── flattened people (for People view) ────────────────────────────────
+  const filteredPeople = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const rows = [];
+    counterparties.forEach(c => {
+      if (filterType !== "All" && c.type !== filterType && !(c.additionalTypes || []).includes(filterType)) return;
+      c.contacts.forEach(p => {
+        const matches = !q
+          || (p.name || "").toLowerCase().includes(q)
+          || (p.email || "").toLowerCase().includes(q)
+          || (p.role || "").toLowerCase().includes(q)
+          || c.name.toLowerCase().includes(q);
+        if (matches) rows.push({ counterparty: c, person: p });
+      });
+    });
+    return rows;
+  }, [counterparties, search, filterType]);
+
+  // ── stats ──────────────────────────────────────────────────────────────
+  const counts = useMemo(() => {
+    const c = { All: counterparties.length };
+    COUNTERPARTY_TYPES.forEach(t => {
+      c[t] = counterparties.filter(x => x.type === t || (x.additionalTypes || []).includes(t)).length;
+    });
+    return c;
+  }, [counterparties]);
+
+  // ── mutations ──────────────────────────────────────────────────────────
+  function saveCounterparty(c) {
+    setCounterparties(prev => {
+      if (c.id) return prev.map(p => p.id === c.id ? { ...p, ...c } : p);
+      const newC = { ...c, id: Date.now(), contacts: [], linkedDocs: [] };
+      setSelectedId(newC.id);
+      return [...prev, newC];
+    });
+    setModal(null);
+  }
+  function deleteCounterparty(id) {
+    setCounterparties(prev => prev.filter(c => c.id !== id));
+    if (selectedId === id) setSelectedId(null);
+  }
+  function savePerson(counterpartyId, person) {
+    setCounterparties(prev => prev.map(c => {
+      if (c.id !== counterpartyId) return c;
+      let nextContacts;
+      if (person.id) {
+        nextContacts = c.contacts.map(p => p.id === person.id ? { ...p, ...person } : p);
+      } else {
+        const newId = Math.max(0, ...c.contacts.map(p => p.id || 0)) + 1;
+        const isFirstPrimary = c.contacts.length === 0;
+        nextContacts = [...c.contacts, { ...person, id: newId, isPrimary: person.isPrimary || isFirstPrimary }];
+      }
+      // Ensure exactly one primary if the new/edited record is primary
+      if (person.isPrimary) {
+        nextContacts = nextContacts.map(p => ({
+          ...p,
+          isPrimary: (person.id ? p.id === person.id : p.id === Math.max(...nextContacts.map(x => x.id))),
+        }));
+      }
+      // Or if no one is primary, make the first one primary
+      if (!nextContacts.some(p => p.isPrimary) && nextContacts.length > 0) {
+        nextContacts = nextContacts.map((p, i) => i === 0 ? { ...p, isPrimary: true } : p);
+      }
+      return { ...c, contacts: nextContacts };
+    }));
+  }
+  function deletePerson(counterpartyId, personId) {
+    setCounterparties(prev => prev.map(c => {
+      if (c.id !== counterpartyId) return c;
+      const nextContacts = c.contacts.filter(p => p.id !== personId);
+      // If we removed the primary, promote the first remaining person
+      if (!nextContacts.some(p => p.isPrimary) && nextContacts.length > 0) {
+        nextContacts[0] = { ...nextContacts[0], isPrimary: true };
+      }
+      return { ...c, contacts: nextContacts };
+    }));
+  }
+  function setPrimary(counterpartyId, personId) {
+    setCounterparties(prev => prev.map(c => {
+      if (c.id !== counterpartyId) return c;
+      return { ...c, contacts: c.contacts.map(p => ({ ...p, isPrimary: p.id === personId })) };
+    }));
+  }
+
+  function handleImport(toImport) {
+    // Assign fresh IDs and merge into state
+    const maxId = counterparties.reduce((m, c) => Math.max(m, c.id || 0), 0);
+    const newRecords = toImport.map((r, i) => ({
+      ...r,
+      id: maxId + i + 1,
+      linkedDocs: [],
+    }));
+    setCounterparties(prev => [...prev, ...newRecords]);
+    setShowImport(false);
+    setImportResult({ count: newRecords.length });
+    setTimeout(() => setImportResult(null), 5000);
+  }
+
+  function handleExport() {
+    const rows = [
+      ["Type", "Also acts as", "Company", "Country", "NIP", "EU VAT", "Address", "Currency", "Payment Terms", "Services", "Person Name", "Role", "Email", "Phone", "Primary", "Notes"],
+    ];
+    counterparties.forEach(c => {
+      const services = (c.services || []).join("; ");
+      const terms = c.paymentTerms === "Other" ? (c.paymentTermsOther || "Other") : c.paymentTerms;
+      const addt = (c.additionalTypes || []).join("; ");
+      if (c.contacts.length === 0) {
+        rows.push([c.type, addt, c.name, c.country, c.nip, c.vatEuId, c.address, c.defaultCurrency, terms, services, "", "", "", "", "", c.notes]);
+      } else {
+        c.contacts.forEach(p => {
+          rows.push([c.type, addt, c.name, c.country, c.nip, c.vatEuId, c.address, c.defaultCurrency, terms, services, p.name, p.role, p.email, p.phone, p.isPrimary ? "yes" : "", p.notes]);
+        });
+      }
+    });
+    exportCSV(rows, "contacts.csv");
+  }
+
+  // ── render ─────────────────────────────────────────────────────────────
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>
+      {modal && (
+        <CounterpartyModal
+          counterparty={modal === "new" ? null : modal}
+          onSave={saveCounterparty}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {emailTarget && <EmailModal counterparty={emailTarget.counterparty} person={emailTarget.person} onClose={() => setEmailTarget(null)} />}
+      {showImport && <ImportModal existingCounterparties={counterparties} onCancel={() => setShowImport(false)} onImport={handleImport} />}
+      {importResult && (
+        <div style={{ position: "fixed", bottom: 24, right: 24, background: "#16A34A", color: "#fff", padding: "14px 20px", borderRadius: 10, boxShadow: "0 6px 24px rgba(0,0,0,0.18)", fontSize: 13, fontWeight: 600, zIndex: 200 }}>
+          ✓ Imported {importResult.count} counterparty record{importResult.count !== 1 ? "s" : ""}
+        </div>
+      )}
+
+      {/* Topbar */}
+      <div style={{ height: 56, background: "#fff", borderBottom: "1px solid #EBEBEB", display: "flex", alignItems: "center", padding: "0 28px", gap: 14, flexShrink: 0 }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: "#111", flex: 1 }}>Contacts</span>
+        {/* View toggle */}
+        <div style={{ display: "flex", background: "#F3F4F6", borderRadius: 8, padding: 2 }}>
+          {[
+            { key: "companies", label: "Companies", icon: "🏢" },
+            { key: "people", label: "People", icon: "👤" },
+          ].map(o => (
+            <button key={o.key} onClick={() => setViewMode(o.key)}
+              style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: viewMode === o.key ? "#fff" : "transparent", color: viewMode === o.key ? "#111" : "#888", fontSize: 12, fontWeight: 600, cursor: "pointer", boxShadow: viewMode === o.key ? "0 1px 2px rgba(0,0,0,0.06)" : "none", display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ fontSize: 13 }}>{o.icon}</span>
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setShowImport(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
+        <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ Export CSV</button>
+        <button onClick={() => setModal("new")} style={{ background: "#111", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
+      </div>
+
+      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        {/* Main area */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          {/* Filter chips */}
+          <div style={{ padding: "14px 28px 0", display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+            {[{ label: "All", count: counts.All }, ...COUNTERPARTY_TYPES.map(t => ({ label: t, count: counts[t] || 0 }))].map(({ label, count }) => (
+              <button key={label} onClick={() => setFilterType(label)}
+                style={{ padding: "6px 14px", borderRadius: 20, border: "1px solid", borderColor: filterType === label ? "#111" : "#E5E7EB", background: filterType === label ? "#111" : "#fff", color: filterType === label ? "#fff" : "#555", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                {label}
+                <span style={{ background: filterType === label ? "rgba(255,255,255,0.2)" : "#F3F4F6", borderRadius: 10, padding: "0 6px", fontSize: 11, fontWeight: 700, color: filterType === label ? "#fff" : "#888" }}>{count}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Search */}
+          <div style={{ padding: "12px 28px", flexShrink: 0 }}>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder={viewMode === "companies" ? "Search companies, NIP, contacts…" : "Search people, role, email, company…"}
+              style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
+          </div>
+
+          {/* Table */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
+            <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
+              {viewMode === "companies" ? (
+                <CompaniesTable
+                  rows={filteredCompanies}
+                  selectedId={selectedId}
+                  onSelect={id => setSelectedId(sel => sel === id ? null : id)}
+                  onEdit={c => setModal(c)}
+                  onDelete={deleteCounterparty}
+                  onEmail={(c) => {
+                    const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
+                    if (primary && primary.email) setEmailTarget({ counterparty: c, person: primary });
+                  }}
+                />
+              ) : (
+                <PeopleTable
+                  rows={filteredPeople}
+                  onOpenCompany={id => setSelectedId(id)}
+                  onEmail={(c, p) => setEmailTarget({ counterparty: c, person: p })}
+                />
+              )}
+            </div>
+            <div style={{ marginTop: 12, fontSize: 12, color: "#AAA", textAlign: "right" }}>
+              Showing {viewMode === "companies" ? filteredCompanies.length : filteredPeople.length}
+              {viewMode === "companies" ? ` of ${counterparties.length} companies` : ` of ${counterparties.reduce((s, c) => s + c.contacts.length, 0)} people`}
+            </div>
+          </div>
+        </div>
+
+        {/* Detail panel */}
+        {selected && (
+          <CounterpartyDetailPanel
+            counterparty={selected}
+            onEditCompany={c => setModal(c)}
+            onDeleteCompany={deleteCounterparty}
+            onClose={() => setSelectedId(null)}
+            onEmail={(c, p) => setEmailTarget({ counterparty: c, person: p })}
+            onSavePerson={savePerson}
+            onDeletePerson={deletePerson}
+            onSetPrimary={setPrimary}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── COMPANIES TABLE ────────────────────────────────────────────────────────
+function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail }: any) {
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 110px 80px 130px", padding: "10px 20px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+        {["TYPE", "COMPANY", "PRIMARY CONTACT", "COUNTRY", "PEOPLE", "ACTIONS"].map((h, i) => (
+          <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
+        ))}
+      </div>
+      {rows.length === 0 && <div style={{ padding: "50px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No counterparties found.</div>}
+      {rows.map((c, idx) => {
+        const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
+        return (
+          <div key={c.id}
+            onClick={() => onSelect(c.id)}
+            style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 110px 80px 130px", padding: "13px 20px", borderBottom: idx < rows.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: selectedId === c.id ? "#F8FAFF" : "#fff", cursor: "pointer", borderLeft: selectedId === c.id ? "3px solid #2563EB" : "3px solid transparent", transition: "background 0.1s" }}
+            onMouseEnter={e => { if (selectedId !== c.id) e.currentTarget.style.background = "#FAFAFA"; }}
+            onMouseLeave={e => { if (selectedId !== c.id) e.currentTarget.style.background = "#fff"; }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+              <TypeBadge type={c.type} />
+              {(c.additionalTypes || []).length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                  {c.additionalTypes.map(t => (
+                    <span key={t} title={`Also acts as ${t}`}
+                      style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "0 6px", borderRadius: 3, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em" }}>
+                      +{t}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {showServicesRow(c) && (
+                <ServicesRow services={c.services} size="small" />
+              )}
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{c.name}</div>
+              <div style={{ fontSize: 11, color: "#AAA" }}>{c.nip || "—"}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 13, color: "#333" }}>{primary?.name || <span style={{ color: "#CCC", fontStyle: "italic" }}>no contact</span>}</div>
+              <div style={{ fontSize: 11, color: "#AAA" }}>{primary?.role || ""}{primary?.email ? ` · ${primary.email}` : ""}</div>
+            </div>
+            <div style={{ fontSize: 12.5, color: "#555" }}>{c.country || "—"}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#555" }}>
+              {c.contacts.length}
+              {c.contacts.length > 1 && <span style={{ fontSize: 10, color: "#AAA", marginLeft: 4 }}>👥</span>}
+            </div>
+            <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
+              {primary?.email && <button onClick={() => onEmail(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Email primary">✉</button>}
+              <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Edit">✎</button>
+              <button onClick={() => { if (window.confirm(`Delete ${c.name} and ${c.contacts.length} contact(s)?`)) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+// ─── PEOPLE TABLE ───────────────────────────────────────────────────────────
+function PeopleTable({ rows, onOpenCompany, onEmail }: any) {
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 110px 110px 200px 90px", padding: "10px 20px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+        {["NAME", "COMPANY", "TYPE", "ROLE", "EMAIL", "ACTIONS"].map((h, i) => (
+          <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
+        ))}
+      </div>
+      {rows.length === 0 && <div style={{ padding: "50px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No people found.</div>}
+      {rows.map(({ counterparty, person }, idx) => (
+        <div key={`${counterparty.id}-${person.id}`}
+          onClick={() => onOpenCompany(counterparty.id)}
+          style={{ display: "grid", gridTemplateColumns: "1fr 1fr 110px 110px 200px 90px", padding: "13px 20px", borderBottom: idx < rows.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer", transition: "background 0.1s" }}
+          onMouseEnter={e => e.currentTarget.style.background = "#FAFAFA"}
+          onMouseLeave={e => e.currentTarget.style.background = "#fff"}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{person.name}</div>
+            {person.isPrimary && <span style={{ fontSize: 9, fontWeight: 700, color: "#16A34A", background: "#DCFCE7", padding: "1px 5px", borderRadius: 3, letterSpacing: "0.03em" }}>PRIMARY</span>}
+          </div>
+          <div style={{ fontSize: 13, color: "#333" }}>{counterparty.name}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+            <TypeBadge type={counterparty.type} />
+            {(counterparty.additionalTypes || []).slice(0, 2).map(t => (
+              <span key={t} title={`Also acts as ${t}`}
+                style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "0 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>
+                +{t.slice(0, 3)}
+              </span>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: "#666" }}>{person.role}</div>
+          <div style={{ fontSize: 12, color: "#2563EB", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{person.email || "—"}</div>
+          <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
+            {person.email && <button onClick={() => onEmail(counterparty, person)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Email">✉</button>}
+            <button onClick={() => onOpenCompany(counterparty.id)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Open company">→</button>
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
