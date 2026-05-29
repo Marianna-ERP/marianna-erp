@@ -382,8 +382,14 @@ function parseNum(n, fallback = 0) {
   return isNaN(v) ? fallback : v;
 }
 
-function uniq(arr) {
-  return Array.from(new Set((arr || []).filter(Boolean)));
+function uniq(arr: any[] = []): string[] {
+  return Array.from(
+    new Set(
+      (arr || [])
+        .map((value: any) => String(value || "").trim())
+        .filter((value: string) => value.length > 0)
+    )
+  );
 }
 
 function locById(id) {

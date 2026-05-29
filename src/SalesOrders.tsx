@@ -820,7 +820,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
 // we are Sprzedawca (seller), client is Nabywca (buyer). No legal clause.
 function BiLbl({ en, pl, align = "left" }: any) {
   return (
-    <div style={{ textAlign: align, lineHeight: 1.1 }}>
+    <div style={{ textAlign: align as React.CSSProperties["textAlign"], lineHeight: 1.1 }}>
       <div style={{ fontWeight: 700, fontSize: 10 }}>{en}</div>
       <div style={{ fontStyle: "italic", color: "#666", fontSize: 8.5 }}>{pl}</div>
     </div>
@@ -2017,12 +2017,17 @@ export default function SalesOrders({
   }
 
   // Product suggestions, same pattern as PO
-  const productSuggestions = useMemo(() => {
-    const seed = ["Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper", "Papryka Kapia", "Tomato Round", "Tomato Cherry", "Carrot", "Cucumber", "Courgette", "Onion Yellow", "Potato", "Garlic", "Cauliflower", "Broccoli", "Lettuce Iceberg", "Cabbage"];
-    const fromOrders = orders.flatMap(o => o.items.map(i => (i.product || "").trim())).filter(Boolean);
-    const seen = new Map();
-    [...fromOrders, ...seed].forEach(p => { const k = p.toLowerCase(); if (!seen.has(k)) seen.set(k, p); });
-    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  const productSuggestions = useMemo((): string[] => {
+    const seed: string[] = ["Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper", "Papryka Kapia", "Tomato Round", "Tomato Cherry", "Carrot", "Cucumber", "Courgette", "Onion Yellow", "Potato", "Garlic", "Cauliflower", "Broccoli", "Lettuce Iceberg", "Cabbage"];
+    const fromOrders: string[] = orders
+      .flatMap((o: any) => (o.items || []).map((i: any) => String(i.product || "").trim()))
+      .filter((value: string) => value.length > 0);
+    const seen = new Map<string, string>();
+    [...fromOrders, ...seed].forEach((product: string) => {
+      const key = product.toLowerCase();
+      if (!seen.has(key)) seen.set(key, product);
+    });
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
   }, [orders]);
 
   // KPIs
@@ -2127,8 +2132,8 @@ export default function SalesOrders({
     const needsSupply = overCount > 0 && o.status !== "Draft" && o.status !== "Cancelled";
     if (needsSupply) {
       const details = avail
-        .map((a, i) => a.hasOverage ? `  • Line ${i + 1}: short by ${a.overage.toLocaleString("pl-PL")} kg (demand ${a.lineQty.toLocaleString("pl-PL")} kg, primary source available ${a.primaryAvailable.toLocaleString("pl-PL")} kg)` : null)
-        .filter(Boolean)
+        .map((a: any, i: number) => a.hasOverage ? `  • Line ${i + 1}: short by ${a.overage.toLocaleString("pl-PL")} kg (demand ${a.lineQty.toLocaleString("pl-PL")} kg, primary source available ${a.primaryAvailable.toLocaleString("pl-PL")} kg)` : null)
+        .filter((value: string | null): value is string => typeof value === "string")
         .join("\n");
       alert(`Cannot save SO as ${o.status} — ${overCount} line(s) exceed available supply:\n\n${details}\n\nReduce qty, switch source, or arrange more procurement.`);
       return;
@@ -2328,10 +2333,10 @@ export default function SalesOrders({
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No sales orders found.</div>}
           {filtered.map((o, idx) => {
             // Build a small sources summary string
-            const sources = o.items
-              .map(it => it.sourceRef ? `${it.sourceType === "STOCK" ? "📦" : "🚚"}${it.sourceRef}` : null)
-              .filter(Boolean);
-            const uniqueSources = [...new Set(sources)];
+            const sources: string[] = o.items
+              .map((it: any) => it.sourceRef ? `${it.sourceType === "STOCK" ? "📦" : "🚚"}${it.sourceRef}` : null)
+              .filter((value: any): value is string => typeof value === "string" && value.length > 0);
+            const uniqueSources: string[] = Array.from(new Set<string>(sources));
             // Quick overage check for the row badge
             const rowAvail = computeLineAvailability(o.items, orders, o.id);
             const rowOverageCount = rowAvail.filter(a => a.hasOverage).length;

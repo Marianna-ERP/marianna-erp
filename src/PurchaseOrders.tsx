@@ -378,7 +378,7 @@ function totalQtyKg(items) { return items.reduce((s, i) => s + (parseFloat(i.qty
 // Small bilingual label helper for the print template — English bold on top, Polish italic gray below
 function BiLbl({ en, pl, align = "left" }: any) {
   return (
-    <div style={{ textAlign: align, lineHeight: 1.1 }}>
+    <div style={{ textAlign: align as React.CSSProperties["textAlign"], lineHeight: 1.1 }}>
       <div style={{ fontWeight: 700, fontSize: 10 }}>{en}</div>
       <div style={{ fontStyle: "italic", color: "#666", fontSize: 8.5 }}>{pl}</div>
     </div>
@@ -1316,8 +1316,14 @@ function LinkRow({ label, items, color, bg }: any) {
 }
 
 
-function uniqRefs(arr) {
-  return Array.from(new Set((arr || []).filter(Boolean)));
+function uniqRefs(arr: any[] = []): string[] {
+  return Array.from(
+    new Set(
+      (arr || [])
+        .map((value: any) => String(value || "").trim())
+        .filter((value: string) => value.length > 0)
+    )
+  );
 }
 
 function isInventoryTransferStatus(status) {
