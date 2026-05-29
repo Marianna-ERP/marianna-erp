@@ -68,3 +68,12 @@ The app is still frontend-only. It stores tester data in the browser using local
 5. Open a Sales Order detail page and review the P/L card.
 6. Open Finance and review aggregate profitability by client, product and month.
 7. Use Settings to export/import/reset browser-local data.
+
+
+## V5.5 — PO/SO destination handling and SO document parity
+
+- PO UI wording now says **Purchase Incoterm** instead of **Buy Incoterm**. The internal field name remains `buyIncoterm` to avoid a storage migration.
+- Sales Orders can now print/save PDF and open the email workflow directly from the edit form for any non-draft SO, matching the Purchase Orders flow.
+- PO and SO destination dropdowns now include common ports used in export/import flows, plus a free-text destination override for missing ports or one-off terminals.
+- For direct export CIF/CFR sales, the PO/SO destination should be the **client destination port**. For DAP/DDP it should be the **client receiving site**. For EXW it should normally be the pickup warehouse/site.
+- Inventory and Shipments now know the same common port IDs so expected lots and transport orders display port destinations correctly.

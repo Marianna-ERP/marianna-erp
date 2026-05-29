@@ -21,12 +21,31 @@ const LOCATIONS = [
   { id: 3,  type: "SUPPLIER", name: "Białski Owoc — Biała Rawska",   country: "Poland" },
   { id: 4,  type: "SUPPLIER", name: "FreshFarm ES — Valencia",       country: "Spain" },
   { id: 5,  type: "SUPPLIER", name: "AgriTrade MA — Agadir",         country: "Morocco" },
-  { id: 6,  type: "PORT",     name: "Gdańsk Port — Transit",          country: "Poland" },
-  { id: 7,  type: "PORT",     name: "Hamburg Port — Transit",         country: "Germany" },
+  { id: 6,   type: "PORT",    name: "Gdańsk Port — Transit",          country: "Poland" },
+  { id: 7,   type: "PORT",    name: "Hamburg Port — Transit",         country: "Germany" },
+  { id: 108, type: "PORT",    name: "Algeciras Port",                country: "Spain" },
+  { id: 109, type: "PORT",    name: "Jeddah Islamic Port",           country: "Saudi Arabia" },
+  { id: 110, type: "PORT",    name: "Venice / Marghera Port",        country: "Italy" },
+  { id: 111, type: "PORT",    name: "Rotterdam Port",                country: "Netherlands" },
+  { id: 112, type: "PORT",    name: "Antwerp-Bruges Port",           country: "Belgium" },
+  { id: 113, type: "PORT",    name: "Koper Port",                    country: "Slovenia" },
+  { id: 114, type: "PORT",    name: "Trieste Port",                  country: "Italy" },
+  { id: 115, type: "PORT",    name: "Genoa Port",                    country: "Italy" },
+  { id: 116, type: "PORT",    name: "Salerno Port",                  country: "Italy" },
+  { id: 117, type: "PORT",    name: "Valencia Port",                 country: "Spain" },
+  { id: 118, type: "PORT",    name: "Barcelona Port",                country: "Spain" },
+  { id: 119, type: "PORT",    name: "Alexandria Port",               country: "Egypt" },
+  { id: 120, type: "PORT",    name: "Port Said",                     country: "Egypt" },
+  { id: 121, type: "PORT",    name: "Agadir / Casablanca port area", country: "Morocco" },
+  // Legacy client IDs kept so older browser localStorage data still resolves
   { id: 8,  type: "CLIENT",   name: "Biedronka DC Poznań",            country: "Poland" },
   { id: 9,  type: "CLIENT",   name: "Lidl DC Chorzów",                country: "Poland" },
-  { id: 10, type: "CLIENT",   name: "Fresco Hamburg",                 country: "Germany" },
-  { id: 14, type: "CLIENT",   name: "Euro-Papryka Tarczyn",          country: "Poland" },
+  // Current PO/SO client IDs
+  { id: 10, type: "CLIENT",   name: "Biedronka DC Poznań",            country: "Poland" },
+  { id: 11, type: "CLIENT",   name: "Lidl DC Chorzów",                country: "Poland" },
+  { id: 12, type: "CLIENT",   name: "Fresco Hamburg",                 country: "Germany" },
+  { id: 13, type: "CLIENT",   name: "Metro DC Warszawa",              country: "Poland" },
+  { id: 14, type: "CLIENT",   name: "Euro-Papryka Tarczyn",           country: "Poland" },
 ];
 
 // Lot status lifecycle — PHYSICAL states only.
@@ -85,7 +104,7 @@ const MOVEMENT_TYPES: Record<string, any> = {
 // ─── SEED DATA — lots covering all 7 flows ──────────────────────────────────
 const today = new Date().toISOString().split("T")[0];
 
-function locById(id) { return LOCATIONS.find(l => l.id === id); }
+function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
 
 // ─── SO STUB ────────────────────────────────────────────────────────────────
 // Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically

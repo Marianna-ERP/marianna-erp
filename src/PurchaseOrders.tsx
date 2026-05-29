@@ -146,19 +146,31 @@ const LOCATION_TYPES: Record<string, any> = {
 };
 const LOCATIONS = [
   // Our warehouses
-  { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)",    country: "Poland" },
-  { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)", country: "Poland" },
-  // Ports
-  { id: 6,  type: "PORT",   name: "Gdańsk Port",                country: "Poland" },
-  { id: 7,  type: "PORT",   name: "Hamburg Port",               country: "Germany" },
-  { id: 8,  type: "PORT",   name: "Algeciras Port",             country: "Spain" },
-  { id: 9,  type: "PORT",   name: "Port of Jeddah",             country: "Saudi Arabia" },
+  { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)",       country: "Poland" },
+  { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)",    country: "Poland" },
+  // Core ports / transit points
+  { id: 6,   type: "PORT",  name: "Gdańsk Port",                   country: "Poland" },
+  { id: 7,   type: "PORT",  name: "Hamburg Port",                  country: "Germany" },
+  { id: 108, type: "PORT",  name: "Algeciras Port",                country: "Spain" },
+  { id: 109, type: "PORT",  name: "Jeddah Islamic Port",           country: "Saudi Arabia" },
+  { id: 110, type: "PORT",  name: "Venice / Marghera Port",        country: "Italy" },
+  { id: 111, type: "PORT",  name: "Rotterdam Port",                country: "Netherlands" },
+  { id: 112, type: "PORT",  name: "Antwerp-Bruges Port",           country: "Belgium" },
+  { id: 113, type: "PORT",  name: "Koper Port",                    country: "Slovenia" },
+  { id: 114, type: "PORT",  name: "Trieste Port",                  country: "Italy" },
+  { id: 115, type: "PORT",  name: "Genoa Port",                    country: "Italy" },
+  { id: 116, type: "PORT",  name: "Salerno Port",                  country: "Italy" },
+  { id: 117, type: "PORT",  name: "Valencia Port",                 country: "Spain" },
+  { id: 118, type: "PORT",  name: "Barcelona Port",                country: "Spain" },
+  { id: 119, type: "PORT",  name: "Alexandria Port",               country: "Egypt" },
+  { id: 120, type: "PORT",  name: "Port Said",                     country: "Egypt" },
+  { id: 121, type: "PORT",  name: "Agadir / Casablanca port area", country: "Morocco" },
   // Client destinations
-  { id: 10, type: "CLIENT", name: "Biedronka DC Poznań",        country: "Poland" },
-  { id: 11, type: "CLIENT", name: "Lidl DC Chorzów",            country: "Poland" },
-  { id: 12, type: "CLIENT", name: "Fresco Hamburg",             country: "Germany" },
-  { id: 13, type: "CLIENT", name: "Metro DC Warszawa",          country: "Poland" },
-  { id: 14, type: "CLIENT", name: "Euro-Papryka Tarczyn",       country: "Poland" },
+  { id: 10, type: "CLIENT", name: "Biedronka DC Poznań",           country: "Poland" },
+  { id: 11, type: "CLIENT", name: "Lidl DC Chorzów",               country: "Poland" },
+  { id: 12, type: "CLIENT", name: "Fresco Hamburg",                country: "Germany" },
+  { id: 13, type: "CLIENT", name: "Metro DC Warszawa",             country: "Poland" },
+  { id: 14, type: "CLIENT", name: "Euro-Papryka Tarczyn",          country: "Poland" },
 ];
 
 // Which location type is the typical destination for each flow (drives optgroup ordering in the dropdown).
@@ -353,7 +365,14 @@ function fmtMoney(n, cur = "PLN") {
 }
 function fmtDate(d) { return d || "—"; }
 
-function locById(id) { return LOCATIONS.find(l => l.id === id); }
+function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
+function destinationDisplay(order) {
+  const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
+  if (custom) return custom;
+  const loc = locById(order?.destinationLocationId);
+  if (!loc) return "—";
+  return `${loc.name}${loc.country ? `, ${loc.country}` : ""}`;
+}
 function netTotal(items) { return items.reduce((s, i) => s + (parseFloat(i.qty) || 0) * (parseFloat(i.unitPrice) || 0), 0); }
 
 // Generate next PO number for the current year by finding the highest existing sequence and adding 1.
@@ -410,7 +429,8 @@ function PODoc({ order }: any) {
     { en: "Order date",         pl: "Data zamówienia",        value: order.orderDate },
     { en: "Loading date",       pl: "Data załadunku",         value: order.loadingDate },
     { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: order.expectedDeliveryDate },
-    { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.buyIncoterm,        strong: true },
+    { en: "Destination",        pl: "Miejsce docelowe",       value: destinationDisplay(order) },
+    { en: "Purchase Incoterm",  pl: "Warunki zakupu Incoterms", value: order.buyIncoterm,      strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
   ];
   const supplierRows = [
@@ -702,7 +722,7 @@ function PrintModal({ order, onClose }: any) {
 // ─── EMAIL MODAL ────────────────────────────────────────────────────────────
 function EmailModal({ order, onClose }: any) {
   const [subject, setSubject] = useState(`Purchase Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.supplier?.contact || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nIncoterm: ${order.buyIncoterm}\nLoading: ${order.loadingDate}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.person}\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.supplier?.contact || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${order.loadingDate}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.person}\n${COMPANY.name}`);
   const [stage, setStage] = useState("compose"); // compose → opened
 
   // ── Step 1: Open the print dialog so the user can "Save as PDF" ──
@@ -955,7 +975,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 
           {/* Flow + Incoterm + Sea */}
           <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>FLOW · INCOTERM · DESTINATION</SectionTitle>
+            <SectionTitle>FLOW · PURCHASE INCOTERM · DESTINATION</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
               <div>
                 <Lbl>Flow type</Lbl>
@@ -982,7 +1002,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 {order.flow && <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>{FLOW_TYPES[order.flow].desc}</div>}
               </div>
               <div>
-                <Lbl>Buy Incoterm</Lbl>
+                <Lbl>Purchase Incoterm</Lbl>
                 <Sel value={order.buyIncoterm || ""} onChange={e => sf("buyIncoterm", e.target.value)} disabled={isLocked}>
                   <option value="">— select —</option>
                   {INCOTERMS_BUY.map(i => <option key={i.code} value={i.code}>{i.code}{compatibleIncoterms.includes(i.code) ? "" : " ⚠"}</option>)}
@@ -1014,6 +1034,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     });
                   })()}
                 </Sel>
+                <Inp
+                  value={order.destinationText || ""}
+                  onChange={e => sf("destinationText", e.target.value)}
+                  placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
+                  style={{ marginTop: 6 }}
+                />
+                <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                  For direct export CIF/CFR sales, use the client destination port as the PO destination. Use the free-text override when the port is not yet in the master list.
+                </div>
               </div>
             </div>
             {/* Sea freight toggle — separate flag, not tied to flow choice */}
@@ -1125,6 +1154,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail }: any)
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
   const dest = locById(order.destinationLocationId);
+  const destLabel = destinationDisplay(order);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1162,7 +1192,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail }: any)
                 <VarianceBadge variance={order.variance} />
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>
-              <div style={{ fontSize: 13, color: "#444" }}>{order.supplier?.name} · {order.supplier?.country} {dest && <>· landing at {LOCATION_TYPES[dest.type]?.icon} {dest.name}</>}</div>
+              <div style={{ fontSize: 13, color: "#444" }}>{order.supplier?.name} · {order.supplier?.country} {destLabel !== "—" && <>· destination {dest ? LOCATION_TYPES[dest.type]?.icon : "📍"} {destLabel}</>}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Total value</div>
@@ -1249,7 +1279,8 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail }: any)
                   <div><div style={{ fontSize: 10, color: "#888" }}>ORDER DATE</div><div style={{ fontWeight: 500 }}>{fmtDate(order.orderDate)}</div></div>
                   <div title="When the supplier loads our truck/container — goods leave origin"><div style={{ fontSize: 10, color: "#888" }}>LOADING <span style={{ color: "#BBB", fontWeight: 400 }}>· goods leave origin</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.loadingDate)}</div></div>
                   <div title="When goods are expected to arrive at the destination"><div style={{ fontSize: 10, color: "#888" }}>EXPECTED DELIVERY <span style={{ color: "#BBB", fontWeight: 400 }}>· goods arrive</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.expectedDeliveryDate)}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>BUY INCOTERM</div><div style={{ fontWeight: 600 }}>{order.buyIncoterm || "—"}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>PURCHASE INCOTERM</div><div style={{ fontWeight: 600 }}>{order.buyIncoterm || "—"}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destLabel}</div></div>
                   <div>
                     <div style={{ fontSize: 10, color: "#888" }}>SEA FREIGHT</div>
                     <div style={{ fontWeight: 600, color: order.requiresSea ? "#0369A1" : "#888" }}>
@@ -1389,6 +1420,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
       poRef: order.number,
       poLineId: it.id ?? idx + 1,
       locationId: order.destinationLocationId || null,
+      destinationText: destinationDisplay(order),
       expectedKg: qty,
       receivedKg: 0,
       physicalKg: 0,
@@ -1401,7 +1433,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
         { type: "purchase", label: `Purchase expected (${order.number})`, source: order.number, amount: purchaseAmount, currency: order.currency || "PLN", pln: purchasePLN },
       ],
       movements: [],
-      notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg at purchase price ${unitPrice} ${order.currency || "PLN"}/kg.`,
+      notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg at purchase price ${unitPrice} ${order.currency || "PLN"}/kg. Destination: ${destinationDisplay(order)}.`,
     });
   });
 
@@ -1535,7 +1567,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
       loadingDate: "", expectedDeliveryDate: "",
       paymentTerms: "30 days from invoice date", paymentTermsOther: "",
       buyIncoterm: "", flow: "",
-      supplier: null, destinationLocationId: null, requiresSea: false,
+      supplier: null, destinationLocationId: null, destinationText: "", requiresSea: false,
       currency: "PLN", fxRate: 1, fxLockedAt: null,
       items: [{ id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
       notes: "",

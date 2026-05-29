@@ -88,6 +88,20 @@ const LOCATIONS = [
   { id: 21, type: "CLIENT",   name: "Venice Cold Stores & Logistics SRL", country: "Italy",   address: "Via Banchina dell'Azoto 17/B, 30175 Marghera" },
   { id: 22, type: "BROKER",   name: "AM sped s.c. - Slomczyn",           country: "Poland",  address: "Slomczyn 81, 05-600 Grojec" },
   { id: 23, type: "PORT",     name: "Agadir / Casablanca port area",      country: "Morocco", address: "Morocco port warehouse" },
+  { id: 108, type: "PORT",  name: "Algeciras Port",                country: "Spain",        address: "Algeciras port" },
+  { id: 109, type: "PORT",  name: "Jeddah Islamic Port",           country: "Saudi Arabia", address: "Jeddah port" },
+  { id: 110, type: "PORT",  name: "Venice / Marghera Port",        country: "Italy",        address: "Marghera / Venice port" },
+  { id: 111, type: "PORT",  name: "Rotterdam Port",                country: "Netherlands",  address: "Rotterdam port" },
+  { id: 112, type: "PORT",  name: "Antwerp-Bruges Port",           country: "Belgium",      address: "Antwerp-Bruges port" },
+  { id: 113, type: "PORT",  name: "Koper Port",                    country: "Slovenia",     address: "Koper port" },
+  { id: 114, type: "PORT",  name: "Trieste Port",                  country: "Italy",        address: "Trieste port" },
+  { id: 115, type: "PORT",  name: "Genoa Port",                    country: "Italy",        address: "Genoa port" },
+  { id: 116, type: "PORT",  name: "Salerno Port",                  country: "Italy",        address: "Salerno port" },
+  { id: 117, type: "PORT",  name: "Valencia Port",                 country: "Spain",        address: "Valencia port" },
+  { id: 118, type: "PORT",  name: "Barcelona Port",                country: "Spain",        address: "Barcelona port" },
+  { id: 119, type: "PORT",  name: "Alexandria Port",               country: "Egypt",        address: "Alexandria port" },
+  { id: 120, type: "PORT",  name: "Port Said",                     country: "Egypt",        address: "Port Said" },
+  { id: 121, type: "PORT",  name: "Agadir / Casablanca port area", country: "Morocco",      address: "Morocco port warehouse" },
 ];
 
 const FALLBACK_PROVIDERS = [
@@ -401,6 +415,11 @@ function locText(id, fallback = "") {
   if (!l) return fallback || "-";
   return `${l.name}${l.address ? `, ${l.address}` : ""}`;
 }
+function shipmentDestinationText(shipment) {
+  const custom = String(shipment?.destinationText || shipment?.destinationLocationText || "").trim();
+  if (custom) return custom;
+  return locText(shipment?.destinationLocationId);
+}
 
 function statusRank(status) {
   const i = STATUS_ORDER.indexOf(status);
@@ -561,6 +580,7 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
   const originLocationId = guessSupplierLocationId(po) || opts.originLocationId || 3;
   const destinationLocationId = po.destinationLocationId || opts.destinationLocationId || 1;
+  const destinationText = String(po.destinationText || po.destinationLocationText || "").trim();
   const poLotRefs = uniq([...(po.linkedLots || []), ...(lots || []).filter(l => l.poRef === po.number).map(l => l.number)]);
   const goods = (po.items || []).map((it, idx) => {
     const lot = poLotRefs[idx] || poLotRefs[0] || "";
@@ -617,6 +637,7 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
     actualDeliveryDate: null,
     originLocationId,
     destinationLocationId,
+    destinationText,
     customsClearance: mode === "Road" ? "Not required / to be confirmed" : "To be confirmed",
     temperatureMinC: parseNum(opts.temperatureMinC, 2),
     temperatureMaxC: parseNum(opts.temperatureMaxC, 8),
@@ -645,6 +666,7 @@ function buildShipmentFromSO(so, opts, shipments, lots) {
   const firstLot = findLotForLine(lots, firstLine, firstLine.sourceType === "PO" ? firstLine.sourceRef : "");
   const originLocationId = firstLot?.locationId || opts.originLocationId || 1;
   const destinationLocationId = so.destinationLocationId || opts.destinationLocationId || 10;
+  const destinationText = String(so.destinationText || so.destinationLocationText || "").trim();
   const poRefs = uniq((so.items || []).filter(it => it.sourceType === "PO").map(it => it.sourceRef));
   const lotRefs = uniq((so.items || []).map(it => findLotForLine(lots, it, it.sourceType === "PO" ? it.sourceRef : "")?.number || (it.sourceType === "STOCK" ? it.sourceRef : "")).filter(Boolean));
   const goods = (so.items || []).map((it, idx) => {
@@ -689,6 +711,7 @@ function buildShipmentFromSO(so, opts, shipments, lots) {
     actualDeliveryDate: null,
     originLocationId,
     destinationLocationId,
+    destinationText,
     customsClearance: "Not required / to be confirmed",
     temperatureMinC: parseNum(opts.temperatureMinC, 2),
     temperatureMaxC: parseNum(opts.temperatureMaxC, 8),
@@ -1188,7 +1211,7 @@ function TransportOrderDocument({ shipment, contacts }: any) {
         <FieldPrint en="Carrier / contractor" pl="Zleceniobiorca" value={`${provider.name || "TBA"}\n${provider.address || ""}\nNIP ${provider.nip || "-"}`} />
         <FieldPrint en="Transport units" pl="Liczba pojazdow / jednostek" value={`${shipmentVehicleCount(shipment) || units.length || 1} unit(s) / pojazd(y)`} />
         <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={locText(shipment.originLocationId || firstLeg.fromLocationId)} />
-        <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={locText(shipment.destinationLocationId || firstLeg.toLocationId)} />
+        <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={shipment.destinationText || locText(shipment.destinationLocationId || firstLeg.toLocationId)} />
         <FieldPrint en="Customs clearance" pl="Odprawa celna" value={shipment.customsClearance || (broker ? `${broker.name}\n${broker.address || ""}` : "TBA")} />
         <FieldPrint en="Temperature" pl="Temperatura" value={tempText} />
         <FieldPrint en="Loading date" pl="Data zaladunku" value={shipment.loadingDate || firstLeg.plannedPickupDate || "TBA"} />
@@ -1255,7 +1278,7 @@ function TransportOrderPrintModal({ shipment, contacts, onClose, onMarkSent }: a
 function TransportOrderEmailModal({ shipment, contacts, onClose, onMarkSent }: any) {
   const provider: any = providerById(shipment.carrierId || shipment.forwarderId, contacts) || {};
   const [subject, setSubject] = useState(`Transport Order ${shipment.transportOrderNo || shipment.number} / Zlecenie transportowe — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${provider.contact || provider.name || "Carrier"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locText(shipment.originLocationId)}\nDelivery: ${locText(shipment.destinationLocationId)}\nDate: ${shipment.loadingDate || "TBA"}\nFreight: ${fmtMoney(shipmentCostPLN(shipment), "PLN")}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`);
+  const [body, setBody] = useState(`Dear ${provider.contact || provider.name || "Carrier"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locText(shipment.originLocationId)}\nDelivery: ${shipmentDestinationText(shipment)}\nDate: ${shipment.loadingDate || "TBA"}\nFreight: ${fmtMoney(shipmentCostPLN(shipment), "PLN")}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`);
   const recipient = provider.email || "";
   function openMailClient() {
     const mailto = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -1293,7 +1316,7 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ fontSize: 22, fontWeight: 850, letterSpacing: "-0.4px" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
-          <div style={{ fontSize: 12, color: "#666", marginTop: 5 }}>{PURPOSE_LABELS[shipment.purpose] || shipment.purpose} - {provider?.name || "Provider TBA"} - {locText(shipment.originLocationId)} {"->"} {locText(shipment.destinationLocationId)}</div>
+          <div style={{ fontSize: 12, color: "#666", marginTop: 5 }}>{PURPOSE_LABELS[shipment.purpose] || shipment.purpose} - {provider?.name || "Provider TBA"} - {locText(shipment.originLocationId)} {"->"} {shipmentDestinationText(shipment)}</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}>{r}</span>)}{(shipment.soRefs || []).map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}>{r}</span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>

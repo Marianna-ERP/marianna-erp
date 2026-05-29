@@ -133,18 +133,43 @@ function _adaptPOsFromModule(pos) {
 
 // ─── DESTINATIONS ─────────────────────────────────────────────────────────
 const LOCATIONS = [
-  { id: 10, type: "CLIENT", name: "Biedronka DC Poznań",     country: "Poland" },
-  { id: 11, type: "CLIENT", name: "Lidl DC Chorzów",         country: "Poland" },
-  { id: 12, type: "CLIENT", name: "Fresco Hamburg",          country: "Germany" },
-  { id: 13, type: "CLIENT", name: "Metro DC Warszawa",       country: "Poland" },
-  { id: 14, type: "CLIENT", name: "Euro-Papryka Tarczyn",    country: "Poland" },
-  { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)", country: "Poland" },
-  { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)", country: "Poland" },
+  { id: 10, type: "CLIENT", name: "Biedronka DC Poznań",           country: "Poland" },
+  { id: 11, type: "CLIENT", name: "Lidl DC Chorzów",               country: "Poland" },
+  { id: 12, type: "CLIENT", name: "Fresco Hamburg",                country: "Germany" },
+  { id: 13, type: "CLIENT", name: "Metro DC Warszawa",             country: "Poland" },
+  { id: 14, type: "CLIENT", name: "Euro-Papryka Tarczyn",          country: "Poland" },
+  { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)",       country: "Poland" },
+  { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)",    country: "Poland" },
+  { id: 6,   type: "PORT",  name: "Gdańsk Port",                   country: "Poland" },
+  { id: 7,   type: "PORT",  name: "Hamburg Port",                  country: "Germany" },
+  { id: 108, type: "PORT",  name: "Algeciras Port",                country: "Spain" },
+  { id: 109, type: "PORT",  name: "Jeddah Islamic Port",           country: "Saudi Arabia" },
+  { id: 110, type: "PORT",  name: "Venice / Marghera Port",        country: "Italy" },
+  { id: 111, type: "PORT",  name: "Rotterdam Port",                country: "Netherlands" },
+  { id: 112, type: "PORT",  name: "Antwerp-Bruges Port",           country: "Belgium" },
+  { id: 113, type: "PORT",  name: "Koper Port",                    country: "Slovenia" },
+  { id: 114, type: "PORT",  name: "Trieste Port",                  country: "Italy" },
+  { id: 115, type: "PORT",  name: "Genoa Port",                    country: "Italy" },
+  { id: 116, type: "PORT",  name: "Salerno Port",                  country: "Italy" },
+  { id: 117, type: "PORT",  name: "Valencia Port",                 country: "Spain" },
+  { id: 118, type: "PORT",  name: "Barcelona Port",                country: "Spain" },
+  { id: 119, type: "PORT",  name: "Alexandria Port",               country: "Egypt" },
+  { id: 120, type: "PORT",  name: "Port Said",                     country: "Egypt" },
+  { id: 121, type: "PORT",  name: "Agadir / Casablanca port area", country: "Morocco" },
 ];
 const LOCATION_TYPES: Record<string, any> = {
   CLIENT: { icon: "🎯", label: "Client site" },
   OWN:    { icon: "🏢", label: "Our warehouse" },
+  PORT:   { icon: "⚓", label: "Port / terminal" },
 };
+function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
+function destinationDisplay(order) {
+  const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
+  if (custom) return custom;
+  const loc = locById(order?.destinationLocationId);
+  if (!loc) return "—";
+  return `${loc.name}${loc.country ? `, ${loc.country}` : ""}`;
+}
 
 // ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
 const SO_STATUSES: Record<string, any> = {
@@ -837,7 +862,8 @@ function SODoc({ order }: any) {
   const total = netTotal(order.items);
   const currency = order.currency || "PLN";
   const paymentDisplay = order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms;
-  const destination = LOCATIONS.find(l => l.id === order.destinationLocationId);
+  const destination = locById(order.destinationLocationId);
+  const destinationLabel = destinationDisplay(order);
 
   const meta = [
     { en: "SO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
@@ -845,7 +871,7 @@ function SODoc({ order }: any) {
     { en: "Delivery date",      pl: "Data dostawy",           value: order.deliveryDate },
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
-    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destination?.name || "—" },
+    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationLabel },
   ];
   const clientRows = [
     { en: "Name",      pl: "Nazwa",     value: order.client?.name    || "—" },
@@ -1362,7 +1388,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Sales Orders</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          {onPrint && order.id && (() => {
+          {onPrint && (() => {
             const isDraft = order.status === "Draft";
             return (
               <button
@@ -1545,13 +1571,25 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <Lbl>Destination</Lbl>
                 <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
                   <option value="">— select —</option>
-                  <optgroup label="🎯 Client Site">
+                  <optgroup label="🎯 Client Site / DC">
                     {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </optgroup>
+                  <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
+                    {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
                   <optgroup label="🏢 Our Warehouse (EXW pickup)">
                     {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
                 </Sel>
+                <Inp
+                  value={order.destinationText || ""}
+                  onChange={e => sf("destinationText", e.target.value)}
+                  placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
+                  style={{ marginTop: 6 }}
+                />
+                <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                  For CIF/CFR sales, destination is normally the destination port. For DAP/DDP sales, use the client site. Use free text when the exact port is missing.
+                </div>
               </div>
             </div>
           </Card>
@@ -1745,7 +1783,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
 function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [] }: any) {
   const total = netTotal(order.items);
-  const destination = LOCATIONS.find(l => l.id === order.destinationLocationId);
+  const destination = locById(order.destinationLocationId);
+  const destinationLabel = destinationDisplay(order);
   const availability = computeLineAvailability(order.items, allOrders, order.id);
   const overageCount = availability.filter(a => a.hasOverage).length;
 
@@ -1920,7 +1959,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                   <div><div style={{ fontSize: 10, color: "#888" }}>SELL INCOTERM</div><div style={{ fontWeight: 600 }}>{order.sellIncoterm || "—"}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>CURRENCY</div><div style={{ fontWeight: 600 }}>{order.currency} {order.fxLockedAt ? "🔒" : ""}</div></div>
                   <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>PAYMENT TERMS</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}</div></div>
-                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destination ? `${LOCATION_TYPES[destination.type]?.icon} ${destination.name}` : "—"}</div></div>
+                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${destination ? LOCATION_TYPES[destination.type]?.icon : "📍"} ${destinationLabel}` : "—"}</div></div>
                 </div>
               </Card>
 
@@ -2063,6 +2102,7 @@ export default function SalesOrders({
       sellIncoterm: "DAP",
       client: null,
       destinationLocationId: null,
+      destinationText: "",
       currency: "PLN", fxRate: 1, fxLockedAt: null,
       items: [{ id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
       notes: "",
