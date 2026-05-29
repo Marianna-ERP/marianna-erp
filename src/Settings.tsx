@@ -69,7 +69,7 @@ export default function Settings({
     fileInputRef.current?.click();
   }
 
-  function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleFileSelected(e: any) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();

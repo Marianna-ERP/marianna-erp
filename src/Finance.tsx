@@ -50,7 +50,7 @@ function StatBlock({ label, value, valueColor, sub }: any) {
 }
 
 // Horizontal bar row — used in client / product / month breakdowns
-function BarRow({ label, value, maxValue, marginPct, sub }: { label: string; value: number; maxValue: number; marginPct?: number; sub?: string }) {
+function BarRow({ label, value, maxValue, marginPct, sub }: any) {
   const pct = maxValue > 0 ? Math.max(0, Math.min(100, (Math.abs(value) / maxValue) * 100)) : 0;
   const isLoss = value < 0;
   const isThinMargin = marginPct !== undefined && marginPct >= 0 && marginPct < 5;
