@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { aggregateMargins } from "./marginCalculations";
+import { aggregateNetMargins } from "./operationalCosts";
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────────────
 // Phase 1 dashboard: reads live state from PO / SO / Inventory / Contacts and
@@ -63,7 +63,7 @@ function KpiCard({ label, value, valueColor, tag, sub, items, onClick }: any) {
   );
 }
 
-export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], onNavigate = () => {} }: any) {
+export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], operationalCosts = [], onNavigate = () => {} }: any) {
   // ── PO summary ─────────────────────────────────────────────────────────
   const poByStatus = useMemo(() => {
     const m: any = {};
@@ -150,14 +150,16 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
 
   // -- Finance / margin summary -------------------------------------------
   const currentMonth = new Date().toISOString().slice(0, 7);
-  const marginThisMonth = useMemo(() => aggregateMargins(
+  const marginThisMonth = useMemo(() => aggregateNetMargins(
     orders,
     lots,
     pos,
     shipments,
     "forecast",
-    o => o.status !== "Draft" && o.status !== "Cancelled" && String(o.orderDate || "").slice(0, 7) === currentMonth
-  ), [orders, lots, pos, shipments, currentMonth]);
+    o => o.status !== "Draft" && o.status !== "Cancelled" && String(o.orderDate || "").slice(0, 7) === currentMonth,
+    operationalCosts,
+    orders
+  ), [orders, lots, pos, shipments, operationalCosts, currentMonth]);
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
@@ -218,15 +220,15 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
           />
           <KpiCard
             label="MARGIN THIS MONTH"
-            value={fmtMoney(marginThisMonth.totalMarginPLN, "PLN")}
-            tag={`${marginThisMonth.avgMarginPct.toFixed(1)}% margin`}
+            value={fmtMoney(marginThisMonth.totalNetMarginPLN, "PLN")}
+            tag={`${marginThisMonth.avgNetMarginPct.toFixed(1)}% net margin`}
             sub="forecast P/L from active SOs"
-            valueColor={marginThisMonth.totalMarginPLN < 0 ? "#DC2626" : marginThisMonth.avgMarginPct < 5 ? "#D97706" : "#16A34A"}
+            valueColor={marginThisMonth.totalNetMarginPLN < 0 ? "#DC2626" : marginThisMonth.avgNetMarginPct < 5 ? "#D97706" : "#16A34A"}
             onClick={() => onNavigate && onNavigate("finance")}
             items={[
               { label: "Revenue", val: Math.max(0, Math.round(marginThisMonth.totalRevenuePLN / 1000)), color: "#2563EB" },
-              { label: "Costs", val: Math.max(0, Math.round((marginThisMonth.totalCOGSPLN + marginThisMonth.totalDirectPLN) / 1000)), color: "#D97706" },
-              { label: "Margin", val: Math.max(0, Math.round(Math.abs(marginThisMonth.totalMarginPLN) / 1000)), color: marginThisMonth.totalMarginPLN < 0 ? "#DC2626" : "#16A34A" },
+              { label: "Costs", val: Math.max(0, Math.round((marginThisMonth.totalCOGSPLN + marginThisMonth.totalDirectPLN + marginThisMonth.totalOverheadPLN) / 1000)), color: "#D97706" },
+              { label: "Margin", val: Math.max(0, Math.round(Math.abs(marginThisMonth.totalNetMarginPLN) / 1000)), color: marginThisMonth.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A" },
             ]}
           />
           <KpiCard

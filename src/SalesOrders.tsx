@@ -1781,7 +1781,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [] }: any) {
+function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [] }: any) {
   const total = netTotal(order.items);
   const destination = locById(order.destinationLocationId);
   const destinationLabel = destinationDisplay(order);
@@ -1877,7 +1877,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
             <div style={{ marginTop: 8, fontSize: 11, color: "#888", fontStyle: "italic" }}>{SO_STATUSES[order.status]?.desc}</div>
           </Card>
 
-          <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} />
+          <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={allOrders} />
 
           <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
             <div>
@@ -2023,6 +2023,7 @@ export default function SalesOrders({
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs,
   contacts: extContacts,
   shipments: extShipments = [],
+  operationalCosts: extOperationalCosts = [],
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
@@ -2289,6 +2290,7 @@ export default function SalesOrders({
           lots={extInvLots || []}
           pos={extPOs || []}
           shipments={extShipments || []}
+          operationalCosts={extOperationalCosts || []}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => editOrder(selected)}
           onPrint={() => {

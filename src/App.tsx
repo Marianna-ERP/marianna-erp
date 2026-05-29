@@ -71,6 +71,7 @@ export default function App() {
   const [lots, setLots] = useLocalStoredState("lots", SHELL_SEED.lots);
   const [orders, setOrders] = useLocalStoredState("orders", SHELL_SEED.orders);
   const [shipments, setShipments] = useLocalStoredState("shipments", SHELL_SEED.shipments);
+  const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
 
   const [activeModule, setActiveModule] = useState("dashboard");
 
@@ -81,9 +82,9 @@ export default function App() {
   function renderActive() {
     switch (activeModule) {
       case "dashboard":
-        return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onNavigate={setActiveModule} />;
+        return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} pos={pos} shipments={shipments} />;
+        return <Finance orders={orders} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContacts} />;
       case "pos":
@@ -91,7 +92,7 @@ export default function App() {
       case "lots":
         return <Inventory lots={lots} setLots={setLots} allOrders={orders} />;
       case "orders":
-        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} />;
+        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} />;
       case "shipments":
         return <Shipments shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} />;
       case "settings":

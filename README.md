@@ -77,3 +77,13 @@ The app is still frontend-only. It stores tester data in the browser using local
 - PO and SO destination dropdowns now include common ports used in export/import flows, plus a free-text destination override for missing ports or one-off terminals.
 - For direct export CIF/CFR sales, the PO/SO destination should be the **client destination port**. For DAP/DDP it should be the **client receiving site**. For EXW it should normally be the pickup warehouse/site.
 - Inventory and Shipments now know the same common port IDs so expected lots and transport orders display port destinations correctly.
+
+## V5.6 - Shipments revision
+
+The Shipments module now separates transport mode from warehousing costs, supports open/manual From-To leg locations, allows extra legs only when needed, and generates carrier/forwarder-specific transport orders with only the selected provider's relevant legs and agreed price. See `V5_6_SHIPMENTS_REVISION.md`.
+
+## V5.7 - Finance overhead allocation
+
+This version adds operational overhead into Finance. Sales P/L now shows contribution margin before overhead and net P/L after allocated operational costs. The new Finance → Operational Costs view lets testers add salaries, rent, accountant fees, general petrol, software and other overhead, then allocate those costs to Sales Orders by revenue, kg sold, order count, shipment count, gross margin, manual allocation or not allocated.
+
+See `V5_7_FINANCE_OVERHEAD.md` for details.
