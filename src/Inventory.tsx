@@ -8,7 +8,7 @@ const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 // SUPPLIER — producer / supplier site
 // PORT     — port-side transit warehouse (Gdańsk, Hamburg)
 // CLIENT   — client's receiving site (used for cross-dock and direct flows)
-const LOCATION_TYPES = {
+const LOCATION_TYPES: Record<string, any> = {
   OWN:      { label: "Our Warehouse",   color: "#0284C7", bg: "#E0F2FE", icon: "🏢" },
   SUPPLIER: { label: "Supplier Site",   color: "#16A34A", bg: "#DCFCE7", icon: "🚜" },
   PORT:     { label: "Port / Transit",  color: "#D97706", bg: "#FEF3C7", icon: "⚓" },
@@ -32,7 +32,7 @@ const LOCATIONS = [
 // Lot status lifecycle — PHYSICAL states only.
 // Reservations are NOT a lot status (they're computed from SO state — see lotReservations).
 // Once SOs reach Shipped+, their kg leave the lot physically (decrements physicalKg).
-const LOT_STATUSES = {
+const LOT_STATUSES: Record<string, any> = {
   Expected:      { color: "#6B7280", bg: "#F3F4F6", desc: "Ordered, not yet shipped from supplier" },
   "In Transit":  { color: "#0284C7", bg: "#E0F2FE", desc: "Moving (supplier → port / port → warehouse / etc.)" },
   Customs:       { color: "#D97706", bg: "#FEF3C7", desc: "Awaiting customs clearance" },
@@ -42,7 +42,7 @@ const LOT_STATUSES = {
 };
 
 // Flow types — 11 flows in two groups (EXP / IMP). Aligned with PurchaseOrders + Shipments.
-const FLOW_TYPES = {
+const FLOW_TYPES: Record<string, any> = {
   // EXPORT
   EXP_EXWS:     { group: "EXP", short: "EXP · EXWs — client pickup",       emoji: "🤝", desc: "Client sends their truck to producer warehouse." },
   EXP_FOB:      { group: "EXP", short: "EXP · FOB — we truck to port",     emoji: "⚓", desc: "We truck to port, client takes over (no sea on our side)." },
@@ -73,7 +73,7 @@ const PRODUCTS = [
 
 // Movement types — physical operations only.
 // SO reservations are NOT movements (they're a calculated overlay from SO state).
-const MOVEMENT_TYPES = {
+const MOVEMENT_TYPES: Record<string, any> = {
   IN:        { label: "Stock In",   color: "#16A34A", icon: "↓", desc: "Lot received into a location" },
   TRANSFER:  { label: "Transfer",   color: "#0284C7", icon: "⇄", desc: "Move between locations (truck/port/WH)" },
   SHIP_OUT:  { label: "Ship Out",   color: "#2563EB", icon: "→", desc: "Physical dispatch to client (decrements physicalKg)" },

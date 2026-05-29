@@ -141,13 +141,13 @@ const LOCATIONS = [
   { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)", country: "Poland" },
   { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)", country: "Poland" },
 ];
-const LOCATION_TYPES = {
+const LOCATION_TYPES: Record<string, any> = {
   CLIENT: { icon: "🎯", label: "Client site" },
   OWN:    { icon: "🏢", label: "Our warehouse" },
 };
 
 // ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
-const SO_STATUSES = {
+const SO_STATUSES: Record<string, any> = {
   Draft:       { bg: "#F3F4F6", color: "#6B7280", order: 0, desc: "Being prepared — can edit freely" },
   Confirmed:   { bg: "#DBEAFE", color: "#2563EB", order: 1, desc: "Agreed with client, prices locked" },
   Reserved:    { bg: "#E0F2FE", color: "#0369A1", order: 2, desc: "Stock allocated / PO confirmed" },

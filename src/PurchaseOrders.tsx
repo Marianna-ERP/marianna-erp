@@ -57,7 +57,7 @@ const INCOTERMS_BUY = [
 // Flow types — 11 flows organised in two groups (EXP / IMP).
 // `buyIncoterms` is a soft hint used for the cross-validation warning, not a hard rule.
 // `defaultRequiresSea` pre-fills the per-PO sea-freight toggle; user can override per deal.
-const FLOW_TYPES = {
+const FLOW_TYPES: Record<string, any> = {
   // ── EXPORT (we sell, origin in PL/EU) ──────────────────────────────────────
   EXP_EXWS: {
     group: "EXP", short: "EXP · EXWs — client pickup", emoji: "🤝",
@@ -126,7 +126,7 @@ const FLOW_GROUPS = [
 
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"];
 
-const PO_STATUSES = {
+const PO_STATUSES: Record<string, any> = {
   Draft:           { bg: "#F3F4F6", color: "#6B7280", desc: "Building the order" },
   Confirmed:       { bg: "#DBEAFE", color: "#2563EB", desc: "Agreed with supplier · FX rate locked" },
   "In Production": { bg: "#FEF3C7", color: "#D97706", desc: "Supplier preparing the goods" },
@@ -139,7 +139,7 @@ const PO_STATUSES = {
 const STATUS_LIFECYCLE = ["Draft", "Confirmed", "In Production", "Shipped", "Arrived", "Closed"];
 
 // Destination location pool (mirrors Inventory/Shipments)
-const LOCATION_TYPES = {
+const LOCATION_TYPES: Record<string, any> = {
   OWN:      { label: "Our Warehouse",  color: "#0284C7", icon: "🏢" },
   PORT:     { label: "Port / Transit", color: "#D97706", icon: "⚓" },
   CLIENT:   { label: "Client Site",    color: "#7C3AED", icon: "🎯" },
@@ -163,7 +163,7 @@ const LOCATIONS = [
 
 // Which location type is the typical destination for each flow (drives optgroup ordering in the dropdown).
 // User can still pick from any type — this just shows the most common option first.
-const FLOW_DESTINATION_TYPE = {
+const FLOW_DESTINATION_TYPE: Record<string, string> = {
   EXP_EXWS:     "PORT",
   EXP_FOB:      "PORT",
   EXP_CIF:      "PORT",
@@ -178,7 +178,7 @@ const FLOW_DESTINATION_TYPE = {
 };
 
 // Stub FX rates for currency conversion in summary (would come from NBP in production)
-const FX_RATES = { PLN: 1, EUR: 4.2531, USD: 3.8812 };
+const FX_RATES: Record<string, number> = { PLN: 1, EUR: 4.2531, USD: 3.8812 };
 
 // ─── SEED DATA ──────────────────────────────────────────────────────────────
 const SUPPLIERS = getSuppliersStub();
