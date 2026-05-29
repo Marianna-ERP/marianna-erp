@@ -505,11 +505,14 @@ function PODoc({ order }: any) {
               { en: "Unit Price",  pl: "Cena jedn.",   align: "right" },
               { en: "Currency",    pl: "Waluta",       align: "center" },
               { en: "Total",       pl: "Wartość",      align: "right" },
-            ].map((h, i) => (
-              <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: h.align, verticalAlign: "bottom" }}>
-                <BiLbl en={h.en} pl={h.pl} align={h.align} />
-              </th>
-            ))}
+            ].map((h, i) => {
+              const headerAlign = h.align as "left" | "center" | "right";
+              return (
+                <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: headerAlign, verticalAlign: "bottom" }}>
+                  <BiLbl en={h.en} pl={h.pl} align={headerAlign} />
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
