@@ -1835,7 +1835,6 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
             <div style={{ marginTop: 8, fontSize: 11, color: "#888", fontStyle: "italic" }}>{SO_STATUSES[order.status]?.desc}</div>
           </Card>
 
-          {/* P/L card — reads live lots/pos/shipments to compute revenue, COGS, direct costs */}
           <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} />
 
           <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
@@ -1980,8 +1979,8 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
 export default function SalesOrders({
   orders: extOrders, setOrders: extSetOrders,
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs,
-  shipments: extShipments,
   contacts: extContacts,
+  shipments: extShipments = [],
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);

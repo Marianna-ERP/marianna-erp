@@ -15,7 +15,7 @@
 //   - Corrupt JSON in storage is ignored — initial value used instead.
 //   - SSR-safe (won't crash if `window` is undefined).
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
 export const STORAGE_VERSION = 1;
 const NAMESPACE = "marianna-erp";
@@ -50,14 +50,10 @@ export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T
   // Read once on mount; thereafter state is the source of truth and we write through.
   const [state, setState] = useState<T>(() => readFromStorage(name, initialValue));
 
-  // Track whether we've actually mounted so we don't double-write on first render.
-  const hasMountedRef = useRef(false);
+  // Persist both the first seed load and all later edits. This makes Settings -> Export
+  // useful even before the user has changed anything in the current browser.
   useEffect(() => {
-    if (hasMountedRef.current) {
-      writeToStorage(name, state);
-    } else {
-      hasMountedRef.current = true;
-    }
+    writeToStorage(name, state);
   }, [name, state]);
 
   return [state, setState];
