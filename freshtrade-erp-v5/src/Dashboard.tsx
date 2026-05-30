@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { aggregateNetMargins } from "./operationalCosts";
+import { aggregateMargins } from "./marginCalculations";
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────────────
 // Phase 1 dashboard: reads live state from PO / SO / Inventory / Contacts and
@@ -63,7 +63,7 @@ function KpiCard({ label, value, valueColor, tag, sub, items, onClick }: any) {
   );
 }
 
-export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], operationalCosts = [], onNavigate = () => {} }: any) {
+export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], onNavigate = () => {} }: any) {
   // ── PO summary ─────────────────────────────────────────────────────────
   const poByStatus = useMemo(() => {
     const m: any = {};
@@ -97,8 +97,9 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
     }, 0);
 
   const upcomingDeliveryCount = orders.filter(o => {
-    if (!o.deliveryDate || !activeSOStatuses.has(o.status)) return false;
-    const days = Math.floor((new Date(o.deliveryDate).getTime() - Date.now()) / 86400000);
+    const promised = o.deliveryDate || o.promisedDeliveryDate;
+    if (!promised || !activeSOStatuses.has(o.status)) return false;
+    const days = Math.floor((new Date(promised).getTime() - Date.now()) / 86400000);
     return days >= 0 && days <= 7;
   }).length;
 
@@ -148,18 +149,12 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
   const shipmentDocsMissing = shipments.filter(s => (s.documents || []).some(d => ["Required", "Missing"].includes(d.status))).length;
   const logisticsCostPLN = shipments.reduce((sum, s) => sum + (s.costs || []).reduce((cs, c) => cs + (parseFloat(c.amountPLN) || ((parseFloat(c.amount) || 0) * (parseFloat(c.fxRate) || 1))), 0), 0);
 
-  // -- Finance / margin summary -------------------------------------------
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const marginThisMonth = useMemo(() => aggregateNetMargins(
-    orders,
-    lots,
-    pos,
-    shipments,
-    "forecast",
-    o => o.status !== "Draft" && o.status !== "Cancelled" && String(o.orderDate || "").slice(0, 7) === currentMonth,
-    operationalCosts,
-    orders
-  ), [orders, lots, pos, shipments, operationalCosts, currentMonth]);
+  // -- This month's margin (P&L analytics — forecast view) -----------------
+  const thisMonth = new Date().toISOString().substring(0, 7); // YYYY-MM
+  const monthMargin = useMemo(
+    () => aggregateMargins(orders, lots, [], shipments, "forecast", o => o.status !== "Draft" && (o.orderDate || "").substring(0, 7) === thisMonth),
+    [orders, lots, shipments, thisMonth]
+  );
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
@@ -176,7 +171,7 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
         </div>
 
         {/* Primary KPI row */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 14, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 16 }}>
           <KpiCard
             label="ACTIVE PURCHASE ORDERS"
             value={activePOCount}
@@ -219,19 +214,6 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
             ]}
           />
           <KpiCard
-            label="MARGIN THIS MONTH"
-            value={fmtMoney(marginThisMonth.totalNetMarginPLN, "PLN")}
-            tag={`${marginThisMonth.avgNetMarginPct.toFixed(1)}% net margin`}
-            sub="forecast P/L from active SOs"
-            valueColor={marginThisMonth.totalNetMarginPLN < 0 ? "#DC2626" : marginThisMonth.avgNetMarginPct < 5 ? "#D97706" : "#16A34A"}
-            onClick={() => onNavigate && onNavigate("finance")}
-            items={[
-              { label: "Revenue", val: Math.max(0, Math.round(marginThisMonth.totalRevenuePLN / 1000)), color: "#2563EB" },
-              { label: "Costs", val: Math.max(0, Math.round((marginThisMonth.totalCOGSPLN + marginThisMonth.totalDirectPLN + marginThisMonth.totalOverheadPLN) / 1000)), color: "#D97706" },
-              { label: "Margin", val: Math.max(0, Math.round(Math.abs(marginThisMonth.totalNetMarginPLN) / 1000)), color: marginThisMonth.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A" },
-            ]}
-          />
-          <KpiCard
             label="INVENTORY"
             value={fmtNum(Math.round(totalKgInStock))}
             tag={`${inStockLots.length} lots in stock`}
@@ -258,6 +240,14 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
               { label: "Logistics", val: contactsByType.Carrier + contactsByType.Forwarder + contactsByType.Warehouse, color: "#D97706" },
               { label: "Brokers", val: contactsByType.Broker, color: "#7C3AED" },
             ]}
+          />
+          <KpiCard
+            label="MARGIN THIS MONTH"
+            value={monthMargin.totalMarginPLN >= 1000 ? fmtNum(Math.round(monthMargin.totalMarginPLN / 1000)) + "k" : fmtNum(Math.round(monthMargin.totalMarginPLN))}
+            tag={(monthMargin.avgMarginPct >= 0 ? "+" : "") + monthMargin.avgMarginPct.toFixed(1) + "% · PLN forecast"}
+            sub={`${monthMargin.orderCount} order${monthMargin.orderCount === 1 ? "" : "s"} this month`}
+            valueColor={monthMargin.totalMarginPLN < 0 ? "#DC2626" : "#16A34A"}
+            onClick={() => onNavigate && onNavigate("finance")}
           />
         </div>
 

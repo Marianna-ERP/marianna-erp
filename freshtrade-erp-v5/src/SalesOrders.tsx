@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
+import { LOCATIONS, locById as canonicalLocById } from "./locations";
+import { defaultSODateMeans, PromisedDateMeansSO } from "./flows";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -132,47 +134,18 @@ function _adaptPOsFromModule(pos) {
 }
 
 // ─── DESTINATIONS ─────────────────────────────────────────────────────────
-const LOCATIONS = [
-  { id: 10, type: "CLIENT", name: "Biedronka DC Poznań",           country: "Poland" },
-  { id: 11, type: "CLIENT", name: "Lidl DC Chorzów",               country: "Poland" },
-  { id: 12, type: "CLIENT", name: "Fresco Hamburg",                country: "Germany" },
-  { id: 13, type: "CLIENT", name: "Metro DC Warszawa",             country: "Poland" },
-  { id: 14, type: "CLIENT", name: "Euro-Papryka Tarczyn",          country: "Poland" },
-  { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)",       country: "Poland" },
-  { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)",    country: "Poland" },
-  { id: 6,   type: "PORT",  name: "Gdańsk Port",                   country: "Poland" },
-  { id: 7,   type: "PORT",  name: "Hamburg Port",                  country: "Germany" },
-  { id: 108, type: "PORT",  name: "Algeciras Port",                country: "Spain" },
-  { id: 109, type: "PORT",  name: "Jeddah Islamic Port",           country: "Saudi Arabia" },
-  { id: 110, type: "PORT",  name: "Venice / Marghera Port",        country: "Italy" },
-  { id: 111, type: "PORT",  name: "Rotterdam Port",                country: "Netherlands" },
-  { id: 112, type: "PORT",  name: "Antwerp-Bruges Port",           country: "Belgium" },
-  { id: 113, type: "PORT",  name: "Koper Port",                    country: "Slovenia" },
-  { id: 114, type: "PORT",  name: "Trieste Port",                  country: "Italy" },
-  { id: 115, type: "PORT",  name: "Genoa Port",                    country: "Italy" },
-  { id: 116, type: "PORT",  name: "Salerno Port",                  country: "Italy" },
-  { id: 117, type: "PORT",  name: "Valencia Port",                 country: "Spain" },
-  { id: 118, type: "PORT",  name: "Barcelona Port",                country: "Spain" },
-  { id: 119, type: "PORT",  name: "Alexandria Port",               country: "Egypt" },
-  { id: 120, type: "PORT",  name: "Port Said",                     country: "Egypt" },
-  { id: 121, type: "PORT",  name: "Agadir / Casablanca port area", country: "Morocco" },
-];
-const LOCATION_TYPES: Record<string, any> = {
-  CLIENT: { icon: "🎯", label: "Client site" },
-  OWN:    { icon: "🏢", label: "Our warehouse" },
-  PORT:   { icon: "⚓", label: "Port / terminal" },
+// Canonical list from ./locations.ts. The local LOCATION_TYPES below is just
+// UI metadata for the destination dropdown.
+const LOCATION_TYPES: any = {
+  ClientFacility:   { icon: "🎯", label: "Client site" },
+  RentedWarehouse:  { icon: "🏬", label: "Rented warehouse" },
+  OwnWarehouse:     { icon: "🏢", label: "Our warehouse" },
+  Port:             { icon: "⚓", label: "Port" },
+  Airport:          { icon: "✈", label: "Airport" },
 };
-function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
-function destinationDisplay(order) {
-  const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
-  if (custom) return custom;
-  const loc = locById(order?.destinationLocationId);
-  if (!loc) return "—";
-  return `${loc.name}${loc.country ? `, ${loc.country}` : ""}`;
-}
 
 // ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
-const SO_STATUSES: Record<string, any> = {
+const SO_STATUSES = {
   Draft:       { bg: "#F3F4F6", color: "#6B7280", order: 0, desc: "Being prepared — can edit freely" },
   Confirmed:   { bg: "#DBEAFE", color: "#2563EB", order: 1, desc: "Agreed with client, prices locked" },
   Reserved:    { bg: "#E0F2FE", color: "#0369A1", order: 2, desc: "Stock allocated / PO confirmed" },
@@ -214,11 +187,11 @@ const PAYMENT_TERMS = [
 export const INIT_ORDERS = [
   {
     id: 1, number: "SO-2026-0094", status: "Delivered",
-    orderDate: "2026-01-22", deliveryDate: "2026-01-25",
+    orderDate: "2026-01-22", deliveryDate: "2026-01-25", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-25",
     paymentTerms: "14 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[0],            // Biedronka
-    destinationLocationId: 10,     // Biedronka DC Poznań
+    destinationLocationId: 301,     // Biedronka DC Poznań
     currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-22",
     items: [
       { id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 8000, unitPrice: 0.32,
@@ -229,11 +202,11 @@ export const INIT_ORDERS = [
   },
   {
     id: 2, number: "SO-2026-0088", status: "Invoiced",
-    orderDate: "2026-01-15", deliveryDate: "2026-01-20",
+    orderDate: "2026-01-15", deliveryDate: "2026-01-20", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-20",
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[1],            // Lidl
-    destinationLocationId: 11,
+    destinationLocationId: 302,
     currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-15",
     items: [
       { id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 2400, unitPrice: 0.33,
@@ -244,11 +217,11 @@ export const INIT_ORDERS = [
   },
   {
     id: 3, number: "SO-2026-0091", status: "Shipped",
-    orderDate: "2026-01-26", deliveryDate: "2026-01-29",
+    orderDate: "2026-01-26", deliveryDate: "2026-01-29", promisedDateMeans: "Pickup-ready at our side", actualDeliveryDate: "2026-01-29",
     paymentTerms: "21 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "EXW",
     client: CLIENTS[4],            // Euro-Papryka
-    destinationLocationId: 1,      // EXW — picked up from our WH
+    destinationLocationId: 101,      // EXW — picked up from our WH
     currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-26",
     items: [
       { id: 1, product: "Papryka Kapia", origin: "Jordania", size: "M", quality: "I", unit: "Kg", qty: 6000, unitPrice: 2.10,
@@ -263,11 +236,11 @@ export const INIT_ORDERS = [
   },
   {
     id: 4, number: "SO-2026-0102", status: "Confirmed",
-    orderDate: "2026-05-20", deliveryDate: "2026-06-10",
+    orderDate: "2026-05-20", deliveryDate: "2026-06-10", promisedDateMeans: "Delivery to client", actualDeliveryDate: null,
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[0],            // Biedronka
-    destinationLocationId: 10,
+    destinationLocationId: 301,
     currency: "PLN", fxRate: 1, fxLockedAt: "2026-05-20",
     items: [
       { id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 8.40,
@@ -278,11 +251,11 @@ export const INIT_ORDERS = [
   },
   {
     id: 5, number: "SO-2026-0105", status: "Draft",
-    orderDate: "2026-05-26", deliveryDate: "2026-06-15",
+    orderDate: "2026-05-26", deliveryDate: "2026-06-15", promisedDateMeans: "Delivery to client", actualDeliveryDate: null,
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[2],            // Metro
-    destinationLocationId: 13,
+    destinationLocationId: 304,
     currency: "PLN", fxRate: 1, fxLockedAt: null,
     items: [
       { id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, unitPrice: 6.20,
@@ -845,7 +818,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
 // we are Sprzedawca (seller), client is Nabywca (buyer). No legal clause.
 function BiLbl({ en, pl, align = "left" }: any) {
   return (
-    <div style={{ textAlign: align as React.CSSProperties["textAlign"], lineHeight: 1.1 }}>
+    <div style={{ textAlign: align, lineHeight: 1.1 }}>
       <div style={{ fontWeight: 700, fontSize: 10 }}>{en}</div>
       <div style={{ fontStyle: "italic", color: "#666", fontSize: 8.5 }}>{pl}</div>
     </div>
@@ -862,8 +835,7 @@ function SODoc({ order }: any) {
   const total = netTotal(order.items);
   const currency = order.currency || "PLN";
   const paymentDisplay = order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms;
-  const destination = locById(order.destinationLocationId);
-  const destinationLabel = destinationDisplay(order);
+  const destination = LOCATIONS.find(l => l.id === order.destinationLocationId);
 
   const meta = [
     { en: "SO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
@@ -871,7 +843,7 @@ function SODoc({ order }: any) {
     { en: "Delivery date",      pl: "Data dostawy",           value: order.deliveryDate },
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
-    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationLabel },
+    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destination?.name || "—" },
   ];
   const clientRows = [
     { en: "Name",      pl: "Nazwa",     value: order.client?.name    || "—" },
@@ -965,14 +937,11 @@ function SODoc({ order }: any) {
               { en: "Unit Price",  pl: "Cena jedn.",   align: "right" },
               { en: "Currency",    pl: "Waluta",       align: "center" },
               { en: "Total",       pl: "Wartość",      align: "right" },
-            ].map((h, i) => {
-              const headerAlign = h.align as "left" | "center" | "right";
-              return (
-                <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: headerAlign, verticalAlign: "bottom" }}>
-                  <BiLbl en={h.en} pl={h.pl} align={headerAlign} />
-                </th>
-              );
-            })}
+            ].map((h, i) => (
+              <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: h.align, verticalAlign: "bottom" }}>
+                <BiLbl en={h.en} pl={h.pl} align={h.align} />
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -1388,7 +1357,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Sales Orders</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          {onPrint && (() => {
+          {onPrint && order.id && (() => {
             const isDraft = order.status === "Draft";
             return (
               <button
@@ -1500,9 +1469,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" title="The date the SO was created/agreed with the client" />
               </div>
               <div>
-                <Lbl>Delivery date</Lbl>
-                <Inp value={order.deliveryDate} onChange={e => sf("deliveryDate", e.target.value)} type="date" title="When the goods are expected to reach the client" />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods arrive at client</div>
+                <Lbl>Expected delivery date</Lbl>
+                <Inp value={order.deliveryDate} onChange={e => sf("deliveryDate", e.target.value)} type="date" title="When the goods are expected to reach the agreed point" />
+                <Sel value={order.promisedDateMeans || "Delivery to client"} onChange={e => sf("promisedDateMeans", e.target.value)} style={{ marginTop: 4, fontSize: 11, padding: "5px 8px" }}>
+                  {["Delivery to client", "Pickup-ready at our side", "Handover at relay", "Loading at supplier", "Arrival at destination port"].map(m => <option key={m} value={m}>means: {m}</option>)}
+                </Sel>
+              </div>
+              <div>
+                <Lbl>Actual delivery {order.actualDeliveryDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
+                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" title="When the goods actually reached the client. Leave blank until it happens." />
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill in once delivered</div>
               </div>
               <div><Lbl>Status</Lbl>
                 <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
@@ -1557,7 +1533,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 14 }}>
               <div>
                 <Lbl>Sell Incoterm</Lbl>
-                <Sel value={order.sellIncoterm || ""} onChange={e => sf("sellIncoterm", e.target.value)} disabled={isLocked}>
+                <Sel value={order.sellIncoterm || ""} onChange={e => { const inc = e.target.value; setOrder(o => ({ ...o, sellIncoterm: inc, promisedDateMeans: defaultSODateMeans(inc) })); }} disabled={isLocked}>
                   <option value="">— select —</option>
                   {INCOTERMS_SELL.map(i => <option key={i.code} value={i.code}>{i.code}</option>)}
                 </Sel>
@@ -1571,25 +1547,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <Lbl>Destination</Lbl>
                 <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
                   <option value="">— select —</option>
-                  <optgroup label="🎯 Client Site / DC">
-                    {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  <optgroup label="🎯 Client Site">
+                    {LOCATIONS.filter(l => l.type === "ClientFacility").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
-                  <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
-                    {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  <optgroup label="🏬 Our Warehouse (EXW pickup)">
+                    {LOCATIONS.filter(l => l.type === "RentedWarehouse" || l.type === "OwnWarehouse").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
-                  <optgroup label="🏢 Our Warehouse (EXW pickup)">
-                    {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  <optgroup label="⚓ Port (CIF/CFR sales)">
+                    {LOCATIONS.filter(l => l.type === "Port" || l.type === "Airport").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
                 </Sel>
-                <Inp
-                  value={order.destinationText || ""}
-                  onChange={e => sf("destinationText", e.target.value)}
-                  placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
-                  style={{ marginTop: 6 }}
-                />
-                <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                  For CIF/CFR sales, destination is normally the destination port. For DAP/DDP sales, use the client site. Use free text when the exact port is missing.
-                </div>
               </div>
             </div>
           </Card>
@@ -1781,10 +1748,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [] }: any) {
+function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [] }: any) {
   const total = netTotal(order.items);
-  const destination = locById(order.destinationLocationId);
-  const destinationLabel = destinationDisplay(order);
+  const destination = LOCATIONS.find(l => l.id === order.destinationLocationId);
   const availability = computeLineAvailability(order.items, allOrders, order.id);
   const overageCount = availability.filter(a => a.hasOverage).length;
 
@@ -1877,7 +1843,8 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
             <div style={{ marginTop: 8, fontSize: 11, color: "#888", fontStyle: "italic" }}>{SO_STATUSES[order.status]?.desc}</div>
           </Card>
 
-          <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={allOrders} />
+          {/* P/L card — reads live lots/pos/shipments to compute revenue, COGS, direct costs */}
+          <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} />
 
           <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
             <div>
@@ -1959,7 +1926,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                   <div><div style={{ fontSize: 10, color: "#888" }}>SELL INCOTERM</div><div style={{ fontWeight: 600 }}>{order.sellIncoterm || "—"}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>CURRENCY</div><div style={{ fontWeight: 600 }}>{order.currency} {order.fxLockedAt ? "🔒" : ""}</div></div>
                   <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>PAYMENT TERMS</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}</div></div>
-                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${destination ? LOCATION_TYPES[destination.type]?.icon : "📍"} ${destinationLabel}` : "—"}</div></div>
+                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destination ? `${LOCATION_TYPES[destination.type]?.icon} ${destination.name}` : "—"}</div></div>
                 </div>
               </Card>
 
@@ -2021,9 +1988,8 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
 export default function SalesOrders({
   orders: extOrders, setOrders: extSetOrders,
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs,
+  shipments: extShipments,
   contacts: extContacts,
-  shipments: extShipments = [],
-  operationalCosts: extOperationalCosts = [],
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
@@ -2057,17 +2023,12 @@ export default function SalesOrders({
   }
 
   // Product suggestions, same pattern as PO
-  const productSuggestions = useMemo((): string[] => {
-    const seed: string[] = ["Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper", "Papryka Kapia", "Tomato Round", "Tomato Cherry", "Carrot", "Cucumber", "Courgette", "Onion Yellow", "Potato", "Garlic", "Cauliflower", "Broccoli", "Lettuce Iceberg", "Cabbage"];
-    const fromOrders: string[] = orders
-      .flatMap((o: any) => (o.items || []).map((i: any) => String(i.product || "").trim()))
-      .filter((value: string) => value.length > 0);
-    const seen = new Map<string, string>();
-    [...fromOrders, ...seed].forEach((product: string) => {
-      const key = product.toLowerCase();
-      if (!seen.has(key)) seen.set(key, product);
-    });
-    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  const productSuggestions = useMemo(() => {
+    const seed = ["Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper", "Papryka Kapia", "Tomato Round", "Tomato Cherry", "Carrot", "Cucumber", "Courgette", "Onion Yellow", "Potato", "Garlic", "Cauliflower", "Broccoli", "Lettuce Iceberg", "Cabbage"];
+    const fromOrders = orders.flatMap(o => o.items.map(i => (i.product || "").trim())).filter(Boolean);
+    const seen = new Map();
+    [...fromOrders, ...seed].forEach(p => { const k = p.toLowerCase(); if (!seen.has(k)) seen.set(k, p); });
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
   }, [orders]);
 
   // KPIs
@@ -2098,12 +2059,13 @@ export default function SalesOrders({
       status: "Draft",
       orderDate: new Date().toISOString().split("T")[0],
       deliveryDate: "",
+      promisedDateMeans: "Delivery to client",
+      actualDeliveryDate: null,
       paymentTerms: "30 days from invoice date",
       paymentTermsOther: "",
       sellIncoterm: "DAP",
       client: null,
       destinationLocationId: null,
-      destinationText: "",
       currency: "PLN", fxRate: 1, fxLockedAt: null,
       items: [{ id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
       notes: "",
@@ -2173,8 +2135,8 @@ export default function SalesOrders({
     const needsSupply = overCount > 0 && o.status !== "Draft" && o.status !== "Cancelled";
     if (needsSupply) {
       const details = avail
-        .map((a: any, i: number) => a.hasOverage ? `  • Line ${i + 1}: short by ${a.overage.toLocaleString("pl-PL")} kg (demand ${a.lineQty.toLocaleString("pl-PL")} kg, primary source available ${a.primaryAvailable.toLocaleString("pl-PL")} kg)` : null)
-        .filter((value: string | null): value is string => typeof value === "string")
+        .map((a, i) => a.hasOverage ? `  • Line ${i + 1}: short by ${a.overage.toLocaleString("pl-PL")} kg (demand ${a.lineQty.toLocaleString("pl-PL")} kg, primary source available ${a.primaryAvailable.toLocaleString("pl-PL")} kg)` : null)
+        .filter(Boolean)
         .join("\n");
       alert(`Cannot save SO as ${o.status} — ${overCount} line(s) exceed available supply:\n\n${details}\n\nReduce qty, switch source, or arrange more procurement.`);
       return;
@@ -2290,7 +2252,6 @@ export default function SalesOrders({
           lots={extInvLots || []}
           pos={extPOs || []}
           shipments={extShipments || []}
-          operationalCosts={extOperationalCosts || []}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => editOrder(selected)}
           onPrint={() => {
@@ -2375,10 +2336,10 @@ export default function SalesOrders({
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No sales orders found.</div>}
           {filtered.map((o, idx) => {
             // Build a small sources summary string
-            const sources: string[] = o.items
-              .map((it: any) => it.sourceRef ? `${it.sourceType === "STOCK" ? "📦" : "🚚"}${it.sourceRef}` : null)
-              .filter((value: any): value is string => typeof value === "string" && value.length > 0);
-            const uniqueSources: string[] = Array.from(new Set<string>(sources));
+            const sources = o.items
+              .map(it => it.sourceRef ? `${it.sourceType === "STOCK" ? "📦" : "🚚"}${it.sourceRef}` : null)
+              .filter(Boolean);
+            const uniqueSources = [...new Set(sources)];
             // Quick overage check for the row badge
             const rowAvail = computeLineAvailability(o.items, orders, o.id);
             const rowOverageCount = rowAvail.filter(a => a.hasOverage).length;

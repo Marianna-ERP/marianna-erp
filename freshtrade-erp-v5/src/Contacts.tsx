@@ -30,7 +30,7 @@ const PAYMENT_TERMS = [
 
 const CURRENCIES = ["PLN", "EUR", "USD"];
 
-const TYPE_COLORS: Record<string, { bg: string; color: string }> = {
+const TYPE_COLORS = {
   Client:         { bg: "#DBEAFE", color: "#2563EB" },
   Supplier:       { bg: "#DCFCE7", color: "#16A34A" },
   Broker:         { bg: "#EDE9FE", color: "#7C3AED" },
@@ -41,7 +41,7 @@ const TYPE_COLORS: Record<string, { bg: string; color: string }> = {
 };
 
 // Service tag colors — compact pills shown in lists + detail
-const SERVICE_COLORS: Record<string, { bg: string; color: string; icon: string }> = {
+const SERVICE_COLORS = {
   Road:         { bg: "#FEF3C7", color: "#92400E", icon: "🚛" },
   Sea:          { bg: "#DBEAFE", color: "#1E40AF", icon: "🚢" },
   Air:          { bg: "#F3E8FF", color: "#6D28D9", icon: "✈️" },
@@ -735,7 +735,7 @@ const EU_VAT_PREFIXES = new Set([
 ]);
 
 // Country → default counterparty type mapping (the import auto-rules)
-const COUNTRY_TYPE_RULES: Record<string, string> = {
+const COUNTRY_TYPE_RULES = {
   // Producer countries (typically suppliers for fresh produce)
   Egypt: "Supplier", Jordan: "Supplier", Libya: "Supplier", Morocco: "Supplier",
   "Saudi Arabia": "Supplier", "United Arab Emirates": "Supplier", Oman: "Supplier",
@@ -863,7 +863,7 @@ function parseFakturowniaRow(row, existingNips, existingNames) {
 function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
   const [stage, setStage] = useState("upload"); // upload | parsing | review
   const [filename, setFilename] = useState("");
-  const [parsedRows, setParsedRows] = useState<any[]>([]); // array of parsed counterparty candidates
+  const [parsedRows, setParsedRows] = useState([]); // array of parsed counterparty candidates
   const [filterType, setFilterType] = useState("All");
   const [filterDup, setFilterDup] = useState("All"); // All | Duplicates | New
   const [search, setSearch] = useState("");
@@ -931,11 +931,7 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
   const visibleRows = parsedRows.filter(visible);
   const selectedCount = parsedRows.filter(r => r._selected).length;
   const duplicateCount = parsedRows.filter(r => r._duplicate).length;
-  const countByType: Record<string, number> = parsedRows.reduce((acc: Record<string, number>, r: any) => {
-    const type = String(r.type || "Other");
-    acc[type] = (acc[type] || 0) + 1;
-    return acc;
-  }, {});
+  const countByType = parsedRows.reduce((acc, r) => { acc[r.type] = (acc[r.type] || 0) + 1; return acc; }, {});
 
   function commit() {
     const toImport = parsedRows.filter(r => r._selected).map(r => {
@@ -1173,7 +1169,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
 
   // ── stats ──────────────────────────────────────────────────────────────
   const counts = useMemo(() => {
-    const c: Record<string, number> = { All: counterparties.length };
+    const c = { All: counterparties.length };
     COUNTERPARTY_TYPES.forEach(t => {
       c[t] = counterparties.filter(x => x.type === t || (x.additionalTypes || []).includes(t)).length;
     });

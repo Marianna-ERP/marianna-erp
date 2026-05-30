@@ -8,7 +8,6 @@ import { INITIAL_ORDERS as INIT_POS } from "./PurchaseOrders";
 import { INIT_LOTS } from "./Inventory";
 import { INIT_ORDERS as INIT_SOS } from "./SalesOrders";
 import { INIT_SHIPMENTS } from "./Shipments";
-import { INIT_OPERATIONAL_COSTS } from "./operationalCosts";
 
 export const SHELL_SEED = {
   contacts: INIT_COUNTERPARTIES,
@@ -16,5 +15,4 @@ export const SHELL_SEED = {
   lots:     INIT_LOTS,
   orders:   INIT_SOS,
   shipments: INIT_SHIPMENTS,
-  operationalCosts: INIT_OPERATIONAL_COSTS,
 };

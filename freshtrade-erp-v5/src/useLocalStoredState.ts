@@ -15,7 +15,7 @@
 //   - Corrupt JSON in storage is ignored — initial value used instead.
 //   - SSR-safe (won't crash if `window` is undefined).
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 export const STORAGE_VERSION = 1;
 const NAMESPACE = "marianna-erp";
@@ -50,10 +50,14 @@ export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T
   // Read once on mount; thereafter state is the source of truth and we write through.
   const [state, setState] = useState<T>(() => readFromStorage(name, initialValue));
 
-  // Persist both the first seed load and all later edits. This makes Settings -> Export
-  // useful even before the user has changed anything in the current browser.
+  // Track whether we've actually mounted so we don't double-write on first render.
+  const hasMountedRef = useRef(false);
   useEffect(() => {
-    writeToStorage(name, state);
+    if (hasMountedRef.current) {
+      writeToStorage(name, state);
+    } else {
+      hasMountedRef.current = true;
+    }
   }, [name, state]);
 
   return [state, setState];
@@ -62,7 +66,7 @@ export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T
 // ─── Bulk helpers — used by the Settings module ─────────────────────────────
 
 export function exportAllData(): string {
-  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts"];
+  const keys = ["contacts", "pos", "lots", "orders", "shipments"];
   const data: any = {
     _meta: {
       app: "marianna-erp",
@@ -93,7 +97,7 @@ export function importAllData(jsonString: string): { ok: boolean; error?: string
     return { ok: false, error: `Export was made on schema v${parsed._meta.version}, but this app uses v${STORAGE_VERSION}. Migration not yet supported.` };
   }
   const loaded: string[] = [];
-  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts"];
+  const keys = ["contacts", "pos", "lots", "orders", "shipments"];
   for (const key of keys) {
     if (parsed[key] !== undefined && parsed[key] !== null) {
       writeToStorage(key, parsed[key]);
@@ -105,7 +109,7 @@ export function importAllData(jsonString: string): { ok: boolean; error?: string
 
 export function clearAllData(): void {
   if (typeof window === "undefined" || !window.localStorage) return;
-  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts"];
+  const keys = ["contacts", "pos", "lots", "orders", "shipments"];
   for (const key of keys) {
     try {
       window.localStorage.removeItem(storageKey(key));
