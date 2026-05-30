@@ -30,7 +30,7 @@ const PAYMENT_TERMS = [
 
 const CURRENCIES = ["PLN", "EUR", "USD"];
 
-const TYPE_COLORS = {
+const TYPE_COLORS: Record<string, { bg: string; color: string }> = {
   Client:         { bg: "#DBEAFE", color: "#2563EB" },
   Supplier:       { bg: "#DCFCE7", color: "#16A34A" },
   Broker:         { bg: "#EDE9FE", color: "#7C3AED" },
@@ -41,7 +41,7 @@ const TYPE_COLORS = {
 };
 
 // Service tag colors — compact pills shown in lists + detail
-const SERVICE_COLORS = {
+const SERVICE_COLORS: Record<string, { bg: string; color: string; icon: string }> = {
   Road:         { bg: "#FEF3C7", color: "#92400E", icon: "🚛" },
   Sea:          { bg: "#DBEAFE", color: "#1E40AF", icon: "🚢" },
   Air:          { bg: "#F3E8FF", color: "#6D28D9", icon: "✈️" },
@@ -735,7 +735,7 @@ const EU_VAT_PREFIXES = new Set([
 ]);
 
 // Country → default counterparty type mapping (the import auto-rules)
-const COUNTRY_TYPE_RULES = {
+const COUNTRY_TYPE_RULES: Record<string, string> = {
   // Producer countries (typically suppliers for fresh produce)
   Egypt: "Supplier", Jordan: "Supplier", Libya: "Supplier", Morocco: "Supplier",
   "Saudi Arabia": "Supplier", "United Arab Emirates": "Supplier", Oman: "Supplier",
@@ -749,7 +749,7 @@ const COUNTRY_TYPE_RULES = {
 };
 
 // Smart parse a TAX ID into either a local NIP or an EU VAT id
-function parseTaxId(raw) {
+function parseTaxId(raw: any) {
   if (!raw) return { nip: "", vatEuId: "" };
   let s = String(raw).trim();
   // Strip common prefixes like "VAT ID:", "NIP:"
@@ -770,7 +770,7 @@ function parseTaxId(raw) {
 }
 
 // Compose address from Street + Postcode + City
-function composeAddress(street, postcode, city) {
+function composeAddress(street: any, postcode: any, city: any) {
   const parts = [];
   if (street) parts.push(String(street).trim());
   const pc = postcode ? String(postcode).trim() : "";
@@ -795,7 +795,7 @@ function assignDefaultType({ isCompany, country, hasNip }: any) {
 }
 
 // Default currency by country
-function defaultCurrencyByCountry(country) {
+function defaultCurrencyByCountry(country: any) {
   if (!country) return "PLN";
   const c = String(country).trim();
   if (c === "Poland") return "PLN";
@@ -805,7 +805,7 @@ function defaultCurrencyByCountry(country) {
 }
 
 // Parse a Fakturownia row into our counterparty shape
-function parseFakturowniaRow(row, existingNips, existingNames) {
+function parseFakturowniaRow(row: any, existingNips: Set<any>, existingNames: Set<any>) {
   const taxId = parseTaxId(row["TAX ID"]);
   const hasNip = !!(taxId.nip || taxId.vatEuId);
   const isCompany = row["Company"] === true || row["Company"] === "true" || row["Company"] === "True";
@@ -863,13 +863,13 @@ function parseFakturowniaRow(row, existingNips, existingNames) {
 function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
   const [stage, setStage] = useState("upload"); // upload | parsing | review
   const [filename, setFilename] = useState("");
-  const [parsedRows, setParsedRows] = useState([]); // array of parsed counterparty candidates
+  const [parsedRows, setParsedRows] = useState<any[]>([]); // array of parsed counterparty candidates
   const [filterType, setFilterType] = useState("All");
   const [filterDup, setFilterDup] = useState("All"); // All | Duplicates | New
   const [search, setSearch] = useState("");
-  const fileInputRef = useRef(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  function handleFile(file) {
+  function handleFile(file: File | undefined | null) {
     if (!file) return;
     setFilename(file.name);
     setStage("parsing");
@@ -887,12 +887,12 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
         const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
         // Build existing-record indices for dedup
-        const existingNips = new Set();
-        existingCounterparties.forEach(c => {
+        const existingNips = new Set<string>();
+        existingCounterparties.forEach((c: any) => {
           if (c.nip) existingNips.add(c.nip.replace(/\s/g, ""));
           if (c.vatEuId) existingNips.add(c.vatEuId.replace(/\s/g, ""));
         });
-        const existingNames = new Set(existingCounterparties.map(c => (c.name || "").toLowerCase()));
+        const existingNames = new Set<string>(existingCounterparties.map((c: any) => (c.name || "").toLowerCase()));
 
         const parsed = rows
           .filter(r => r["Client"] && String(r["Client"]).trim() && String(r["Client"]).trim() !== "-")
@@ -908,16 +908,16 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
   }
 
   // Bulk operations
-  function setTypeForFiltered(type) {
+  function setTypeForFiltered(type: string) {
     setParsedRows(rows => rows.map(r => visible(r) ? { ...r, type } : r));
   }
-  function selectAllFiltered(selected) {
+  function selectAllFiltered(selected: boolean) {
     setParsedRows(rows => rows.map(r => visible(r) ? { ...r, _selected: selected } : r));
   }
-  function toggleRow(idx, k, v) {
+  function toggleRow(idx: number, k: string, v: any) {
     setParsedRows(rows => rows.map((r, i) => i === idx ? { ...r, [k]: v } : r));
   }
-  function visible(r) {
+  function visible(r: any) {
     if (filterType !== "All" && r.type !== filterType) return false;
     if (filterDup === "Duplicates" && !r._duplicate) return false;
     if (filterDup === "New" && r._duplicate) return false;
@@ -931,7 +931,7 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
   const visibleRows = parsedRows.filter(visible);
   const selectedCount = parsedRows.filter(r => r._selected).length;
   const duplicateCount = parsedRows.filter(r => r._duplicate).length;
-  const countByType = parsedRows.reduce((acc, r) => { acc[r.type] = (acc[r.type] || 0) + 1; return acc; }, {});
+  const countByType: Record<string, number> = parsedRows.reduce((acc: Record<string, number>, r: any) => { const type = String(r.type || "Other"); acc[type] = (acc[type] || 0) + 1; return acc; }, {});
 
   function commit() {
     const toImport = parsedRows.filter(r => r._selected).map(r => {

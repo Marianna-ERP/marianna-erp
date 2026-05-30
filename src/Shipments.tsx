@@ -1,5 +1,4 @@
 import React, { useMemo, useState } from "react";
-import { LOCATIONS, locById as canonicalLocById } from "./locations";
 
 // MARIANNA ERP - Shipments / Logistics module
 // Standalone-friendly: when no props are passed it uses INIT_SHIPMENTS plus small
@@ -71,8 +70,25 @@ const COST_TYPES = [
   { code: "other", label: "Other", inventoryType: "other" },
 ];
 
-// LOCATIONS — uses the canonical list from ./locations.ts in V5.
-// (V4 had a local array with conflicting IDs; this is now centralized.)
+const LOCATIONS = [
+  { id: 1,  type: "OWN",      name: "WH-01 Poznan (Logipark)",           country: "Poland",  address: "Poznan / Logipark" },
+  { id: 2,  type: "OWN",      name: "WH-02 Warszawa (ColdStore)",        country: "Poland",  address: "Warszawa cold storage" },
+  { id: 3,  type: "SUPPLIER", name: "Bialski Owoc - Biala Rawska",       country: "Poland",  address: "Wojska Polskiego 6F, 96-230 Biala Rawska" },
+  { id: 4,  type: "SUPPLIER", name: "FreshFarm ES - Valencia",           country: "Spain",   address: "Valencia, Spain" },
+  { id: 5,  type: "SUPPLIER", name: "AgriTrade MA - Agadir",             country: "Morocco", address: "Agadir, Morocco" },
+  { id: 6,  type: "PORT",     name: "Gdansk Port - Transit",             country: "Poland",  address: "Gdansk port" },
+  { id: 7,  type: "PORT",     name: "Hamburg Port - Transit",            country: "Germany", address: "Hamburg port" },
+  { id: 8,  type: "CLIENT",   name: "Biedronka DC Poznan",               country: "Poland",  address: "ul. Gorecka 1, 60-201 Poznan" },
+  { id: 9,  type: "CLIENT",   name: "Lidl DC Chorzow",                   country: "Poland",  address: "Chorzow" },
+  { id: 10, type: "CLIENT",   name: "Biedronka DC Poznan (SO/PO id)",    country: "Poland",  address: "ul. Gorecka 1, 60-201 Poznan" },
+  { id: 11, type: "CLIENT",   name: "Lidl DC Chorzow (SO/PO id)",        country: "Poland",  address: "Chorzow" },
+  { id: 12, type: "CLIENT",   name: "Fresco Hamburg",                    country: "Germany", address: "Hamburg" },
+  { id: 13, type: "CLIENT",   name: "Metro DC Warszawa",                 country: "Poland",  address: "Warszawa" },
+  { id: 14, type: "CLIENT",   name: "Euro-Papryka Tarczyn",              country: "Poland",  address: "Tarczyn / Wola Przypkowska" },
+  { id: 21, type: "CLIENT",   name: "Venice Cold Stores & Logistics SRL", country: "Italy",   address: "Via Banchina dell'Azoto 17/B, 30175 Marghera" },
+  { id: 22, type: "BROKER",   name: "AM sped s.c. - Slomczyn",           country: "Poland",  address: "Slomczyn 81, 05-600 Grojec" },
+  { id: 23, type: "PORT",     name: "Agadir / Casablanca port area",      country: "Morocco", address: "Morocco port warehouse" },
+];
 
 const FALLBACK_PROVIDERS = [
   { id: 1001, type: "Carrier", name: "Mikolaj Majewski", country: "Poland", nip: "6010091289", address: "Marysin 36, 26-414 Potworow", services: ["Road"], contact: "Mikolaj Majewski", phone: "", email: "" },
@@ -86,20 +102,20 @@ const FALLBACK_PROVIDERS = [
 ];
 
 const STANDALONE_POS = [
-  { id: 1, number: "PO-2025-0468", status: "Arrived", loadingDate: "2025-10-10", expectedDeliveryDate: "2025-10-13", buyIncoterm: "EXW", flow: "EXP_BY_TRUCK_DAP", requiresSea: false, supplier: { id: 1, name: "Bialski Owoc", country: "Poland", address: "Wojska Polskiego 6F, 96-230 Biala Rawska" }, destinationLocationId: 306, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", qty: 19422, unitPrice: 2.80, packaging: "13 kg loose crate" }], linkedShipments: ["SHP-2025-0107"], linkedLots: ["LOT-2026-0091"] },
-  { id: 2, number: "PO-2026-0117", status: "Shipped", loadingDate: "2026-05-20", expectedDeliveryDate: "2026-05-30", buyIncoterm: "EXW", flow: "IMP_EXW", requiresSea: true, supplier: { id: 3, name: "AgriTrade MA", country: "Morocco", address: "Agadir" }, destinationLocationId: 101, currency: "USD", fxRate: 3.8812, items: [{ id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", qty: 12000, unitPrice: 1.20, packaging: "5 kg carton" }], linkedShipments: ["SHP-2026-0045"], linkedLots: ["LOT-2026-0086"] },
-  { id: 3, number: "PO-2026-0121", status: "Confirmed", loadingDate: "2026-06-02", expectedDeliveryDate: "2026-06-05", buyIncoterm: "DDP", flow: "IMP_DDP_TO_OUR_WH", requiresSea: false, supplier: { id: 2, name: "FreshFarm ES", country: "Spain", address: "Valencia" }, destinationLocationId: 101, currency: "EUR", fxRate: 4.2531, items: [{ id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", qty: 8000, unitPrice: 1.85, packaging: "5 kg carton" }], linkedShipments: [], linkedLots: ["LOT-2026-0100"] },
+  { id: 1, number: "PO-2025-0468", status: "Arrived", loadingDate: "2025-10-10", expectedDeliveryDate: "2025-10-13", buyIncoterm: "EXW", flow: "EXP_DDP_EU", requiresSea: false, supplier: { id: 1, name: "Bialski Owoc", country: "Poland", address: "Wojska Polskiego 6F, 96-230 Biala Rawska" }, destinationLocationId: 21, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", qty: 19422, unitPrice: 2.80, packaging: "13 kg loose crate" }], linkedShipments: ["SHP-2025-0107"], linkedLots: ["LOT-2026-0091"] },
+  { id: 2, number: "PO-2026-0117", status: "Shipped", loadingDate: "2026-05-20", expectedDeliveryDate: "2026-05-30", buyIncoterm: "EXW", flow: "IMP_EXWS_WH", requiresSea: true, supplier: { id: 3, name: "AgriTrade MA", country: "Morocco", address: "Agadir" }, destinationLocationId: 1, currency: "USD", fxRate: 3.8812, items: [{ id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", qty: 12000, unitPrice: 1.20, packaging: "5 kg carton" }], linkedShipments: ["SHP-2026-0045"], linkedLots: ["LOT-2026-0086"] },
+  { id: 3, number: "PO-2026-0121", status: "Confirmed", loadingDate: "2026-06-02", expectedDeliveryDate: "2026-06-05", buyIncoterm: "DDP", flow: "IMP_DDP_WH", requiresSea: false, supplier: { id: 2, name: "FreshFarm ES", country: "Spain", address: "Valencia" }, destinationLocationId: 1, currency: "EUR", fxRate: 4.2531, items: [{ id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", qty: 8000, unitPrice: 1.85, packaging: "5 kg carton" }], linkedShipments: [], linkedLots: ["LOT-2026-0100"] },
 ];
 
 const STANDALONE_SOS = [
-  { id: 4, number: "SO-2026-0102", status: "Confirmed", orderDate: "2026-05-20", deliveryDate: "2026-06-10", sellIncoterm: "DAP", client: { id: 4, name: "Biedronka", country: "Poland", address: "Poznan" }, destinationLocationId: 301, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 8.40, sourceType: "PO", sourceRef: "PO-2026-0121", sourceLineId: 1, packaging: "5 kg carton" }], linkedShipments: [] },
-  { id: 5, number: "SO-2026-0105", status: "Booked", orderDate: "2026-05-26", deliveryDate: "2026-06-15", sellIncoterm: "DAP", client: { id: 6, name: "Metro Cash & Carry", country: "Poland", address: "Warszawa" }, destinationLocationId: 304, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, unitPrice: 6.20, sourceType: "PO", sourceRef: "PO-2026-0117", sourceLineId: 1, packaging: "5 kg carton" }], linkedShipments: [] },
+  { id: 4, number: "SO-2026-0102", status: "Confirmed", orderDate: "2026-05-20", deliveryDate: "2026-06-10", sellIncoterm: "DAP", client: { id: 4, name: "Biedronka", country: "Poland", address: "Poznan" }, destinationLocationId: 10, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 8.40, sourceType: "PO", sourceRef: "PO-2026-0121", sourceLineId: 1, packaging: "5 kg carton" }], linkedShipments: [] },
+  { id: 5, number: "SO-2026-0105", status: "Booked", orderDate: "2026-05-26", deliveryDate: "2026-06-15", sellIncoterm: "DAP", client: { id: 6, name: "Metro Cash & Carry", country: "Poland", address: "Warszawa" }, destinationLocationId: 13, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, unitPrice: 6.20, sourceType: "PO", sourceRef: "PO-2026-0117", sourceLineId: 1, packaging: "5 kg carton" }], linkedShipments: [] },
 ];
 
 const STANDALONE_LOTS = [
-  { id: 1, number: "LOT-2026-0091", product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", locationId: 401, physicalKg: 19422, expectedKg: 19500, receivedKg: 19422, status: "Loaded", poRef: "PO-2025-0468", packaging: "13 kg loose crate", costs: [], movements: [] },
-  { id: 5, number: "LOT-2026-0086", product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", locationId: 101, physicalKg: 2500, expectedKg: 8500, receivedKg: 8500, status: "In Stock", poRef: "PO-2026-0117", packaging: "5 kg carton", costs: [], movements: [] },
-  { id: 8, number: "LOT-2026-0100", product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", locationId: 202, physicalKg: 0, expectedKg: 8000, receivedKg: 0, status: "Expected", poRef: "PO-2026-0121", packaging: "5 kg carton", costs: [], movements: [] },
+  { id: 1, number: "LOT-2026-0091", product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", locationId: 6, physicalKg: 19422, expectedKg: 19500, receivedKg: 19422, status: "Loaded", poRef: "PO-2025-0468", packaging: "13 kg loose crate", costs: [], movements: [] },
+  { id: 5, number: "LOT-2026-0086", product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", locationId: 1, physicalKg: 2500, expectedKg: 8500, receivedKg: 8500, status: "In Stock", poRef: "PO-2026-0117", packaging: "5 kg carton", costs: [], movements: [] },
+  { id: 8, number: "LOT-2026-0100", product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", locationId: 4, physicalKg: 0, expectedKg: 8000, receivedKg: 0, status: "Expected", poRef: "PO-2026-0121", packaging: "5 kg carton", costs: [], movements: [] },
 ];
 
 const STANDARD_ROAD_TERMS = [
@@ -137,8 +153,8 @@ export const INIT_SHIPMENTS = [
     expectedDeliveryDate: "2025-10-13",
     actualLoadingDate: null,
     actualDeliveryDate: null,
-    originLocationId: 201,
-    destinationLocationId: 306,
+    originLocationId: 3,
+    destinationLocationId: 21,
     customsClearance: "AM sped s.c., Slomczyn 81, 05-600 Grojec",
     temperatureMinC: 2,
     temperatureMaxC: 4,
@@ -147,7 +163,7 @@ export const INIT_SHIPMENTS = [
     billingStatus: "Not ready",
     notes: "Facsimile road order: Biala Rawska -> Venice Cold Stores. Clean reefer trailer required.",
     legs: [
-      { id: 1, mode: "Road", status: "Confirmed", fromLocationId: 201, toLocationId: 306, carrierId: 1001, plannedPickupDate: "2025-10-10", plannedDeliveryDate: "2025-10-13T09:00", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 2, temperatureMaxC: 4, costAmount: 1700, costCurrency: "EUR", costFxRate: 4.25, costPLN: 7225, notes: "One refrigerated truck. Delivery by 09:00." },
+      { id: 1, mode: "Road", status: "Confirmed", fromLocationId: 3, toLocationId: 21, carrierId: 1001, plannedPickupDate: "2025-10-10", plannedDeliveryDate: "2025-10-13T09:00", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 2, temperatureMaxC: 4, costAmount: 1700, costCurrency: "EUR", costFxRate: 4.25, costPLN: 7225, notes: "One refrigerated truck. Delivery by 09:00." },
     ],
     goods: [
       { id: 1, poRef: "PO-2025-0468", soRef: "", lotRef: "LOT-2026-0091", product: "Jablko", origin: "Poland", quality: "I", size: "70-80", packaging: "13 kg loose crate", qtyKg: 19422, grossKg: 22500, pallets: 21, description: "21 pallets: 20 x 1200x1000 + 1 x 1200x800" },
@@ -181,8 +197,8 @@ export const INIT_SHIPMENTS = [
     expectedDeliveryDate: "2026-05-30",
     actualLoadingDate: "2026-05-20",
     actualDeliveryDate: null,
-    originLocationId: 203,
-    destinationLocationId: 101,
+    originLocationId: 5,
+    destinationLocationId: 1,
     customsClearance: "CustomsPro / Gdansk",
     temperatureMinC: 5,
     temperatureMaxC: 8,
@@ -191,9 +207,9 @@ export const INIT_SHIPMENTS = [
     billingStatus: "Not ready",
     notes: "EXW Morocco. Forwarder combines container and inland handling. BL and container captured after sailing.",
     legs: [
-      { id: 1, mode: "Road", status: "Delivered", fromLocationId: 203, toLocationId: 406, carrierId: 15, plannedPickupDate: "2026-05-20", plannedDeliveryDate: "2026-05-20", actualPickupDate: "2026-05-20", actualDeliveryDate: "2026-05-20", vehiclePlate: "MA-74231", trailerPlate: "MA-RF-108", driverName: "Youssef A.", driverPhone: "+212 600 000 111", temperatureMinC: 5, temperatureMaxC: 8, costAmount: 2100, costCurrency: "PLN", costFxRate: 1, costPLN: 2100, notes: "Producer to port warehouse" },
-      { id: 2, mode: "Sea", status: "Loaded", fromLocationId: 406, toLocationId: 401, forwarderId: 15, plannedPickupDate: "2026-05-22", plannedDeliveryDate: "2026-05-30", containerNumber: "MSCU1234567", sealNumber: "SL998877", bookingNumber: "RAB-AGD-0522", blNumber: "BL-MA-2026-7781", vesselName: "MSC Atlas", voyageNumber: "MA226W", costAmount: 1850, costCurrency: "USD", costFxRate: 3.8812, costPLN: 7180.22, notes: "Container leg to Gdansk" },
-      { id: 3, mode: "Road", status: "Planned", fromLocationId: 401, toLocationId: 101, carrierId: 15, plannedPickupDate: "2026-05-30", plannedDeliveryDate: "2026-05-30", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 5, temperatureMaxC: 8, costAmount: 1450, costCurrency: "PLN", costFxRate: 1, costPLN: 1450, notes: "Port to WH-01 after customs" },
+      { id: 1, mode: "Road", status: "Delivered", fromLocationId: 5, toLocationId: 23, carrierId: 15, plannedPickupDate: "2026-05-20", plannedDeliveryDate: "2026-05-20", actualPickupDate: "2026-05-20", actualDeliveryDate: "2026-05-20", vehiclePlate: "MA-74231", trailerPlate: "MA-RF-108", driverName: "Youssef A.", driverPhone: "+212 600 000 111", temperatureMinC: 5, temperatureMaxC: 8, costAmount: 2100, costCurrency: "PLN", costFxRate: 1, costPLN: 2100, notes: "Producer to port warehouse" },
+      { id: 2, mode: "Sea", status: "Loaded", fromLocationId: 23, toLocationId: 6, forwarderId: 15, plannedPickupDate: "2026-05-22", plannedDeliveryDate: "2026-05-30", containerNumber: "MSCU1234567", sealNumber: "SL998877", bookingNumber: "RAB-AGD-0522", blNumber: "BL-MA-2026-7781", vesselName: "MSC Atlas", voyageNumber: "MA226W", costAmount: 1850, costCurrency: "USD", costFxRate: 3.8812, costPLN: 7180.22, notes: "Container leg to Gdansk" },
+      { id: 3, mode: "Road", status: "Planned", fromLocationId: 6, toLocationId: 1, carrierId: 15, plannedPickupDate: "2026-05-30", plannedDeliveryDate: "2026-05-30", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 5, temperatureMaxC: 8, costAmount: 1450, costCurrency: "PLN", costFxRate: 1, costPLN: 1450, notes: "Port to WH-01 after customs" },
     ],
     goods: [
       { id: 1, poRef: "PO-2026-0117", soRef: "SO-2026-0105", lotRef: "LOT-2026-0086", product: "Papryka Kapia", origin: "Morocco", quality: "I", size: "M", packaging: "5 kg carton", qtyKg: 12000, grossKg: 12800, pallets: 20, description: "Moroccan pepper, reefer container" },
@@ -229,8 +245,8 @@ export const INIT_SHIPMENTS = [
     expectedDeliveryDate: "2026-06-10",
     actualLoadingDate: null,
     actualDeliveryDate: null,
-    originLocationId: 101,
-    destinationLocationId: 301,
+    originLocationId: 1,
+    destinationLocationId: 10,
     customsClearance: "Not required - EU road",
     temperatureMinC: 6,
     temperatureMaxC: 8,
@@ -239,7 +255,7 @@ export const INIT_SHIPMENTS = [
     billingStatus: "Not ready",
     notes: "Delivery from Spanish PO to Biedronka after arrival. Use once stock/lot is available.",
     legs: [
-      { id: 1, mode: "Road", status: "Booked", fromLocationId: 101, toLocationId: 301, carrierId: 17, plannedPickupDate: "2026-06-05", plannedDeliveryDate: "2026-06-10", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 6, temperatureMaxC: 8, costAmount: 1450, costCurrency: "PLN", costFxRate: 1, costPLN: 1450, notes: "WH-01 to Biedronka" },
+      { id: 1, mode: "Road", status: "Booked", fromLocationId: 1, toLocationId: 10, carrierId: 17, plannedPickupDate: "2026-06-05", plannedDeliveryDate: "2026-06-10", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 6, temperatureMaxC: 8, costAmount: 1450, costCurrency: "PLN", costFxRate: 1, costPLN: 1450, notes: "WH-01 to Biedronka" },
     ],
     goods: [
       { id: 1, poRef: "PO-2026-0121", soRef: "SO-2026-0102", lotRef: "LOT-2026-0100", product: "Red Bell Pepper", origin: "Spain", quality: "I", size: "L", packaging: "5 kg carton", qtyKg: 5000, grossKg: 5400, pallets: 10, description: "Sales delivery for Biedronka" },
@@ -273,8 +289,8 @@ export const INIT_SHIPMENTS = [
     expectedDeliveryDate: "2026-07-03",
     actualLoadingDate: "2026-06-12",
     actualDeliveryDate: null,
-    originLocationId: 406,
-    destinationLocationId: 101,
+    originLocationId: 23,
+    destinationLocationId: 1,
     customsClearance: "CustomsPro Sp. z o.o. - Gdansk port clearance",
     temperatureMinC: 7,
     temperatureMaxC: 10,
@@ -287,8 +303,8 @@ export const INIT_SHIPMENTS = [
         id: 1,
         mode: "Sea",
         status: "Arrived",
-        fromLocationId: 406,
-        toLocationId: 401,
+        fromLocationId: 23,
+        toLocationId: 6,
         forwarderId: 16,
         plannedPickupDate: "2026-06-12",
         plannedDeliveryDate: "2026-07-01",
@@ -308,8 +324,8 @@ export const INIT_SHIPMENTS = [
         id: 2,
         mode: "Road",
         status: "Booked",
-        fromLocationId: 401,
-        toLocationId: 101,
+        fromLocationId: 6,
+        toLocationId: 1,
         carrierId: 17,
         plannedPickupDate: "2026-07-02",
         plannedDeliveryDate: "2026-07-03",
@@ -366,13 +382,15 @@ function parseNum(n, fallback = 0) {
   return isNaN(v) ? fallback : v;
 }
 
-function uniq(arr) {
-  return Array.from(new Set((arr || []).filter(Boolean)));
+function uniq(arr: any[]): string[] {
+  return Array.from(new Set<string>((arr || []).filter((value: any): value is string => typeof value === "string" && value.length > 0)));
 }
 
-// Re-export canonical locById/locText from ./locations to keep call sites stable
-function locById(id: any) { return canonicalLocById(id); }
-function locText(id: any, fallback = "") {
+function locById(id) {
+  return LOCATIONS.find(l => String(l.id) === String(id));
+}
+
+function locText(id, fallback = "") {
   const l = locById(id);
   if (!l) return fallback || "-";
   return `${l.name}${l.address ? `, ${l.address}` : ""}`;
@@ -566,9 +584,9 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
   let legs: any[] = [roadLeg];
   if (mode === "Multimodal" || mode === "Sea") {
     legs = [
-      { ...roadLeg, id: 1, mode: "Road", toLocationId: 406, notes: `Pre-carriage for ${po.number}` },
-      { id: 2, mode: "Sea", status: "Booked", fromLocationId: 406, toLocationId: 401, forwarderId: forwarderId || 15, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", vesselName: "", voyageNumber: "", costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Sea leg for ${po.number}` },
-      { id: 3, mode: "Road", status: "Planned", fromLocationId: 401, toLocationId: destinationLocationId, carrierId: carrierId || forwarderId || 15, plannedPickupDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", costAmount: 0, costCurrency: "PLN", costFxRate: 1, costPLN: 0, notes: "On-carriage after customs" },
+      { ...roadLeg, id: 1, mode: "Road", toLocationId: 23, notes: `Pre-carriage for ${po.number}` },
+      { id: 2, mode: "Sea", status: "Booked", fromLocationId: 23, toLocationId: 6, forwarderId: forwarderId || 15, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", vesselName: "", voyageNumber: "", costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Sea leg for ${po.number}` },
+      { id: 3, mode: "Road", status: "Planned", fromLocationId: 6, toLocationId: destinationLocationId, carrierId: carrierId || forwarderId || 15, plannedPickupDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", costAmount: 0, costCurrency: "PLN", costFxRate: 1, costPLN: 0, notes: "On-carriage after customs" },
     ];
   }
 
@@ -830,8 +848,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     expectedDeliveryDate: todayISO(),
     temperatureMinC: "2",
     temperatureMaxC: "8",
-    originLocationId: 101,
-    destinationLocationId: 301,
+    originLocationId: 1,
+    destinationLocationId: 10,
     product: "Goods",
     qtyKg: "1000",
     pallets: "1",

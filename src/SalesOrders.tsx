@@ -1,8 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
-import { LOCATIONS, locById as canonicalLocById } from "./locations";
-import { defaultSODateMeans, PromisedDateMeansSO } from "./flows";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -134,14 +132,18 @@ function _adaptPOsFromModule(pos) {
 }
 
 // ─── DESTINATIONS ─────────────────────────────────────────────────────────
-// Canonical list from ./locations.ts. The local LOCATION_TYPES below is just
-// UI metadata for the destination dropdown.
-const LOCATION_TYPES: any = {
-  ClientFacility:   { icon: "🎯", label: "Client site" },
-  RentedWarehouse:  { icon: "🏬", label: "Rented warehouse" },
-  OwnWarehouse:     { icon: "🏢", label: "Our warehouse" },
-  Port:             { icon: "⚓", label: "Port" },
-  Airport:          { icon: "✈", label: "Airport" },
+const LOCATIONS = [
+  { id: 10, type: "CLIENT", name: "Biedronka DC Poznań",     country: "Poland" },
+  { id: 11, type: "CLIENT", name: "Lidl DC Chorzów",         country: "Poland" },
+  { id: 12, type: "CLIENT", name: "Fresco Hamburg",          country: "Germany" },
+  { id: 13, type: "CLIENT", name: "Metro DC Warszawa",       country: "Poland" },
+  { id: 14, type: "CLIENT", name: "Euro-Papryka Tarczyn",    country: "Poland" },
+  { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)", country: "Poland" },
+  { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)", country: "Poland" },
+];
+const LOCATION_TYPES = {
+  CLIENT: { icon: "🎯", label: "Client site" },
+  OWN:    { icon: "🏢", label: "Our warehouse" },
 };
 
 // ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
@@ -187,11 +189,11 @@ const PAYMENT_TERMS = [
 export const INIT_ORDERS = [
   {
     id: 1, number: "SO-2026-0094", status: "Delivered",
-    orderDate: "2026-01-22", deliveryDate: "2026-01-25", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-25",
+    orderDate: "2026-01-22", deliveryDate: "2026-01-25",
     paymentTerms: "14 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[0],            // Biedronka
-    destinationLocationId: 301,     // Biedronka DC Poznań
+    destinationLocationId: 10,     // Biedronka DC Poznań
     currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-22",
     items: [
       { id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 8000, unitPrice: 0.32,
@@ -202,11 +204,11 @@ export const INIT_ORDERS = [
   },
   {
     id: 2, number: "SO-2026-0088", status: "Invoiced",
-    orderDate: "2026-01-15", deliveryDate: "2026-01-20", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-20",
+    orderDate: "2026-01-15", deliveryDate: "2026-01-20",
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[1],            // Lidl
-    destinationLocationId: 302,
+    destinationLocationId: 11,
     currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-15",
     items: [
       { id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 2400, unitPrice: 0.33,
@@ -217,11 +219,11 @@ export const INIT_ORDERS = [
   },
   {
     id: 3, number: "SO-2026-0091", status: "Shipped",
-    orderDate: "2026-01-26", deliveryDate: "2026-01-29", promisedDateMeans: "Pickup-ready at our side", actualDeliveryDate: "2026-01-29",
+    orderDate: "2026-01-26", deliveryDate: "2026-01-29",
     paymentTerms: "21 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "EXW",
     client: CLIENTS[4],            // Euro-Papryka
-    destinationLocationId: 101,      // EXW — picked up from our WH
+    destinationLocationId: 1,      // EXW — picked up from our WH
     currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-26",
     items: [
       { id: 1, product: "Papryka Kapia", origin: "Jordania", size: "M", quality: "I", unit: "Kg", qty: 6000, unitPrice: 2.10,
@@ -236,11 +238,11 @@ export const INIT_ORDERS = [
   },
   {
     id: 4, number: "SO-2026-0102", status: "Confirmed",
-    orderDate: "2026-05-20", deliveryDate: "2026-06-10", promisedDateMeans: "Delivery to client", actualDeliveryDate: null,
+    orderDate: "2026-05-20", deliveryDate: "2026-06-10",
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[0],            // Biedronka
-    destinationLocationId: 301,
+    destinationLocationId: 10,
     currency: "PLN", fxRate: 1, fxLockedAt: "2026-05-20",
     items: [
       { id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 8.40,
@@ -251,11 +253,11 @@ export const INIT_ORDERS = [
   },
   {
     id: 5, number: "SO-2026-0105", status: "Draft",
-    orderDate: "2026-05-26", deliveryDate: "2026-06-15", promisedDateMeans: "Delivery to client", actualDeliveryDate: null,
+    orderDate: "2026-05-26", deliveryDate: "2026-06-15",
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[2],            // Metro
-    destinationLocationId: 304,
+    destinationLocationId: 13,
     currency: "PLN", fxRate: 1, fxLockedAt: null,
     items: [
       { id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, unitPrice: 6.20,
@@ -937,11 +939,14 @@ function SODoc({ order }: any) {
               { en: "Unit Price",  pl: "Cena jedn.",   align: "right" },
               { en: "Currency",    pl: "Waluta",       align: "center" },
               { en: "Total",       pl: "Wartość",      align: "right" },
-            ].map((h, i) => (
-              <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: h.align, verticalAlign: "bottom" }}>
-                <BiLbl en={h.en} pl={h.pl} align={h.align} />
-              </th>
-            ))}
+            ].map((h, i) => {
+              const headerAlign = h.align as "left" | "center" | "right";
+              return (
+                <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: headerAlign, verticalAlign: "bottom" }}>
+                  <BiLbl en={h.en} pl={h.pl} align={headerAlign} />
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -1469,16 +1474,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" title="The date the SO was created/agreed with the client" />
               </div>
               <div>
-                <Lbl>Expected delivery date</Lbl>
-                <Inp value={order.deliveryDate} onChange={e => sf("deliveryDate", e.target.value)} type="date" title="When the goods are expected to reach the agreed point" />
-                <Sel value={order.promisedDateMeans || "Delivery to client"} onChange={e => sf("promisedDateMeans", e.target.value)} style={{ marginTop: 4, fontSize: 11, padding: "5px 8px" }}>
-                  {["Delivery to client", "Pickup-ready at our side", "Handover at relay", "Loading at supplier", "Arrival at destination port"].map(m => <option key={m} value={m}>means: {m}</option>)}
-                </Sel>
-              </div>
-              <div>
-                <Lbl>Actual delivery {order.actualDeliveryDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" title="When the goods actually reached the client. Leave blank until it happens." />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill in once delivered</div>
+                <Lbl>Delivery date</Lbl>
+                <Inp value={order.deliveryDate} onChange={e => sf("deliveryDate", e.target.value)} type="date" title="When the goods are expected to reach the client" />
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods arrive at client</div>
               </div>
               <div><Lbl>Status</Lbl>
                 <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
@@ -1533,7 +1531,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 14 }}>
               <div>
                 <Lbl>Sell Incoterm</Lbl>
-                <Sel value={order.sellIncoterm || ""} onChange={e => { const inc = e.target.value; setOrder(o => ({ ...o, sellIncoterm: inc, promisedDateMeans: defaultSODateMeans(inc) })); }} disabled={isLocked}>
+                <Sel value={order.sellIncoterm || ""} onChange={e => sf("sellIncoterm", e.target.value)} disabled={isLocked}>
                   <option value="">— select —</option>
                   {INCOTERMS_SELL.map(i => <option key={i.code} value={i.code}>{i.code}</option>)}
                 </Sel>
@@ -1548,13 +1546,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
                   <option value="">— select —</option>
                   <optgroup label="🎯 Client Site">
-                    {LOCATIONS.filter(l => l.type === "ClientFacility").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
-                  <optgroup label="🏬 Our Warehouse (EXW pickup)">
-                    {LOCATIONS.filter(l => l.type === "RentedWarehouse" || l.type === "OwnWarehouse").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </optgroup>
-                  <optgroup label="⚓ Port (CIF/CFR sales)">
-                    {LOCATIONS.filter(l => l.type === "Port" || l.type === "Airport").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  <optgroup label="🏢 Our Warehouse (EXW pickup)">
+                    {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
                 </Sel>
               </div>
@@ -2059,8 +2054,6 @@ export default function SalesOrders({
       status: "Draft",
       orderDate: new Date().toISOString().split("T")[0],
       deliveryDate: "",
-      promisedDateMeans: "Delivery to client",
-      actualDeliveryDate: null,
       paymentTerms: "30 days from invoice date",
       paymentTermsOther: "",
       sellIncoterm: "DAP",
@@ -2336,10 +2329,10 @@ export default function SalesOrders({
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No sales orders found.</div>}
           {filtered.map((o, idx) => {
             // Build a small sources summary string
-            const sources = o.items
-              .map(it => it.sourceRef ? `${it.sourceType === "STOCK" ? "📦" : "🚚"}${it.sourceRef}` : null)
-              .filter(Boolean);
-            const uniqueSources = [...new Set(sources)];
+            const sources: string[] = o.items
+              .map((it: any) => it.sourceRef ? `${it.sourceType === "STOCK" ? "📦" : "🚚"}${it.sourceRef}` : null)
+              .filter((value: any): value is string => typeof value === "string" && value.length > 0);
+            const uniqueSources: string[] = Array.from(new Set<string>(sources));
             // Quick overage check for the row badge
             const rowAvail = computeLineAvailability(o.items, orders, o.id);
             const rowOverageCount = rowAvail.filter(a => a.hasOverage).length;

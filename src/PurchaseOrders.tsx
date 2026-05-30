@@ -1,7 +1,5 @@
 import React, { useState, useRef, useMemo } from "react";
 import { getCounterpartiesByType } from "./Contacts";
-import { LOCATIONS, locById as canonicalLocById, Location } from "./locations";
-import { FLOWS, FlowCode, flowsByDirection, defaultPODateMeans, migrateLegacyFlow, PromisedDateMeansPO } from "./flows";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -59,62 +57,64 @@ const INCOTERMS_BUY = [
 // Flow types — 11 flows organised in two groups (EXP / IMP).
 // `buyIncoterms` is a soft hint used for the cross-validation warning, not a hard rule.
 // `defaultRequiresSea` pre-fills the per-PO sea-freight toggle; user can override per deal.
-// PO flow types — V5 CANONICAL CODES (see ./flows.ts for the authoritative spec).
-// FLOW_TYPES here adds UI metadata (short label, emoji, description) for each
-// flow. Keep the keys aligned with FlowCode in flows.ts.
 const FLOW_TYPES = {
-  // ── EXPORT ─────────────────────────────────────────────────────────────────
-  EXP_BY_SEA_CIF: {
-    group: "EXP", short: "EXP · Sea CIF", emoji: "🚢",
+  // ── EXPORT (we sell, origin in PL/EU) ──────────────────────────────────────
+  EXP_EXWS: {
+    group: "EXP", short: "EXP · EXWs — client pickup", emoji: "🤝",
+    buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
+    desc: "Client sends their truck to producer warehouse. We do paperwork only — no logistics on our side.",
+  },
+  EXP_FOB: {
+    group: "EXP", short: "EXP · FOB — we truck to port", emoji: "⚓",
+    buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
+    desc: "We truck from producer to port of loading. Client takes over from there (sea + onward). No sea on our side.",
+  },
+  EXP_CIF: {
+    group: "EXP", short: "EXP · CIF — own full logistics", emoji: "🚢",
     buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: true,
-    desc: "Supplier → our truck → customs → port → vessel → destination port (CIF transfer).",
+    desc: "Producer → our truck → port → vessel → destination port (CIF). We handle inland + sea + insurance.",
   },
-  EXP_BY_AIR_CIF: {
-    group: "EXP", short: "EXP · Air CIF", emoji: "✈️",
+  EXP_DDP_EU: {
+    group: "EXP", short: "EXP · DDP intra-EU", emoji: "🚛",
     buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
-    desc: "Premium products (blueberries etc.) — truck to airport → customs → flight → destination airport (CIF).",
+    desc: "Producer → our truck → EU client. No customs (free movement). DDP sale.",
   },
-  EXP_BY_TRUCK_DAP: {
-    group: "EXP", short: "EXP · Road DAP", emoji: "🚛",
+  EXP_DDP_XEU: {
+    group: "EXP", short: "EXP · DDP extra-EU", emoji: "🛃",
     buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
-    desc: "Supplier → our truck → customs (if needed) → client warehouse. DAP sale.",
-  },
-  EXP_BY_TRUCK_RELAY: {
-    group: "EXP", short: "EXP · Road relay", emoji: "🔁",
-    buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
-    desc: "Our truck → handover at a relay point where client's truck takes over for the final leg.",
+    desc: "Producer → our truck → export customs → non-EU client. DDP sale (we cover everything).",
   },
 
-  // ── IMPORT ─────────────────────────────────────────────────────────────────
-  IMP_CIF_TO_OUR_WH: {
-    group: "IMP", short: "IMP · Sea CIF → our WH", emoji: "📦",
-    buyIncoterms: ["CIF", "CFR"], defaultRequiresSea: true,
-    desc: "Supplier ships CIF to EU port. Our forwarder receives, customs clears, our truck → our rented WH.",
+  // ── IMPORT (we buy, origin overseas/EU) ────────────────────────────────────
+  IMP_EXWS_WH: {
+    group: "IMP", short: "IMP · EXWs → our WH", emoji: "🔄",
+    buyIncoterms: ["EXW", "FCA", "FOB"], defaultRequiresSea: true,
+    desc: "Our truck picks up at supplier. Sea freight typical for extra-EU origin. Import customs. Lands in our WH for split distribution.",
   },
-  IMP_CIF_TO_CLIENT_WH: {
+  IMP_EXWS_DIR: {
+    group: "IMP", short: "IMP · EXWs → direct to client", emoji: "↗️",
+    buyIncoterms: ["EXW", "FCA", "FOB"], defaultRequiresSea: true,
+    desc: "Our truck picks up at supplier. Sea freight typical for extra-EU origin. Import customs. Delivered straight to client (no WH stop).",
+  },
+  IMP_CIF_WH: {
+    group: "IMP", short: "IMP · CIF → our WH", emoji: "📦",
+    buyIncoterms: ["CIF", "CFR"], defaultRequiresSea: true,
+    desc: "Supplier ships CIF to our destination port. We handle import customs and inland to our WH for split.",
+  },
+  IMP_CIF_DIR: {
     group: "IMP", short: "IMP · CIF → direct to client", emoji: "➡️",
     buyIncoterms: ["CIF", "CFR"], defaultRequiresSea: true,
-    desc: "Supplier ships CIF to EU port. After customs, our truck delivers direct to client warehouse.",
+    desc: "Supplier ships CIF to destination port. We handle customs + inland delivery direct to client.",
   },
-  IMP_CIF_CROSSDOCK: {
-    group: "IMP", short: "IMP · CIF crossdock", emoji: "🚏",
-    buyIncoterms: ["CIF", "CFR"], defaultRequiresSea: true,
-    desc: "Supplier ships CIF to EU port. After customs, client's truck loads directly from the port — no detour.",
-  },
-  IMP_DDP_TO_OUR_WH: {
+  IMP_DDP_WH: {
     group: "IMP", short: "IMP · DDP → our WH", emoji: "🏭",
     buyIncoterms: ["DDP", "DAP"], defaultRequiresSea: false,
-    desc: "Supplier handles all transport + customs. Goods arrive at our rented WH for QC and onward sale.",
+    desc: "Supplier delivers DDP to our warehouse. We just receive and sort/repack.",
   },
-  IMP_DDP_TO_CLIENT_WH: {
+  IMP_DDP_DIR: {
     group: "IMP", short: "IMP · DDP → direct to client", emoji: "🎯",
     buyIncoterms: ["DDP", "DAP"], defaultRequiresSea: false,
-    desc: "Supplier handles everything end-to-end. Pass-through — but watch for client rejections (we may need to redirect to our WH).",
-  },
-  IMP_EXW: {
-    group: "IMP", short: "IMP · EXW (we manage all)", emoji: "🔄",
-    buyIncoterms: ["EXW", "FCA", "FOB"], defaultRequiresSea: true,
-    desc: "Rare. We arrange inland transport in supplier's country, sea freight, EU customs, onward delivery.",
+    desc: "Supplier delivers DDP straight to client. Pass-through deal — we do paperwork only.",
   },
 };
 
@@ -138,30 +138,43 @@ const PO_STATUSES = {
 
 const STATUS_LIFECYCLE = ["Draft", "Confirmed", "In Production", "Shipped", "Arrived", "Closed"];
 
-// Destination location pool — V5 uses canonical locations from ./locations.ts.
-// LOCATION_TYPES below is just UI metadata (icon + label) for the location-type
-// values used in the destination dropdown's optgroups.
-const LOCATION_TYPES: any = {
-  OwnWarehouse:     { label: "Own Warehouse",     color: "#059669", icon: "🏢" },
-  RentedWarehouse:  { label: "Rented Warehouse",  color: "#0284C7", icon: "🏬" },
-  Port:             { label: "Port",              color: "#D97706", icon: "⚓" },
-  Airport:          { label: "Airport",           color: "#A855F7", icon: "✈" },
-  ClientFacility:   { label: "Client Site",       color: "#7C3AED", icon: "🎯" },
+// Destination location pool (mirrors Inventory/Shipments)
+const LOCATION_TYPES = {
+  OWN:      { label: "Our Warehouse",  color: "#0284C7", icon: "🏢" },
+  PORT:     { label: "Port / Transit", color: "#D97706", icon: "⚓" },
+  CLIENT:   { label: "Client Site",    color: "#7C3AED", icon: "🎯" },
 };
+const LOCATIONS = [
+  // Our warehouses
+  { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)",    country: "Poland" },
+  { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)", country: "Poland" },
+  // Ports
+  { id: 6,  type: "PORT",   name: "Gdańsk Port",                country: "Poland" },
+  { id: 7,  type: "PORT",   name: "Hamburg Port",               country: "Germany" },
+  { id: 8,  type: "PORT",   name: "Algeciras Port",             country: "Spain" },
+  { id: 9,  type: "PORT",   name: "Port of Jeddah",             country: "Saudi Arabia" },
+  // Client destinations
+  { id: 10, type: "CLIENT", name: "Biedronka DC Poznań",        country: "Poland" },
+  { id: 11, type: "CLIENT", name: "Lidl DC Chorzów",            country: "Poland" },
+  { id: 12, type: "CLIENT", name: "Fresco Hamburg",             country: "Germany" },
+  { id: 13, type: "CLIENT", name: "Metro DC Warszawa",          country: "Poland" },
+  { id: 14, type: "CLIENT", name: "Euro-Papryka Tarczyn",       country: "Poland" },
+];
 
-// Typical destination location type for each canonical V5 flow code.
-// Drives optgroup ordering in the destination dropdown.
-const FLOW_DESTINATION_TYPE: Record<string, string> = {
-  EXP_BY_SEA_CIF:       "Port",
-  EXP_BY_AIR_CIF:       "Airport",
-  EXP_BY_TRUCK_DAP:     "ClientFacility",
-  EXP_BY_TRUCK_RELAY:   "ClientFacility",
-  IMP_CIF_TO_OUR_WH:    "RentedWarehouse",
-  IMP_CIF_TO_CLIENT_WH: "ClientFacility",
-  IMP_CIF_CROSSDOCK:    "Port",
-  IMP_DDP_TO_OUR_WH:    "RentedWarehouse",
-  IMP_DDP_TO_CLIENT_WH: "ClientFacility",
-  IMP_EXW:              "RentedWarehouse",
+// Which location type is the typical destination for each flow (drives optgroup ordering in the dropdown).
+// User can still pick from any type — this just shows the most common option first.
+const FLOW_DESTINATION_TYPE = {
+  EXP_EXWS:     "PORT",
+  EXP_FOB:      "PORT",
+  EXP_CIF:      "PORT",
+  EXP_DDP_EU:   "CLIENT",
+  EXP_DDP_XEU:  "CLIENT",
+  IMP_EXWS_WH:  "OWN",
+  IMP_EXWS_DIR: "CLIENT",
+  IMP_CIF_WH:   "OWN",
+  IMP_CIF_DIR:  "CLIENT",
+  IMP_DDP_WH:   "OWN",
+  IMP_DDP_DIR:  "CLIENT",
 };
 
 // Stub FX rates for currency conversion in summary (would come from NBP in production)
@@ -196,11 +209,11 @@ function suppliersFromContacts(contacts) {
 export const INITIAL_ORDERS = [
   {
     id: 1, number: "PO-2025-0468", status: "Arrived",
-    orderDate: "2025-10-10", loadingDate: "2025-10-15", expectedDeliveryDate: "2026-05-20", promisedDateMeans: "Arrival at port", actualAvailabilityDate: "2026-05-20",
+    orderDate: "2025-10-10", loadingDate: "2025-10-15", expectedDeliveryDate: "2026-05-20",
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "EXW", flow: "EXP_BY_SEA_CIF",
+    buyIncoterm: "EXW", flow: "EXP_CIF",
     supplier: SUPPLIERS[0],
-    destinationLocationId: 401, requiresSea: true,
+    destinationLocationId: 6, requiresSea: true,
     currency: "PLN", fxRate: 1, fxLockedAt: "2025-10-10",
     items: [{ id: 1, product: "Golden Delicious", coloration: "przełamany", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 19422, unitPrice: 2.80, currency: "PLN", packaging: "13 kg wooden box" }],
     notes: 'Łuszczka na trzy deski "NO NAME" ; górna warstwa dla kalibrów 70/80 na wytłoczce\nFolia "MARIANNA" & sticker "MARIANNA" na górnej wrastwie',
@@ -211,11 +224,11 @@ export const INITIAL_ORDERS = [
   },
   {
     id: 2, number: "PO-2026-0112", status: "Draft",
-    orderDate: "2026-05-20", loadingDate: "2026-05-28", expectedDeliveryDate: "2026-06-02", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
+    orderDate: "2026-05-20", loadingDate: "2026-05-28", expectedDeliveryDate: "2026-06-02",
     paymentTerms: "14 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "DDP", flow: "IMP_DDP_TO_OUR_WH",
+    buyIncoterm: "DDP", flow: "IMP_DDP_WH",
     supplier: SUPPLIERS[1],
-    destinationLocationId: 101, requiresSea: false,
+    destinationLocationId: 1, requiresSea: false,
     currency: "EUR", fxRate: 4.2531, fxLockedAt: null,
     items: [{ id: 1, product: "Red Bell Pepper", coloration: "", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 1.85, currency: "EUR", packaging: "5 kg carton" }],
     notes: "",
@@ -226,11 +239,11 @@ export const INITIAL_ORDERS = [
   },
   {
     id: 3, number: "PO-2026-0118", status: "Arrived",
-    orderDate: "2026-04-22", loadingDate: "2026-05-02", expectedDeliveryDate: "2026-05-15", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: "2026-05-15",
+    orderDate: "2026-04-22", loadingDate: "2026-05-02", expectedDeliveryDate: "2026-05-15",
     paymentTerms: "Advance payment", paymentTermsOther: "",
-    buyIncoterm: "CIF", flow: "IMP_CIF_TO_OUR_WH",
+    buyIncoterm: "CIF", flow: "IMP_CIF_WH",
     supplier: SUPPLIERS[2],
-    destinationLocationId: 101, requiresSea: true,
+    destinationLocationId: 1, requiresSea: true,
     currency: "USD", fxRate: 3.8812, fxLockedAt: "2026-04-22",
     items: [{ id: 1, product: "Carrot", coloration: "", origin: "Morocco", size: "L", quality: "I", unit: "Kg", qty: 24000, unitPrice: 0.55, currency: "USD", packaging: "10 kg mesh bag" }],
     notes: "CIF Gdańsk. Supplier handles sea freight, we customs and inland.",
@@ -241,11 +254,11 @@ export const INITIAL_ORDERS = [
   },
   {
     id: 4, number: "PO-2026-0117", status: "Shipped",
-    orderDate: "2026-05-05", loadingDate: "2026-05-20", expectedDeliveryDate: "2026-05-30", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: "2026-05-30",
+    orderDate: "2026-05-05", loadingDate: "2026-05-20", expectedDeliveryDate: "2026-05-30",
     paymentTerms: "Cash against documents", paymentTermsOther: "",
-    buyIncoterm: "EXW", flow: "IMP_EXW",
+    buyIncoterm: "EXW", flow: "IMP_EXWS_WH",
     supplier: SUPPLIERS[2],
-    destinationLocationId: 101, requiresSea: true,
+    destinationLocationId: 1, requiresSea: true,
     currency: "USD", fxRate: 3.8812, fxLockedAt: "2026-05-05",
     items: [{ id: 1, product: "Papryka Kapia", coloration: "", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, unitPrice: 1.20, currency: "USD", packaging: "5 kg carton" }],
     notes: "EXW Agadir. Container at Gdańsk awaiting customs.",
@@ -256,11 +269,11 @@ export const INITIAL_ORDERS = [
   },
   {
     id: 5, number: "PO-2026-0121", status: "Confirmed",
-    orderDate: "2026-05-15", loadingDate: "2026-06-02", expectedDeliveryDate: "2026-06-05", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
+    orderDate: "2026-05-15", loadingDate: "2026-06-02", expectedDeliveryDate: "2026-06-05",
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "DDP", flow: "IMP_DDP_TO_OUR_WH",
+    buyIncoterm: "DDP", flow: "IMP_DDP_WH",
     supplier: SUPPLIERS[1],
-    destinationLocationId: 101, requiresSea: false,
+    destinationLocationId: 1, requiresSea: false,
     currency: "EUR", fxRate: 4.2531, fxLockedAt: "2026-05-15",
     items: [{ id: 1, product: "Red Bell Pepper", coloration: "", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 8000, unitPrice: 1.85, currency: "EUR", packaging: "5 kg carton" }],
     notes: "DDP delivery to WH-01 Poznań. Pre-sold from PO source to SO-2026-0102.",
@@ -340,8 +353,7 @@ function fmtMoney(n, cur = "PLN") {
 }
 function fmtDate(d) { return d || "—"; }
 
-// Use canonical locById from ./locations
-function locById(id: any): any { return canonicalLocById(id); }
+function locById(id) { return LOCATIONS.find(l => l.id === id); }
 function netTotal(items) { return items.reduce((s, i) => s + (parseFloat(i.qty) || 0) * (parseFloat(i.unitPrice) || 0), 0); }
 
 // Generate next PO number for the current year by finding the highest existing sequence and adding 1.
@@ -493,11 +505,14 @@ function PODoc({ order }: any) {
               { en: "Unit Price",  pl: "Cena jedn.",   align: "right" },
               { en: "Currency",    pl: "Waluta",       align: "center" },
               { en: "Total",       pl: "Wartość",      align: "right" },
-            ].map((h, i) => (
-              <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: h.align, verticalAlign: "bottom" }}>
-                <BiLbl en={h.en} pl={h.pl} align={h.align} />
-              </th>
-            ))}
+            ].map((h, i) => {
+              const headerAlign = h.align as "left" | "center" | "right";
+              return (
+                <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: headerAlign, verticalAlign: "bottom" }}>
+                  <BiLbl en={h.en} pl={h.pl} align={headerAlign} />
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -919,16 +934,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods leave origin</div>
               </div>
               <div>
-                <Lbl>Expected delivery date</Lbl>
-                <Inp value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed point" />
-                <Sel value={order.promisedDateMeans || "Arrival at our warehouse"} onChange={e => sf("promisedDateMeans", e.target.value)} style={{ marginTop: 4, fontSize: 11, padding: "5px 8px" }}>
-                  {["Pickup from supplier", "Arrival at port", "Arrival at our warehouse", "Arrival at client"].map(m => <option key={m} value={m}>means: {m}</option>)}
-                </Sel>
-              </div>
-              <div>
-                <Lbl>Actual availability {order.actualAvailabilityDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualAvailabilityDate || ""} onChange={e => sf("actualAvailabilityDate", e.target.value || null)} type="date" title="When the goods actually became available at our side (customs-cleared / received). Leave blank until it happens." />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill in once it actually arrives</div>
+                <Lbl>Expected delivery</Lbl>
+                <Inp value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the destination (our WH / port / client)" />
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods arrive at destination</div>
               </div>
               <div><Lbl>Status</Lbl>
                 <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
@@ -960,8 +968,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     requiresSea: (o.requiresSea === undefined || o.requiresSea === null)
                       ? (FLOW_TYPES[nextFlow]?.defaultRequiresSea || false)
                       : o.requiresSea,
-                    // Auto-set the date-meaning from the flow's typical destination
-                    promisedDateMeans: defaultPODateMeans(nextFlow),
                   }));
                 }}>
                   <option value="">— select —</option>
@@ -1310,8 +1316,8 @@ function LinkRow({ label, items, color, bg }: any) {
 }
 
 
-function uniqRefs(arr) {
-  return Array.from(new Set((arr || []).filter(Boolean)));
+function uniqRefs(arr: any[]): string[] {
+  return Array.from(new Set<string>((arr || []).filter((value: any): value is string => typeof value === "string" && value.length > 0)));
 }
 
 function isInventoryTransferStatus(status) {
@@ -1521,7 +1527,6 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
       number: nextNum, status: "Draft",
       orderDate: new Date().toISOString().split("T")[0],
       loadingDate: "", expectedDeliveryDate: "",
-      promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
       paymentTerms: "30 days from invoice date", paymentTermsOther: "",
       buyIncoterm: "", flow: "",
       supplier: null, destinationLocationId: null, requiresSea: false,
