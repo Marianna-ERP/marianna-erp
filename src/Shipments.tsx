@@ -75,6 +75,14 @@ const COST_TYPES = [
   { code: "other", label: "Other", inventoryType: "other" },
 ];
 
+// Core freight cost lines that must not be deleted from a shipment (it should always
+// keep its primary freight cost). Pre/on-carriage are NOT locked — they are optional
+// sub-legs the user may legitimately remove.
+const PROTECTED_FREIGHT_TYPES = new Set(["road_freight", "sea_freight", "rail_freight", "air_freight"]);
+function isFreightCostType(type) {
+  return PROTECTED_FREIGHT_TYPES.has(type);
+}
+
 const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
 
 const FALLBACK_PROVIDERS = [
@@ -600,7 +608,13 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
   const poLotRefs = uniq([...(po.linkedLots || []), ...(lots || []).filter(l => l.poRef === po.number).map(l => l.number)]);
   // Find any SO that sources from this PO, so goods rows can carry the SO ref.
   const soRefForPO = (opts.soRefs && opts.soRefs[0]) || "";
-  const goods = (po.items || []).map((it, idx) => {
+  // The user may load only SOME of the PO's products on this shipment. If
+  // opts.selectedItemIds is provided, restrict goods to those line ids; otherwise
+  // include all PO items (back-compat).
+  const itemsToLoad = (opts.selectedItemIds && opts.selectedItemIds.length)
+    ? (po.items || []).filter((it, idx) => opts.selectedItemIds.map(String).includes(String(it.id ?? idx + 1)))
+    : (po.items || []);
+  const goods = itemsToLoad.map((it, idx) => {
     const lot = poLotRefs[idx] || poLotRefs[0] || "";
     return {
       id: idx + 1,
@@ -889,6 +903,9 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const seaProviders = logisticsProviders(contacts, "Sea");
   const [sourceType, setSourceType] = useState("PO");
   const [ref, setRef] = useState((pos?.[0]?.number) || "");
+  // Which PO line ids are loaded on this shipment (default: all). Lets the user load
+  // a subset of a multi-product PO.
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [form, setForm] = useState({
     mode: "Road",
     carrierId: roadProviders[0]?.id || 1001,
@@ -922,7 +939,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       const linkedSOs = (orders || [])
         .filter(o => (o.items || []).some(it => it.sourceType === "PO" && it.sourceRef === selectedPO.number))
         .map(o => o.number);
-      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs: linkedSOs }, shipments, lots);
+      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs: linkedSOs, selectedItemIds }, shipments, lots);
     }
     else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, form, shipments, lots);
     else sh = buildManualShipment(form, shipments);
@@ -944,6 +961,32 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
             <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={e => sf("currency", e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
           </div>
         </Card>
+
+        {sourceType === "PO" && selectedPO && (selectedPO.items || []).length > 0 && (
+          <Card>
+            <SectionTitle>Products to load on this shipment</SectionTitle>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>This PO has {(selectedPO.items || []).length} product line(s). Tick the ones physically loaded on this shipment — only those appear on the transport order and goods. (None ticked = all loaded.)</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {(selectedPO.items || []).map((it, idx) => {
+                const id = String(it.id ?? idx + 1);
+                const checked = selectedItemIds.length === 0 || selectedItemIds.includes(id);
+                return (
+                  <label key={id} style={{ display: "inline-flex", gap: 7, alignItems: "center", fontSize: 12.5, border: "1px solid", borderColor: checked ? "#2563EB" : "#E5E7EB", background: checked ? "#EFF6FF" : "#fff", borderRadius: 8, padding: "7px 11px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={checked} onChange={() => {
+                      const all = (selectedPO.items || []).map((x, i2) => String(x.id ?? i2 + 1));
+                      // If currently "all" (empty), start from the full set, then toggle this id off.
+                      const base = selectedItemIds.length === 0 ? all : selectedItemIds;
+                      const next = base.includes(id) ? base.filter(x => x !== id) : [...base, id];
+                      // If user re-selected everything, collapse back to "all" (empty array).
+                      setSelectedItemIds(next.length === all.length ? [] : next);
+                    }} />
+                    <span><strong>{it.product || "Product"}</strong>{it.size ? ` · ${it.size}` : ""}{it.packaging ? ` · ${it.packaging}` : ""} · {fmtNum(parseNum(it.qty))} kg</span>
+                  </label>
+                );
+              })}
+            </div>
+          </Card>
+        )}
         <Card>
           <SectionTitle>{(form.mode === "Multimodal" || form.mode === "Sea") ? "Providers" : "Provider and cost"}</SectionTitle>
           <div style={{ display: "grid", gap: 12 }}>
@@ -1025,7 +1068,18 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
     setDraft(prev => ({ ...prev, documents: (prev.documents || []).map((d, i) => i === idx ? { ...d, [k]: v } : d) }));
   }
   function addCost() {
-    setDraft(prev => ({ ...prev, costs: [...(prev.costs || []), { id: Date.now(), type: "road_freight", supplierId: prev.carrierId || prev.forwarderId || 1001, amount: 0, currency: "PLN", fxRate: 1, amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] }));
+    // New manual lines default to a non-freight type ("other") so they're freely
+    // deletable; freight lines are reserved for the per-leg freight created by the builder.
+    setDraft(prev => ({ ...prev, costs: [...(prev.costs || []), { id: Date.now(), type: "other", supplierId: prev.carrierId || prev.forwarderId || 1001, amount: 0, currency: "PLN", fxRate: 1, amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] }));
+  }
+  function removeCost(idx) {
+    const c = (draft.costs || [])[idx];
+    if (c && isFreightCostType(c.type)) {
+      window.alert("Freight lines (road / sea / air / rail freight) can't be deleted here — a shipment must keep its freight cost. Change the amount to 0 if it doesn't apply, or edit the type.");
+      return;
+    }
+    if (!window.confirm("Delete this cost line?")) return;
+    setDraft(prev => ({ ...prev, costs: (prev.costs || []).filter((_, i) => i !== idx) }));
   }
 
   function updateVehicle(legIdx, unitIdx, k, v) {
@@ -1121,8 +1175,8 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
               <div><Lbl>Driver name</Lbl><Inp value={leg.driverName} onChange={e => updateLeg(i, "driverName", e.target.value)} /></div>
               <div><Lbl>Driver phone</Lbl><Inp value={leg.driverPhone} onChange={e => updateLeg(i, "driverPhone", e.target.value)} /></div>
             </div>
-            {(draft.mode === "Sea" || draft.mode === "Multimodal" || leg.mode === "Sea") && <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 9, marginTop: 9 }}>
-              <div><Lbl>Container</Lbl><Inp value={leg.containerNumber} onChange={e => updateLeg(i, "containerNumber", e.target.value)} /></div>
+            {(draft.mode === "Sea" || draft.mode === "Multimodal" || leg.mode === "Sea") && <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1.3fr 1fr", gap: 9, marginTop: 9 }}>
+              <div><Lbl>Container</Lbl><Inp value={leg.containerNumber} onChange={e => updateLeg(i, "containerNumber", e.target.value)} placeholder="e.g. MSCU1234567" /></div>
               <div><Lbl>Seal</Lbl><Inp value={leg.sealNumber} onChange={e => updateLeg(i, "sealNumber", e.target.value)} /></div>
               <div><Lbl>Booking</Lbl><Inp value={leg.bookingNumber} onChange={e => updateLeg(i, "bookingNumber", e.target.value)} /></div>
               <div><Lbl>BL</Lbl><Inp value={leg.blNumber} onChange={e => updateLeg(i, "blNumber", e.target.value)} /></div>
@@ -1133,7 +1187,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Transport units for this leg · trucks / containers / AWB</div>
                 <SmallButton onClick={() => addVehicle(i)}>+ Add unit</SmallButton>
               </div>
-              {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => <div key={u.id || ui} style={{ display: "grid", gridTemplateColumns: "70px 100px 100px 110px 110px 1fr 1fr 1fr 1fr 80px", gap: 7, marginBottom: 8, alignItems: "end" }}>
+              {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => <div key={u.id || ui} style={{ display: "grid", gridTemplateColumns: "50px 90px 90px 100px 100px 1fr 1fr 1.5fr 90px 1.3fr 70px", gap: 7, marginBottom: 8, alignItems: "end" }}>
                 <div><Lbl>Unit</Lbl><div style={{ fontSize: 12, fontWeight: 800 }}>#{ui + 1}</div></div>
                 <div><Lbl>Mode</Lbl><Sel value={u.mode || leg.mode} onChange={e => updateVehicle(i, ui, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
                 <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
@@ -1141,7 +1195,8 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
                 <div><Lbl>Trailer</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>
                 <div><Lbl>Driver</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
                 <div><Lbl>Phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} /></div>
-                <div><Lbl>Container / Seal</Lbl><Inp value={[u.containerNumber, u.sealNumber].filter(Boolean).join(" / ")} onChange={e => { const parts = String(e.target.value).split("/").map(x => x.trim()); updateVehicle(i, ui, "containerNumber", parts[0] || ""); updateVehicle(i, ui, "sealNumber", parts[1] || ""); }} /></div>
+                <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
+                <div><Lbl>Seal</Lbl><Inp value={u.sealNumber || ""} onChange={e => updateVehicle(i, ui, "sealNumber", e.target.value)} /></div>
                 <div><Lbl>BL / AWB</Lbl><Inp value={[u.blNumber, u.awbNumber].filter(Boolean).join(" / ")} onChange={e => { const parts = String(e.target.value).split("/").map(x => x.trim()); updateVehicle(i, ui, "blNumber", parts[0] || ""); updateVehicle(i, ui, "awbNumber", parts[1] || ""); }} /></div>
                 <SmallButton onClick={() => removeVehicle(i, ui)}>Remove</SmallButton>
               </div>)}
@@ -1151,7 +1206,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
         </Card>
         <Card>
           <SectionTitle right={<SmallButton onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
-          {(draft.costs || []).map((c, i) => <div key={c.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.7fr 0.6fr 0.8fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+          {(draft.costs || []).map((c, i) => <div key={c.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.7fr 0.6fr 0.8fr 1fr 1fr 0.5fr", gap: 8, marginBottom: 8 }}>
             <div><Lbl>Type</Lbl><Sel value={c.type} onChange={e => updateCost(i, "type", e.target.value)}>{COST_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
             <div><Lbl>Supplier</Lbl><Sel value={c.supplierId || ""} onChange={e => updateCost(i, "supplierId", e.target.value ? parseNum(e.target.value) : null)}>{logisticsProviders(contacts).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
             <div><Lbl>Amount</Lbl><Inp type="number" value={c.amount} onChange={e => updateCost(i, "amount", e.target.value)} /></div>
@@ -1159,6 +1214,9 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
             <div><Lbl>FX</Lbl><Inp type="number" value={c.fxRate} onChange={e => updateCost(i, "fxRate", e.target.value)} /></div>
             <div><Lbl>Status</Lbl><Sel value={c.invoiceStatus} onChange={e => updateCost(i, "invoiceStatus", e.target.value)}><option>Expected</option><option>Received</option><option>Approved</option><option>Posted</option><option>Paid</option></Sel></div>
             <div><Lbl>Invoice ref</Lbl><Inp value={c.invoiceRef} onChange={e => updateCost(i, "invoiceRef", e.target.value)} /></div>
+            <div><Lbl>&nbsp;</Lbl>{isFreightCostType(c.type)
+              ? <span title="Freight lines can't be deleted" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", height: 34, width: "100%", color: "#9CA3AF", fontSize: 14 }}>🔒</span>
+              : <button onClick={() => removeCost(i)} title="Delete this cost line" style={{ height: 34, width: "100%", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>✕</button>}</div>
           </div>)}
           <div style={{ textAlign: "right", fontSize: 13, color: "#444", marginTop: 8 }}>Total: <strong>{fmtMoney(shipmentCostPLN(draft), "PLN")}</strong></div>
         </Card>
