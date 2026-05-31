@@ -406,7 +406,7 @@ function locationDatalistId(prefix, legIdx) {
 function providerRoleForLeg(leg, providerId) {
   if (String(leg.carrierId || "") === String(providerId || "")) return "Carrier";
   if (String(leg.forwarderId || "") === String(providerId || "")) return "Forwarder";
-  return "Provider";
+  return "Carrier";
 }
 
 function providerIdsForShipment(shipment) {
@@ -415,8 +415,10 @@ function providerIdsForShipment(shipment) {
     if (leg.carrierId) ids.push(leg.carrierId);
     if (leg.forwarderId) ids.push(leg.forwarderId);
   });
-  (shipment.costs || []).forEach(c => { if (c.supplierId) ids.push(c.supplierId); });
-  // Only fall back to shipment-level providers if no leg carried any provider at all
+  // NOTE: we intentionally do NOT pull from shipment.costs[].supplierId — a cost
+  // line can reference a broker or other party not actually performing transport,
+  // which would wrongly appear in the transport-order provider dropdown.
+  // Only fall back to shipment-level providers if no leg carried any provider at all.
   if (!ids.length) {
     if (shipment.carrierId) ids.push(shipment.carrierId);
     if (shipment.forwarderId) ids.push(shipment.forwarderId);
@@ -584,18 +586,23 @@ function norm(v) {
 function buildShipmentFromPO(po, opts, shipments, lots) {
   const id = Date.now();
   const number = nextShipmentNumber(shipments);
+  const isExport = String(po.flow || "").startsWith("EXP");
   const mode = opts.mode || (po.requiresSea ? "Multimodal" : "Road");
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
-  const originLocationId = guessSupplierLocationId(po) || opts.originLocationId || 3;
-  const destinationLocationId = po.destinationLocationId || opts.destinationLocationId || 1;
+  // Origin = supplier facility (PO pickup). Destination = the PO's actual destination
+  // (do NOT default to WH-01 — leave unset so the user picks it if the PO has none).
+  const originLocationId = guessSupplierLocationId(po) || opts.originLocationId || null;
+  const destinationLocationId = po.destinationLocationId || opts.destinationLocationId || null;
   const poLotRefs = uniq([...(po.linkedLots || []), ...(lots || []).filter(l => l.poRef === po.number).map(l => l.number)]);
+  // Find any SO that sources from this PO, so goods rows can carry the SO ref.
+  const soRefForPO = (opts.soRefs && opts.soRefs[0]) || "";
   const goods = (po.items || []).map((it, idx) => {
     const lot = poLotRefs[idx] || poLotRefs[0] || "";
     return {
       id: idx + 1,
       poRef: po.number,
-      soRef: "",
+      soRef: soRefForPO,
       lotRef: lot,
       product: it.product || "Goods",
       origin: it.origin || po.supplier?.country || "",
@@ -603,24 +610,30 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
       size: it.size || "",
       packaging: it.packaging || "",
       qtyKg: parseNum(it.qty),
-      grossKg: Math.round(parseNum(it.qty) * 1.06),
-      pallets: Math.max(1, Math.round(parseNum(it.qty) / 900)),
+      grossKg: parseNum(it.grossKg) || 0,
+      pallets: parseNum(it.pallets) || 0,   // do NOT auto-guess pallets — leave 0 until entered
       description: `${it.product || "Goods"} ${it.packaging || ""}`.trim(),
     };
   });
   const totalKg = goods.reduce((s, g) => s + parseNum(g.qtyKg), 0);
-  const amount = parseNum(opts.amount, mode === "Road" ? 1700 : 3500);
-  const currency = opts.currency || (mode === "Sea" || mode === "Multimodal" ? "USD" : "EUR");
+  // Per-leg costs: caller may pass opts.legCosts; otherwise legs start at 0 cost
+  // (user fills them in) rather than every leg inheriting the same guessed amount.
+  const amount = parseNum(opts.amount, 0);
+  const currency = opts.currency || (mode === "Sea" || mode === "Multimodal" ? "USD" : "PLN");
   const fxRate = parseNum(opts.fxRate, currency === "PLN" ? 1 : currency === "EUR" ? 4.25 : 3.9);
-  const baseCost = { id: 1, type: mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight", supplierId: forwarderId || carrierId || 15, amount, currency, fxRate, amountPLN: Math.round(amount * fxRate * 100) / 100, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Expected logistics cost" };
+  const freightType = mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight";
+  const baseCost = { id: 1, type: freightType, supplierId: carrierId || forwarderId || null, amount, currency, fxRate, amountPLN: Math.round(amount * fxRate * 100) / 100, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Expected logistics cost" };
 
   const roadLeg: any = { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, toLocationId: destinationLocationId, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Generated from ${po.number}` };
   let legs: any[] = [roadLeg];
   if (mode === "Multimodal" || mode === "Sea") {
+    // Multimodal: pre-carriage (road) → main (sea) → on-carriage (road).
+    // Each leg starts with ZERO cost so the user enters the real per-leg figure;
+    // we no longer copy the same amount onto every leg.
     legs = [
-      { ...roadLeg, id: 1, mode: "Road", toLocationId: 23, notes: `Pre-carriage for ${po.number}` },
-      { id: 2, mode: "Sea", status: "Booked", fromLocationId: 23, toLocationId: 6, forwarderId: forwarderId || 15, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Sea leg for ${po.number}` },
-      { id: 3, mode: "Road", status: "Planned", fromLocationId: 6, toLocationId: destinationLocationId, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", costAmount: 0, costCurrency: "PLN", costFxRate: 1, costPLN: 0, notes: "On-carriage after customs" },
+      { ...roadLeg, id: 1, mode: "Road", toLocationId: null, costAmount: 0, costPLN: 0, notes: `Pre-carriage for ${po.number}` },
+      { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, toLocationId: destinationLocationId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${po.number}` },
+      { id: 3, mode: "Road", status: "Planned", fromLocationId: null, toLocationId: destinationLocationId, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", costAmount: 0, costCurrency: "PLN", costFxRate: 1, costPLN: 0, notes: "On-carriage after customs" },
     ];
   }
 
@@ -629,7 +642,7 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
     number,
     transportOrderNo: number,
     mode,
-    purpose: mode === "Road" && String(po.flow || "").startsWith("EXP") ? "PO_EXPORT" : "PO_IMPORT",
+    purpose: String(po.flow || "").startsWith("EXP") ? "PO_EXPORT" : "PO_IMPORT",
     status: "Booked",
     poRefs: [po.number],
     soRefs: [],
@@ -1237,26 +1250,25 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
   ];
 
   return (
-    <div style={{ background: "#fff", color: "#111", fontFamily: "Arial, Calibri, sans-serif", fontSize: 11.2, lineHeight: 1.33, padding: 18 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 10, marginBottom: 12 }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-          <img src={LOGO_DATA_URL} alt="MARIANNA" style={{ width: 104, height: "auto", objectFit: "contain" }} />
+    <div style={{ background: "#fff", color: "#111", fontFamily: "Arial, Calibri, sans-serif", fontSize: 10, lineHeight: 1.22, padding: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 6, marginBottom: 8 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <img src={LOGO_DATA_URL} alt="MARIANNA" style={{ width: 82, height: "auto", objectFit: "contain" }} />
           <div>
-            <div style={{ fontSize: 14, fontWeight: 850 }}>{COMPANY.name}</div>
+            <div style={{ fontSize: 12, fontWeight: 850 }}>{COMPANY.name}</div>
             <div>{COMPANY.address1}</div><div>{COMPANY.address2}</div><div>NIP: {COMPANY.nip}</div>
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 16, fontWeight: 850 }}>{providerRole.toUpperCase()} ORDER / ZLECENIE DLA {providerRole.toUpperCase()}</div>
-          <div style={{ fontSize: 14, fontWeight: 800 }}>No {docNo}</div>
-          <div>Page / Strona: 1/1</div>
-          <div>Date / Data: {todayISO()}</div>
+          <div style={{ fontSize: 13, fontWeight: 850 }}>{providerRole.toUpperCase()} ORDER / ZLECENIE DLA {providerRole.toUpperCase()}</div>
+          <div style={{ fontSize: 12, fontWeight: 800 }}>No {docNo}</div>
+          <div>Page / Strona: 1/1 · Date / Data: {todayISO()}</div>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "7px 12px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 10px" }}>
         <FieldPrint en="Carrier / contractor" pl="Zleceniobiorca" value={`${provider.name || "TBA"}\n${provider.address || ""}\nNIP ${provider.nip || "-"}`} />
-        <FieldPrint en="Transport units" pl="Liczba pojazdow / jednostek" value={`${shipmentVehicleCount(shipment) || units.length || 1} unit(s) / pojazd(y)`} />
+        <FieldPrint en="Transport units" pl="Liczba pojazdow / jednostek" value={`${units.length || 1} unit(s) / pojazd(y)`} />
         <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={locationTextFromFields(firstLeg.fromLocationId || shipment.originLocationId, firstLeg.fromCustom || shipment.originCustom)} />
         <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={locationTextFromFields(lastLeg.toLocationId || shipment.destinationLocationId, lastLeg.toCustom || shipment.destinationCustom)} />
         <FieldPrint en="Customs clearance" pl="Odprawa celna" value={shipment.customsClearance || (broker ? `${broker.name}\n${broker.address || ""}` : "TBA")} />
@@ -1267,40 +1279,40 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
         <FieldPrint en={`Agreed price for this ${providerRole.toLowerCase()} order`} pl="Uzgodniony fracht dla tego zlecenia" value={cost.amount ? fmtMoney(cost.amount, cost.currency) : selectedCosts.length ? fmtMoney(selectedCosts.reduce((sum, c) => sum + parseNum(c.amount), 0), selectedCosts[0]?.currency || "PLN") : fmtMoney(shipmentCostPLN(shipment), "PLN")} />
       </div>
 
-      <div style={{ marginTop: 12, fontWeight: 850, fontSize: 12 }}>Cargo / Ladunek</div>
-      <table style={{ marginTop: 4, borderCollapse: "collapse", width: "100%" }}>
-        <thead><tr>{["Product / Produkt", "Origin / Pochodzenie", "Packaging / Opakowanie", "Kg netto", "Pallets / Palety", "PO/SO/Lot"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 5, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
+      <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Cargo / Ladunek</div>
+      <table style={{ marginTop: 3, borderCollapse: "collapse", width: "100%" }}>
+        <thead><tr>{["Product / Produkt", "Origin / Pochodzenie", "Packaging / Opakowanie", "Kg netto", "Pallets / Palety", "PO/SO/Lot"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
         <tbody>{scopedGoods.map((g, i) => <tr key={i}>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5, fontWeight: 700 }}>{g.product}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{g.origin || "-"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{g.packaging || "-"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5, textAlign: "right" }}>{g.pallets || "-"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "-"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3, fontWeight: 700 }}>{g.product}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.origin || "-"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.packaging || "-"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{g.pallets || "-"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "-"}</td>
         </tr>)}</tbody>
       </table>
 
-      <div style={{ marginTop: 12, fontWeight: 850, fontSize: 12 }}>Truck / driver / container / BL / AWB units · Dane pojazdow / kierowcow / kontenerow / BL / AWB</div>
-      <table style={{ marginTop: 4, borderCollapse: "collapse", width: "100%" }}>
-        <thead><tr>{["Leg", "Mode", "From → To", "Truck / Trailer", "Driver / Phone", "Container / Seal", "BL / AWB", "Kg"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 5, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
+      <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Truck / driver / container / BL / AWB units · Dane pojazdow / kierowcow / kontenerow</div>
+      <table style={{ marginTop: 3, borderCollapse: "collapse", width: "100%" }}>
+        <thead><tr>{["Leg", "Mode", "From → To", "Truck / Trailer", "Driver / Phone", "Container / Seal", "BL / AWB", "Kg"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
         <tbody>{units.map((u, i) => <tr key={i}>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{u.legNo}.{u.unitNo || i + 1}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{u.mode || u.legMode}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{u.from} → {u.to}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{[u.truckPlate || u.vehiclePlate, u.trailerPlate].filter(Boolean).join(" / ") || "TBA"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{[u.driverName, u.driverPhone].filter(Boolean).join(" / ") || "TBA"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{[u.containerNumber, u.sealNumber].filter(Boolean).join(" / ") || "TBA"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5 }}>{[u.blNumber, u.awbNumber, u.bookingNumber].filter(Boolean).join(" / ") || "TBA"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 5, textAlign: "right" }}>{u.qtyKg ? fmtNum(u.qtyKg) : "-"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{u.legNo}.{u.unitNo || i + 1}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{u.mode || u.legMode}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{u.from} → {u.to}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[u.truckPlate || u.vehiclePlate, u.trailerPlate].filter(Boolean).join(" / ") || "TBA"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[u.driverName, u.driverPhone].filter(Boolean).join(" / ") || "TBA"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[u.containerNumber, u.sealNumber].filter(Boolean).join(" / ") || "TBA"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[u.blNumber, u.awbNumber, u.bookingNumber].filter(Boolean).join(" / ") || "TBA"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{u.qtyKg ? fmtNum(u.qtyKg) : "-"}</td>
         </tr>)}</tbody>
       </table>
 
-      <div style={{ marginTop: 12, fontWeight: 850, fontSize: 12 }}>Terms / Warunki</div>
-      <ol style={{ marginTop: 5, paddingLeft: 18 }}>{terms.map((t, i) => <li key={i} style={{ marginBottom: 3 }}><span>{t[0]}</span><br/><span style={{ color: "#555", fontStyle: "italic" }}>{t[1]}</span></li>)}</ol>
+      <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Terms / Warunki</div>
+      <ol style={{ marginTop: 3, paddingLeft: 16, marginBottom: 0 }}>{terms.map((t, i) => <li key={i} style={{ marginBottom: 1.5 }}><span>{t[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>/ {t[1]}</span></li>)}</ol>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, marginTop: 22 }}>
-        <div style={{ borderTop: "1px solid #111", paddingTop: 6, textAlign: "center" }}>Ordering party / Zleceniodawca<br/>Date, stamp and signature / Data, pieczatka i podpis</div>
-        <div style={{ borderTop: "1px solid #111", paddingTop: 6, textAlign: "center" }}>Carrier / Zleceniobiorca<br/>Date, stamp and signature / Data, pieczatka i podpis</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, marginTop: 14 }}>
+        <div style={{ borderTop: "1px solid #111", paddingTop: 4, textAlign: "center" }}>Ordering party / Zleceniodawca<br/>Date, stamp and signature / Data, pieczatka i podpis</div>
+        <div style={{ borderTop: "1px solid #111", paddingTop: 4, textAlign: "center" }}>Carrier / Zleceniobiorca<br/>Date, stamp and signature / Data, pieczatka i podpis</div>
       </div>
     </div>
   );

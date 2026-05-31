@@ -103,3 +103,45 @@ now fixed permanently. No source code changed.
    - Forwarder (Italy): "Adriatica Forwarding S.r.l." (Sea/Road/Customs)
 
 Inventory lot notes summary: left as-is (confirmed helpful).
+
+---
+
+## v6.0.3 — Shipment detail-view & transport-order fixes (testing round 2)
+
+All from direct testing of a direct-export PO→shipment:
+
+1. **Export shipment mislabeled "PO import"** — purpose is now decided purely by the
+   PO flow direction (EXP → export), regardless of transport mode. Previously only
+   road-mode exports were labeled correctly.
+
+2. **Phantom WH-01 Poznań on legs** — `buildShipmentFromPO` no longer defaults the
+   destination to WH-01 (id 1) or origin to id 3. They start unset so the user's
+   actual PO destination is used; multimodal intermediate legs start with no location
+   rather than hardcoded port ids.
+
+3. **Same cost shown on every leg** — the multimodal builder no longer copies one
+   freight amount onto all legs. Each leg starts at 0 cost for the user to fill, so
+   the per-leg cost display reflects the real figures.
+
+4. **SO number missing in goods PO/SO/Lot** — goods rows now carry the SO ref when the
+   shipment is linked to an SO (via opts.soRefs), instead of a hardcoded blank.
+
+5. **Pallets auto-showing 22** — pallets are no longer auto-calculated from kg. They
+   default to 0 (or the value entered on the PO line) until you set them.
+
+6. **Transport-order dropdown showed an uninvolved company** — the provider dropdown
+   now lists ONLY actual leg providers (carriers/forwarders moving goods), not
+   cost-line suppliers (which could include a broker or other non-transport party).
+
+7. **"2 units for 1 truck"** — the Transport units count now reflects only the legs on
+   the selected order, and the builder no longer creates phantom legs for a simple
+   direct road export (1 leg = 1 unit).
+
+8. **Polish header "DLA PROVIDE" → "DLA CARRIER"** — the provider role now resolves to
+   Carrier by default, so the bilingual header reads "CARRIER ORDER / ZLECENIE DLA CARRIER".
+
+9. **One-page A4 print** — header, fonts, table padding, section spacing and the terms
+   list were tightened (terms now render inline EN / PL instead of stacked) so the
+   transport order fits on a single A4 page.
+
+Costs/billing view: confirmed correct, unchanged.
