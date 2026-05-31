@@ -895,16 +895,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
         <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, gap: 20 }}>
+            <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status || "Draft"} />
                 {order.flow && <FlowBadge flow={order.flow} />}
               </div>
               <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
               <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "FX rate locked at confirmation · some fields read-only" : "Draft — all fields editable"}</div>
             </div>
-            <div style={{ textAlign: "right" }}>
+            <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Total net</div>
               <div style={{ fontSize: 24, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
               {order.currency !== "PLN" && <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(totalInPLN, "PLN")} · rate {order.fxRate}</div>}
@@ -1168,9 +1168,9 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
         <div style={{ maxWidth: 1280, margin: "0 auto" }}>
           {/* Header */}
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22 }}>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, gap: 20 }}>
+            <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status} />
                 {order.flow && <FlowBadge flow={order.flow} />}
                 <VarianceBadge variance={order.variance} />
@@ -1178,7 +1178,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>
               <div style={{ fontSize: 13, color: "#444" }}>{order.supplier?.name} · {order.supplier?.country} {destLabel !== "—" && <>· destination {dest ? LOCATION_TYPES[dest.type]?.icon : "📍"} {destLabel}</>}</div>
             </div>
-            <div style={{ textAlign: "right" }}>
+            <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Total value</div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
               {order.currency !== "PLN" && <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(totalPLN, "PLN")} · rate {order.fxRate}</div>}

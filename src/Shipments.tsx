@@ -709,6 +709,11 @@ function buildShipmentFromSO(so, opts, shipments, lots) {
   const lotRefs = uniq((so.items || []).map(it => findLotForLine(lots, it, it.sourceType === "PO" ? it.sourceRef : "")?.number || (it.sourceType === "STOCK" ? it.sourceRef : "")).filter(Boolean));
   const goods = (so.items || []).map((it, idx) => {
     const lot = findLotForLine(lots, it, it.sourceType === "PO" ? it.sourceRef : "");
+    // Real pallet count: prefer the SO line's own pallets; else the lot's pallets;
+    // else 0. Do NOT auto-guess from kg (that produced wrong numbers like 39 for a
+    // 19,422 kg line that was really 21 pallets).
+    let palletCount = parseNum(it.pallets) || 0;
+    if (!palletCount && lot) palletCount = parseNum(lot.pallets) || 0;
     return {
       id: idx + 1,
       poRef: it.sourceType === "PO" ? it.sourceRef : lot?.poRef || "",
@@ -721,7 +726,7 @@ function buildShipmentFromSO(so, opts, shipments, lots) {
       packaging: it.packaging || "",
       qtyKg: parseNum(it.qty),
       grossKg: Math.round(parseNum(it.qty) * 1.06),
-      pallets: Math.max(1, Math.round(parseNum(it.qty) / 500)),
+      pallets: palletCount,
       description: `${it.product || "Goods"} ${it.packaging || ""}`.trim(),
     };
   });
@@ -1187,18 +1192,30 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Transport units for this leg · trucks / containers / AWB</div>
                 <SmallButton onClick={() => addVehicle(i)}>+ Add unit</SmallButton>
               </div>
-              {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => <div key={u.id || ui} style={{ display: "grid", gridTemplateColumns: "50px 90px 90px 100px 100px 1fr 1fr 1.5fr 90px 1.3fr 70px", gap: 7, marginBottom: 8, alignItems: "end" }}>
-                <div><Lbl>Unit</Lbl><div style={{ fontSize: 12, fontWeight: 800 }}>#{ui + 1}</div></div>
-                <div><Lbl>Mode</Lbl><Sel value={u.mode || leg.mode} onChange={e => updateVehicle(i, ui, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
-                <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
-                <div><Lbl>Truck</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>
-                <div><Lbl>Trailer</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>
-                <div><Lbl>Driver</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
-                <div><Lbl>Phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} /></div>
-                <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
-                <div><Lbl>Seal</Lbl><Inp value={u.sealNumber || ""} onChange={e => updateVehicle(i, ui, "sealNumber", e.target.value)} /></div>
-                <div><Lbl>BL / AWB</Lbl><Inp value={[u.blNumber, u.awbNumber].filter(Boolean).join(" / ")} onChange={e => { const parts = String(e.target.value).split("/").map(x => x.trim()); updateVehicle(i, ui, "blNumber", parts[0] || ""); updateVehicle(i, ui, "awbNumber", parts[1] || ""); }} /></div>
-                <SmallButton onClick={() => removeVehicle(i, ui)}>Remove</SmallButton>
+              {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => <div key={u.id || ui} style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#FCFCFD" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Unit #{ui + 1}</div>
+                  <SmallButton onClick={() => removeVehicle(i, ui)}>Remove</SmallButton>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
+                  <div><Lbl>Mode</Lbl><Sel value={u.mode || leg.mode} onChange={e => updateVehicle(i, ui, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
+                  <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
+                  <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>
+                  <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr", gap: 9, marginBottom: 9 }}>
+                  <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
+                  <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.4fr", gap: 9 }}>
+                  <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
+                  <div><Lbl>Seal</Lbl><Inp value={u.sealNumber || ""} onChange={e => updateVehicle(i, ui, "sealNumber", e.target.value)} /></div>
+                  <div><Lbl>BL / AWB</Lbl><Inp value={[u.blNumber, u.awbNumber].filter(Boolean).join(" / ")} onChange={e => { const parts = String(e.target.value).split("/").map(x => x.trim()); updateVehicle(i, ui, "blNumber", parts[0] || ""); updateVehicle(i, ui, "awbNumber", parts[1] || ""); }} /></div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 9, marginTop: 9 }}>
+                  <div><Lbl>Price for this unit</Lbl><Inp type="number" value={u.costAmount || ""} onChange={e => updateVehicle(i, ui, "costAmount", parseNum(e.target.value))} placeholder="0" /></div>
+                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Optional — set this when each truck/container has a different price. The transport order totals all unit prices for the carrier.</div>
+                </div>
               </div>)}
               <div style={{ fontSize: 10.5, color: "#64748B" }}>Use several units when one shipment has multiple trucks/containers. Example: 4 sea containers and 5 road trucks at arrival port are recorded as two legs with 4 sea units and 5 road units.</div>
             </div>
@@ -1297,8 +1314,21 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
   const firstLeg = selectedLegs[0] || (shipment.legs || [])[0] || {};
   const lastLeg = selectedLegs[selectedLegs.length - 1] || firstLeg;
   const selectedCosts = providerCosts(shipment, effectiveProviderId);
-  const cost = selectedCosts[0] || firstLeg || {};
   const providerRole = providerRoleForLeg(firstLeg, effectiveProviderId);
+  // Agreed price for this order = sum of ALL this provider's cost lines for the
+  // selected legs (multiple trucks/containers each can have a different price), plus
+  // any per-unit prices recorded on the units themselves. Currency taken from the
+  // first cost line (or PLN). This replaces the old behaviour of showing only the
+  // first cost line's amount.
+  const orderCurrency = selectedCosts[0]?.currency || firstLeg.costCurrency || "PLN";
+  const costLinesTotal = selectedCosts.reduce((sum, c) => sum + parseNum(c.amount), 0);
+  const legCostTotal = selectedLegs.reduce((sum, l) => sum + parseNum(l.costAmount), 0);
+  const unitPriceTotal = selectedLegs.reduce((sum, l) => sum + transportUnitsForLeg(l).reduce((u, unit) => u + parseNum(unit.costAmount || unit.unitPrice), 0), 0);
+  // Prefer explicit cost lines; fall back to leg costs; add any per-unit prices on top.
+  const agreedPriceTotal = (costLinesTotal || legCostTotal) + unitPriceTotal;
+  const agreedPriceText = agreedPriceTotal > 0
+    ? fmtMoney(agreedPriceTotal, orderCurrency)
+    : fmtMoney(shipmentCostPLN(shipment), "PLN");
   const tempText = shipment.temperatureMinC || shipment.temperatureMaxC ? `${shipment.temperatureMinC ?? ""}/${shipment.temperatureMaxC ?? ""}°C - continuous reefer / agregat ciagly` : "TBA";
   // Goods scoped to the selected legs: a leg carries goods whose lotRef/poRef/soRef
   // appears on it, OR (fallback) all shipment goods if legs don't carry explicit refs.
@@ -1357,7 +1387,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
         <FieldPrint en="Loading date" pl="Data zaladunku" value={firstLeg.plannedPickupDate || shipment.loadingDate || "TBA"} />
         <FieldPrint en="Delivery date" pl="Data rozladunku" value={lastLeg.plannedDeliveryDate || shipment.expectedDeliveryDate || "TBA"} />
         <FieldPrint en="Goods" pl="Towar" value="Food goods - clean trailer / Towar spozywczy - czysta naczepa" />
-        <FieldPrint en={`Agreed price for this ${providerRole.toLowerCase()} order`} pl="Uzgodniony fracht dla tego zlecenia" value={cost.amount ? fmtMoney(cost.amount, cost.currency) : selectedCosts.length ? fmtMoney(selectedCosts.reduce((sum, c) => sum + parseNum(c.amount), 0), selectedCosts[0]?.currency || "PLN") : fmtMoney(shipmentCostPLN(shipment), "PLN")} />
+        <FieldPrint en={`Agreed price for this ${providerRole.toLowerCase()} order`} pl="Uzgodniony fracht dla tego zlecenia" value={agreedPriceText} />
       </div>
 
       <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Cargo / Ladunek</div>

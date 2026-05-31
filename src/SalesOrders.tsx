@@ -1331,7 +1331,7 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
 function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (i, k, v) => setOrder(o => ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
   const removeItem = (i) => setOrder(o => ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
@@ -1840,9 +1840,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ marginTop: 8 }}>
-                    <Lbl>Packaging</Lbl>
-                    <Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" />
+                  <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
+                    <div>
+                      <Lbl>Packaging</Lbl>
+                      <Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" />
+                    </div>
+                    <div>
+                      <Lbl>Pallets (for this sale)</Lbl>
+                      <Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 12" />
+                    </div>
                   </div>
                 </div>
               );
@@ -2008,7 +2014,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                           <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef) : ""} /></td>
                           <td style={{ padding: "10px 6px" }}>
                             <div style={{ fontWeight: 600 }}>{it.product}</div>
-                            <div style={{ fontSize: 11, color: "#888" }}>{it.size} · {it.origin} · {it.packaging}</div>
+                            <div style={{ fontSize: 11, color: "#888" }}>{it.size} · {it.origin} · {it.packaging}{it.pallets ? ` · ${it.pallets} pallets` : ""}</div>
                           </td>
                           <td style={{ padding: "10px 6px", textAlign: "center" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 600 }}>
@@ -2215,7 +2221,7 @@ export default function SalesOrders({
       destinationLocationId: null,
       destinationText: "",
       currency: "PLN", fxRate: 1, fxLockedAt: null,
-      items: [{ id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
+      items: [{ id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
       notes: "",
       linkedInvoices: [], linkedShipments: [],
     });
