@@ -590,10 +590,13 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
   const mode = opts.mode || (po.requiresSea ? "Multimodal" : "Road");
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
-  // Origin = supplier facility (PO pickup). Destination = the PO's actual destination
-  // (do NOT default to WH-01 — leave unset so the user picks it if the PO has none).
+  // Origin = supplier facility (PO pickup). Try a known location id first; otherwise
+  // fall back to the supplier's real address as FREE TEXT so ANY supplier works
+  // (including newly added ones not in the fixed location list). Never default to WH-01.
   const originLocationId = guessSupplierLocationId(po) || opts.originLocationId || null;
+  const originCustom = originLocationId ? "" : (opts.originCustom || (po.supplier ? `${po.supplier.name}${po.supplier.address ? ", " + po.supplier.address : ""}${po.supplier.country ? ", " + po.supplier.country : ""}` : ""));
   const destinationLocationId = po.destinationLocationId || opts.destinationLocationId || null;
+  const destinationCustom = destinationLocationId ? "" : (opts.destinationCustom || "");
   const poLotRefs = uniq([...(po.linkedLots || []), ...(lots || []).filter(l => l.poRef === po.number).map(l => l.number)]);
   // Find any SO that sources from this PO, so goods rows can carry the SO ref.
   const soRefForPO = (opts.soRefs && opts.soRefs[0]) || "";
@@ -624,16 +627,16 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
   const freightType = mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight";
   const baseCost = { id: 1, type: freightType, supplierId: carrierId || forwarderId || null, amount, currency, fxRate, amountPLN: Math.round(amount * fxRate * 100) / 100, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Expected logistics cost" };
 
-  const roadLeg: any = { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, toLocationId: destinationLocationId, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Generated from ${po.number}` };
+  const roadLeg: any = { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: destinationLocationId, toCustom: destinationCustom, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Generated from ${po.number}` };
   let legs: any[] = [roadLeg];
   if (mode === "Multimodal" || mode === "Sea") {
     // Multimodal: pre-carriage (road) → main (sea) → on-carriage (road).
-    // Each leg starts with ZERO cost so the user enters the real per-leg figure;
-    // we no longer copy the same amount onto every leg.
+    // Pre-carriage starts at the supplier (origin); the port-of-loading and final
+    // destination are left for the user to set. Each leg starts at ZERO cost.
     legs = [
-      { ...roadLeg, id: 1, mode: "Road", toLocationId: null, costAmount: 0, costPLN: 0, notes: `Pre-carriage for ${po.number}` },
-      { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, toLocationId: destinationLocationId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${po.number}` },
-      { id: 3, mode: "Road", status: "Planned", fromLocationId: null, toLocationId: destinationLocationId, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", costAmount: 0, costCurrency: "PLN", costFxRate: 1, costPLN: 0, notes: "On-carriage after customs" },
+      { ...roadLeg, id: 1, mode: "Road", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: null, toCustom: "", costAmount: 0, costPLN: 0, notes: `Pre-carriage for ${po.number}` },
+      { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: destinationLocationId, toCustom: destinationCustom, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${po.number}` },
+      { id: 3, mode: "Road", status: "Planned", fromLocationId: null, fromCustom: "", toLocationId: destinationLocationId, toCustom: destinationCustom, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", costAmount: 0, costCurrency: "PLN", costFxRate: 1, costPLN: 0, notes: "On-carriage after customs" },
     ];
   }
 
@@ -645,19 +648,21 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
     purpose: String(po.flow || "").startsWith("EXP") ? "PO_EXPORT" : "PO_IMPORT",
     status: "Booked",
     poRefs: [po.number],
-    soRefs: [],
+    soRefs: (opts.soRefs || []),
     lotRefs: poLotRefs,
     carrierId,
     forwarderId,
     brokerId: null,
     vehicleCount: 1,
+    originLocationId,
+    originCustom,
+    destinationLocationId,
+    destinationCustom,
     costResponsibility: "Marianna",
     loadingDate: opts.loadingDate || po.loadingDate || todayISO(),
     expectedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(),
     actualLoadingDate: null,
     actualDeliveryDate: null,
-    originLocationId,
-    destinationLocationId,
     customsClearance: mode === "Road" ? "Not required / to be confirmed" : "To be confirmed",
     temperatureMinC: parseNum(opts.temperatureMinC, 2),
     temperatureMaxC: parseNum(opts.temperatureMaxC, 8),
@@ -888,15 +893,15 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     mode: "Road",
     carrierId: roadProviders[0]?.id || 1001,
     forwarderId: seaProviders[0]?.id || 15,
-    amount: "1450",
+    amount: "",
     currency: "PLN",
     fxRate: "1",
     loadingDate: todayISO(),
     expectedDeliveryDate: todayISO(),
     temperatureMinC: "2",
     temperatureMaxC: "8",
-    originLocationId: 1,
-    destinationLocationId: 10,
+    originLocationId: null,
+    destinationLocationId: null,
     product: "Goods",
     qtyKg: "1000",
     pallets: "1",
@@ -936,9 +941,16 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         <Card>
           <SectionTitle>Provider and cost</SectionTitle>
           <div style={{ display: "grid", gap: 12 }}>
-            <div><Lbl>{form.mode === "Road" || form.mode === "Rail" ? "Carrier / forwarder" : form.mode === "Air" ? "Air forwarder" : "Forwarder / line"}</Lbl><Sel value={form.mode === "Road" || form.mode === "Rail" ? form.carrierId : form.forwarderId} onChange={e => form.mode === "Road" || form.mode === "Rail" ? sf("carrierId", e.target.value) : sf("forwarderId", e.target.value)}>{providers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}</Sel></div>
+            {(form.mode === "Multimodal" || form.mode === "Sea") ? (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div><Lbl>Road carrier (pre/on-carriage)</Lbl><Sel value={form.carrierId || ""} onChange={e => sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— none —</option>{roadProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
+                <div><Lbl>Sea forwarder / line</Lbl><Sel value={form.forwarderId || ""} onChange={e => sf("forwarderId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— none —</option>{seaProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
+              </div>
+            ) : (
+              <div><Lbl>{form.mode === "Air" ? "Air forwarder" : "Carrier"}</Lbl><Sel value={form.mode === "Air" ? (form.forwarderId || "") : (form.carrierId || "")} onChange={e => form.mode === "Air" ? sf("forwarderId", e.target.value ? parseNum(e.target.value) : null) : sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— select —</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}</Sel></div>
+            )}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}><div><Lbl>Freight amount</Lbl><Inp type="number" value={form.amount} onChange={e => sf("amount", e.target.value)} /></div><div><Lbl>FX to PLN</Lbl><Inp type="number" value={form.fxRate} onChange={e => sf("fxRate", e.target.value)} /></div></div>
-            <div style={{ fontSize: 12, color: "#666", background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: 10 }}>Expected logistics cost: <strong>{fmtMoney(parseNum(form.amount) * parseNum(form.fxRate, 1), "PLN")}</strong></div>
+            <div style={{ fontSize: 12, color: "#666", background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: 10 }}>{(form.mode === "Multimodal" || form.mode === "Sea") ? "Per-leg costs start at 0 — set the real figure on each leg after creating." : <>Expected logistics cost: <strong>{fmtMoney(parseNum(form.amount) * parseNum(form.fxRate, 1), "PLN")}</strong></>}</div>
           </div>
         </Card>
         <Card>
@@ -1403,7 +1415,14 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ fontSize: 22, fontWeight: 850, letterSpacing: "-0.4px" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
-          <div style={{ fontSize: 12, color: "#666", marginTop: 5 }}>{PURPOSE_LABELS[shipment.purpose] || shipment.purpose} - {provider?.name || "Provider TBA"} - {locationTextFromFields(shipment.originLocationId, shipment.originCustom)} {"->"} {locationTextFromFields(shipment.destinationLocationId, shipment.destinationCustom)}</div>
+          <div style={{ fontSize: 12, color: "#666", marginTop: 5 }}>{PURPOSE_LABELS[shipment.purpose] || shipment.purpose} - {provider?.name || "Provider TBA"} - {(() => {
+            const legs = shipment.legs || [];
+            const fl = legs[0] || {};
+            const ll = legs[legs.length - 1] || fl;
+            const from = locationTextFromFields(fl.fromLocationId ?? shipment.originLocationId, fl.fromCustom || shipment.originCustom);
+            const to = locationTextFromFields(ll.toLocationId ?? shipment.destinationLocationId, ll.toCustom || shipment.destinationCustom);
+            return `${from} -> ${to}`;
+          })()}</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}>{r}</span>)}{(shipment.soRefs || []).map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}>{r}</span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -1437,7 +1456,6 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
                 {(u.awbNumber || leg.mode === "Air") && <div>AWB: <strong>{u.awbNumber || "TBA"}</strong></div>}
               </div>
             )) : <div>Transport unit details: TBA</div>}
-            <div style={{ marginTop: 4 }}>Cost: {fmtMoney(leg.costPLN || (parseNum(leg.costAmount) * parseNum(leg.costFxRate, 1)), "PLN")}</div>
           </div>
         </div>)}
       </Card>

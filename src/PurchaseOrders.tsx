@@ -203,7 +203,7 @@ export const INITIAL_ORDERS = [
     supplier: SUPPLIERS[0],
     destinationLocationId: 6, requiresSea: true,
     currency: "PLN", fxRate: 1, fxLockedAt: "2025-10-10",
-    items: [{ id: 1, product: "Golden Delicious", coloration: "przełamany", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 19422, unitPrice: 2.80, currency: "PLN", packaging: "13 kg wooden box" }],
+    items: [{ id: 1, product: "Golden Delicious", coloration: "przełamany", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 19422, pallets: 33, unitPrice: 2.80, currency: "PLN", packaging: "13 kg wooden box" }],
     notes: 'Łuszczka na trzy deski "NO NAME" ; górna warstwa dla kalibrów 70/80 na wytłoczce\nFolia "MARIANNA" & sticker "MARIANNA" na górnej wrastwie',
     linkedShipments: ["SHP-2026-0044"],
     linkedLots: ["LOT-2026-0091"],
@@ -248,7 +248,7 @@ export const INITIAL_ORDERS = [
     supplier: SUPPLIERS[2],
     destinationLocationId: 1, requiresSea: true,
     currency: "USD", fxRate: 3.8812, fxLockedAt: "2026-05-05",
-    items: [{ id: 1, product: "Papryka Kapia", coloration: "", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, unitPrice: 1.20, currency: "USD", packaging: "5 kg carton" }],
+    items: [{ id: 1, product: "Papryka Kapia", coloration: "", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, pallets: 20, unitPrice: 1.20, currency: "USD", packaging: "5 kg carton" }],
     notes: "EXW Agadir. Container at Gdańsk awaiting customs.",
     linkedShipments: ["SHP-2026-0045"],
     linkedLots: ["LOT-2026-0086"],
@@ -855,7 +855,7 @@ function LifecycleTimeline({ status }: any) {
 function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
   const showOtherTerms = order.paymentTerms === "Other";
@@ -1110,9 +1110,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 8, marginTop: 8 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr", gap: 8, marginTop: 8 }}>
                     <div><Lbl>Coloration / Variety</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" /></div>
+                    <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
                   </div>
                 </div>
               );
