@@ -658,7 +658,7 @@ function SourceBadge({ sourceType, sourceRef, supplierName }: any) {
 
 // Resolve the supplier name for a PO-sourced line (from the SO's PO references)
 function supplierNameForPO(poRef: any): string {
-  const po = (PO_REFS || []).find((p: any) => p.number === poRef);
+  const po: any = (PO_REFS || []).find((p: any) => p.number === poRef);
   return po?.supplierName || po?.supplier?.name || "";
 }
 
