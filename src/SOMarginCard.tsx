@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
-import { computeSOMargin, MarginMode } from "./marginCalculations";
+import { MarginMode } from "./marginCalculations";
+import { computeSOMarginWithOverhead } from "./operationalCosts";
 
 // ─── SO MARGIN CARD ─────────────────────────────────────────────────────────
 // Drop-in component rendered inside OrderDetail. Shows revenue, COGS, direct
@@ -27,11 +28,15 @@ export default function SOMarginCard({
   lots = [],
   pos = [],
   shipments = [],
+  operationalCosts = [],
+  allOrders = [],
 }: {
   order: any;
   lots?: any[];
   pos?: any[];
   shipments?: any[];
+  operationalCosts?: any[];
+  allOrders?: any[];
 }) {
   const [mode, setMode] = useState<MarginMode>(() => {
     // Default heuristic: if SO is Confirmed/Reserved/Loading, show Forecast.
@@ -42,12 +47,12 @@ export default function SOMarginCard({
   });
 
   const margin = useMemo(
-    () => computeSOMargin(order, lots, pos, shipments, mode),
-    [order, lots, pos, shipments, mode]
+    () => computeSOMarginWithOverhead(order, lots, pos, shipments, mode, operationalCosts, allOrders),
+    [order, lots, pos, shipments, operationalCosts, allOrders, mode]
   );
 
-  const isLoss = margin.marginPLN < 0;
-  const isThinMargin = margin.marginPLN >= 0 && margin.marginPct < 5;
+  const isLoss = margin.netMarginPLN < 0;
+  const isThinMargin = margin.netMarginPLN >= 0 && margin.netMarginPct < 5;
   const marginColor = isLoss ? "#DC2626" : isThinMargin ? "#D97706" : "#16A34A";
 
   return (
@@ -88,18 +93,21 @@ export default function SOMarginCard({
           )}
         </div>
         <div>
-          <div style={{ fontSize: 10, color: "#888" }}>TOTAL COSTS</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtPLN(margin.totalCostsPLN)}</div>
-          {margin.currency !== "PLN" && (
-            <div style={{ fontSize: 11, color: "#888" }}>{fmtSO(margin.totalCostsPLN / margin.fxRate, margin.currency)}</div>
-          )}
+          <div style={{ fontSize: 10, color: "#888" }}>CONTRIBUTION</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: margin.contributionMarginPLN < 0 ? "#DC2626" : "#16A34A", marginTop: 2 }}>{fmtPLN(margin.contributionMarginPLN)}</div>
+          <div style={{ fontSize: 11, color: "#888" }}>{fmtPct(margin.contributionMarginPct)} before overhead</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: "#888" }}>ALLOCATED OVERHEAD</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#64748B", marginTop: 2 }}>{fmtPLN(margin.overheadCostsPLN)}</div>
+          <div style={{ fontSize: 11, color: "#888" }}>{margin.overheadLines.length} overhead line(s)</div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 10, color: "#888" }}>MARGIN</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: marginColor, marginTop: 2 }}>{fmtPLN(margin.marginPLN)}</div>
-          <div style={{ fontSize: 12, color: marginColor, fontWeight: 600 }}>{fmtPct(margin.marginPct)}</div>
+          <div style={{ fontSize: 10, color: "#888" }}>NET P/L</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: marginColor, marginTop: 2 }}>{fmtPLN(margin.netMarginPLN)}</div>
+          <div style={{ fontSize: 12, color: marginColor, fontWeight: 600 }}>{fmtPct(margin.netMarginPct)}</div>
           {margin.currency !== "PLN" && (
-            <div style={{ fontSize: 11, color: "#888" }}>{fmtSO(margin.marginSO, margin.currency)}</div>
+            <div style={{ fontSize: 11, color: "#888" }}>{fmtSO(margin.netMarginSO, margin.currency)}</div>
           )}
         </div>
       </div>
@@ -114,8 +122,11 @@ export default function SOMarginCard({
             {margin.directCostsPLN > 0 && (
               <div title={`Direct: ${fmtPLN(margin.directCostsPLN)}`} style={{ flex: margin.directCostsPLN, background: "#F59E0B" }} />
             )}
-            {!isLoss && margin.marginPLN > 0 && (
-              <div title={`Margin: ${fmtPLN(margin.marginPLN)}`} style={{ flex: margin.marginPLN, background: "#16A34A" }} />
+            {margin.overheadCostsPLN > 0 && (
+              <div title={`Overhead: ${fmtPLN(margin.overheadCostsPLN)}`} style={{ flex: margin.overheadCostsPLN, background: "#64748B" }} />
+            )}
+            {!isLoss && margin.netMarginPLN > 0 && (
+              <div title={`Net P/L: ${fmtPLN(margin.netMarginPLN)}`} style={{ flex: margin.netMarginPLN, background: "#16A34A" }} />
             )}
           </div>
           <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 10.5, color: "#666", flexWrap: "wrap" }}>
@@ -128,8 +139,12 @@ export default function SOMarginCard({
               <span>Direct {fmtPLN(margin.directCostsPLN)}</span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 8, height: 8, background: "#64748B", borderRadius: 2 }} />
+              <span>Overhead {fmtPLN(margin.overheadCostsPLN)}</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <div style={{ width: 8, height: 8, background: marginColor, borderRadius: 2 }} />
-              <span>Margin {fmtPLN(margin.marginPLN)}</span>
+              <span>Net P/L {fmtPLN(margin.netMarginPLN)}</span>
             </div>
           </div>
         </div>
@@ -138,7 +153,7 @@ export default function SOMarginCard({
       {/* Loss warning */}
       {isLoss && (
         <div style={{ padding: "8px 12px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 6, fontSize: 12, color: "#991B1B", marginBottom: 12 }}>
-          ⚠ This SO is currently {mode === "forecast" ? "projected to lose" : "showing a loss of"} <strong>{fmtPLN(Math.abs(margin.marginPLN))}</strong>.
+          ⚠ This SO is currently {mode === "forecast" ? "projected to lose" : "showing a loss of"} <strong>{fmtPLN(Math.abs(margin.netMarginPLN))}</strong>.
           {mode === "forecast"
             ? " Review costs and sales prices before confirming."
             : " Costs exceed revenue — investigate underlying cost components below."}
@@ -146,7 +161,7 @@ export default function SOMarginCard({
       )}
       {isThinMargin && !isLoss && (
         <div style={{ padding: "8px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 6, fontSize: 12, color: "#92400E", marginBottom: 12 }}>
-          ⚠ Margin is thin ({fmtPct(margin.marginPct)}) — small cost increases could turn this into a loss.
+          ⚠ Net margin is thin ({fmtPct(margin.netMarginPct)}) — small cost increases could turn this into a loss.
         </div>
       )}
 
@@ -200,9 +215,22 @@ export default function SOMarginCard({
             </div>
           )}
 
+          {/* Overhead lines */}
+          {margin.overheadLines.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.04em", marginBottom: 4 }}>ALLOCATED OPERATIONAL OVERHEAD</div>
+              {margin.overheadLines.map((l, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F9FAFB", color: "#444" }}>
+                  <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                  <span style={{ fontWeight: 500 }}>{fmtPLN(l.amountPLN)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {margin.cogsLines.length === 0 && margin.directLines.length === 0 && (
             <div style={{ fontSize: 11, color: "#AAA", fontStyle: "italic", padding: "8px 0" }}>
-              No COGS or direct costs computed yet.
+              No COGS, direct costs or overhead computed yet.
               {mode === "actual" && " For Actual view, costs only show after lot cost data exists and shipments have invoiced costs."}
             </div>
           )}

@@ -69,7 +69,7 @@ export default function Settings({
     fileInputRef.current?.click();
   }
 
-  function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleFileSelected(e: any) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
@@ -101,7 +101,7 @@ export default function Settings({
   function handleReset() {
     const confirmed = window.confirm(
       "Reset all your data to the demo seed?\n\n" +
-      "This wipes contacts, POs, lots, sales orders, and shipments. " +
+      "This wipes contacts, POs, lots, sales orders, shipments, and operational costs. " +
       "Anything you've entered will be lost. This cannot be undone."
     );
     if (!confirmed) return;
@@ -135,7 +135,7 @@ export default function Settings({
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>EXPORT</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Download a JSON file containing all your contacts, POs, lots, sales orders, and shipments. Share this with a colleague so they can see exactly what you see, or send it to Hazem as feedback.
+            Download a JSON file containing all your contacts, POs, lots, sales orders, shipments, and operational costs. Share this with a colleague so they can see exactly what you see, or send it to Hazem as feedback.
           </div>
           <Button onClick={handleExport} variant="primary">📥 Export all data as JSON</Button>
         </Card>

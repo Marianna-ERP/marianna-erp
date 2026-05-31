@@ -1,38 +1,29 @@
 import React, { useState, useMemo } from "react";
-import { LOCATIONS, locById as canonicalLocById, LocationType } from "./locations";
+import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 
-// UI metadata for each location TYPE (used for badges in lists and movements).
-// The canonical type names come from ./locations. We keep a UI lookup here
-// because Inventory uses colored icons that don't need to live in the
-// canonical Location entity (which is shared by other modules).
-const LOCATION_TYPES: Partial<Record<LocationType, { label: string; color: string; bg: string; icon: string }>> = {
-  OwnWarehouse:     { label: "Own Warehouse",     color: "#059669", bg: "#D1FAE5", icon: "🏢" },
-  RentedWarehouse:  { label: "Rented Warehouse",  color: "#0284C7", bg: "#E0F2FE", icon: "🏬" },
-  SupplierFacility: { label: "Supplier Site",     color: "#16A34A", bg: "#DCFCE7", icon: "🚜" },
-  Port:             { label: "Port",              color: "#D97706", bg: "#FEF3C7", icon: "⚓" },
-  Airport:          { label: "Airport",           color: "#A855F7", bg: "#F3E8FF", icon: "✈" },
-  PortWarehouse:    { label: "Port Warehouse",    color: "#D97706", bg: "#FFEDD5", icon: "🏗" },
-  BondedWarehouse:  { label: "Bonded Warehouse",  color: "#92400E", bg: "#FEF3C7", icon: "🔒" },
-  ClientFacility:   { label: "Client Site",       color: "#7C3AED", bg: "#EDE9FE", icon: "🎯" },
-  Customs:          { label: "Customs",           color: "#DC2626", bg: "#FEE2E2", icon: "📋" },
-  BorderCrossing:   { label: "Border",            color: "#DC2626", bg: "#FEE2E2", icon: "🛂" },
-  RelayPoint:       { label: "Relay Point",       color: "#64748B", bg: "#F1F5F9", icon: "🔄" },
+const LOCATION_TYPES: Record<string, any> = {
+  OWN:      { label: "Our Warehouse",   color: "#0284C7", bg: "#E0F2FE", icon: "🏢" },
+  SUPPLIER: { label: "Supplier Site",   color: "#16A34A", bg: "#DCFCE7", icon: "🚜" },
+  PORT:     { label: "Port / Transit",  color: "#D97706", bg: "#FEF3C7", icon: "⚓" },
+  CLIENT:   { label: "Client Site",     color: "#7C3AED", bg: "#EDE9FE", icon: "🎯" },
 };
 
-// Helper to get the UI metadata for any location type, with a safe fallback
-function locTypeMeta(type: string) {
-  return LOCATION_TYPES[type as LocationType] || { label: type, color: "#6B7280", bg: "#F3F4F6", icon: "📍" };
-}
-
+// LOCATIONS now comes from the shared ./locations source of truth. We map the
+// rich `type` back onto the legacy single-word `type` field that this module's
+// existing UI code expects (LOCATION_TYPES[loc.type]).
+const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
 
 // Lot status lifecycle — PHYSICAL states only.
 // Reservations are NOT a lot status (they're computed from SO state — see lotReservations).
 // Once SOs reach Shipped+, their kg leave the lot physically (decrements physicalKg).
-const LOT_STATUSES = {
+const LOT_STATUSES: Record<string, any> = {
   Expected:      { color: "#6B7280", bg: "#F3F4F6", desc: "Ordered, not yet shipped from supplier" },
+  "Direct Expected": { color: "#D97706", bg: "#FEF3C7", desc: "Direct supplier/producer to client or port · not received in our warehouse" },
+  Cancelled:     { color: "#DC2626", bg: "#FEE2E2", desc: "Cancelled expected procurement" },
+  "Blocked · PO Cancelled": { color: "#DC2626", bg: "#FEE2E2", desc: "PO cancelled; review any physical stock manually" },
   "In Transit":  { color: "#0284C7", bg: "#E0F2FE", desc: "Moving (supplier → port / port → warehouse / etc.)" },
   Customs:       { color: "#D97706", bg: "#FEF3C7", desc: "Awaiting customs clearance" },
   "In Stock":    { color: "#16A34A", bg: "#DCFCE7", desc: "Physically in our warehouse (may have SO reservations)" },
@@ -41,19 +32,20 @@ const LOT_STATUSES = {
 };
 
 // Flow types — 11 flows in two groups (EXP / IMP). Aligned with PurchaseOrders + Shipments.
-const FLOW_TYPES = {
+const FLOW_TYPES: Record<string, any> = {
   // EXPORT
-  EXP_BY_SEA_CIF:       { group: "EXP", short: "EXP · Sea CIF",        emoji: "🚢", desc: "Our truck → customs → port → vessel → destination port (CIF)." },
-  EXP_BY_AIR_CIF:       { group: "EXP", short: "EXP · Air CIF",        emoji: "✈️", desc: "Truck to airport → customs → flight → destination (CIF)." },
-  EXP_BY_TRUCK_DAP:     { group: "EXP", short: "EXP · Road DAP",       emoji: "🚛", desc: "Our truck → customs (if needed) → client warehouse (DAP)." },
-  EXP_BY_TRUCK_RELAY:   { group: "EXP", short: "EXP · Road relay",     emoji: "🔁", desc: "Our truck → relay point where client's truck takes over." },
+  EXP_EXWS:     { group: "EXP", short: "EXP · EXWs — client pickup",       emoji: "🤝", desc: "Client sends their truck to producer warehouse." },
+  EXP_FOB:      { group: "EXP", short: "EXP · FOB — we truck to port",     emoji: "⚓", desc: "We truck to port, client takes over (no sea on our side)." },
+  EXP_CIF:      { group: "EXP", short: "EXP · CIF — own full logistics",   emoji: "🚢", desc: "Producer → our truck → port → vessel (CIF)." },
+  EXP_DDP_EU:   { group: "EXP", short: "EXP · DDP intra-EU",               emoji: "🚛", desc: "Producer → our truck → EU client (DDP)." },
+  EXP_DDP_XEU:  { group: "EXP", short: "EXP · DDP extra-EU",               emoji: "🛃", desc: "Producer → our truck → export customs → client (DDP)." },
   // IMPORT
-  IMP_CIF_TO_OUR_WH:    { group: "IMP", short: "IMP · CIF → our WH",       emoji: "📦", desc: "Supplier CIF to port → customs → our truck → our rented WH." },
-  IMP_CIF_TO_CLIENT_WH: { group: "IMP", short: "IMP · CIF → client",       emoji: "➡️", desc: "Supplier CIF to port → customs → our truck → direct to client." },
-  IMP_CIF_CROSSDOCK:    { group: "IMP", short: "IMP · CIF crossdock",      emoji: "🚏", desc: "Supplier CIF to port → customs → client's truck loads at port." },
-  IMP_DDP_TO_OUR_WH:    { group: "IMP", short: "IMP · DDP → our WH",       emoji: "🏭", desc: "Supplier handles all transport + customs → arrives our rented WH." },
-  IMP_DDP_TO_CLIENT_WH: { group: "IMP", short: "IMP · DDP → client",       emoji: "🎯", desc: "Supplier delivers DDP straight to client (watch for rejections)." },
-  IMP_EXW:              { group: "IMP", short: "IMP · EXW (we manage)",    emoji: "🔄", desc: "We arrange inland in supplier country, sea, EU customs, onward." },
+  IMP_EXWS_WH:  { group: "IMP", short: "IMP · EXWs → our WH",              emoji: "🔄", desc: "Our truck picks up at supplier → sea (if needed) → customs → our WH." },
+  IMP_EXWS_DIR: { group: "IMP", short: "IMP · EXWs → direct to client",    emoji: "↗️", desc: "Our truck picks up at supplier → sea (if needed) → customs → client." },
+  IMP_CIF_WH:   { group: "IMP", short: "IMP · CIF → our WH",               emoji: "📦", desc: "Supplier ships CIF → we customs + inland → our WH." },
+  IMP_CIF_DIR:  { group: "IMP", short: "IMP · CIF → direct to client",     emoji: "➡️", desc: "Supplier ships CIF → we customs + inland → client." },
+  IMP_DDP_WH:   { group: "IMP", short: "IMP · DDP → our WH",               emoji: "🏭", desc: "Supplier delivers DDP to our warehouse." },
+  IMP_DDP_DIR:  { group: "IMP", short: "IMP · DDP → direct to client",     emoji: "🎯", desc: "Supplier delivers DDP straight to client." },
 };
 
 const FLOW_GROUPS = [
@@ -71,7 +63,7 @@ const PRODUCTS = [
 
 // Movement types — physical operations only.
 // SO reservations are NOT movements (they're a calculated overlay from SO state).
-const MOVEMENT_TYPES = {
+const MOVEMENT_TYPES: Record<string, any> = {
   IN:        { label: "Stock In",   color: "#16A34A", icon: "↓", desc: "Lot received into a location" },
   TRANSFER:  { label: "Transfer",   color: "#0284C7", icon: "⇄", desc: "Move between locations (truck/port/WH)" },
   SHIP_OUT:  { label: "Ship Out",   color: "#2563EB", icon: "→", desc: "Physical dispatch to client (decrements physicalKg)" },
@@ -83,8 +75,7 @@ const MOVEMENT_TYPES = {
 // ─── SEED DATA — lots covering all 7 flows ──────────────────────────────────
 const today = new Date().toISOString().split("T")[0];
 
-// Use canonical locById from ./locations (handles null/undefined safely)
-function locById(id: any) { return canonicalLocById(id); }
+function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
 
 // ─── SO STUB ────────────────────────────────────────────────────────────────
 // Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically
@@ -147,19 +138,23 @@ function lotReservations(lot, sourceSOs) {
     // Shipped+ SOs already had their kg physically subtracted via SHIP_OUT movements.
     if (!PRE_DISPATCH_STATUSES.has(o.status)) return;
     (o.items || []).forEach(it => {
-      if (it.sourceType !== "STOCK") return;
-      if (it.sourceRef !== lot.number) return;
+      const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
+      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product);
+      if (!matchesStock && !matchesPOBackedLot) return;
       if (!productsMatch(it.product, lot.product)) return;
       const q = parseFloat(it.qty) || 0;
       if (q <= 0) return;
-      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, clientName: _soClientName(o), qty: q });
+      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, clientName: _soClientName(o), qty: q, sourceType: it.sourceType });
       totalReserved += q;
     });
   });
+  const directBasis = lot.directFlow ? (parseFloat(lot.expectedKg) || 0) : 0;
   const physical = lot.physicalKg ?? lot.receivedKg ?? 0;
+  const availabilityBasis = lot.directFlow ? Math.max(directBasis, physical) : physical;
   return {
     physicalKg: physical,
-    liveAvailable: Math.max(0, physical - totalReserved),
+    availabilityBasis,
+    liveAvailable: Math.max(0, availabilityBasis - totalReserved),
     totalReserved,
     reservations,
   };
@@ -174,11 +169,12 @@ function soRefsFor(lot, sourceSOs) {
     if (o.status === "Cancelled") return;
     if (o.status === "Draft") return;
     (o.items || []).forEach(it => {
-      if (it.sourceType !== "STOCK") return;
-      if (it.sourceRef !== lot.number) return;
+      const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
+      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product);
+      if (!matchesStock && !matchesPOBackedLot) return;
       if (!productsMatch(it.product, lot.product)) return;
       if (!refs.find(r => r.number === o.number)) {
-        refs.push({ number: o.number, status: o.status, clientName: _soClientName(o) });
+        refs.push({ number: o.number, status: o.status, clientName: _soClientName(o), sourceType: it.sourceType });
       }
     });
   });
@@ -189,9 +185,9 @@ export const INIT_LOTS = [
   // EXPORT — apples (CIF) — currently in port transit
   {
     id: 1, number: "LOT-2026-0091", product: "Golden Delicious", quality: "I", size: "70-80", origin: "Poland",
-    flow: "EXP_BY_SEA_CIF",
+    flow: "EXP_CIF",
     poRef: "PO-2025-0468",
-    locationId: 401, // Gdańsk Port
+    locationId: 6, // Gdańsk Port
     expectedKg: 19500,
     receivedKg: 19422,      // what came in when received
     physicalKg: 19422,      // still physically present (in port transit, not yet dispatched)
@@ -216,9 +212,9 @@ export const INIT_LOTS = [
   // (their physical departure should have already been recorded via SHIP_OUT movements — see below)
   {
     id: 2, number: "LOT-2026-0091B", product: "Golden Delicious", quality: "I", size: "70-80", origin: "Poland",
-    flow: "IMP_DDP_TO_OUR_WH",
+    flow: "IMP_DDP_WH",
     poRef: "PO-2025-0470",
-    locationId: 101, // WH-01 Poznań
+    locationId: 1, // WH-01 Poznań
     expectedKg: 22800,
     receivedKg: 22800,
     physicalKg: 12400,  // 22800 received − 8000 (SO-94) − 2400 (SO-88) shipped out = 12400 left physically
@@ -241,9 +237,9 @@ export const INIT_LOTS = [
   // Import carrots — In Stock, partially damaged
   {
     id: 3, number: "LOT-2026-0088", product: "Carrot", quality: "I", size: "60-100", origin: "Morocco",
-    flow: "IMP_CIF_TO_OUR_WH",
+    flow: "IMP_CIF_WH",
     poRef: "PO-2026-0118",
-    locationId: 101,
+    locationId: 1,
     expectedKg: 24000,
     receivedKg: 23720,
     physicalKg: 23420,  // received 23720 − 300 damaged write-off = 23420 physically
@@ -268,9 +264,9 @@ export const INIT_LOTS = [
   // Import tomato — Shipped Out (whole lot delivered direct to Biedronka)
   {
     id: 4, number: "LOT-2026-0089", product: "Tomato Round", quality: "I", size: "M", origin: "Spain",
-    flow: "IMP_CIF_TO_CLIENT_WH",
+    flow: "IMP_CIF_DIR",
     poRef: "PO-2026-0120",
-    locationId: 301, // Biedronka DC Poznań — direct flow, never our WH
+    locationId: 8, // Biedronka DC Poznań — direct flow, never our WH
     expectedKg: 18000,
     receivedKg: 17940,
     physicalKg: 0,  // entire lot dispatched direct
@@ -296,9 +292,9 @@ export const INIT_LOTS = [
   // Result: 8500 received − 6000 SHIP_OUT = 2500 physically present, no pre-dispatch reservations → liveAvailable = 2500
   {
     id: 5, number: "LOT-2026-0086", product: "Papryka Kapia", quality: "I", size: "M", origin: "Jordania",
-    flow: "IMP_EXW",
+    flow: "IMP_EXWS_WH",
     poRef: "PO-2026-0117",
-    locationId: 101, // moved into our WH after customs
+    locationId: 1, // moved into our WH after customs
     expectedKg: 8500,
     receivedKg: 8500,
     physicalKg: 2500,
@@ -323,9 +319,9 @@ export const INIT_LOTS = [
   // Red Bell Pepper — small remainder, post-shipout to Euro-Papryka
   {
     id: 6, number: "LOT-2026-0095", product: "Red Bell Pepper", quality: "I", size: "L", origin: "Jordania",
-    flow: "IMP_DDP_TO_OUR_WH",
+    flow: "IMP_DDP_WH",
     poRef: "PO-2026-0115",
-    locationId: 102, // WH-02 Warszawa
+    locationId: 2, // WH-02 Warszawa
     expectedKg: 2300,
     receivedKg: 2300,
     physicalKg: 1100,  // 2300 − 1200 (SO-91) shipped = 1100
@@ -346,9 +342,9 @@ export const INIT_LOTS = [
   // Yellow Bell Pepper — small remainder after Euro-Papryka
   {
     id: 7, number: "LOT-2026-0099", product: "Yellow Bell Pepper", quality: "I", size: "L", origin: "Jordania",
-    flow: "IMP_DDP_TO_OUR_WH",
+    flow: "IMP_DDP_WH",
     poRef: "PO-2026-0116",
-    locationId: 102,
+    locationId: 2,
     expectedKg: 4200,
     receivedKg: 4200,
     physicalKg: 600,  // 4200 − 3600 (SO-91) = 600
@@ -369,9 +365,9 @@ export const INIT_LOTS = [
   // Expected lot (just-confirmed PO, not yet shipped)
   {
     id: 8, number: "LOT-2026-0100", product: "Red Bell Pepper", quality: "I", size: "L", origin: "Spain",
-    flow: "IMP_DDP_TO_OUR_WH",
+    flow: "IMP_DDP_WH",
     poRef: "PO-2026-0121",
-    locationId: 202,
+    locationId: 4,
     expectedKg: 8000,
     receivedKg: 0,
     physicalKg: 0,
@@ -422,7 +418,7 @@ function QualityBadge({ quality }: any) {
 function LocationPill({ locationId }: any) {
   const loc = locById(locationId);
   if (!loc) return <span style={{ color: "#CCC" }}>—</span>;
-  const t = locTypeMeta(loc.type);
+  const t = LOCATION_TYPES[loc.type];
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#444" }}>
       <span style={{ fontSize: 11 }}>{t.icon}</span>
@@ -532,17 +528,20 @@ function MovementModal({ lot, liveSOs = [], onCancel, onConfirm }: any) {
               <div>
                 <Lbl>From</Lbl>
                 <Sel value={fromId} onChange={e => setFromId(parseInt(e.target.value))}>
-                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locTypeMeta(l.type).icon} {l.name}</option>)}
+                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{LOCATION_TYPES[l.type].icon} {l.name}</option>)}
                 </Sel>
               </div>
               <div>
                 <Lbl>To</Lbl>
                 <Sel value={toId} onChange={e => setToId(parseInt(e.target.value))}>
-                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locTypeMeta(l.type).icon} {l.name}</option>)}
+                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{LOCATION_TYPES[l.type].icon} {l.name}</option>)}
                 </Sel>
               </div>
             </div>
           )}
+          <div style={{ padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11, color: "#92400E", lineHeight: 1.45, marginBottom: 12 }}>
+            Use Inventory movement for receipt, adjustment or exceptional correction. If the movement requires a truck/forwarder/cost, create it from Shipments so transport cost and documents stay linked.
+          </div>
           <div style={{ marginBottom: 18 }}>
             <Lbl>Note</Lbl>
             <Inp value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Reserved for SO-2026-0094 (Biedronka)" />
@@ -741,12 +740,23 @@ function LotDetail({ lot, onBack, onMove, onDelete, liveSOs }: any) {
                   <div>
                     <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>CURRENT LOCATION</div>
                     <LocationPill locationId={lot.locationId} />
+                    {lot.directFlow && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4 }}>{lot.destinationText || "Direct destination"}</div>}
                   </div>
                   <div>
                     <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>DATES</div>
                     <div style={{ fontSize: 12, color: "#444" }}>
-                      Production: <span style={{ fontWeight: 500 }}>{lot.productionDate || "—"}</span><br />
-                      Arrival: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span>
+                      {lot.directFlow ? (
+                        <>
+                          Loading / pickup: <span style={{ fontWeight: 500 }}>{lot.loadingDate || "—"}</span><br />
+                          ETA destination: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span><br />
+                          <span style={{ color: "#92400E", fontSize: 11 }}>Direct flow · not received into our warehouse</span>
+                        </>
+                      ) : (
+                        <>
+                          Production: <span style={{ fontWeight: 500 }}>{lot.productionDate || "—"}</span><br />
+                          Arrival: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -813,7 +823,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const inStock = lots.filter(l => l.status === "In Stock");
   const totalKgInStock = inStock.reduce((s, l) => s + (l.physicalKg || 0), 0);
   const totalValueInStock = inStock.reduce((s, l) => s + valueInStock(l), 0);
-  const lotsAtPort = lots.filter(l => (locById(l.locationId)?.type === "Port" || locById(l.locationId)?.type === "PortWarehouse") && l.status !== "Shipped Out").length;
+  const lotsAtPort = lots.filter(l => locById(l.locationId)?.type === "PORT" && l.status !== "Shipped Out").length;
   const lotsWithVariance = lots.filter(l => l.expectedKg > 0 && l.receivedKg > 0 && Math.abs(l.receivedKg - l.expectedKg) / l.expectedKg > 0.01).length;
   const totalDamagedKg = lots.reduce((s, l) => s + (l.damagedKg || 0), 0);
 
@@ -873,8 +883,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       // Auto-status transitions based on physical state
       if (type === "TRANSFER") {
         const newLoc = locById(toId);
-        if (newLoc?.type === "RentedWarehouse" || newLoc?.type === "OwnWarehouse") next.status = "In Stock";
-        else if (newLoc?.type === "Port" || newLoc?.type === "PortWarehouse") next.status = "Customs";
+        if (newLoc?.type === "OWN") next.status = "In Stock";
+        else if (newLoc?.type === "PORT") next.status = "Customs";
         // CLIENT location is reached via SHIP_OUT, not TRANSFER (in this model)
       }
       if (type === "SHIP_OUT" && next.physicalKg === 0) {
@@ -882,8 +892,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       }
       if (type === "IN" && next.status === "Expected") {
         const newLoc = locById(toId);
-        if (newLoc?.type === "RentedWarehouse" || newLoc?.type === "OwnWarehouse") next.status = "In Stock";
-        else if (newLoc?.type === "Port" || newLoc?.type === "PortWarehouse") next.status = "Customs";
+        if (newLoc?.type === "OWN") next.status = "In Stock";
+        else if (newLoc?.type === "PORT") next.status = "Customs";
         else next.status = "In Transit";
       }
       return next;
@@ -970,9 +980,9 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 
         <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>LOCATION</span>
-          {["All", "OwnWarehouse", "RentedWarehouse", "SupplierFacility", "Port", "PortWarehouse", "ClientFacility"].map(t => (
+          {["All", ...Object.keys(LOCATION_TYPES)].map(t => (
             <button key={t} onClick={() => setFilterLocationType(t)} style={chipStyle(filterLocationType === t)}>
-              {t === "All" ? "All" : `${locTypeMeta(t).icon} ${locTypeMeta(t).label}`}
+              {t === "All" ? "All" : `${LOCATION_TYPES[t].icon} ${LOCATION_TYPES[t].label}`}
             </button>
           ))}
         </div>

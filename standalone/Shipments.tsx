@@ -26,7 +26,7 @@ const SHIPMENT_STATUSES = {
 };
 
 const HEADER_MODES = ["Road", "Sea", "Rail", "Air", "Multimodal"];
-const LEG_MODES = ["Road", "Sea", "Rail", "Air", "Warehouse"];
+const LEG_MODES = ["Road", "Sea", "Rail", "Air"];
 const LEG_STATUSES = ["Booked", "Confirmed", "Loaded", "In Transit", "Arrived", "Delivered", "Cancelled"];
 
 const MODE_CONFIG = {
@@ -401,7 +401,52 @@ function statusRank(status) {
   return i < 0 ? 999 : i;
 }
 
+function locationInputValue(id, custom) {
+  if (custom) return custom;
+  const l = locById(id);
+  return l ? l.name : "";
+}
 
+function locationTextFromFields(id, custom) {
+  if (custom) return custom;
+  return locText(id);
+}
+
+function locationDatalistId(prefix, legIdx) {
+  return `${prefix}-location-options-${legIdx}`;
+}
+
+function providerRoleForLeg(leg, providerId) {
+  if (String(leg.carrierId || "") === String(providerId || "")) return "Carrier";
+  if (String(leg.forwarderId || "") === String(providerId || "")) return "Forwarder";
+  return "Provider";
+}
+
+function providerIdsForShipment(shipment) {
+  const ids = [];
+  (shipment.legs || []).forEach(leg => {
+    if (leg.carrierId) ids.push(leg.carrierId);
+    if (leg.forwarderId) ids.push(leg.forwarderId);
+  });
+  (shipment.costs || []).forEach(c => { if (c.supplierId) ids.push(c.supplierId); });
+  if (shipment.carrierId) ids.push(shipment.carrierId);
+  if (shipment.forwarderId) ids.push(shipment.forwarderId);
+  return Array.from(new Set(ids.map(x => String(x))));
+}
+
+function providerLegs(shipment, providerId) {
+  const pid = String(providerId || "");
+  const legs = (shipment.legs || []).filter(leg => String(leg.carrierId || "") === pid || String(leg.forwarderId || "") === pid);
+  if (legs.length) return legs;
+  return (shipment.legs || []).slice(0, 1);
+}
+
+function providerCosts(shipment, providerId) {
+  const pid = String(providerId || "");
+  const costs = (shipment.costs || []).filter(c => String(c.supplierId || "") === pid);
+  if (costs.length) return costs;
+  return [];
+}
 
 function blankTransportUnit(mode = "Road") {
   return {
@@ -981,6 +1026,29 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
       legs: (prev.legs || []).map((leg, i) => i === legIdx ? { ...leg, vehicles: transportUnitsForLeg(leg).filter((_, ui) => ui !== unitIdx) } : leg)
     }));
   }
+  function addLeg() {
+    setDraft(prev => ({
+      ...prev,
+      legs: [...(prev.legs || []), {
+        id: Date.now(),
+        mode: prev.mode === "Sea" ? "Sea" : "Road",
+        status: "Booked",
+        fromLocationId: null,
+        toLocationId: null,
+        fromCustom: "",
+        toCustom: "",
+        carrierId: prev.carrierId || null,
+        forwarderId: prev.forwarderId || null,
+        plannedPickupDate: prev.loadingDate || todayISO(),
+        plannedDeliveryDate: prev.expectedDeliveryDate || todayISO(),
+        vehicles: [],
+        notes: ""
+      }]
+    }));
+  }
+  function removeLeg(legIdx) {
+    setDraft(prev => ({ ...prev, legs: (prev.legs || []).filter((_, i) => i !== legIdx) }));
+  }
 
   return <div style={{ position: "fixed", inset: 0, zIndex: 65, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
     <div style={{ width: 980, maxHeight: "90vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.22)", border: "1px solid #E5E7EB" }}>
@@ -1011,15 +1079,16 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
           </div>
         </Card>
         <Card>
-          <SectionTitle>Legs - truck / driver / container / BL</SectionTitle>
+          <SectionTitle right={<SmallButton onClick={addLeg}>+ Activate extra leg</SmallButton>}>Legs - route, truck / driver / container / BL</SectionTitle>
           {(draft.legs || []).map((leg, i) => <div key={leg.id || i} style={{ border: "1px solid #E5E7EB", borderRadius: 10, padding: 12, marginBottom: 10, background: "#FAFAFA" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "90px 110px 1fr 1fr 1fr 1fr", gap: 9 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "90px 110px 1fr 1fr 1fr 1fr 80px", gap: 9 }}>
               <div><Lbl>Mode</Lbl><Sel value={leg.mode} onChange={e => updateLeg(i, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
               <div><Lbl>Status</Lbl><Sel value={leg.status} onChange={e => updateLeg(i, "status", e.target.value)}>{LEG_STATUSES.map(st => <option key={st}>{st}</option>)}</Sel></div>
-              <div><Lbl>From</Lbl><Sel value={leg.fromLocationId || ""} onChange={e => updateLeg(i, "fromLocationId", parseNum(e.target.value))}>{LOCATIONS.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</Sel></div>
-              <div><Lbl>To</Lbl><Sel value={leg.toLocationId || ""} onChange={e => updateLeg(i, "toLocationId", parseNum(e.target.value))}>{LOCATIONS.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</Sel></div>
+              <div><Lbl>From</Lbl><Inp list={locationDatalistId("from", i)} value={locationInputValue(leg.fromLocationId, leg.fromCustom)} onChange={e => { const raw = e.target.value; const found = LOCATIONS.find(l => l.name === raw); updateLeg(i, "fromCustom", found ? "" : raw); updateLeg(i, "fromLocationId", found ? found.id : null); }} /><datalist id={locationDatalistId("from", i)}>{LOCATIONS.map(l => <option key={l.id} value={l.name} />)}</datalist></div>
+              <div><Lbl>To</Lbl><Inp list={locationDatalistId("to", i)} value={locationInputValue(leg.toLocationId, leg.toCustom)} onChange={e => { const raw = e.target.value; const found = LOCATIONS.find(l => l.name === raw); updateLeg(i, "toCustom", found ? "" : raw); updateLeg(i, "toLocationId", found ? found.id : null); }} /><datalist id={locationDatalistId("to", i)}>{LOCATIONS.map(l => <option key={l.id} value={l.name} />)}</datalist></div>
               <div><Lbl>Pickup</Lbl><Inp type="date" value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} /></div>
               <div><Lbl>Delivery</Lbl><Inp type="date" value={String(leg.plannedDeliveryDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedDeliveryDate", e.target.value)} /></div>
+              <div><Lbl>&nbsp;</Lbl>{(draft.legs || []).length > 2 && <SmallButton onClick={() => removeLeg(i)}>Remove</SmallButton>}</div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 9, marginTop: 9 }}>
               <div><Lbl>Truck plate</Lbl><Inp value={leg.vehiclePlate} onChange={e => updateLeg(i, "vehiclePlate", e.target.value)} /></div>
@@ -1042,7 +1111,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
               </div>
               {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => <div key={u.id || ui} style={{ display: "grid", gridTemplateColumns: "70px 100px 100px 110px 110px 1fr 1fr 1fr 1fr 80px", gap: 7, marginBottom: 8, alignItems: "end" }}>
                 <div><Lbl>Unit</Lbl><div style={{ fontSize: 12, fontWeight: 800 }}>#{ui + 1}</div></div>
-                <div><Lbl>Mode</Lbl><Sel value={u.mode || leg.mode} onChange={e => updateVehicle(i, ui, "mode", e.target.value)}>{LEG_MODES.filter(m => m !== "Warehouse").map(m => <option key={m}>{m}</option>)}</Sel></div>
+                <div><Lbl>Mode</Lbl><Sel value={u.mode || leg.mode} onChange={e => updateVehicle(i, ui, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
                 <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
                 <div><Lbl>Truck</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>
                 <div><Lbl>Trailer</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>
@@ -1133,16 +1202,20 @@ function printHtmlNode(nodeId, title) {
   }
 }
 
-function TransportOrderDocument({ shipment, contacts }: any) {
+function TransportOrderDocument({ shipment, contacts, providerId }: any) {
   const docNo = shipment.transportOrderNo || shipment.number;
-  const provider: any = providerById(shipment.carrierId || shipment.forwarderId, contacts) || {};
+  const effectiveProviderId = providerId || shipment.carrierId || shipment.forwarderId;
+  const provider: any = providerById(effectiveProviderId, contacts) || {};
   const broker: any = providerById(shipment.brokerId, contacts) || null;
-  const firstLeg = (shipment.legs || [])[0] || {};
-  const cost = (shipment.costs || [])[0] || firstLeg || {};
+  const selectedLegs = providerLegs(shipment, effectiveProviderId);
+  const firstLeg = selectedLegs[0] || (shipment.legs || [])[0] || {};
+  const selectedCosts = providerCosts(shipment, effectiveProviderId);
+  const cost = selectedCosts[0] || firstLeg || {};
+  const providerRole = providerRoleForLeg(firstLeg, effectiveProviderId);
   const tempText = shipment.temperatureMinC || shipment.temperatureMaxC ? `${shipment.temperatureMinC ?? ""}/${shipment.temperatureMaxC ?? ""}°C - continuous reefer / agregat ciagly` : "TBA";
-  const units = (shipment.legs || []).flatMap((leg, li) => {
-    const from = locText(leg.fromLocationId || shipment.originLocationId);
-    const to = locText(leg.toLocationId || shipment.destinationLocationId);
+  const units = selectedLegs.flatMap((leg, li) => {
+    const from = locationTextFromFields(leg.fromLocationId || shipment.originLocationId, leg.fromCustom || shipment.originCustom);
+    const to = locationTextFromFields(leg.toLocationId || shipment.destinationLocationId, leg.toCustom || shipment.destinationCustom);
     const rows = transportUnitsForLeg(leg);
     if (!rows.length) return [{ ...blankTransportUnit(leg.mode), legNo: li + 1, legMode: leg.mode, from, to, legStatus: leg.status }];
     return rows.map((u, ui) => ({ ...u, legNo: li + 1, unitNo: ui + 1, legMode: leg.mode, from, to, legStatus: leg.status }));
@@ -1171,7 +1244,7 @@ function TransportOrderDocument({ shipment, contacts }: any) {
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 16, fontWeight: 850 }}>TRANSPORT ORDER / ZLECENIE TRANSPORTOWE</div>
+          <div style={{ fontSize: 16, fontWeight: 850 }}>{providerRole.toUpperCase()} ORDER / ZLECENIE DLA {providerRole.toUpperCase()}</div>
           <div style={{ fontSize: 14, fontWeight: 800 }}>No {docNo}</div>
           <div>Page / Strona: 1/1</div>
           <div>Date / Data: {todayISO()}</div>
@@ -1181,14 +1254,14 @@ function TransportOrderDocument({ shipment, contacts }: any) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "7px 12px" }}>
         <FieldPrint en="Carrier / contractor" pl="Zleceniobiorca" value={`${provider.name || "TBA"}\n${provider.address || ""}\nNIP ${provider.nip || "-"}`} />
         <FieldPrint en="Transport units" pl="Liczba pojazdow / jednostek" value={`${shipmentVehicleCount(shipment) || units.length || 1} unit(s) / pojazd(y)`} />
-        <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={locText(shipment.originLocationId || firstLeg.fromLocationId)} />
-        <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={locText(shipment.destinationLocationId || firstLeg.toLocationId)} />
+        <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={locationTextFromFields(firstLeg.fromLocationId || shipment.originLocationId, firstLeg.fromCustom || shipment.originCustom)} />
+        <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={locationTextFromFields(firstLeg.toLocationId || shipment.destinationLocationId, firstLeg.toCustom || shipment.destinationCustom)} />
         <FieldPrint en="Customs clearance" pl="Odprawa celna" value={shipment.customsClearance || (broker ? `${broker.name}\n${broker.address || ""}` : "TBA")} />
         <FieldPrint en="Temperature" pl="Temperatura" value={tempText} />
         <FieldPrint en="Loading date" pl="Data zaladunku" value={shipment.loadingDate || firstLeg.plannedPickupDate || "TBA"} />
         <FieldPrint en="Delivery date" pl="Data rozladunku" value={shipment.expectedDeliveryDate || firstLeg.plannedDeliveryDate || "TBA"} />
         <FieldPrint en="Goods" pl="Towar" value="Food goods - clean trailer / Towar spozywczy - czysta naczepa" />
-        <FieldPrint en="Freight" pl="Fracht" value={cost.amount ? fmtMoney(cost.amount, cost.currency) : fmtMoney(shipmentCostPLN(shipment), "PLN")} />
+        <FieldPrint en={`Agreed price for this ${providerRole.toLowerCase()} order`} pl="Uzgodniony fracht dla tego zlecenia" value={cost.amount ? fmtMoney(cost.amount, cost.currency) : selectedCosts.length ? fmtMoney(selectedCosts.reduce((sum, c) => sum + parseNum(c.amount), 0), selectedCosts[0]?.currency || "PLN") : fmtMoney(shipmentCostPLN(shipment), "PLN")} />
       </div>
 
       <div style={{ marginTop: 12, fontWeight: 850, fontSize: 12 }}>Cargo / Ladunek</div>
@@ -1231,15 +1304,17 @@ function TransportOrderDocument({ shipment, contacts }: any) {
 }
 
 function TransportOrderPrintModal({ shipment, contacts, onClose, onMarkSent }: any) {
+  const providerIds = providerIdsForShipment(shipment);
+  const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
   return <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
     <div style={{ width: 980, maxHeight: "94vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
       <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div><strong>Transport order confirmation</strong><span style={{ color: "#888", marginLeft: 8, fontSize: 12 }}>Bilingual EN/PL template with logo.</span></div>
-        <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={onMarkSent} kind="green">Mark sent</SmallButton><SmallButton onClick={() => printHtmlNode("transport-order-print", shipment.number)} kind="dark">Print / PDF</SmallButton><SmallButton onClick={onClose}>Close</SmallButton></div>
+        <div><strong>Transport order confirmation</strong><span style={{ color: "#888", marginLeft: 8, fontSize: 12 }}>Generate one clean order per carrier / forwarder.</span></div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Sel value={providerId} onChange={e => setProviderId(e.target.value)}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel><SmallButton onClick={onMarkSent} kind="green">Mark sent</SmallButton><SmallButton onClick={() => printHtmlNode("transport-order-print", `${shipment.number}-${providerId}`)} kind="dark">Print / PDF</SmallButton><SmallButton onClick={onClose}>Close</SmallButton></div>
       </div>
       <div style={{ padding: 22, background: "#ECECEC" }}>
         <div id="transport-order-print" style={{ width: "190mm", margin: "0 auto", background: "#fff", boxShadow: "0 3px 16px rgba(0,0,0,0.18)" }}>
-          <TransportOrderDocument shipment={shipment} contacts={contacts} />
+          <TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} />
         </div>
       </div>
     </div>
@@ -1247,9 +1322,12 @@ function TransportOrderPrintModal({ shipment, contacts, onClose, onMarkSent }: a
 }
 
 function TransportOrderEmailModal({ shipment, contacts, onClose, onMarkSent }: any) {
-  const provider: any = providerById(shipment.carrierId || shipment.forwarderId, contacts) || {};
+  const providerIds = providerIdsForShipment(shipment);
+  const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
+  const provider: any = providerById(providerId, contacts) || {};
+  const firstProviderLeg: any = providerLegs(shipment, providerId)[0] || (shipment.legs || [])[0] || {};
   const [subject, setSubject] = useState(`Transport Order ${shipment.transportOrderNo || shipment.number} / Zlecenie transportowe — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${provider.contact || provider.name || "Carrier"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locText(shipment.originLocationId)}\nDelivery: ${locText(shipment.destinationLocationId)}\nDate: ${shipment.loadingDate || "TBA"}\nFreight: ${fmtMoney(shipmentCostPLN(shipment), "PLN")}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`);
+  const [body, setBody] = useState(`Dear ${provider.contact || provider.name || "Carrier"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipment.originLocationId, firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(firstProviderLeg.toLocationId || shipment.destinationLocationId, firstProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${shipment.loadingDate || "TBA"}\nFreight: ${fmtMoney(shipmentCostPLN(shipment), "PLN")}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`);
   const recipient = provider.email || "";
   function openMailClient() {
     const mailto = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -1264,10 +1342,10 @@ function TransportOrderEmailModal({ shipment, contacts, onClose, onMarkSent }: a
       </div>
       <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ padding: "10px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12, color: "#92400E" }}>Until the backend email service is built, this follows the same two-step workflow as PO/SO email: save the document as PDF, then open your mail client.</div>
-        <div><Lbl>TO</Lbl><Inp value={recipient || "(carrier / forwarder email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
+        <div><Lbl>Provider</Lbl><Sel value={providerId} onChange={e => setProviderId(e.target.value)}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel></div><div><Lbl>TO</Lbl><Inp value={recipient || "(carrier / forwarder email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
         <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
         <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
-        <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument shipment={shipment} contacts={contacts} /></div></div>
+        <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} /></div></div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", borderTop: "1px solid #F3F4F6", paddingTop: 14 }}>
           <SmallButton onClick={onClose}>Cancel</SmallButton>
           <SmallButton onClick={() => printHtmlNode("transport-order-email-doc", shipment.number)} kind="blue">① Save PDF</SmallButton>
@@ -1287,7 +1365,7 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ fontSize: 22, fontWeight: 850, letterSpacing: "-0.4px" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
-          <div style={{ fontSize: 12, color: "#666", marginTop: 5 }}>{PURPOSE_LABELS[shipment.purpose] || shipment.purpose} - {provider?.name || "Provider TBA"} - {locText(shipment.originLocationId)} {"->"} {locText(shipment.destinationLocationId)}</div>
+          <div style={{ fontSize: 12, color: "#666", marginTop: 5 }}>{PURPOSE_LABELS[shipment.purpose] || shipment.purpose} - {provider?.name || "Provider TBA"} - {locationTextFromFields(shipment.originLocationId, shipment.originCustom)} {"->"} {locationTextFromFields(shipment.destinationLocationId, shipment.destinationCustom)}</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}>{r}</span>)}{(shipment.soRefs || []).map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}>{r}</span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -1310,8 +1388,8 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
         {(shipment.legs || []).map((leg, i) => <div key={leg.id || i} style={{ display: "grid", gridTemplateColumns: "36px 70px 1fr 1fr 1.1fr", gap: 10, alignItems: "start", padding: "10px 0", borderBottom: i === (shipment.legs || []).length - 1 ? "none" : "1px solid #F1F5F9" }}>
           <div style={{ width: 26, height: 26, borderRadius: 999, background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>{i + 1}</div>
           <div><ModeBadge mode={leg.mode} /><div style={{ marginTop: 4 }}><StatusBadge status={leg.status} /></div></div>
-          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>FROM</div><div style={{ fontSize: 12, color: "#333" }}>{locText(leg.fromLocationId)}</div><div style={{ fontSize: 11, color: "#888" }}>{leg.plannedPickupDate || "-"}</div></div>
-          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>TO</div><div style={{ fontSize: 12, color: "#333" }}>{locText(leg.toLocationId)}</div><div style={{ fontSize: 11, color: "#888" }}>{leg.plannedDeliveryDate || "-"}</div></div>
+          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>FROM</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{leg.plannedPickupDate || "-"}</div></div>
+          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>TO</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{leg.plannedDeliveryDate || "-"}</div></div>
           <div style={{ fontSize: 11.5, color: "#555", lineHeight: 1.45 }}>
             {transportUnitsForLeg(leg).length > 0 ? transportUnitsForLeg(leg).map((u, ui) => (
               <div key={u.id || ui} style={{ padding: "4px 0", borderBottom: ui === transportUnitsForLeg(leg).length - 1 ? "none" : "1px dashed #E5E7EB" }}>

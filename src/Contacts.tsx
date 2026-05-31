@@ -749,7 +749,7 @@ const COUNTRY_TYPE_RULES: Record<string, string> = {
 };
 
 // Smart parse a TAX ID into either a local NIP or an EU VAT id
-function parseTaxId(raw: any) {
+function parseTaxId(raw) {
   if (!raw) return { nip: "", vatEuId: "" };
   let s = String(raw).trim();
   // Strip common prefixes like "VAT ID:", "NIP:"
@@ -770,7 +770,7 @@ function parseTaxId(raw: any) {
 }
 
 // Compose address from Street + Postcode + City
-function composeAddress(street: any, postcode: any, city: any) {
+function composeAddress(street, postcode, city) {
   const parts = [];
   if (street) parts.push(String(street).trim());
   const pc = postcode ? String(postcode).trim() : "";
@@ -795,7 +795,7 @@ function assignDefaultType({ isCompany, country, hasNip }: any) {
 }
 
 // Default currency by country
-function defaultCurrencyByCountry(country: any) {
+function defaultCurrencyByCountry(country) {
   if (!country) return "PLN";
   const c = String(country).trim();
   if (c === "Poland") return "PLN";
@@ -805,7 +805,7 @@ function defaultCurrencyByCountry(country: any) {
 }
 
 // Parse a Fakturownia row into our counterparty shape
-function parseFakturowniaRow(row: any, existingNips: Set<any>, existingNames: Set<any>) {
+function parseFakturowniaRow(row, existingNips, existingNames) {
   const taxId = parseTaxId(row["TAX ID"]);
   const hasNip = !!(taxId.nip || taxId.vatEuId);
   const isCompany = row["Company"] === true || row["Company"] === "true" || row["Company"] === "True";
@@ -867,9 +867,9 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
   const [filterType, setFilterType] = useState("All");
   const [filterDup, setFilterDup] = useState("All"); // All | Duplicates | New
   const [search, setSearch] = useState("");
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef(null);
 
-  function handleFile(file: File | undefined | null) {
+  function handleFile(file) {
     if (!file) return;
     setFilename(file.name);
     setStage("parsing");
@@ -887,12 +887,12 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
         const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
         // Build existing-record indices for dedup
-        const existingNips = new Set<string>();
-        existingCounterparties.forEach((c: any) => {
+        const existingNips = new Set();
+        existingCounterparties.forEach(c => {
           if (c.nip) existingNips.add(c.nip.replace(/\s/g, ""));
           if (c.vatEuId) existingNips.add(c.vatEuId.replace(/\s/g, ""));
         });
-        const existingNames = new Set<string>(existingCounterparties.map((c: any) => (c.name || "").toLowerCase()));
+        const existingNames = new Set(existingCounterparties.map(c => (c.name || "").toLowerCase()));
 
         const parsed = rows
           .filter(r => r["Client"] && String(r["Client"]).trim() && String(r["Client"]).trim() !== "-")
@@ -908,16 +908,16 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
   }
 
   // Bulk operations
-  function setTypeForFiltered(type: string) {
+  function setTypeForFiltered(type) {
     setParsedRows(rows => rows.map(r => visible(r) ? { ...r, type } : r));
   }
-  function selectAllFiltered(selected: boolean) {
+  function selectAllFiltered(selected) {
     setParsedRows(rows => rows.map(r => visible(r) ? { ...r, _selected: selected } : r));
   }
-  function toggleRow(idx: number, k: string, v: any) {
+  function toggleRow(idx, k, v) {
     setParsedRows(rows => rows.map((r, i) => i === idx ? { ...r, [k]: v } : r));
   }
-  function visible(r: any) {
+  function visible(r) {
     if (filterType !== "All" && r.type !== filterType) return false;
     if (filterDup === "Duplicates" && !r._duplicate) return false;
     if (filterDup === "New" && r._duplicate) return false;
@@ -931,7 +931,11 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
   const visibleRows = parsedRows.filter(visible);
   const selectedCount = parsedRows.filter(r => r._selected).length;
   const duplicateCount = parsedRows.filter(r => r._duplicate).length;
-  const countByType: Record<string, number> = parsedRows.reduce((acc: Record<string, number>, r: any) => { const type = String(r.type || "Other"); acc[type] = (acc[type] || 0) + 1; return acc; }, {});
+  const countByType: Record<string, number> = parsedRows.reduce((acc: Record<string, number>, r: any) => {
+    const type = String(r.type || "Other");
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
 
   function commit() {
     const toImport = parsedRows.filter(r => r._selected).map(r => {
@@ -1169,7 +1173,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
 
   // ── stats ──────────────────────────────────────────────────────────────
   const counts = useMemo(() => {
-    const c = { All: counterparties.length };
+    const c: Record<string, number> = { All: counterparties.length };
     COUNTERPARTY_TYPES.forEach(t => {
       c[t] = counterparties.filter(x => x.type === t || (x.additionalTypes || []).includes(t)).length;
     });

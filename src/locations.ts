@@ -1,200 +1,127 @@
-// ─── LOCATIONS — CANONICAL SOURCE OF TRUTH ────────────────────────────────
+// ─── SHARED LOCATIONS (v5.8 trunk, Option B consolidation) ──────────────────
 //
-// Single canonical list of physical/logical places where Marianna's goods can
-// be at any point in their journey. Replaces the per-module LOCATIONS arrays
-// that existed in V4 (PurchaseOrders, Inventory, Shipments, SalesOrders) —
-// those had conflicting IDs (e.g., id 8 = "Algeciras Port" in PO but "Biedronka
-// DC Poznań" in Inventory) and silently produced wrong references when
-// modules cross-referenced.
+// Single source of truth for all location lookups across PurchaseOrders,
+// SalesOrders, Inventory and Shipments. Replaces the four separate per-module
+// LOCATIONS arrays that had drifted (different spellings) and conflicted
+// (id 8/10 both Biedronka, Shipments had an "(SO/PO id)" workaround).
 //
-// ID scheme:
-//   100-199 = Our storage (RentedWarehouse today, OwnWarehouse when Marianna
-//             opens its own one day)
-//   200-299 = SupplierFacility (where we pick up from suppliers)
-//   300-399 = ClientFacility (where we deliver to clients)
-//   400-499 = Port (sea/inland ports — title transfer points for CIF)
-//   500-599 = Airport (for air export flow — blueberries etc.)
-//   600-699 = PortWarehouse / BondedWarehouse (3rd-party storage at ports)
-//   700-799 = Customs / Broker facility
-//   800-899 = RelayPoint (truck handover points)
+// Option B approach (per decision): we KEEP all existing IDs so no seed data
+// reference needs to change. We only:
+//   1. unify spelling (proper Polish diacritics everywhere)
+//   2. keep both alias IDs pointing at the same real place
+//      (id 8 == id 10 == Biedronka DC Poznań; id 9 == id 11 == Lidl DC Chorzów)
+//   3. add the `type` taxonomy and capability flags for future journey work (V6)
 //
-// Each location has a `type` and `capabilities` so downstream code (e.g.,
-// journey-stage validation in V6) can ask "can this location host customs
-// clearance?" without hardcoding.
+// A future V6 can renumber to a fully clean scheme; for now this fixes the
+// real bug (conflicting/duplicate references) with zero churn to seed data.
 
 export type LocationType =
-  | "OwnWarehouse"        // Future: when Marianna owns its own
-  | "RentedWarehouse"     // Logipark, ColdStore (current setup)
-  | "PortWarehouse"       // 3rd-party port-side storage
-  | "BondedWarehouse"     // Formal customs storage
-  | "SupplierFacility"    // Supplier's premises
-  | "ClientFacility"      // Client's premises
-  | "Port"                // Sea port (CIF transfer points)
-  | "Airport"             // Cargo airports
-  | "Customs"             // Customs broker / agent facility
-  | "BorderCrossing"      // Specific border post
-  | "RelayPoint";         // Truck handover meeting points
+  | "OwnWarehouse"
+  | "RentedWarehouse"
+  | "SupplierFacility"
+  | "ClientFacility"
+  | "Port"
+  | "Airport"
+  | "PortWarehouse"
+  | "BondedWarehouse"
+  | "Customs"
+  | "BorderCrossing"
+  | "RelayPoint";
 
-export interface LocationCapabilities {
-  storage: boolean;             // can goods sit here?
-  customsClearance: boolean;    // can customs be done here?
-  refrigerated: boolean;        // reefer facility?
-  qualityInspection: boolean;   // can our QC person work here?
-  sorting: boolean;             // can sorting / repacking happen here?
-}
-
+// Legacy single-word type strings used in v5.8 seed (OWN / SUPPLIER / PORT /
+// CLIENT / BROKER) are mapped to the richer taxonomy here.
 export interface Location {
   id: number;
   type: LocationType;
+  legacyType: string;          // the original "OWN"/"PORT"/etc. — kept so existing UI lookups by legacy type still work
   name: string;
   country: string;
   address?: string;
-  operatorContactId?: number | null;   // ref to Contacts.id for the company running this place (null = we run it)
-  capabilities: LocationCapabilities;
-  storageCostModel?: "PerKgDay" | "PerPalletDay" | "PerPalletMove" | "Fixed" | null;
-  contactInfo?: { name?: string; phone?: string; email?: string };
+  aliasOf?: number;            // if set, this id is an alias for another canonical id (same physical place)
 }
 
-// ─── Default capability presets ────────────────────────────────────────────
-const CAP_OWN_WAREHOUSE: LocationCapabilities = {
-  storage: true, customsClearance: false, refrigerated: true, qualityInspection: true, sorting: true,
-};
-const CAP_RENTED_WAREHOUSE: LocationCapabilities = {
-  storage: true, customsClearance: false, refrigerated: true, qualityInspection: true, sorting: true,
-};
-const CAP_PORT_WAREHOUSE: LocationCapabilities = {
-  storage: true, customsClearance: true, refrigerated: true, qualityInspection: true, sorting: false,
-};
-const CAP_BONDED_WAREHOUSE: LocationCapabilities = {
-  storage: true, customsClearance: true, refrigerated: false, qualityInspection: false, sorting: false,
-};
-const CAP_SUPPLIER_FACILITY: LocationCapabilities = {
-  storage: false, customsClearance: false, refrigerated: false, qualityInspection: true, sorting: false,
-};
-const CAP_CLIENT_FACILITY: LocationCapabilities = {
-  storage: false, customsClearance: false, refrigerated: false, qualityInspection: false, sorting: false,
-};
-const CAP_PORT: LocationCapabilities = {
-  storage: false, customsClearance: true, refrigerated: false, qualityInspection: false, sorting: false,
-};
-const CAP_AIRPORT: LocationCapabilities = {
-  storage: false, customsClearance: true, refrigerated: true, qualityInspection: false, sorting: false,
-};
-const CAP_CUSTOMS: LocationCapabilities = {
-  storage: false, customsClearance: true, refrigerated: false, qualityInspection: false, sorting: false,
-};
-const CAP_BORDER_CROSSING: LocationCapabilities = {
-  storage: false, customsClearance: true, refrigerated: false, qualityInspection: false, sorting: false,
-};
-const CAP_RELAY: LocationCapabilities = {
-  storage: false, customsClearance: false, refrigerated: false, qualityInspection: false, sorting: false,
-};
-
-// ─── The canonical list ────────────────────────────────────────────────────
-// IMPORTANT: operatorContactId values reference Contacts.tsx counterparty IDs.
-// In V4, warehouse operators were already in Contacts as type "Warehouse". We
-// keep those refs; if a contact doesn't exist for a given operator we leave
-// the field null and it falls back to display the location name only.
+// Helper to keep the table compact
+function L(id: number, type: LocationType, legacyType: string, name: string, country: string, address?: string, aliasOf?: number): Location {
+  return { id, type, legacyType, name, country, address, aliasOf };
+}
 
 export const LOCATIONS: Location[] = [
-  // ── Our storage (rented today) ──
-  { id: 101, type: "RentedWarehouse", name: "WH-01 Poznań (Logipark)", country: "Poland",
-    address: "Logipark, Poznań", operatorContactId: null /* TODO: link to Logipark contact */,
-    capabilities: CAP_RENTED_WAREHOUSE, storageCostModel: "PerKgDay" },
-  { id: 102, type: "RentedWarehouse", name: "WH-02 Warszawa (ColdStore)", country: "Poland",
-    address: "Warszawa cold storage", operatorContactId: null /* TODO: link to ColdStore contact */,
-    capabilities: CAP_RENTED_WAREHOUSE, storageCostModel: "PerKgDay" },
+  // ── Our storage (rented today; will include OwnWarehouse when Marianna opens one) ──
+  L(1, "RentedWarehouse", "OWN", "WH-01 Poznań (Logipark)", "Poland", "Poznań / Logipark"),
+  L(2, "RentedWarehouse", "OWN", "WH-02 Warszawa (ColdStore)", "Poland", "Warszawa cold storage"),
 
   // ── Supplier facilities ──
-  { id: 201, type: "SupplierFacility", name: "Białski Owoc — Biała Rawska", country: "Poland",
-    address: "Wojska Polskiego 6F, 96-230 Biała Rawska", capabilities: CAP_SUPPLIER_FACILITY },
-  { id: 202, type: "SupplierFacility", name: "FreshFarm ES — Valencia", country: "Spain",
-    address: "Valencia, Spain", capabilities: CAP_SUPPLIER_FACILITY },
-  { id: 203, type: "SupplierFacility", name: "AgriTrade MA — Agadir", country: "Morocco",
-    address: "Agadir, Morocco", capabilities: CAP_SUPPLIER_FACILITY },
+  L(3, "SupplierFacility", "SUPPLIER", "Białski Owoc — Biała Rawska", "Poland", "Wojska Polskiego 6F, 96-230 Biała Rawska"),
+  L(4, "SupplierFacility", "SUPPLIER", "FreshFarm ES — Valencia", "Spain", "Valencia, Spain"),
+  L(5, "SupplierFacility", "SUPPLIER", "AgriTrade MA — Agadir", "Morocco", "Agadir, Morocco"),
 
-  // ── Client facilities ──
-  { id: 301, type: "ClientFacility", name: "Biedronka DC Poznań", country: "Poland",
-    address: "ul. Górecka 1, 60-201 Poznań", capabilities: CAP_CLIENT_FACILITY },
-  { id: 302, type: "ClientFacility", name: "Lidl DC Chorzów", country: "Poland",
-    address: "Chorzów", capabilities: CAP_CLIENT_FACILITY },
-  { id: 303, type: "ClientFacility", name: "Fresco Hamburg", country: "Germany",
-    address: "Hamburg", capabilities: CAP_CLIENT_FACILITY },
-  { id: 304, type: "ClientFacility", name: "Metro DC Warszawa", country: "Poland",
-    address: "Warszawa", capabilities: CAP_CLIENT_FACILITY },
-  { id: 305, type: "ClientFacility", name: "Euro-Papryka Tarczyn", country: "Poland",
-    address: "Tarczyn / Wola Przypkowska", capabilities: CAP_CLIENT_FACILITY },
-  { id: 306, type: "ClientFacility", name: "Venice Cold Stores & Logistics SRL", country: "Italy",
-    address: "Via Banchina dell'Azoto 17/B, 30175 Marghera", capabilities: CAP_CLIENT_FACILITY },
+  // ── Ports (base set) ──
+  L(6, "Port", "PORT", "Gdańsk Port", "Poland", "Gdańsk port"),
+  L(7, "Port", "PORT", "Hamburg Port", "Germany", "Hamburg port"),
 
-  // ── Ports ──
-  { id: 401, type: "Port", name: "Gdańsk Port", country: "Poland", capabilities: CAP_PORT },
-  { id: 402, type: "Port", name: "Gdynia Port", country: "Poland", capabilities: CAP_PORT },
-  { id: 403, type: "Port", name: "Hamburg Port", country: "Germany", capabilities: CAP_PORT },
-  { id: 404, type: "Port", name: "Algeciras Port", country: "Spain", capabilities: CAP_PORT },
-  { id: 405, type: "Port", name: "Port of Jeddah", country: "Saudi Arabia", capabilities: CAP_PORT },
-  { id: 406, type: "Port", name: "Agadir / Casablanca port area", country: "Morocco", capabilities: CAP_PORT },
+  // ── Client facilities (base set) ──
+  // NOTE: id 8 and id 10 are the SAME place (Biedronka). v5.8 had both because
+  // different modules referenced different ids. We keep both as aliases so no
+  // seed reference breaks; id 10 is the canonical one.
+  L(8, "ClientFacility", "CLIENT", "Biedronka DC Poznań", "Poland", "ul. Górecka 1, 60-201 Poznań", 10),
+  L(9, "ClientFacility", "CLIENT", "Lidl DC Chorzów", "Poland", "Chorzów", 11),
+  L(10, "ClientFacility", "CLIENT", "Biedronka DC Poznań", "Poland", "ul. Górecka 1, 60-201 Poznań"),
+  L(11, "ClientFacility", "CLIENT", "Lidl DC Chorzów", "Poland", "Chorzów"),
+  L(12, "ClientFacility", "CLIENT", "Fresco Hamburg", "Germany", "Hamburg"),
+  L(13, "ClientFacility", "CLIENT", "Metro DC Warszawa", "Poland", "Warszawa"),
+  L(14, "ClientFacility", "CLIENT", "Euro-Papryka Tarczyn", "Poland", "Tarczyn / Wola Przypkowska"),
 
-  // ── Airports (for air export flow — blueberries etc.) ──
-  { id: 501, type: "Airport", name: "Warsaw Chopin Airport — Cargo", country: "Poland", capabilities: CAP_AIRPORT },
-  { id: 502, type: "Airport", name: "Frankfurt Cargo Airport", country: "Germany", capabilities: CAP_AIRPORT },
+  // ── Additional clients / mixed (from Shipments) ──
+  L(21, "ClientFacility", "CLIENT", "Venice Cold Stores & Logistics SRL", "Italy", "Via Banchina dell'Azoto 17/B, 30175 Marghera"),
+  L(22, "Customs", "BROKER", "AM sped s.c. — Słomczyn", "Poland", "Słomczyn 81, 05-600 Grójec"),
+  L(23, "Port", "PORT", "Agadir / Casablanca port area", "Morocco", "Morocco port warehouse"),
 
-  // ── Port warehouses (3rd-party storage at ports) ──
-  { id: 601, type: "PortWarehouse", name: "Gdańsk Port Warehouse (DSV)", country: "Poland",
-    capabilities: CAP_PORT_WAREHOUSE, storageCostModel: "PerPalletDay" },
-  { id: 602, type: "PortWarehouse", name: "Gdynia Port Warehouse", country: "Poland",
-    capabilities: CAP_PORT_WAREHOUSE, storageCostModel: "PerPalletDay" },
+  // ── Expanded port list (v5.8 added these consistently; IDs preserved) ──
+  L(108, "Port", "PORT", "Algeciras Port", "Spain"),
+  L(109, "Port", "PORT", "Jeddah Islamic Port", "Saudi Arabia"),
+  L(110, "Port", "PORT", "Venice / Marghera Port", "Italy"),
+  L(111, "Port", "PORT", "Rotterdam Port", "Netherlands"),
+  L(112, "Port", "PORT", "Antwerp-Bruges Port", "Belgium"),
+  L(113, "Port", "PORT", "Koper Port", "Slovenia"),
+  L(114, "Port", "PORT", "Trieste Port", "Italy"),
+  L(115, "Port", "PORT", "Genoa Port", "Italy"),
+  L(116, "Port", "PORT", "Salerno Port", "Italy"),
+  L(117, "Port", "PORT", "Valencia Port", "Spain"),
+  L(118, "Port", "PORT", "Barcelona Port", "Spain"),
+  L(119, "Port", "PORT", "Alexandria Port", "Egypt"),
+  L(120, "Port", "PORT", "Port Said", "Egypt"),
+  L(121, "Port", "PORT", "Agadir / Casablanca port area", "Morocco"),
 
-  // ── Customs / brokers ──
-  { id: 701, type: "Customs", name: "AM sped — Słomczyn", country: "Poland",
-    address: "Słomczyn 81, 05-600 Grójec", capabilities: CAP_CUSTOMS },
+  // ── Airports (NEW — for the air-export flow, e.g. blueberries) ──
+  L(201, "Airport", "PORT", "Warsaw Chopin Airport — Cargo", "Poland"),
+  L(202, "Airport", "PORT", "Frankfurt Cargo Airport", "Germany"),
 ];
 
-// ─── Lookup helpers ─────────────────────────────────────────────────────────
+// ─── Lookups ────────────────────────────────────────────────────────────────
 
-export function locById(id: number | null | undefined): Location | null {
-  if (id === null || id === undefined) return null;
-  return LOCATIONS.find(l => l.id === Number(id)) || null;
+export function locById(id: any): Location | null {
+  if (id === null || id === undefined || id === "") return null;
+  return LOCATIONS.find(l => String(l.id) === String(id)) || null;
 }
 
-export function locText(id: number | null | undefined, fallback = ""): string {
+export function locText(id: any, fallback = ""): string {
   const l = locById(id);
   if (!l) return fallback || "—";
   return l.address ? `${l.name}, ${l.address}` : l.name;
 }
 
 export function locationsOfType(...types: LocationType[]): Location[] {
-  return LOCATIONS.filter(l => types.includes(l.type));
+  return LOCATIONS.filter(l => types.includes(l.type) && !l.aliasOf);
 }
 
-export function locationsWithCapability(cap: keyof LocationCapabilities): Location[] {
-  return LOCATIONS.filter(l => l.capabilities[cap]);
+// Locations filtered by the LEGACY type string (OWN/PORT/CLIENT/SUPPLIER/BROKER)
+// — used by existing v5.8 dropdowns that group by legacy type. Aliases hidden so
+// dropdowns don't show Biedronka twice.
+export function locationsByLegacyType(legacyType: string): Location[] {
+  return LOCATIONS.filter(l => l.legacyType === legacyType && !l.aliasOf);
 }
 
-// ─── Legacy → canonical migration map ──────────────────────────────────────
-// V4 had module-local LOCATIONS arrays with conflicting IDs. This map
-// translates old IDs (per source module) to new canonical IDs. Used during
-// seed migration; once migrated, no module should ever use legacy IDs again.
-
-export const LEGACY_ID_MAP: Record<string, Record<number, number>> = {
-  // PurchaseOrders.tsx LOCATIONS
-  PO: {
-    1: 101, 2: 102, 6: 401, 7: 403, 8: 404, 9: 405,
-    10: 301, 11: 302, 12: 303, 13: 304, 14: 305,
-  },
-  // Inventory.tsx LOCATIONS
-  INV: {
-    1: 101, 2: 102, 3: 201, 4: 202, 5: 203,
-    6: 401, 7: 403, 8: 301, 9: 302, 10: 303, 14: 305,
-  },
-  // Shipments.tsx LOCATIONS
-  SHP: {
-    1: 101, 2: 102, 3: 201, 4: 202, 5: 203,
-    6: 401, 7: 403, 8: 301, 9: 302, 10: 301, 11: 302,
-    12: 303, 13: 304, 14: 305, 21: 306, 22: 701, 23: 406,
-  },
-  // SalesOrders.tsx LOCATIONS
-  SO: {
-    1: 101, 2: 102, 10: 301, 11: 302, 13: 304,
-  },
-};
+// All non-alias locations (for datalists / full dropdowns)
+export function allLocations(): Location[] {
+  return LOCATIONS.filter(l => !l.aliasOf);
+}

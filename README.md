@@ -1,107 +1,102 @@
-# MARIANNA ERP — Integration Shell
+# MARIANNA ERP — Integrated Prototype
 
-Integrated build of the FreshTrade ERP. Purchase Orders, Inventory, Sales Orders, Shipments and Counterparties run together with shared state, plus a dashboard.
+Integrated React + TypeScript prototype for FreshTrade / MARIANNA ERP.
 
-## What's in this folder
+## Modules included
 
-```
+- Dashboard — live operational KPI overview
+- Finance — aggregate P/L analytics
+- Purchase Orders — procurement workflow and PO -> Inventory expected lot creation
+- Inventory — lots, movements, reservations and cost allocation
+- Sales Orders — SO lifecycle, sourcing, email/print workflow and inline P/L card
+- Shipments — logistics tracking for road / sea / rail / air / multimodal movements
+- Counterparties — clients, suppliers, carriers, forwarders, warehouses and contacts
+- Settings — local JSON export/import/reset for tester data
+
+## Project structure
+
+```txt
 freshtrade-erp/
 ├── package.json
 ├── tsconfig.json
 ├── public/
 │   └── index.html
 ├── src/
-│   ├── index.tsx           ← React entry point
-│   ├── App.tsx             ← shell: top nav, holds all state
-│   ├── Dashboard.tsx       ← Phase 1 dashboard
-│   ├── Contacts.tsx        ← integrated (accepts shell state)
-│   ├── PurchaseOrders.tsx  ← integrated
-│   ├── Inventory.tsx       ← integrated (reads live SOs from shell)
-│   ├── SalesOrders.tsx     ← integrated (reads live lots + POs from shell)
-│   ├── Shipments.tsx       ← integrated logistics / transport module
-│   └── shell_seed.ts       ← combines each module's seed data
-└── standalone/             ← standalone module copies for solo testing
+│   ├── index.tsx
+│   ├── App.tsx
+│   ├── Dashboard.tsx
+│   ├── Finance.tsx
+│   ├── Contacts.tsx
+│   ├── PurchaseOrders.tsx
+│   ├── Inventory.tsx
+│   ├── SalesOrders.tsx
+│   ├── Shipments.tsx
+│   ├── Settings.tsx
+│   ├── SOMarginCard.tsx
+│   ├── marginCalculations.ts
+│   ├── useLocalStoredState.ts
+│   └── shell_seed.ts
+└── standalone/
     └── Shipments.tsx
 ```
 
-## How to run in StackBlitz
+## How to run locally
 
-1. Open https://stackblitz.com/fork/react-ts
-2. **Replace `package.json`** with the one from this folder (adds `xlsx` for Contacts' Fakturownia import)
-3. **Delete the default `src/App.tsx`** that StackBlitz generated
-4. **Upload everything from `src/`** into the StackBlitz `src/` folder (drag-and-drop all files)
-5. Replace `public/index.html` with the one from this folder
-6. StackBlitz auto-reloads. You should see the top nav with 6 tabs (Dashboard / Purchase Orders / Inventory / Sales Orders / Shipments / Counterparties) and the dashboard view by default.
-
-## How to run a single standalone module
-
-The `standalone/` folder includes standalone modules that work on their own (no shell required). To test one:
-
-1. Open https://stackblitz.com/fork/react-ts
-2. Paste the standalone module's contents into `src/App.tsx`
-3. For Contacts specifically, add `"xlsx": "^0.18.5"` to package.json. Shipments does not need extra dependencies.
-4. Save — that one module renders alone
-
-## What works end-to-end
-
-- **Cross-module reservations**: confirm an SO in Sales Orders → open the lot in Inventory → see the reservation appear under "RESERVATIONS"
-- **Live source picker**: the SO source picker reads real lots from Inventory state and real POs from PO state — so available kg in the picker reflects current Inventory + commitments from other SOs
-- **Dashboard KPIs**: pull from all four state slices live; click a card to jump to that module
-- **Edits persist across module switches** (within the same browser session — no backend yet)
-
-## What's deliberately not wired yet
-
-- **Client/supplier picker integration**: SO still uses its local CLIENTS array, PO still uses local SUPPLIERS. The Contacts module is editable but those edits don't yet flow to the SO/PO dropdowns. This is a follow-up pass.
-- **Auto-lot creation on PO confirmation**: when a PO is confirmed, no Expected lot is created in Inventory automatically. The lot has to be added manually.
-- **Auto SHIP_OUT on SO Shipped**: when an SO is marked Shipped, the corresponding lot doesn't get a SHIP_OUT movement automatically. Manual workflow for now.
-
-These are workflow enhancements, not architectural problems. The shared-state plumbing is in place; the workflows just need to be wired through the appropriate `setX` callbacks.
-
-## State architecture
-
-All canonical state lives in `App.tsx`:
-
-```js
-const [contacts, setContacts] = useState(SHELL_SEED.contacts);
-const [pos, setPOs]           = useState(SHELL_SEED.pos);
-const [lots, setLots]         = useState(SHELL_SEED.lots);
-const [orders, setOrders]     = useState(SHELL_SEED.orders);
-const [shipments, setShipments] = useState(SHELL_SEED.shipments);
+```bash
+npm install
+npm start
 ```
 
-Each module accepts these as optional props. When props are provided (integration mode), they're used directly. When not (standalone mode), each module falls back to its local seed via `useState`.
+Then open `http://localhost:3000`.
 
-The Inventory module's `lotReservations(lot, sourceSOs)` and `soRefsFor(lot, sourceSOs)` accept the live SOs array as a second argument — same pattern.
+## How to build
 
-The SalesOrders module syncs the module-scope `LOTS` and `PO_REFS` references at the top of every render. This is a pragmatic choice (the alternative was plumbing data through ~14 call sites in 4 internal functions). It works because React renders synchronously, so the assignment happens before any reader runs.
+```bash
+npm run build
+```
 
-## Known quirk — module-scope mutables
+## Data persistence
 
-`SalesOrders.tsx` uses `let LOTS` and `let PO_REFS` at module scope. These are intentionally not `const`. They get reassigned at the top of each render of the main `SalesOrders` component. This pattern is **not safe under React Strict Mode or concurrent rendering** because the same module could be invoked twice in parallel render passes. For now, with non-Strict-Mode standard rendering, it's fine.
+The app is still frontend-only. It stores tester data in the browser using localStorage. Use **Settings -> Export all data as JSON** before resetting or sharing a test scenario.
 
-If we hit Strict Mode in the future, the fix is to refactor `LOTS` and `PO_REFS` into a React ref or context that the helpers read from via a hook. Two passes of refactoring instead of one — defer until needed.
+## Key workflows to test
+
+1. Create/confirm a PO with valid product, quantity and price; check that an Expected lot appears in Inventory.
+2. Create/confirm an SO sourced from stock; check the reservation in Inventory.
+3. Ship and then cancel an SO; check the Inventory REVERSAL movement.
+4. Open Shipments and test the bilingual EN/PL transport order email/print flow.
+5. Open a Sales Order detail page and review the P/L card.
+6. Open Finance and review aggregate profitability by client, product and month.
+7. Use Settings to export/import/reset browser-local data.
 
 
-## Shipments / Logistics module
+## V5.5 — PO/SO destination handling and SO document parity
 
-This version adds `src/Shipments.tsx` and a standalone copy in `standalone/Shipments.tsx`. The module tracks road, sea and multimodal shipments, prints a carrier transport order confirmation, stores truck / driver / container / BL data, records expected logistics costs, sends shipments to a billing queue, and can allocate logistics costs into linked Inventory lots.
+- PO UI wording now says **Purchase Incoterm** instead of **Buy Incoterm**. The internal field name remains `buyIncoterm` to avoid a storage migration.
+- Sales Orders can now print/save PDF and open the email workflow directly from the edit form for any non-draft SO, matching the Purchase Orders flow.
+- PO and SO destination dropdowns now include common ports used in export/import flows, plus a free-text destination override for missing ports or one-off terminals.
+- For direct export CIF/CFR sales, the PO/SO destination should be the **client destination port**. For DAP/DDP it should be the **client receiving site**. For EXW it should normally be the pickup warehouse/site.
+- Inventory and Shipments now know the same common port IDs so expected lots and transport orders display port destinations correctly.
 
-See `SHIPMENTS_MODULE.md` for the scenario guide.
+## V5.6 - Shipments revision
 
-## Update 2026-05-28 - Shipments v2
+The Shipments module now separates transport mode from warehousing costs, supports open/manual From-To leg locations, allows extra legs only when needed, and generates carrier/forwarder-specific transport orders with only the selected provider's relevant legs and agreed price. See `V5_6_SHIPMENTS_REVISION.md`.
 
-This update adds the second version of the Shipments / Logistics workflow.
+## V5.7 - Finance overhead allocation
 
-Highlights:
+This version adds operational overhead into Finance. Sales P/L now shows contribution margin before overhead and net P/L after allocated operational costs. The new Finance → Operational Costs view lets testers add salaries, rent, accountant fees, general petrol, software and other overhead, then allocate those costs to Sales Orders by revenue, kg sold, order count, shipment count, gross margin, manual allocation or not allocated.
 
-- PO -> Inventory transfer is blocked if product, quantity or price are missing/zero.
-- Cancelled SOs are soft-cancelled and can reverse Inventory `SHIP_OUT` movements with an auditable `REVERSAL` movement.
-- Sales Orders now support email draft generation similar to Purchase Orders.
-- Transport Orders are bilingual English / Polish, include the MARIANNA logo, and can be prepared for email from the shipment detail page.
-- Shipment header statuses are reduced to Booked, Confirmed, Loaded, Arrived, Delivered, Closed and Cancelled.
-- Shipment header modes are Road, Sea, Rail, Air and Multimodal.
-- Shipment legs now support Air mode.
-- Each leg can track multiple transport units, allowing one shipment to contain multiple trucks, containers, AWBs or rail units.
-- Seed scenario `SHP-2026-0070` demonstrates 4 sea containers split into 5 road trucks after port arrival.
+See `V5_7_FINANCE_OVERHEAD.md` for details.
 
-See `UPDATE_2026_05_28.md` for details.
+## Update V5.8 - Integrity workflows
+
+This version adds integrity rules requested during testing:
+
+- Contact edits refresh saved PO/SO counterparty snapshots and transport documents resolve providers from live Contacts.
+- SOs cannot move past Draft while any referenced PO is Draft, Cancelled or missing.
+- Direct-flow POs create `Direct Expected` traceability lots in Inventory instead of pretending goods arrive in Marianna warehouse.
+- Inventory linked documents now shows SOs sourced from the PO behind a lot, not only SOs sourced directly from a stock lot.
+- Manual Inventory movement is clarified as receipt/adjustment/exceptional correction; cost-bearing physical movements should be managed from Shipments.
+- Cancelled POs block related expected lots and return non-terminal related SOs to Draft for sourcing review.
+
+See `V5_8_INTEGRITY_WORKFLOWS.md` for details.

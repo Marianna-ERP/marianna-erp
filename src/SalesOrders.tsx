@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
+import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -132,22 +133,23 @@ function _adaptPOsFromModule(pos) {
 }
 
 // ─── DESTINATIONS ─────────────────────────────────────────────────────────
-const LOCATIONS = [
-  { id: 10, type: "CLIENT", name: "Biedronka DC Poznań",     country: "Poland" },
-  { id: 11, type: "CLIENT", name: "Lidl DC Chorzów",         country: "Poland" },
-  { id: 12, type: "CLIENT", name: "Fresco Hamburg",          country: "Germany" },
-  { id: 13, type: "CLIENT", name: "Metro DC Warszawa",       country: "Poland" },
-  { id: 14, type: "CLIENT", name: "Euro-Papryka Tarczyn",    country: "Poland" },
-  { id: 1,  type: "OWN",    name: "WH-01 Poznań (Logipark)", country: "Poland" },
-  { id: 2,  type: "OWN",    name: "WH-02 Warszawa (ColdStore)", country: "Poland" },
-];
-const LOCATION_TYPES = {
+const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
+const LOCATION_TYPES: Record<string, any> = {
   CLIENT: { icon: "🎯", label: "Client site" },
   OWN:    { icon: "🏢", label: "Our warehouse" },
+  PORT:   { icon: "⚓", label: "Port / terminal" },
 };
+function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
+function destinationDisplay(order) {
+  const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
+  if (custom) return custom;
+  const loc = locById(order?.destinationLocationId);
+  if (!loc) return "—";
+  return `${loc.name}${loc.country ? `, ${loc.country}` : ""}`;
+}
 
 // ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
-const SO_STATUSES = {
+const SO_STATUSES: Record<string, any> = {
   Draft:       { bg: "#F3F4F6", color: "#6B7280", order: 0, desc: "Being prepared — can edit freely" },
   Confirmed:   { bg: "#DBEAFE", color: "#2563EB", order: 1, desc: "Agreed with client, prices locked" },
   Reserved:    { bg: "#E0F2FE", color: "#0369A1", order: 2, desc: "Stock allocated / PO confirmed" },
@@ -189,7 +191,7 @@ const PAYMENT_TERMS = [
 export const INIT_ORDERS = [
   {
     id: 1, number: "SO-2026-0094", status: "Delivered",
-    orderDate: "2026-01-22", deliveryDate: "2026-01-25",
+    orderDate: "2026-01-22", deliveryDate: "2026-01-25", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-25",
     paymentTerms: "14 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[0],            // Biedronka
@@ -204,7 +206,7 @@ export const INIT_ORDERS = [
   },
   {
     id: 2, number: "SO-2026-0088", status: "Invoiced",
-    orderDate: "2026-01-15", deliveryDate: "2026-01-20",
+    orderDate: "2026-01-15", deliveryDate: "2026-01-20", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-20",
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[1],            // Lidl
@@ -219,7 +221,7 @@ export const INIT_ORDERS = [
   },
   {
     id: 3, number: "SO-2026-0091", status: "Shipped",
-    orderDate: "2026-01-26", deliveryDate: "2026-01-29",
+    orderDate: "2026-01-26", deliveryDate: "2026-01-29", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-29",
     paymentTerms: "21 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "EXW",
     client: CLIENTS[4],            // Euro-Papryka
@@ -238,7 +240,7 @@ export const INIT_ORDERS = [
   },
   {
     id: 4, number: "SO-2026-0102", status: "Confirmed",
-    orderDate: "2026-05-20", deliveryDate: "2026-06-10",
+    orderDate: "2026-05-20", deliveryDate: "2026-06-10", promisedDateMeans: "Delivery to client", actualDeliveryDate: null,
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[0],            // Biedronka
@@ -253,7 +255,7 @@ export const INIT_ORDERS = [
   },
   {
     id: 5, number: "SO-2026-0105", status: "Draft",
-    orderDate: "2026-05-26", deliveryDate: "2026-06-15",
+    orderDate: "2026-05-26", deliveryDate: "2026-06-15", promisedDateMeans: "Delivery to client", actualDeliveryDate: null,
     paymentTerms: "30 days from invoice date", paymentTermsOther: "",
     sellIncoterm: "DAP",
     client: CLIENTS[2],            // Metro
@@ -386,6 +388,23 @@ function validateSourcing(items) {
   };
 }
 
+function isPOUsableForConfirmedSO(po: any) {
+  if (!po) return false;
+  return po.status !== "Draft" && po.status !== "Cancelled";
+}
+
+function validatePOReadinessForSO(items: any[]) {
+  const blocked: any[] = [];
+  (items || []).forEach((it: any, idx: number) => {
+    if (it.sourceType !== "PO" || !it.sourceRef) return;
+    const po = PO_REFS.find((p: any) => p.number === it.sourceRef);
+    if (!po || !isPOUsableForConfirmedSO(po)) {
+      blocked.push({ idx, poRef: it.sourceRef, status: po?.status || "Missing", product: it.product || "" });
+    }
+  });
+  return blocked;
+}
+
 // ─── STOCK ACCOUNTING — single source of truth for "what's really available" ────
 //
 // The lot's stored `availableKg` is the ORIGINAL capacity when received. The live
@@ -490,7 +509,7 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
         committedFromStock[it.sourceRef] = (committedFromStock[it.sourceRef] || 0) + q;
       } else if (it.sourceType === "PO") {
         const po = PO_REFS.find(p => p.number === it.sourceRef);
-        if (!po) return;
+        if (!po || !isPOUsableForConfirmedSO(po)) return;
         const poLine = po.items.find(l => l.id === (it.sourceLineId ?? 1));
         if (!poLine) return;
         // Same product-match guard for POs
@@ -508,7 +527,7 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
   }
   function poLineRemaining(poNumber, lineId) {
     const po = PO_REFS.find(p => p.number === poNumber);
-    if (!po) return 0;
+    if (!po || !isPOUsableForConfirmedSO(po)) return 0;
     const line = po.items.find(l => l.id === (lineId ?? 1));
     if (!line) return 0;
     const k = `${po.number}::${line.id}`;
@@ -536,7 +555,7 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
       }
     } else if (it.sourceType === "PO" && it.sourceRef) {
       const po = PO_REFS.find(p => p.number === it.sourceRef);
-      if (po) {
+      if (po && isPOUsableForConfirmedSO(po)) {
         const poLine = po.items.find(l => l.id === (it.sourceLineId ?? 1));
         if (poLine) {
           if (productsMatch(it.product, poLine.product)) {
@@ -820,7 +839,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
 // we are Sprzedawca (seller), client is Nabywca (buyer). No legal clause.
 function BiLbl({ en, pl, align = "left" }: any) {
   return (
-    <div style={{ textAlign: align, lineHeight: 1.1 }}>
+    <div style={{ textAlign: align as React.CSSProperties["textAlign"], lineHeight: 1.1 }}>
       <div style={{ fontWeight: 700, fontSize: 10 }}>{en}</div>
       <div style={{ fontStyle: "italic", color: "#666", fontSize: 8.5 }}>{pl}</div>
     </div>
@@ -837,7 +856,8 @@ function SODoc({ order }: any) {
   const total = netTotal(order.items);
   const currency = order.currency || "PLN";
   const paymentDisplay = order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms;
-  const destination = LOCATIONS.find(l => l.id === order.destinationLocationId);
+  const destination = locById(order.destinationLocationId);
+  const destinationLabel = destinationDisplay(order);
 
   const meta = [
     { en: "SO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
@@ -845,7 +865,7 @@ function SODoc({ order }: any) {
     { en: "Delivery date",      pl: "Data dostawy",           value: order.deliveryDate },
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
-    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destination?.name || "—" },
+    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationLabel },
   ];
   const clientRows = [
     { en: "Name",      pl: "Nazwa",     value: order.client?.name    || "—" },
@@ -1325,6 +1345,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   const nonDraftStatuses = Object.keys(SO_STATUSES).filter(s => s !== "Draft" && s !== "Cancelled");
   // Is the user currently trying to be in a non-Draft, non-Cancelled status while unsourced?
   const sourcingBlock = !sourcing.allSourced && nonDraftStatuses.includes(order.status);
+  const poReadinessIssues = validatePOReadinessForSO(order.items);
+  const poReadinessBlock = poReadinessIssues.length > 0 && nonDraftStatuses.includes(order.status);
 
   // Per-line availability check — does each line have enough stock/PO supply to fulfill it?
   // Aggregates across all matching sources (primary source + any other lot/PO with same product).
@@ -1334,7 +1356,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   const availabilityBlock = overageCount > 0 && nonDraftStatuses.includes(order.status);
 
   // Single combined flag for any rule blocking the current status
-  const isBlocked = sourcingBlock || availabilityBlock;
+  const isBlocked = sourcingBlock || poReadinessBlock || availabilityBlock;
 
   // PO-ETA-vs-SO-delivery warning: if any line sourced from a PO has ETA after this SO's deliveryDate, surface it
   const deliveryWarnings = [];
@@ -1362,7 +1384,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Sales Orders</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          {onPrint && order.id && (() => {
+          {onPrint && (() => {
             const isDraft = order.status === "Draft";
             return (
               <button
@@ -1397,6 +1419,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             disabled={isBlocked}
             title={
               sourcingBlock ? `Cannot save as ${order.status} with unsourced lines — pick sources first or set status back to Draft` :
+              poReadinessBlock ? `Cannot save as ${order.status} while a sourced PO is Draft, Cancelled or missing.` :
               availabilityBlock ? `Cannot save as ${order.status} — ${overageCount} line(s) exceed available supply. Reduce qty, change source, or set status back to Draft.` :
               ""
             }
@@ -1428,6 +1451,18 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   {sourcing.unsourcedIndexes.length > 0 && (
                     <span> Unsourced: line{sourcing.unsourcedIndexes.length === 1 ? "" : "s"} <strong>{sourcing.unsourcedIndexes.map(i => i + 1).join(", ")}</strong>.</span>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {poReadinessBlock && (
+            <div style={{ padding: "12px 16px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, marginBottom: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <div style={{ fontSize: 20 }}>🚫</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#991B1B" }}>Cannot save as {order.status} — source PO is not confirmed</div>
+                <div style={{ fontSize: 11, color: "#991B1B", marginTop: 4, lineHeight: 1.5 }}>
+                  A Sales Order cannot be confirmed/reserved/shipped while it refers to a Purchase Order in Draft, Cancelled or missing status. Blocked: <strong>{poReadinessIssues.map((x: any) => `${x.poRef} (${x.status})`).join(", ")}</strong>.
                 </div>
               </div>
             </div>
@@ -1474,9 +1509,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" title="The date the SO was created/agreed with the client" />
               </div>
               <div>
-                <Lbl>Delivery date</Lbl>
-                <Inp value={order.deliveryDate} onChange={e => sf("deliveryDate", e.target.value)} type="date" title="When the goods are expected to reach the client" />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods arrive at client</div>
+                <Lbl>Expected delivery date</Lbl>
+                <Inp value={order.deliveryDate} onChange={e => sf("deliveryDate", e.target.value)} type="date" title="When the goods are expected to reach the agreed point" />
+                <Sel value={order.promisedDateMeans || "Delivery to client"} onChange={e => sf("promisedDateMeans", e.target.value)} style={{ marginTop: 4, fontSize: 11, padding: "5px 8px" }}>
+                  {["Delivery to client", "Pickup-ready at our side", "Handover at relay", "Loading at supplier", "Arrival at destination port"].map(m => <option key={m} value={m}>means: {m}</option>)}
+                </Sel>
+              </div>
+              <div>
+                <Lbl>Actual delivery {order.actualDeliveryDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
+                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" title="When the goods actually reached the client. Leave blank until it happens." />
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once delivered</div>
               </div>
               <div><Lbl>Status</Lbl>
                 <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
@@ -1486,18 +1528,23 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     if (s === "Draft" || s === "Cancelled") return <option key={s} value={s}>{s}</option>;
                     const needsSource = !sourcing.allSourced;
                     const needsSupply = overageCount > 0;
-                    const disabled = needsSource || needsSupply;
+                    const needsPOReady = poReadinessIssues.length > 0;
+                    const disabled = needsSource || needsSupply || needsPOReady;
                     const reason = needsSource && needsSupply ? "  — needs sourcing + supply"
                       : needsSource ? "  — needs sourcing"
                       : needsSupply ? "  — short on supply"
+                      : needsPOReady ? "  — PO not confirmed"
                       : "";
                     return <option key={s} value={s} disabled={disabled}>{s}{reason}</option>;
                   })}
                 </Sel>
-                {(!sourcing.allSourced || overageCount > 0) && (
+                {(!sourcing.allSourced || overageCount > 0 || poReadinessIssues.length > 0) && (
                   <div style={{ fontSize: 10, color: "#D97706", marginTop: 3, lineHeight: 1.4 }}>
                     {!sourcing.allSourced && (
                       <div>{sourcing.unsourcedIndexes.length} line{sourcing.unsourcedIndexes.length === 1 ? "" : "s"} unsourced</div>
+                    )}
+                    {poReadinessIssues.length > 0 && (
+                      <div>{poReadinessIssues.length} line{poReadinessIssues.length === 1 ? "" : "s"} sourced from a Draft/Cancelled/missing PO</div>
                     )}
                     {overageCount > 0 && (
                       <div>{overageCount} line{overageCount === 1 ? "" : "s"} short on supply</div>
@@ -1545,13 +1592,25 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <Lbl>Destination</Lbl>
                 <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
                   <option value="">— select —</option>
-                  <optgroup label="🎯 Client Site">
+                  <optgroup label="🎯 Client Site / DC">
                     {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </optgroup>
+                  <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
+                    {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
                   <optgroup label="🏢 Our Warehouse (EXW pickup)">
                     {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                   </optgroup>
                 </Sel>
+                <Inp
+                  value={order.destinationText || ""}
+                  onChange={e => sf("destinationText", e.target.value)}
+                  placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
+                  style={{ marginTop: 6 }}
+                />
+                <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                  For CIF/CFR sales, destination is normally the destination port. For DAP/DDP sales, use the client site. Use free text when the exact port is missing.
+                </div>
               </div>
             </div>
           </Card>
@@ -1743,9 +1802,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [] }: any) {
+function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [] }: any) {
   const total = netTotal(order.items);
-  const destination = LOCATIONS.find(l => l.id === order.destinationLocationId);
+  const destination = locById(order.destinationLocationId);
+  const destinationLabel = destinationDisplay(order);
   const availability = computeLineAvailability(order.items, allOrders, order.id);
   const overageCount = availability.filter(a => a.hasOverage).length;
 
@@ -1838,8 +1898,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
             <div style={{ marginTop: 8, fontSize: 11, color: "#888", fontStyle: "italic" }}>{SO_STATUSES[order.status]?.desc}</div>
           </Card>
 
-          {/* P/L card — reads live lots/pos/shipments to compute revenue, COGS, direct costs */}
-          <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} />
+          <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={allOrders} />
 
           <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
             <div>
@@ -1921,7 +1980,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                   <div><div style={{ fontSize: 10, color: "#888" }}>SELL INCOTERM</div><div style={{ fontWeight: 600 }}>{order.sellIncoterm || "—"}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>CURRENCY</div><div style={{ fontWeight: 600 }}>{order.currency} {order.fxLockedAt ? "🔒" : ""}</div></div>
                   <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>PAYMENT TERMS</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}</div></div>
-                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destination ? `${LOCATION_TYPES[destination.type]?.icon} ${destination.name}` : "—"}</div></div>
+                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${destination ? LOCATION_TYPES[destination.type]?.icon : "📍"} ${destinationLabel}` : "—"}</div></div>
                 </div>
               </Card>
 
@@ -1983,8 +2042,9 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
 export default function SalesOrders({
   orders: extOrders, setOrders: extSetOrders,
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs,
-  shipments: extShipments,
   contacts: extContacts,
+  shipments: extShipments = [],
+  operationalCosts: extOperationalCosts = [],
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
@@ -2018,12 +2078,17 @@ export default function SalesOrders({
   }
 
   // Product suggestions, same pattern as PO
-  const productSuggestions = useMemo(() => {
-    const seed = ["Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper", "Papryka Kapia", "Tomato Round", "Tomato Cherry", "Carrot", "Cucumber", "Courgette", "Onion Yellow", "Potato", "Garlic", "Cauliflower", "Broccoli", "Lettuce Iceberg", "Cabbage"];
-    const fromOrders = orders.flatMap(o => o.items.map(i => (i.product || "").trim())).filter(Boolean);
-    const seen = new Map();
-    [...fromOrders, ...seed].forEach(p => { const k = p.toLowerCase(); if (!seen.has(k)) seen.set(k, p); });
-    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  const productSuggestions = useMemo((): string[] => {
+    const seed: string[] = ["Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper", "Papryka Kapia", "Tomato Round", "Tomato Cherry", "Carrot", "Cucumber", "Courgette", "Onion Yellow", "Potato", "Garlic", "Cauliflower", "Broccoli", "Lettuce Iceberg", "Cabbage"];
+    const fromOrders: string[] = orders
+      .flatMap((o: any) => (o.items || []).map((i: any) => String(i.product || "").trim()))
+      .filter((value: string) => value.length > 0);
+    const seen = new Map<string, string>();
+    [...fromOrders, ...seed].forEach((product: string) => {
+      const key = product.toLowerCase();
+      if (!seen.has(key)) seen.set(key, product);
+    });
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
   }, [orders]);
 
   // KPIs
@@ -2054,11 +2119,14 @@ export default function SalesOrders({
       status: "Draft",
       orderDate: new Date().toISOString().split("T")[0],
       deliveryDate: "",
+      promisedDateMeans: "Delivery to client",
+      actualDeliveryDate: null,
       paymentTerms: "30 days from invoice date",
       paymentTermsOther: "",
       sellIncoterm: "DAP",
       client: null,
       destinationLocationId: null,
+      destinationText: "",
       currency: "PLN", fxRate: 1, fxLockedAt: null,
       items: [{ id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
       notes: "",
@@ -2121,6 +2189,12 @@ export default function SalesOrders({
       alert(`Cannot save SO as ${o.status} — ${src.unsourcedIndexes.length} line(s) unsourced. Pick a stock lot or a PO for every line first, or save as Draft.`);
       return;
     }
+    const poIssues = validatePOReadinessForSO(o.items);
+    if (poIssues.length && o.status !== "Draft" && o.status !== "Cancelled") {
+      const poDetails = poIssues.map((x: any) => `• Line ${x.idx + 1}: ${x.poRef} (${x.status})`).join("\n");
+      alert(`Cannot save SO as ${o.status} because it refers to a PO that is Draft, Cancelled or missing:\n\n${poDetails}\n\nConfirm the PO first, choose another source, or keep the SO as Draft.`);
+      return;
+    }
     // Availability guard — same hard rule, parallel to sourcing.
     // Can't promise to a client what we cannot supply (from stock or any PO).
     const avail = computeLineAvailability(o.items, orders, o.id);
@@ -2128,8 +2202,8 @@ export default function SalesOrders({
     const needsSupply = overCount > 0 && o.status !== "Draft" && o.status !== "Cancelled";
     if (needsSupply) {
       const details = avail
-        .map((a, i) => a.hasOverage ? `  • Line ${i + 1}: short by ${a.overage.toLocaleString("pl-PL")} kg (demand ${a.lineQty.toLocaleString("pl-PL")} kg, primary source available ${a.primaryAvailable.toLocaleString("pl-PL")} kg)` : null)
-        .filter(Boolean)
+        .map((a: any, i: number) => a.hasOverage ? `  • Line ${i + 1}: short by ${a.overage.toLocaleString("pl-PL")} kg (demand ${a.lineQty.toLocaleString("pl-PL")} kg, primary source available ${a.primaryAvailable.toLocaleString("pl-PL")} kg)` : null)
+        .filter((value: string | null): value is string => typeof value === "string")
         .join("\n");
       alert(`Cannot save SO as ${o.status} — ${overCount} line(s) exceed available supply:\n\n${details}\n\nReduce qty, switch source, or arrange more procurement.`);
       return;
@@ -2245,6 +2319,7 @@ export default function SalesOrders({
           lots={extInvLots || []}
           pos={extPOs || []}
           shipments={extShipments || []}
+          operationalCosts={extOperationalCosts || []}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => editOrder(selected)}
           onPrint={() => {
