@@ -60,3 +60,25 @@ sea leg and sea freight.
 3. Pick the carrier → the order shows only the road leg(s), road freight, road route. Pick the forwarder → only the sea leg, sea freight, port-to-port.
 4. The leg checkboxes let you add/remove legs from the order.
 5. Create a NEW shipment from a PO without choosing a carrier → the road leg shows "TBD carrier — to be assigned", NOT the forwarder.
+
+---
+
+## v6.0.1 build fix (eslintConfig)
+
+Vercel build was failing with:
+`src/App.tsx Line 147:5 Definition for rule 'react-hooks/exhaustive-deps' was not found`
+
+**Cause:** App.tsx line 147 has `// eslint-disable-next-line react-hooks/exhaustive-deps`
+(added to silence a hook dependency warning), but package.json had NO `eslintConfig`
+block — so the build-time ESLint never loaded the react-app preset that DEFINES that
+rule, and errored on the unknown rule reference.
+
+**Fix:** added the standard CRA `eslintConfig` block to package.json:
+```json
+"eslintConfig": { "extends": ["react-app"] }
+```
+This loads eslint-config-react-app (which includes eslint-plugin-react-hooks),
+so the rule resolves and the disable-comment works as intended.
+
+This is a config gap that would have bitten any future eslint-disable comment too —
+now fixed permanently. No source code changed.
