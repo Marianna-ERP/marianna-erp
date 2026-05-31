@@ -135,6 +135,9 @@ export default function App() {
   const [orders, setOrders] = useLocalStoredState("orders", SHELL_SEED.orders);
   const [shipments, setShipments] = useLocalStoredState("shipments", SHELL_SEED.shipments);
   const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
+  // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
+  const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
+  const [userName, setUserName] = useLocalStoredState("userName", "");
 
   function setContactsCascade(update: any) {
     _setContacts(update);
@@ -166,11 +169,11 @@ export default function App() {
       case "lots":
         return <Inventory lots={lots} setLots={setLots} allOrders={orders} />;
       case "orders":
-        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} />;
+        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} />;
       case "shipments":
         return <Shipments shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} />;
+        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} />;
       default:
         return null;
     }

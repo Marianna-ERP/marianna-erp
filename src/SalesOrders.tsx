@@ -482,6 +482,27 @@ function poLineReservations(po, poLine, allOrders, excludeOrderId) {
 //
 // Returns an array, one entry per line:
 //   { lineQty, primaryAvailable, otherSourcesAvailable, combinedAvailable, overage, hasOverage }
+// Detect when MULTIPLE lines in the SAME SO point at the same source (same lot, or
+// same PO line). This catches the mistake of assigning one physical product twice
+// within one order. Returns a map: sourceKey -> { indices:[...], totalQty, label }.
+// Only sourced lines (STOCK/PO with a ref) are considered.
+function sameSoDuplicateSources(soItems) {
+  const groups = {};
+  (soItems || []).forEach((it, idx) => {
+    if (!it.sourceType || !it.sourceRef) return;
+    const key = it.sourceType === "PO"
+      ? `PO::${it.sourceRef}::${it.sourceLineId ?? 1}`
+      : `STOCK::${it.sourceRef}`;
+    if (!groups[key]) groups[key] = { indices: [], totalQty: 0, sourceType: it.sourceType, sourceRef: it.sourceRef, sourceLineId: it.sourceLineId ?? 1 };
+    groups[key].indices.push(idx);
+    groups[key].totalQty += parseFloat(it.qty) || 0;
+  });
+  // Keep only the groups that actually have more than one line (a real duplicate)
+  const dups = {};
+  Object.keys(groups).forEach(k => { if (groups[k].indices.length > 1) dups[k] = groups[k]; });
+  return dups;
+}
+
 function computeLineAvailability(soItems, allOrders, currentOrderId) {
   // Build a map of how much each lot / PO line has been reserved by OTHER reserving SOs.
   // "Reserving" = status in RESERVING_SO_STATUSES (Confirmed and beyond, but not Cancelled).
@@ -1364,6 +1385,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   const overageCount = availability.filter(a => a.hasOverage).length;
   const availabilityBlock = overageCount > 0 && nonDraftStatuses.includes(order.status);
 
+  // Same-SO duplicate sources: a set of line indices that share a source with another
+  // line in THIS order (e.g. the same PO product assigned twice). Map index -> info.
+  const dupSourceGroups = sameSoDuplicateSources(order.items);
+  const dupLineIndex = {}; // lineIndex -> { sourceRef, sourceLineId, totalQty, count, others:[idx] }
+  Object.values(dupSourceGroups).forEach((g: any) => {
+    g.indices.forEach((idx: number) => {
+      dupLineIndex[idx] = { sourceRef: g.sourceRef, sourceLineId: g.sourceLineId, sourceType: g.sourceType, totalQty: g.totalQty, count: g.indices.length, others: g.indices.filter((x: number) => x !== idx) };
+    });
+  });
+  const hasDuplicateSources = Object.keys(dupSourceGroups).length > 0;
+
   // Single combined flag for any rule blocking the current status
   const isBlocked = sourcingBlock || poReadinessBlock || availabilityBlock;
 
@@ -1652,6 +1684,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             </div>
           )}
 
+          {hasDuplicateSources && (
+            <div style={{ padding: "10px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400E", marginBottom: 4 }}>⚠ Same source assigned to more than one line</div>
+              {Object.values(dupSourceGroups).map((g: any, gi) => (
+                <div key={gi} style={{ fontSize: 11, color: "#92400E" }}>
+                  Lines {g.indices.map((x: number) => x + 1).join(", ")} all draw from <strong>{g.sourceRef}</strong>{g.sourceType === "PO" ? ` (line ${g.sourceLineId})` : ""} — combined <strong>{fmtNum(g.totalQty)} kg</strong>. If this is one physical product, you may be assigning it twice; merge the lines or pick a different source.
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Line items */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle right={<button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>+ Add line</button>}>LINE ITEMS ({order.items.length})</SectionTitle>
@@ -1716,6 +1759,20 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       <span style={{ fontWeight: 700, color: "#991B1B" }}>⚠ Product mismatch:</span>
                       <span style={{ color: "#991B1B" }}>
                         This line is <strong>{it.product || "(no product)"}</strong> but the picked source ({it.sourceRef}) is a different product. Pick a source whose product matches.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Duplicate-source warning — fires if another line in THIS SAME order
+                      already draws from this exact source (same PO line or same lot). */}
+                  {dupLineIndex[i] && (
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "6px 10px", borderRadius: 6,
+                      background: "#FEF3C7", border: "1px solid #FCD34D", fontSize: 11,
+                    }}>
+                      <span style={{ fontWeight: 700, color: "#92400E" }}>⚠ Same source used twice:</span>
+                      <span style={{ color: "#92400E" }}>
+                        {dupLineIndex[i].count} lines in this order draw from <strong>{dupLineIndex[i].sourceRef}</strong>{dupLineIndex[i].sourceType === "PO" ? ` (line ${dupLineIndex[i].sourceLineId})` : ""} — combined {fmtNum(dupLineIndex[i].totalQty)} kg. If this is one physical product, you may be assigning it twice. Merge the lines or pick a different source.
                       </span>
                     </div>
                   )}
@@ -1811,7 +1868,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [] }: any) {
+function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+  // P/L visibility rule:
+  //  - Assistant & Operations: never see P/L
+  //  - Sales: see P/L only for SOs they created (createdBy === their name)
+  //  - Financial Director & General Manager: see all P/L
+  const canSeePL = (() => {
+    if (userRole === "Financial Director" || userRole === "General Manager") return true;
+    if (userRole === "Sales") return !!order.createdBy && order.createdBy === userName;
+    return false; // Assistant, Operations, or unknown
+  })();
   const total = netTotal(order.items);
   const destination = locById(order.destinationLocationId);
   const destinationLabel = destinationDisplay(order);
@@ -1907,7 +1973,16 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
             <div style={{ marginTop: 8, fontSize: 11, color: "#888", fontStyle: "italic" }}>{SO_STATUSES[order.status]?.desc}</div>
           </Card>
 
-          <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={allOrders} />
+          {canSeePL ? (
+            <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={allOrders} />
+          ) : (
+            <Card style={{ marginBottom: 16 }}>
+              <SectionTitle>PROFITABILITY (P/L)</SectionTitle>
+              <div style={{ fontSize: 12.5, color: "#888", lineHeight: 1.5 }}>
+                Profitability is hidden for your role ({userRole || "—"}). {userRole === "Sales" ? "Sales users can see P/L only for orders they created." : "P/L is visible to Sales (own orders), Financial Director, and General Manager."} You can change the active role in Settings.
+              </div>
+            </Card>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
             <div>
@@ -2054,6 +2129,8 @@ export default function SalesOrders({
   contacts: extContacts,
   shipments: extShipments = [],
   operationalCosts: extOperationalCosts = [],
+  userRole = "General Manager",
+  userName = "",
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
@@ -2126,6 +2203,7 @@ export default function SalesOrders({
       id: null,
       number: nextSONumber(orders),
       status: "Draft",
+      createdBy: userName || userRole || "",
       orderDate: new Date().toISOString().split("T")[0],
       deliveryDate: "",
       promisedDateMeans: "Delivery to client",
@@ -2329,6 +2407,8 @@ export default function SalesOrders({
           pos={extPOs || []}
           shipments={extShipments || []}
           operationalCosts={extOperationalCosts || []}
+          userRole={userRole}
+          userName={userName}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => editOrder(selected)}
           onPrint={() => {

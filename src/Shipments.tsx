@@ -917,7 +917,13 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const providers = form.mode === "Road" || form.mode === "Rail" ? roadProviders : form.mode === "Air" ? logisticsProviders(contacts, "Air") : seaProviders;
   function create() {
     let sh;
-    if (sourceType === "PO" && selectedPO) sh = buildShipmentFromPO(selectedPO, form, shipments, lots);
+    if (sourceType === "PO" && selectedPO) {
+      // Find any SOs that source from this PO so the shipment carries the SO ref too.
+      const linkedSOs = (orders || [])
+        .filter(o => (o.items || []).some(it => it.sourceType === "PO" && it.sourceRef === selectedPO.number))
+        .map(o => o.number);
+      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs: linkedSOs }, shipments, lots);
+    }
     else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, form, shipments, lots);
     else sh = buildManualShipment(form, shipments);
     onCreate(sh);
@@ -939,18 +945,23 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           </div>
         </Card>
         <Card>
-          <SectionTitle>Provider and cost</SectionTitle>
+          <SectionTitle>{(form.mode === "Multimodal" || form.mode === "Sea") ? "Providers" : "Provider and cost"}</SectionTitle>
           <div style={{ display: "grid", gap: 12 }}>
             {(form.mode === "Multimodal" || form.mode === "Sea") ? (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div><Lbl>Road carrier (pre/on-carriage)</Lbl><Sel value={form.carrierId || ""} onChange={e => sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— none —</option>{roadProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
-                <div><Lbl>Sea forwarder / line</Lbl><Sel value={form.forwarderId || ""} onChange={e => sf("forwarderId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— none —</option>{seaProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
-              </div>
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div><Lbl>Road carrier (pre/on-carriage)</Lbl><Sel value={form.carrierId || ""} onChange={e => sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— none —</option>{roadProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
+                  <div><Lbl>Sea forwarder / line</Lbl><Sel value={form.forwarderId || ""} onChange={e => sf("forwarderId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— none —</option>{seaProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
+                </div>
+                <div style={{ fontSize: 12, color: "#666", background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: 10 }}>Costs are entered per leg later, in the shipment's Cost &amp; Billing section — there's no single freight figure for a multi-provider shipment, so it's omitted here to avoid duplication.</div>
+              </>
             ) : (
-              <div><Lbl>{form.mode === "Air" ? "Air forwarder" : "Carrier"}</Lbl><Sel value={form.mode === "Air" ? (form.forwarderId || "") : (form.carrierId || "")} onChange={e => form.mode === "Air" ? sf("forwarderId", e.target.value ? parseNum(e.target.value) : null) : sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— select —</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}</Sel></div>
+              <>
+                <div><Lbl>{form.mode === "Air" ? "Air forwarder" : "Carrier"}</Lbl><Sel value={form.mode === "Air" ? (form.forwarderId || "") : (form.carrierId || "")} onChange={e => form.mode === "Air" ? sf("forwarderId", e.target.value ? parseNum(e.target.value) : null) : sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— select —</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}</Sel></div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}><div><Lbl>Freight amount</Lbl><Inp type="number" value={form.amount} onChange={e => sf("amount", e.target.value)} /></div><div><Lbl>FX to PLN</Lbl><Inp type="number" value={form.fxRate} onChange={e => sf("fxRate", e.target.value)} /></div></div>
+                <div style={{ fontSize: 12, color: "#666", background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: 10 }}>Expected logistics cost: <strong>{fmtMoney(parseNum(form.amount) * parseNum(form.fxRate, 1), "PLN")}</strong></div>
+              </>
             )}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}><div><Lbl>Freight amount</Lbl><Inp type="number" value={form.amount} onChange={e => sf("amount", e.target.value)} /></div><div><Lbl>FX to PLN</Lbl><Inp type="number" value={form.fxRate} onChange={e => sf("fxRate", e.target.value)} /></div></div>
-            <div style={{ fontSize: 12, color: "#666", background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: 10 }}>{(form.mode === "Multimodal" || form.mode === "Sea") ? "Per-leg costs start at 0 — set the real figure on each leg after creating." : <>Expected logistics cost: <strong>{fmtMoney(parseNum(form.amount) * parseNum(form.fxRate, 1), "PLN")}</strong></>}</div>
           </div>
         </Card>
         <Card>

@@ -40,8 +40,16 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
 
 export default function Settings({
   reloadFromStorage,
+  userRole,
+  setUserRole,
+  userName,
+  setUserName,
 }: {
   reloadFromStorage: () => void;
+  userRole?: string;
+  setUserRole?: (r: string) => void;
+  userName?: string;
+  setUserName?: (n: string) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
@@ -131,6 +139,34 @@ export default function Settings({
             {message.text}
           </div>
         )}
+
+        <Card style={{ marginBottom: 16 }}>
+          <SectionTitle>CURRENT USER &amp; ROLE</SectionTitle>
+          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+            Your role controls who can see Sales Order profitability (P/L). Assistant and Operations don't see P/L at all; Sales sees P/L only for orders they created; Financial Director and General Manager see all P/L. (No login yet — this is a simple switch for testing.)
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Role</label>
+              <select
+                value={userRole || "General Manager"}
+                onChange={e => setUserRole && setUserRole(e.target.value)}
+                style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}
+              >
+                {["Assistant", "Operations", "Sales", "Financial Director", "General Manager"].map(r => <option key={r}>{r}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Your name (used to tag SOs you create)</label>
+              <input
+                value={userName || ""}
+                onChange={e => setUserName && setUserName(e.target.value)}
+                placeholder="e.g. Anna (sales)"
+                style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}
+              />
+            </div>
+          </div>
+        </Card>
 
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>EXPORT</SectionTitle>
