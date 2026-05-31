@@ -276,6 +276,51 @@ export const INIT_COUNTERPARTIES = [
       { id: 1, name: "Beata Sienkiewicz", role: "Operations", email: "ops@coldstore.pl", phone: "+48 22 887 6543", isPrimary: true, notes: "" },
     ],
   },
+
+  // ─── BASELINE TEST SET (for end-to-end testing of the logistics flow) ──────
+  {
+    id: 51, type: "Supplier", name: "Owoce Polska Sp. z o.o.", country: "Poland",
+    address: "ul. Sadownicza 12, 96-200 Rawa Mazowiecka",
+    nip: "8361122334", vatEuId: "PL8361122334",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    notes: "Baseline test supplier — Polish apples & pears, 13 kg wooden box",
+    linkedDocs: [],
+    contacts: [
+      { id: 1, name: "Marek Kowalczyk", role: "Sales", email: "marek@owocepolska.pl", phone: "+48 601 234 567", isPrimary: true, notes: "Primary contact for loadings" },
+    ],
+  },
+  {
+    id: 52, type: "Client", name: "Nile Fresh Imports", country: "Egypt",
+    address: "14 El Horreya Road, Alexandria",
+    nip: "EG-204556789", vatEuId: "",
+    defaultCurrency: "USD", paymentTerms: "Prepaid / TT before shipment",
+    notes: "Baseline test client — Egyptian importer, receives at Alexandria Port (CIF)",
+    contacts: [
+      { id: 1, name: "Ahmed Hassan", role: "Purchasing", email: "ahmed@nilefresh.eg", phone: "+20 100 555 1234", isPrimary: true, notes: "Speaks EN/AR" },
+    ],
+  },
+  {
+    id: 53, type: "Carrier", name: "PolTrans Drogowy", country: "Poland",
+    address: "ul. Transportowa 8, 02-672 Warszawa",
+    nip: "5262233445", vatEuId: "PL5262233445",
+    defaultCurrency: "PLN", paymentTerms: "30 days after CMR",
+    services: ["Road"],
+    notes: "Baseline test road carrier — reefer trucks, PL & EU",
+    contacts: [
+      { id: 1, name: "Janusz Wójcik", role: "Dispatch", email: "dyspozytor@poltrans.pl", phone: "+48 22 612 3456", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 54, type: "Forwarder", name: "Adriatica Forwarding S.r.l.", country: "Italy",
+    address: "Via del Porto 22, 30175 Marghera VE",
+    nip: "IT-09887766554", vatEuId: "IT09887766554",
+    defaultCurrency: "EUR", paymentTerms: "30 days from invoice date",
+    services: ["Sea", "Road", "Customs"],
+    notes: "Baseline test forwarder — Italian sea + inland, container bookings",
+    contacts: [
+      { id: 1, name: "Giulia Ferrari", role: "Operations", email: "g.ferrari@adriatica-fwd.it", phone: "+39 041 555 7788", isPrimary: true, notes: "" },
+    ],
+  },
 ];
 
 // ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────

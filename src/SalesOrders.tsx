@@ -638,19 +638,28 @@ function QualityBadge({ quality }: any) {
   const p = palette[quality] || palette["I"];
   return <span style={{ background: p.bg, color: p.color, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
-function SourceBadge({ sourceType, sourceRef }: any) {
+function SourceBadge({ sourceType, sourceRef, supplierName }: any) {
   if (!sourceType || !sourceRef) return <span style={{ fontSize: 10.5, color: "#AAA", fontStyle: "italic" }}>unsourced</span>;
   const isStock = sourceType === "STOCK";
   return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", gap: 3,
-      padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace",
-      background: isStock ? "#E0F2FE" : "#FCE7F3",
-      color: isStock ? "#0369A1" : "#9D174D",
-    }}>
-      <span style={{ fontSize: 10 }}>{isStock ? "📦" : "🚚"}</span>{sourceRef}
+    <span style={{ display: "inline-flex", flexDirection: "column", gap: 2, alignItems: "flex-start" }}>
+      <span style={{
+        display: "inline-flex", alignItems: "center", gap: 3,
+        padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace",
+        background: isStock ? "#E0F2FE" : "#FCE7F3",
+        color: isStock ? "#0369A1" : "#9D174D",
+      }}>
+        <span style={{ fontSize: 10 }}>{isStock ? "📦" : "🚚"}</span>{sourceRef}
+      </span>
+      {!isStock && supplierName && <span style={{ fontSize: 9.5, color: "#9D174D", paddingLeft: 2 }}>{supplierName}</span>}
     </span>
   );
+}
+
+// Resolve the supplier name for a PO-sourced line (from the SO's PO references)
+function supplierNameForPO(poRef: any): string {
+  const po = (PO_REFS || []).find((p: any) => p.number === poRef);
+  return po?.supplierName || po?.supplier?.name || "";
 }
 
 
@@ -1092,7 +1101,7 @@ function PrintModal({ order, onClose }: any) {
 function EmailModal({ order, onClose }: any) {
   const recipient = order.client?.email || order.client?.contact || "";
   const [subject, setSubject] = useState(`Sales Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.client?.contactName || order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nDelivery date: ${order.deliveryDate || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.person}\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nDelivery date: ${order.deliveryDate || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
 
   function openPrintForPdf() {
     const node = document.getElementById("so-print-doc-email");
@@ -1677,7 +1686,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <span style={{ fontSize: 11, fontWeight: 700, color: lineIsBlocking ? "#991B1B" : "#444" }}>
                       {lineIsBlocking ? "⚠ Source required:" : "Source:"}
                     </span>
-                    <SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} />
+                    <SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef) : ""} />
                     <button onClick={() => setSourceFor(i)} style={{
                       padding: "3px 10px", borderRadius: 5,
                       border: lineIsBlocking ? "1px solid #991B1B" : "1px solid #E5E7EB",
@@ -1921,7 +1930,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                       const av = availability[i] || {};
                       return (
                         <tr key={i} style={{ borderBottom: "1px solid #F9FAFB", background: av.hasOverage ? "#FFFBEB" : undefined }}>
-                          <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} /></td>
+                          <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef) : ""} /></td>
                           <td style={{ padding: "10px 6px" }}>
                             <div style={{ fontWeight: 600 }}>{it.product}</div>
                             <div style={{ fontSize: 11, color: "#888" }}>{it.size} · {it.origin} · {it.packaging}</div>

@@ -698,7 +698,7 @@ function PrintModal({ order, onClose }: any) {
 // ─── EMAIL MODAL ────────────────────────────────────────────────────────────
 function EmailModal({ order, onClose }: any) {
   const [subject, setSubject] = useState(`Purchase Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.supplier?.contact || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${order.loadingDate}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.person}\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.supplier?.name || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${order.loadingDate}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.name}`);
   const [stage, setStage] = useState("compose"); // compose → opened
 
   // ── Step 1: Open the print dialog so the user can "Save as PDF" ──
@@ -1132,7 +1132,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 }
 
 // ─── ORDER DETAIL ───────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail }: any) {
+function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [] }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -1299,11 +1299,12 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail }: any)
               {/* Linked documents */}
               <Card>
                 <SectionTitle>LINKED RECORDS</SectionTitle>
-                <LinkRow label="Shipments" items={order.linkedShipments} color="#0284C7" bg="#E0F2FE" />
+                <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
+                <LinkRow label="Shipments" items={computedShipments.length ? computedShipments : order.linkedShipments} color="#0284C7" bg="#E0F2FE" />
                 <LinkRow label="Inventory lots" items={order.linkedLots} color="#92400E" bg="#FEF3C7" />
                 <LinkRow label="Invoices" items={order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
                 <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
-                  Links populate as the PO moves through its lifecycle: shipments at dispatch, lots on arrival, invoices when received.
+                  Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
                 </div>
               </Card>
             </div>
@@ -1439,7 +1440,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs }: any = {}) {
+export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [] }: any = {}) {
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
   const [localOrders, setLocalOrders] = useState(INITIAL_ORDERS);
   const orders = extPOs ?? localOrders;
@@ -1666,6 +1667,8 @@ ${blockNote}`.trim(),
         {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
         <OrderDetail
           order={selected}
+          computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number)).map((s: any) => s.number)}
+          computedSOs={(extSOs || []).filter((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}
           onDelete={deleteOrder}

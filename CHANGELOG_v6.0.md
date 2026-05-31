@@ -82,3 +82,24 @@ so the rule resolves and the disable-comment works as intended.
 
 This is a config gap that would have bitten any future eslint-disable comment too —
 now fixed permanently. No source code changed.
+
+---
+
+## v6.0.2 — testing feedback fixes
+
+1. **PO/SO email text** — now opens "Dear {company name}," and signs "Best regards, MARIANNA" (was: contact person / Hazem Osman).
+
+2. **PO linked records now computed live** — the PO detail's LINKED RECORDS section now:
+   - Adds a **Sales orders** row (SOs whose line items source from this PO) — previously missing entirely.
+   - Computes **Shipments** by scanning live shipments whose `poRefs` include this PO (so a shipment created from the PO shows up immediately, instead of "not yet").
+   - Inventory lots row unchanged (was already working).
+
+3. **SO line items — supplier under PO number** — for PO-sourced lines, the source badge now shows the supplier name beneath the PO number.
+
+4. **Baseline test data added** (4 contacts) for end-to-end logistics testing:
+   - Supplier (Poland): "Owoce Polska Sp. z o.o."
+   - Client (Egypt): "Nile Fresh Imports" (Alexandria, CIF, USD)
+   - Carrier (Poland, road): "PolTrans Drogowy"
+   - Forwarder (Italy): "Adriatica Forwarding S.r.l." (Sea/Road/Customs)
+
+Inventory lot notes summary: left as-is (confirmed helpful).

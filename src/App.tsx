@@ -162,7 +162,7 @@ export default function App() {
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} />;
       case "pos":
-        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} />;
+        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} />;
       case "lots":
         return <Inventory lots={lots} setLots={setLots} allOrders={orders} />;
       case "orders":
