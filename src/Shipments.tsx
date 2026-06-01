@@ -1064,6 +1064,9 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
   function updateLeg(idx, k, v) {
     setDraft(prev => ({ ...prev, legs: (prev.legs || []).map((l, i) => i === idx ? { ...l, [k]: v } : l) }));
   }
+  function updateGood(idx, k, v) {
+    setDraft(prev => ({ ...prev, goods: (prev.goods || []).map((g, i) => i === idx ? { ...g, [k]: v } : g) }));
+  }
   function updateCost(idx, k, v) {
     setDraft(prev => ({ ...prev, costs: (prev.costs || []).map((c, i) => {
       if (i !== idx) return c;
@@ -1230,6 +1233,17 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
           </div>)}
         </Card>
         <Card>
+          <SectionTitle>Goods on this shipment</SectionTitle>
+          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>Adjust quantities and pallets here — e.g. if you entered pallets on the SO after creating this shipment, update them here so the transport order shows the right figure.</div>
+          {(draft.goods || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No goods lines on this shipment.</div>}
+          {(draft.goods || []).map((g, i) => <div key={g.id || i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 0.8fr 1.4fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
+            <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.size ? ` · ${g.size}` : ""}</div></div>
+            <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => updateGood(i, "qtyKg", parseNum(e.target.value))} /></div>
+            <div><Lbl>Pallets</Lbl><Inp type="number" value={g.pallets || ""} onChange={e => updateGood(i, "pallets", parseNum(e.target.value))} placeholder="0" /></div>
+            <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>
+          </div>)}
+        </Card>
+        <Card>
           <SectionTitle right={<SmallButton onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
           {(draft.costs || []).map((c, i) => <div key={c.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.7fr 0.6fr 0.8fr 1fr 1fr 0.5fr", gap: 8, marginBottom: 8 }}>
             <div><Lbl>Type</Lbl><Sel value={c.type} onChange={e => updateCost(i, "type", e.target.value)}>{COST_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
@@ -1323,17 +1337,17 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
   const lastLeg = selectedLegs[selectedLegs.length - 1] || firstLeg;
   const selectedCosts = providerCosts(shipment, effectiveProviderId);
   const providerRole = providerRoleForLeg(firstLeg, effectiveProviderId);
-  // Agreed price for this order = sum of ALL this provider's cost lines for the
-  // selected legs (multiple trucks/containers each can have a different price), plus
-  // any per-unit prices recorded on the units themselves. Currency taken from the
-  // first cost line (or PLN). This replaces the old behaviour of showing only the
-  // first cost line's amount.
+  // Agreed price for this order. There are three possible sources of the freight
+  // figure, and they represent the SAME money entered at different granularities —
+  // so we pick ONE by priority rather than adding them (which double-counted):
+  //   1. Per-unit prices (most granular: each truck/container priced individually)
+  //   2. Cost & Billing lines for this provider
+  //   3. Leg-level cost amounts
   const orderCurrency = selectedCosts[0]?.currency || firstLeg.costCurrency || "PLN";
   const costLinesTotal = selectedCosts.reduce((sum, c) => sum + parseNum(c.amount), 0);
   const legCostTotal = selectedLegs.reduce((sum, l) => sum + parseNum(l.costAmount), 0);
   const unitPriceTotal = selectedLegs.reduce((sum, l) => sum + transportUnitsForLeg(l).reduce((u, unit) => u + parseNum(unit.costAmount || unit.unitPrice), 0), 0);
-  // Prefer explicit cost lines; fall back to leg costs; add any per-unit prices on top.
-  const agreedPriceTotal = (costLinesTotal || legCostTotal) + unitPriceTotal;
+  const agreedPriceTotal = unitPriceTotal > 0 ? unitPriceTotal : (costLinesTotal > 0 ? costLinesTotal : legCostTotal);
   const agreedPriceText = agreedPriceTotal > 0
     ? fmtMoney(agreedPriceTotal, orderCurrency)
     : fmtMoney(shipmentCostPLN(shipment), "PLN");

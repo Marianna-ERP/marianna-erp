@@ -317,7 +317,7 @@ function FlowBadge({ flow, compact = false }: any) {
   const f = FLOW_TYPES[flow];
   if (!f) return null;
   return (
-    <span title={f.desc} style={{ background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: "nowrap", fontWeight: 500 }}>
+    <span title={f.desc} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
       {f.emoji} {f.short}
     </span>
   );
@@ -1770,7 +1770,7 @@ ${blockNote}`.trim(),
 
         {/* Table */}
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 140px 130px 120px 140px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 200px 130px 120px 120px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
             {["PO NUMBER", "SUPPLIER · PRODUCTS", "STATUS", "FLOW", "VALUE", "LOAD/DELIVERY", "LINKED"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
@@ -1782,7 +1782,7 @@ ${blockNote}`.trim(),
             const totalPLN = plnTotal(o);
             const isLoadingOverdue = activeStatuses.has(o.status) && o.loadingDate && new Date(o.loadingDate) < new Date();
             return (
-              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 140px 130px 120px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
+              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 200px 130px 120px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
                 onClick={() => { setSelected(o); setView("detail"); }}
                 onMouseEnter={e => e.currentTarget.style.background = "#FAFAFA"}
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}

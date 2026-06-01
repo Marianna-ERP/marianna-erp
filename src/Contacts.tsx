@@ -321,6 +321,68 @@ export const INIT_COUNTERPARTIES = [
       { id: 1, name: "Giulia Ferrari", role: "Operations", email: "g.ferrari@adriatica-fwd.it", phone: "+39 041 555 7788", isPrimary: true, notes: "" },
     ],
   },
+
+  // ── Additional baseline test parties (round 2) ──
+  {
+    id: 55, type: "Client", name: "Cairo Fresh Trading", country: "Egypt",
+    address: "El Obour Market, Cairo",
+    nip: "EG-301229988", vatEuId: "",
+    defaultCurrency: "USD", paymentTerms: "Prepaid / TT before shipment",
+    notes: "Baseline test client — Cairo wholesaler, receives at Damietta / Port Said",
+    contacts: [
+      { id: 1, name: "Mostafa Saleh", role: "Purchasing", email: "mostafa@cairofresh.eg", phone: "+20 122 444 7788", isPrimary: true, notes: "EN/AR" },
+    ],
+  },
+  {
+    id: 56, type: "Client", name: "Delta Produce Co.", country: "Egypt",
+    address: "Industrial Zone, Damietta",
+    nip: "EG-302554411", vatEuId: "",
+    defaultCurrency: "USD", paymentTerms: "CAD — cash against documents",
+    notes: "Baseline test client — Damietta importer, reefer containers",
+    contacts: [
+      { id: 1, name: "Hany Fawzy", role: "Imports", email: "hany@deltaproduce.eg", phone: "+20 100 778 2211", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 57, type: "Supplier", name: "Alex Agro Export", country: "Egypt",
+    address: "Agricultural Road, Beheira (Alexandria area)",
+    nip: "EG-205667788", vatEuId: "",
+    defaultCurrency: "USD", paymentTerms: "30% advance, 70% against BL copy",
+    notes: "Baseline test supplier — Egyptian citrus & potatoes, ships from Alexandria/Damietta",
+    contacts: [
+      { id: 1, name: "Tarek El-Sayed", role: "Sales", email: "tarek@alexagro.eg", phone: "+20 111 223 3445", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 58, type: "Supplier", name: "Nile Valley Farms", country: "Egypt",
+    address: "Nubaria, Beheira Governorate",
+    nip: "EG-206334455", vatEuId: "",
+    defaultCurrency: "USD", paymentTerms: "Prepaid 50% / 50% on loading",
+    notes: "Baseline test supplier — Egyptian grapes, onions, oranges",
+    contacts: [
+      { id: 1, name: "Sherif Ramadan", role: "Export Manager", email: "sherif@nilevalley.eg", phone: "+20 109 556 6778", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 59, type: "Supplier", name: "Sadowniczy Eksport Sp. z o.o.", country: "Poland",
+    address: "ul. Grójecka 110, 05-600 Grójec",
+    nip: "7972244668", vatEuId: "PL7972244668",
+    defaultCurrency: "PLN", paymentTerms: "21 days from invoice date",
+    notes: "Baseline test supplier — Polish apples (Grójec region), 13 kg box",
+    contacts: [
+      { id: 1, name: "Krzysztof Lewandowski", role: "Sales", email: "k.lewandowski@sadowniczy.pl", phone: "+48 605 112 334", isPrimary: true, notes: "" },
+    ],
+  },
+  {
+    id: 60, type: "Supplier", name: "Warzywa Polskie S.A.", country: "Poland",
+    address: "ul. Ogrodnicza 5, 96-100 Skierniewice",
+    nip: "8361177553", vatEuId: "PL8361177553",
+    defaultCurrency: "PLN", paymentTerms: "30 days from invoice date",
+    notes: "Baseline test supplier — Polish vegetables (cabbage, carrots, onions)",
+    contacts: [
+      { id: 1, name: "Agnieszka Nowak", role: "Sales", email: "a.nowak@warzywapolskie.pl", phone: "+48 601 778 990", isPrimary: true, notes: "" },
+    ],
+  },
 ];
 
 // ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────

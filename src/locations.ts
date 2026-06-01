@@ -91,6 +91,11 @@ export const LOCATIONS: Location[] = [
   L(119, "Port", "PORT", "Alexandria Port", "Egypt"),
   L(120, "Port", "PORT", "Port Said", "Egypt"),
   L(121, "Port", "PORT", "Agadir / Casablanca port area", "Morocco"),
+  L(122, "Port", "PORT", "Ravenna Port", "Italy"),
+  L(123, "Port", "PORT", "Rijeka Port", "Croatia"),
+  L(124, "Port", "PORT", "Bremerhaven Port", "Germany"),
+  L(125, "Port", "PORT", "Gdynia Port", "Poland"),
+  L(126, "Port", "PORT", "Damietta Port", "Egypt"),
 
   // ── Airports (NEW — for the air-export flow, e.g. blueberries) ──
   L(201, "Airport", "PORT", "Warsaw Chopin Airport — Cargo", "Poland"),
