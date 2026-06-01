@@ -151,6 +151,8 @@ export default function App() {
   }, [contacts]);
 
   const [activeModule, setActiveModule] = useState("dashboard");
+  // One-time reminder for testers to export/back up their data (localStorage only).
+  const [backupReminderDismissed, setBackupReminderDismissed] = useLocalStoredState("backupReminderDismissed", false);
 
   function reloadFromStorage() {
     window.location.reload();
@@ -182,6 +184,16 @@ export default function App() {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
       <TopNav active={activeModule} onNav={setActiveModule} />
+      {!backupReminderDismissed && (
+        <div style={{ background: "#FEF3C7", borderBottom: "1px solid #FDE68A", padding: "10px 28px", display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: "#92400E", flexShrink: 0 }}>
+          <span style={{ fontSize: 15 }}>💾</span>
+          <span style={{ flex: 1, lineHeight: 1.45 }}>
+            <strong>Test build — your data lives only in this browser.</strong> It survives refreshes and updates here, but is lost if you switch browser/device, use a private window, or clear browsing data. Back it up regularly via <strong>Settings → Export all data</strong>, and send that file with any bug report.
+          </span>
+          <button onClick={() => { setActiveModule("settings"); }} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#92400E", fontSize: 11.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>Open Settings</button>
+          <button onClick={() => setBackupReminderDismissed(true)} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "transparent", color: "#92400E", fontSize: 16, cursor: "pointer", lineHeight: 1 }} title="Dismiss">×</button>
+        </div>
+      )}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {renderActive()}
       </div>

@@ -1,20 +1,23 @@
-// Shell seed — pulls each module's local seed array and combines them.
-// The standalone modules still use these same arrays internally (when no props
-// are passed). When mounted in the shell, the shell passes its (now shared)
-// state and the modules mutate it instead.
+// Shell seed — for the TEST SHELL this is intentionally EMPTY so each tester starts
+// with a completely clean system and populates their own real data. Locations/ports
+// remain built-in (reference data in ./locations). The per-module demo arrays
+// (INIT_COUNTERPARTIES, INIT_LOTS, etc.) still exist for standalone/dev use and can
+// be re-enabled here later if a richly-seeded demo build is wanted.
+//
+// To restore the demo dataset, swap the [] values below for the imported arrays.
 
-import { INIT_COUNTERPARTIES } from "./Contacts";
-import { INITIAL_ORDERS as INIT_POS } from "./PurchaseOrders";
-import { INIT_LOTS } from "./Inventory";
-import { INIT_ORDERS as INIT_SOS } from "./SalesOrders";
-import { INIT_SHIPMENTS } from "./Shipments";
-import { INIT_OPERATIONAL_COSTS } from "./operationalCosts";
+// import { INIT_COUNTERPARTIES } from "./Contacts";
+// import { INITIAL_ORDERS as INIT_POS } from "./PurchaseOrders";
+// import { INIT_LOTS } from "./Inventory";
+// import { INIT_ORDERS as INIT_SOS } from "./SalesOrders";
+// import { INIT_SHIPMENTS } from "./Shipments";
+// import { INIT_OPERATIONAL_COSTS } from "./operationalCosts";
 
 export const SHELL_SEED = {
-  contacts: INIT_COUNTERPARTIES,
-  pos:      INIT_POS,
-  lots:     INIT_LOTS,
-  orders:   INIT_SOS,
-  shipments: INIT_SHIPMENTS,
-  operationalCosts: INIT_OPERATIONAL_COSTS,
+  contacts: [] as any[],
+  pos: [] as any[],
+  lots: [] as any[],
+  orders: [] as any[],
+  shipments: [] as any[],
+  operationalCosts: [] as any[],
 };

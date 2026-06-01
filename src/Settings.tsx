@@ -108,13 +108,14 @@ export default function Settings({
 
   function handleReset() {
     const confirmed = window.confirm(
-      "Reset all your data to the demo seed?\n\n" +
-      "This wipes contacts, POs, lots, sales orders, shipments, and operational costs. " +
-      "Anything you've entered will be lost. This cannot be undone."
+      "Start fresh — clear ALL your data?\n\n" +
+      "This wipes contacts, POs, lots, sales orders, shipments, and operational costs, " +
+      "returning the system to a completely empty state. Anything you've entered will be lost. " +
+      "This cannot be undone — export a backup first if you want to keep it."
     );
     if (!confirmed) return;
     clearAllData();
-    setMessage({ kind: "info", text: "Data cleared. Reloading page..." });
+    setMessage({ kind: "info", text: "All data cleared. Reloading to an empty system..." });
     setTimeout(() => window.location.reload(), 800);
   }
 
