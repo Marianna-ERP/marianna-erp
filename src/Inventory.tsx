@@ -43,19 +43,66 @@ const LOT_STATUSES: Record<string, any> = {
 // Flow types — 11 flows in two groups (EXP / IMP). Aligned with PurchaseOrders + Shipments.
 const FLOW_TYPES: Record<string, any> = {
   // EXPORT
-  EXP_EXWS:     { group: "EXP", short: "EXP · EXWs — client pickup",       emoji: "🤝", desc: "Client sends their truck to producer warehouse." },
-  EXP_FOB:      { group: "EXP", short: "EXP · FOB — we truck to port",     emoji: "⚓", desc: "We truck to port, client takes over (no sea on our side)." },
-  EXP_CIF:      { group: "EXP", short: "EXP · CIF — own full logistics",   emoji: "🚢", desc: "Producer → our truck → port → vessel (CIF)." },
-  EXP_DDP_EU:   { group: "EXP", short: "EXP · DDP intra-EU",               emoji: "🚛", desc: "Producer → our truck → EU client (DDP)." },
-  EXP_DDP_XEU:  { group: "EXP", short: "EXP · DDP extra-EU",               emoji: "🛃", desc: "Producer → our truck → export customs → client (DDP)." },
+  EXP_EXWS:     { group: "EXP", short: "EXP · EXWs — client pickup",       emoji: "🤝", desc: "Client sends their truck to producer warehouse.", buyOwnershipStart: "never", sellOwnershipEnd: "never", stageTemplate: [{ kind: "supplier", label: "At producer (ready)" }, { kind: "client", label: "Collected by client" }] },
+  EXP_FOB:      { group: "EXP", short: "EXP · FOB — we truck to port",     emoji: "⚓", desc: "We truck to port, client takes over (no sea on our side).", buyOwnershipStart: "supplier", sellOwnershipEnd: "origin_port", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading (handed to client)" }] },
+  EXP_CIF:      { group: "EXP", short: "EXP · CIF — own full logistics",   emoji: "🚢", desc: "Producer → our truck → port → vessel (CIF).", buyOwnershipStart: "supplier", sellOwnershipEnd: "dest_port", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "customs_export", label: "Export customs" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port (handed to client)" }] },
+  EXP_DDP_EU:   { group: "EXP", short: "EXP · DDP intra-EU",               emoji: "🚛", desc: "Producer → our truck → EU client (DDP).", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to client (intra-EU)" }, { kind: "client", label: "Delivered to client" }] },
+  EXP_DDP_XEU:  { group: "EXP", short: "EXP · DDP extra-EU",               emoji: "🛃", desc: "Producer → our truck → export customs → client (DDP).", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to border" }, { kind: "customs_export", label: "Export customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
   // IMPORT
-  IMP_EXWS_WH:  { group: "IMP", short: "IMP · EXWs → our WH",              emoji: "🔄", desc: "Our truck picks up at supplier → sea (if needed) → customs → our WH." },
-  IMP_EXWS_DIR: { group: "IMP", short: "IMP · EXWs → direct to client",    emoji: "↗️", desc: "Our truck picks up at supplier → sea (if needed) → customs → client." },
-  IMP_CIF_WH:   { group: "IMP", short: "IMP · CIF → our WH",               emoji: "📦", desc: "Supplier ships CIF → we customs + inland → our WH." },
-  IMP_CIF_DIR:  { group: "IMP", short: "IMP · CIF → direct to client",     emoji: "➡️", desc: "Supplier ships CIF → we customs + inland → client." },
-  IMP_DDP_WH:   { group: "IMP", short: "IMP · DDP → our WH",               emoji: "🏭", desc: "Supplier delivers DDP to our warehouse." },
-  IMP_DDP_DIR:  { group: "IMP", short: "IMP · DDP → direct to client",     emoji: "🎯", desc: "Supplier delivers DDP straight to client." },
+  IMP_EXWS_WH:  { group: "IMP", short: "IMP · EXWs → our WH",              emoji: "🔄", desc: "Our truck picks up at supplier → sea (if needed) → customs → our WH.", buyOwnershipStart: "supplier", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to our warehouse" }, { kind: "our_wh", label: "In our warehouse" }] },
+  IMP_EXWS_DIR: { group: "IMP", short: "IMP · EXWs → direct to client",    emoji: "↗️", desc: "Our truck picks up at supplier → sea (if needed) → customs → client.", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At supplier" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
+  IMP_CIF_WH:   { group: "IMP", short: "IMP · CIF → our WH",               emoji: "📦", desc: "Supplier ships CIF → we customs + inland → our WH.", buyOwnershipStart: "dest_port", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier ships)" }, { kind: "transit_sea", label: "Sea freight (supplier's risk)" }, { kind: "dest_port", label: "Destination port (we take over)" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to our warehouse" }, { kind: "our_wh", label: "In our warehouse" }] },
+  IMP_CIF_DIR:  { group: "IMP", short: "IMP · CIF → direct to client",     emoji: "➡️", desc: "Supplier ships CIF → we customs + inland → client.", buyOwnershipStart: "dest_port", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier ships)" }, { kind: "transit_sea", label: "Sea freight (supplier's risk)" }, { kind: "dest_port", label: "Destination port (we take over)" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
+  IMP_DDP_WH:   { group: "IMP", short: "IMP · DDP → our WH",               emoji: "🏭", desc: "Supplier delivers DDP to our warehouse.", buyOwnershipStart: "our_wh", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier delivers)" }, { kind: "transit_road", label: "Supplier's delivery (their risk)" }, { kind: "our_wh", label: "Received in our warehouse" }] },
+  IMP_DDP_DIR:  { group: "IMP", short: "IMP · DDP → direct to client",     emoji: "🎯", desc: "Supplier delivers DDP straight to client.", buyOwnershipStart: "never", sellOwnershipEnd: "never", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier delivers)" }, { kind: "client", label: "Delivered to client (pass-through)" }] },
 };
+
+const OWNERSHIP_POINT_ORDER = ["supplier", "origin_port", "vessel", "dest_port", "our_wh", "client"];
+const STAGE_KIND_TO_POINT: Record<string, string> = {
+  supplier: "supplier", transit_road: "supplier", origin_port: "origin_port",
+  customs_export: "origin_port", transit_sea: "vessel", dest_port: "dest_port",
+  customs_import: "dest_port", our_wh: "our_wh", client: "client",
+};
+function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?: number) {
+  const f = FLOW_TYPES[flow];
+  if (!f) return "owned";
+  if (f.buyOwnershipStart === "never" || f.sellOwnershipEnd === "never") return "not_owned";
+  // A transit leg (road/sea) sits BETWEEN two points; its ownership follows the
+  // point it departs FROM — i.e. the nearest preceding non-transit stage's point.
+  let point = STAGE_KIND_TO_POINT[stageKind] || "supplier";
+  const isTransit = stageKind === "transit_road" || stageKind === "transit_sea";
+  if (isTransit && Array.isArray(stages) && typeof idx === "number") {
+    for (let j = idx - 1; j >= 0; j--) {
+      const pk = stages[j].kind;
+      if (pk !== "transit_road" && pk !== "transit_sea") { point = STAGE_KIND_TO_POINT[pk] || point; break; }
+    }
+  }
+  const sI = OWNERSHIP_POINT_ORDER.indexOf(f.buyOwnershipStart);
+  const eI = OWNERSHIP_POINT_ORDER.indexOf(f.sellOwnershipEnd);
+  const pI = OWNERSHIP_POINT_ORDER.indexOf(point);
+  if (sI === -1 || eI === -1 || pI === -1) return "owned";
+  if (pI < sI) return "not_owned";
+  if (pI > eI) return "handed_over";
+  return "owned";
+}
+// On-the-fly journey for a lot that has a flow but no stored journey (seed/old lots).
+function journeyForLot(lot: any) {
+  if (Array.isArray(lot.journey) && lot.journey.length > 0) return lot.journey;
+  const f = FLOW_TYPES[lot.flow];
+  if (!f || !Array.isArray(f.stageTemplate)) return [];
+  const load = lot.loadingDate || null;
+  const arrive = lot.arrivalDate || null;
+  const n = f.stageTemplate.length;
+  return f.stageTemplate.map((st: any, i: number) => {
+    let plannedDate: string | null = null;
+    if (load && arrive && n > 1) {
+      const t0 = new Date(load).getTime(), t1 = new Date(arrive).getTime();
+      plannedDate = new Date(t0 + (t1 - t0) * (i / (n - 1))).toISOString().split("T")[0];
+    } else if (i === 0) plannedDate = load;
+    else if (i === n - 1) plannedDate = arrive;
+    return { seq: i + 1, kind: st.kind, label: st.label, ownership: ownershipForStage(lot.flow, st.kind, f.stageTemplate, i), plannedDate, actualDate: null, status: "pending" };
+  });
+}
 
 const FLOW_GROUPS = [
   { id: "EXP", label: "EXPORT", color: "#16A34A" },
@@ -680,6 +727,40 @@ function LotDetail({ lot, onBack, onMove, onDelete, liveSOs }: any) {
           {/* Two-column body */}
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
             <div>
+              {/* Journey (v6.1b) — planned stages from the PO flow, with ownership coding */}
+              {(() => { const journey = journeyForLot(lot); return journey.length > 0 && (
+                <Card style={{ marginBottom: 16 }}>
+                  <SectionTitle>JOURNEY · {journey.length} STAGES</SectionTitle>
+                  <div style={{ fontSize: 11, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>
+                    Planned route for this lot, from its flow. <span style={{ color: "#16A34A", fontWeight: 600 }}>Green = ours (our risk)</span>; grey = not yet ours / handed to client.
+                  </div>
+                  <div style={{ position: "relative" }}>
+                    {journey.map((s, i) => {
+                      const owned = s.ownership === "owned";
+                      const tagText = s.ownership === "owned" ? "OURS" : s.ownership === "not_owned" ? "not ours yet" : "client's";
+                      const dotColor = owned ? "#16A34A" : "#CBD5E1";
+                      const textColor = owned ? "#111" : "#94A3B8";
+                      const last = i === journey.length - 1;
+                      return (
+                        <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", paddingBottom: last ? 0 : 16, position: "relative" }}>
+                          {!last && <div style={{ position: "absolute", left: 7, top: 18, bottom: 0, width: 2, background: owned ? "#BBF7D0" : "#E5E7EB" }} />}
+                          <div style={{ width: 16, height: 16, borderRadius: "50%", background: dotColor, flexShrink: 0, marginTop: 2, border: "2px solid #fff", boxShadow: "0 0 0 1px " + dotColor }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: textColor }}>{s.label}</span>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: owned ? "#16A34A" : "#94A3B8", background: owned ? "#DCFCE7" : "#F1F5F9", padding: "1px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{tagText}</span>
+                            </div>
+                            <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>
+                              {s.plannedDate ? `planned ${s.plannedDate}` : "date TBA"}{s.actualDate ? ` · actual ${s.actualDate}` : ""} · {s.status}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              ); })()}
+
               {/* Movement history */}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>MOVEMENT HISTORY ({lot.movements.length})</SectionTitle>

@@ -1518,6 +1518,64 @@ function nextLotSerial(existingLots, year, offset = 1) {
   return String(max + offset).padStart(4, "0");
 }
 
+// ── v6.1b: Build a lot's planned JOURNEY from its flow's stageTemplate ─────────
+// Each stage gets: kind, label, an ownership tag (not_owned / owned / handed_over)
+// derived from the flow's buy/sell ownership boundaries, a planned date, and a
+// status (all "pending" at creation — actuals fill in later via movements).
+function ownershipForStage(flow, stageKind, stages, idx) {
+  const f = FLOW_TYPES[flow];
+  if (!f) return "owned";
+  const start = f.buyOwnershipStart;
+  const end = f.sellOwnershipEnd;
+  if (start === "never" || end === "never") return "not_owned";
+  let point = STAGE_KIND_TO_POINT[stageKind] || "supplier";
+  const isTransit = stageKind === "transit_road" || stageKind === "transit_sea";
+  if (isTransit && Array.isArray(stages) && typeof idx === "number") {
+    for (let j = idx - 1; j >= 0; j--) {
+      const pk = stages[j].kind;
+      if (pk !== "transit_road" && pk !== "transit_sea") { point = STAGE_KIND_TO_POINT[pk] || point; break; }
+    }
+  }
+  const startIdx = OWNERSHIP_POINT_ORDER.indexOf(start);
+  const endIdx = OWNERSHIP_POINT_ORDER.indexOf(end);
+  const pointIdx = OWNERSHIP_POINT_ORDER.indexOf(point);
+  if (startIdx === -1 || endIdx === -1 || pointIdx === -1) return "owned";
+  if (pointIdx < startIdx) return "not_owned";
+  if (pointIdx > endIdx) return "handed_over";
+  return "owned";
+}
+
+function buildJourneyFromFlow(order) {
+  const f = FLOW_TYPES[order.flow];
+  if (!f || !Array.isArray(f.stageTemplate)) return [];
+  const stages = f.stageTemplate;
+  const loadISO = order.loadingDate || null;
+  const arriveISO = order.expectedDeliveryDate || null;
+  const n = stages.length;
+  return stages.map((st, i) => {
+    let plannedDate = null;
+    if (loadISO && arriveISO && n > 1) {
+      const t0 = new Date(loadISO).getTime();
+      const t1 = new Date(arriveISO).getTime();
+      const frac = i / (n - 1);
+      plannedDate = new Date(t0 + (t1 - t0) * frac).toISOString().split("T")[0];
+    } else if (i === 0) {
+      plannedDate = loadISO;
+    } else if (i === n - 1) {
+      plannedDate = arriveISO;
+    }
+    return {
+      seq: i + 1,
+      kind: st.kind,
+      label: st.label,
+      ownership: ownershipForStage(order.flow, st.kind, stages, i),
+      plannedDate,
+      actualDate: null,
+      status: "pending",
+    };
+  });
+}
+
 function buildExpectedLotsFromPO(order, existingLots = []) {
   const year = lotNumberYear(order);
   const fx = parseFloat(order.fxRate) || 1;
@@ -1566,6 +1624,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
         { type: "purchase", label: `Purchase expected (${order.number})`, source: order.number, amount: purchaseAmount, currency: order.currency || "PLN", pln: purchasePLN },
       ],
       movements: [],
+      journey: buildJourneyFromFlow(order),
       notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg at purchase price ${unitPrice} ${order.currency || "PLN"}/kg. Destination: ${destinationDisplay(order)}. ${directFlowLabel(order)}.`,
     });
   });
