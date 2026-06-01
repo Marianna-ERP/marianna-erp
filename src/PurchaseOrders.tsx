@@ -611,7 +611,7 @@ function PODoc({ order }: any) {
       <table style={{ width: "100%", borderCollapse: "collapse", marginTop: -1 }}>
         <thead>
           <tr>
-            <th colSpan={9} style={{ border: "1px solid #ccc", background: "#f9f9f9", padding: "6px 10px", textAlign: "left" }}>
+            <th colSpan={11} style={{ border: "1px solid #ccc", background: "#f9f9f9", padding: "6px 10px", textAlign: "left" }}>
               <BiLbl en="Description of goods" pl="Opis towaru" />
             </th>
           </tr>
@@ -621,6 +621,8 @@ function PODoc({ order }: any) {
               { en: "Origin",      pl: "Pochodzenie",  align: "left" },
               { en: "Size",        pl: "Kaliber",      align: "center" },
               { en: "Quality",     pl: "Klasa",        align: "center" },
+              { en: "Packaging",   pl: "Opakowanie",   align: "left" },
+              { en: "Pallets",     pl: "Palety",       align: "center" },
               { en: "Unit",        pl: "Jedn.",        align: "center" },
               { en: "Qty",         pl: "Ilość",        align: "right" },
               { en: "Unit Price",  pl: "Cena jedn.",   align: "right" },
@@ -648,6 +650,8 @@ function PODoc({ order }: any) {
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.size}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>Kl. {item.quality}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.packaging || "—"}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.pallets || "—"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.unit || "Kg"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.qty || 0).toLocaleString("pl-PL")}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.unitPrice || 0).toFixed(2)}</td>
@@ -657,7 +661,7 @@ function PODoc({ order }: any) {
             );
           })}
           <tr>
-            <td colSpan={7} style={{ border: "1px solid #ccc", padding: "6px 8px", verticalAlign: "top" }}>
+            <td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", verticalAlign: "top" }}>
               <div style={{ fontSize: 9, color: "#777" }}>
                 <span style={{ fontWeight: 700, color: "#E05A2B" }}>Notes</span>
                 <span style={{ fontStyle: "italic", marginLeft: 4 }}>/ Uwagi</span>
