@@ -58,6 +58,47 @@ const FLOW_TYPES: Record<string, any> = {
 };
 
 const OWNERSHIP_POINT_ORDER = ["supplier", "origin_port", "vessel", "dest_port", "our_wh", "client"];
+
+// v6.1.5: Standard Incoterm-aligned stage wording, derived from the stage kind and the
+// flow's buy/sell Incoterm family. One source of truth → consistent across the app.
+function incotermFamily(flow: string, side: "buy" | "sell") {
+  // Infer the Incoterm family from the flow code.
+  const f = flow || "";
+  if (side === "buy") {
+    if (f.includes("CIF")) return "CIF";
+    if (f.includes("DDP")) return "DDP";
+    if (f.includes("FOB")) return "FOB";
+    return "EXW"; // EXWS / default pickup
+  } else {
+    if (f.startsWith("EXP_EXWS")) return "EXW";
+    if (f.startsWith("EXP_FOB")) return "FOB";
+    if (f.startsWith("EXP_CIF")) return "CIF";
+    if (f.startsWith("EXP_DDP")) return "DDP";
+    if (f.endsWith("_DIR")) return "DDP"; // sold delivered to client
+    return ""; // import to our WH — no onward sale Incoterm at this point
+  }
+}
+function standardStageLabel(kind: string, flow: string) {
+  const buy = incotermFamily(flow, "buy");
+  switch (kind) {
+    case "supplier":
+      return buy === "EXW" ? "EXW — at supplier (ex works)"
+           : buy === "FOB" ? "At supplier (before FOB)"
+           : buy === "CIF" ? "At supplier (supplier ships CIF)"
+           : buy === "DDP" ? "At supplier (supplier delivers DDP)"
+           : "At supplier";
+    case "transit_road": return "Road carriage";
+    case "transit_sea":  return buy === "CIF" ? "Sea freight (CIF — supplier's risk)" : "Sea freight";
+    case "origin_port":  return buy === "FOB" ? "FOB — loaded on vessel (port of loading)" : "Port of loading";
+    case "customs_export": return "Export customs cleared";
+    case "dest_port":    return buy === "CIF" ? "CIF — arrived at destination port" : "Destination port";
+    case "customs_import": return "Import customs cleared";
+    case "our_wh":       return "Received into our warehouse";
+    case "client":       return "Delivered to client";
+    default: return kind;
+  }
+}
+
 const STAGE_KIND_TO_POINT: Record<string, string> = {
   supplier: "supplier", transit_road: "supplier", origin_port: "origin_port",
   customs_export: "origin_port", transit_sea: "vessel", dest_port: "dest_port",
@@ -632,6 +673,9 @@ function MovementModal({ lot, liveSOs = [], onCancel, onConfirm }: any) {
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
         </div>
         <div style={{ padding: 24 }}>
+          <div style={{ padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11, color: "#92400E", lineHeight: 1.45, marginBottom: 16 }}>
+            Use Inventory movement for receipt, adjustment or exceptional correction. If the movement requires a truck/forwarder/cost, create it from Shipments so transport cost and documents stay linked.
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
             <div>
               <Lbl>Movement type</Lbl>
@@ -660,9 +704,6 @@ function MovementModal({ lot, liveSOs = [], onCancel, onConfirm }: any) {
               </div>
             </div>
           )}
-          <div style={{ padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11, color: "#92400E", lineHeight: 1.45, marginBottom: 12 }}>
-            Use Inventory movement for receipt, adjustment or exceptional correction. If the movement requires a truck/forwarder/cost, create it from Shipments so transport cost and documents stay linked.
-          </div>
           <div style={{ marginBottom: 18 }}>
             <Lbl>Note</Lbl>
             <Inp value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Reserved for SO-2026-0094 (Biedronka)" />
@@ -840,11 +881,14 @@ function LotDetail({ lot, onBack, onMove, onDelete, onCustoms, liveSOs }: any) {
                   <div style={{ position: "relative" }}>
                     {journey.map((s, i) => {
                       const owned = s.ownership === "owned";
-                      const tagText = s.ownership === "owned" ? "OURS" : s.ownership === "not_owned" ? "not ours yet" : "client's";
+                      const tagText = s.ownership === "owned" ? "OURS" : s.ownership === "not_owned" ? "supplier's" : "client's";
                       const done = s.status === "done";
                       const active = s.status === "active";
-                      const dotColor = done ? "#16A34A" : active ? "#D97706" : (owned ? "#86EFAC" : "#CBD5E1");
-                      const textColor = done || active ? "#111" : (owned ? "#334155" : "#94A3B8");
+                      const dotColor = done ? "#16A34A" : active ? "#D97706" : (owned ? "#86EFAC" : "#D1D5DB");
+                      // Black/gray emphasis: stages where goods are OURS render in black;
+                      // the supplier's / client's portions render gray.
+                      const textColor = owned ? "#111827" : "#9CA3AF";
+                      const labelText = standardStageLabel(s.kind, lot.flow);
                       const last = i === journey.length - 1;
                       return (
                         <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", paddingBottom: last ? 0 : 16, position: "relative" }}>
@@ -852,10 +896,10 @@ function LotDetail({ lot, onBack, onMove, onDelete, onCustoms, liveSOs }: any) {
                           <div style={{ width: 16, height: 16, borderRadius: "50%", background: dotColor, flexShrink: 0, marginTop: 2, border: "2px solid #fff", boxShadow: "0 0 0 1px " + dotColor, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#fff", fontWeight: 900 }}>{done ? "✓" : ""}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: textColor }}>{s.label}{active && <span style={{ color: "#D97706", fontWeight: 700, fontSize: 10, marginLeft: 6 }}>● IN PROGRESS</span>}</span>
-                              <span style={{ fontSize: 10, fontWeight: 700, color: owned ? "#16A34A" : "#94A3B8", background: owned ? "#DCFCE7" : "#F1F5F9", padding: "1px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{tagText}</span>
+                              <span style={{ fontSize: 13, fontWeight: owned ? 700 : 500, color: textColor }}>{labelText}{active && <span style={{ color: "#D97706", fontWeight: 700, fontSize: 10, marginLeft: 6 }}>● IN PROGRESS</span>}</span>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: owned ? "#16A34A" : "#9CA3AF", background: owned ? "#DCFCE7" : "#F3F4F6", padding: "1px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{tagText}</span>
                             </div>
-                            <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>
+                            <div style={{ fontSize: 11, color: owned ? "#9CA3AF" : "#CBD5E1", marginTop: 2 }}>
                               {s.plannedDate ? `planned ${s.plannedDate}` : "date TBA"}{s.actualDate ? ` · actual ${s.actualDate}` : ""} · {s.status}
                             </div>
                           </div>

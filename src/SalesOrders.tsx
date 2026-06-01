@@ -1670,7 +1670,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 </Sel>
               </div>
               <div><Lbl>FX rate to PLN</Lbl>
-                <Inp value={order.fxRate} onChange={e => sf("fxRate", parseFloat(e.target.value) || 0)} type="number" disabled={isLocked} />
+                <Inp value={order.fxRate ?? ""} onChange={e => sf("fxRate", e.target.value)} type="number" disabled={isLocked} />
                 {order.fxLockedAt && <div style={{ fontSize: 10, color: "#888", marginTop: 3 }}>Locked {order.fxLockedAt}</div>}
               </div>
             </div>
