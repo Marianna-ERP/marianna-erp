@@ -60,30 +60,78 @@ const INCOTERMS_BUY = [
 // `defaultRequiresSea` pre-fills the per-PO sea-freight toggle; user can override per deal.
 const FLOW_TYPES: Record<string, any> = {
   // ── EXPORT (we sell, origin in PL/EU) ──────────────────────────────────────
+  // Enrichment fields (v6.1a — additive, drive the lot journey & ownership):
+  //   direction          "EXP" | "IMP"
+  //   landsInOwnWarehouse  true if goods physically pass through OUR warehouse
+  //   buyOwnershipStart   journey point where goods BECOME ours (by buy Incoterm)
+  //   sellOwnershipEnd    journey point where goods STOP being ours (by sell Incoterm)
+  //   stageTemplate       ordered journey stages (kind + label) for this flow
+  // Ownership points use canonical keys: "supplier" | "origin_port" | "vessel" |
+  //   "dest_port" | "our_wh" | "client" | "never". The owned segment runs from
+  //   buyOwnershipStart to sellOwnershipEnd inclusive.
   EXP_EXWS: {
     group: "EXP", short: "EXP · EXWs — client pickup", emoji: "🤝",
     buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
     desc: "Client sends their truck to producer warehouse. We do paperwork only — no logistics on our side.",
+    direction: "EXP", landsInOwnWarehouse: false,
+    buyOwnershipStart: "never", sellOwnershipEnd: "never",
+    stageTemplate: [
+      { kind: "supplier", label: "At producer (ready)" },
+      { kind: "client", label: "Collected by client" },
+    ],
   },
   EXP_FOB: {
     group: "EXP", short: "EXP · FOB — we truck to port", emoji: "⚓",
     buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
     desc: "We truck from producer to port of loading. Client takes over from there (sea + onward). No sea on our side.",
+    direction: "EXP", landsInOwnWarehouse: false,
+    buyOwnershipStart: "supplier", sellOwnershipEnd: "origin_port",
+    stageTemplate: [
+      { kind: "supplier", label: "At producer" },
+      { kind: "transit_road", label: "Road to port of loading" },
+      { kind: "origin_port", label: "Port of loading (handed to client)" },
+    ],
   },
   EXP_CIF: {
     group: "EXP", short: "EXP · CIF — own full logistics", emoji: "🚢",
     buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: true,
     desc: "Producer → our truck → port → vessel → destination port (CIF). We handle inland + sea + insurance.",
+    direction: "EXP", landsInOwnWarehouse: false,
+    buyOwnershipStart: "supplier", sellOwnershipEnd: "dest_port",
+    stageTemplate: [
+      { kind: "supplier", label: "At producer" },
+      { kind: "transit_road", label: "Road to port of loading" },
+      { kind: "origin_port", label: "Port of loading" },
+      { kind: "customs_export", label: "Export customs" },
+      { kind: "transit_sea", label: "Sea freight" },
+      { kind: "dest_port", label: "Destination port (handed to client)" },
+    ],
   },
   EXP_DDP_EU: {
     group: "EXP", short: "EXP · DDP intra-EU", emoji: "🚛",
     buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
     desc: "Producer → our truck → EU client. No customs (free movement). DDP sale.",
+    direction: "EXP", landsInOwnWarehouse: false,
+    buyOwnershipStart: "supplier", sellOwnershipEnd: "client",
+    stageTemplate: [
+      { kind: "supplier", label: "At producer" },
+      { kind: "transit_road", label: "Road to client (intra-EU)" },
+      { kind: "client", label: "Delivered to client" },
+    ],
   },
   EXP_DDP_XEU: {
     group: "EXP", short: "EXP · DDP extra-EU", emoji: "🛃",
     buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
     desc: "Producer → our truck → export customs → non-EU client. DDP sale (we cover everything).",
+    direction: "EXP", landsInOwnWarehouse: false,
+    buyOwnershipStart: "supplier", sellOwnershipEnd: "client",
+    stageTemplate: [
+      { kind: "supplier", label: "At producer" },
+      { kind: "transit_road", label: "Road to border" },
+      { kind: "customs_export", label: "Export customs" },
+      { kind: "transit_road", label: "Road to client" },
+      { kind: "client", label: "Delivered to client" },
+    ],
   },
 
   // ── IMPORT (we buy, origin overseas/EU) ────────────────────────────────────
@@ -91,32 +139,105 @@ const FLOW_TYPES: Record<string, any> = {
     group: "IMP", short: "IMP · EXWs → our WH", emoji: "🔄",
     buyIncoterms: ["EXW", "FCA", "FOB"], defaultRequiresSea: true,
     desc: "Our truck picks up at supplier. Sea freight typical for extra-EU origin. Import customs. Lands in our WH for split distribution.",
+    direction: "IMP", landsInOwnWarehouse: true,
+    buyOwnershipStart: "supplier", sellOwnershipEnd: "our_wh",
+    stageTemplate: [
+      { kind: "supplier", label: "At supplier" },
+      { kind: "transit_road", label: "Road to port of loading" },
+      { kind: "origin_port", label: "Port of loading" },
+      { kind: "transit_sea", label: "Sea freight" },
+      { kind: "dest_port", label: "Destination port" },
+      { kind: "customs_import", label: "Import customs" },
+      { kind: "transit_road", label: "Road to our warehouse" },
+      { kind: "our_wh", label: "In our warehouse" },
+    ],
   },
   IMP_EXWS_DIR: {
     group: "IMP", short: "IMP · EXWs → direct to client", emoji: "↗️",
     buyIncoterms: ["EXW", "FCA", "FOB"], defaultRequiresSea: true,
     desc: "Our truck picks up at supplier. Sea freight typical for extra-EU origin. Import customs. Delivered straight to client (no WH stop).",
+    direction: "IMP", landsInOwnWarehouse: false,
+    buyOwnershipStart: "supplier", sellOwnershipEnd: "client",
+    stageTemplate: [
+      { kind: "supplier", label: "At supplier" },
+      { kind: "transit_road", label: "Road to port of loading" },
+      { kind: "origin_port", label: "Port of loading" },
+      { kind: "transit_sea", label: "Sea freight" },
+      { kind: "dest_port", label: "Destination port" },
+      { kind: "customs_import", label: "Import customs" },
+      { kind: "transit_road", label: "Road to client" },
+      { kind: "client", label: "Delivered to client" },
+    ],
   },
   IMP_CIF_WH: {
     group: "IMP", short: "IMP · CIF → our WH", emoji: "📦",
     buyIncoterms: ["CIF", "CFR"], defaultRequiresSea: true,
     desc: "Supplier ships CIF to our destination port. We handle import customs and inland to our WH for split.",
+    direction: "IMP", landsInOwnWarehouse: true,
+    buyOwnershipStart: "dest_port", sellOwnershipEnd: "our_wh",
+    stageTemplate: [
+      { kind: "supplier", label: "At supplier (supplier ships)" },
+      { kind: "transit_sea", label: "Sea freight (supplier's risk)" },
+      { kind: "dest_port", label: "Destination port (we take over)" },
+      { kind: "customs_import", label: "Import customs" },
+      { kind: "transit_road", label: "Road to our warehouse" },
+      { kind: "our_wh", label: "In our warehouse" },
+    ],
   },
   IMP_CIF_DIR: {
     group: "IMP", short: "IMP · CIF → direct to client", emoji: "➡️",
     buyIncoterms: ["CIF", "CFR"], defaultRequiresSea: true,
     desc: "Supplier ships CIF to destination port. We handle customs + inland delivery direct to client.",
+    direction: "IMP", landsInOwnWarehouse: false,
+    buyOwnershipStart: "dest_port", sellOwnershipEnd: "client",
+    stageTemplate: [
+      { kind: "supplier", label: "At supplier (supplier ships)" },
+      { kind: "transit_sea", label: "Sea freight (supplier's risk)" },
+      { kind: "dest_port", label: "Destination port (we take over)" },
+      { kind: "customs_import", label: "Import customs" },
+      { kind: "transit_road", label: "Road to client" },
+      { kind: "client", label: "Delivered to client" },
+    ],
   },
   IMP_DDP_WH: {
     group: "IMP", short: "IMP · DDP → our WH", emoji: "🏭",
     buyIncoterms: ["DDP", "DAP"], defaultRequiresSea: false,
     desc: "Supplier delivers DDP to our warehouse. We just receive and sort/repack.",
+    direction: "IMP", landsInOwnWarehouse: true,
+    buyOwnershipStart: "our_wh", sellOwnershipEnd: "our_wh",
+    stageTemplate: [
+      { kind: "supplier", label: "At supplier (supplier delivers)" },
+      { kind: "transit_road", label: "Supplier's delivery (their risk)" },
+      { kind: "our_wh", label: "Received in our warehouse" },
+    ],
   },
   IMP_DDP_DIR: {
     group: "IMP", short: "IMP · DDP → direct to client", emoji: "🎯",
     buyIncoterms: ["DDP", "DAP"], defaultRequiresSea: false,
     desc: "Supplier delivers DDP straight to client. Pass-through deal — we do paperwork only.",
+    direction: "IMP", landsInOwnWarehouse: false,
+    buyOwnershipStart: "never", sellOwnershipEnd: "never",
+    stageTemplate: [
+      { kind: "supplier", label: "At supplier (supplier delivers)" },
+      { kind: "client", label: "Delivered to client (pass-through)" },
+    ],
   },
+};
+
+// Canonical ordering of ownership points along any journey, used to compute whether
+// a given stage falls inside the owned segment [buyOwnershipStart .. sellOwnershipEnd].
+const OWNERSHIP_POINT_ORDER = ["supplier", "origin_port", "vessel", "dest_port", "our_wh", "client"];
+// Map a stage kind to the ownership point it sits at (for the owned-segment test).
+const STAGE_KIND_TO_POINT: Record<string, string> = {
+  supplier: "supplier",
+  transit_road: "supplier",      // refined per-position by the journey builder
+  origin_port: "origin_port",
+  customs_export: "origin_port",
+  transit_sea: "vessel",
+  dest_port: "dest_port",
+  customs_import: "dest_port",
+  our_wh: "our_wh",
+  client: "client",
 };
 
 // Groups for ordered rendering in UI (chips + dropdowns)
@@ -1351,8 +1472,12 @@ function isInventoryTransferStatus(status) {
 }
 
 function isDirectFlow(flow) {
-  const f = String(flow || "");
-  return f.startsWith("EXP_") || f.endsWith("_DIR");
+  const f = FLOW_TYPES[flow];
+  // v6.1a: prefer the explicit field. "Direct" = does NOT pass through our warehouse.
+  if (f && typeof f.landsInOwnWarehouse === "boolean") return !f.landsInOwnWarehouse;
+  // Fallback to the original string heuristic for any flow lacking the field.
+  const s = String(flow || "");
+  return s.startsWith("EXP_") || s.endsWith("_DIR");
 }
 
 function directFlowLabel(order) {
