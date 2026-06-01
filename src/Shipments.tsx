@@ -35,11 +35,11 @@ const TBD_CARRIER_ID = "TBD_CARRIER";
 const LEG_STATUSES = ["Booked", "Confirmed", "Loaded", "In Transit", "Arrived", "Delivered", "Cancelled"];
 
 const MODE_CONFIG = {
-  Road:       { bg: "#EFF6FF", color: "#2563EB", label: "Road" },
-  Sea:        { bg: "#E0F2FE", color: "#0284C7", label: "Sea" },
-  Rail:       { bg: "#F0FDFA", color: "#0F766E", label: "Rail" },
-  Air:        { bg: "#FCE7F3", color: "#DB2777", label: "Air" },
-  Multimodal: { bg: "#F5F3FF", color: "#7C3AED", label: "Multimodal" },
+  Road:       { bg: "#EFF6FF", color: "#2563EB", label: "Road", icon: "🚚" },
+  Sea:        { bg: "#CFFAFE", color: "#0E7490", label: "Sea", icon: "🚢" },
+  Rail:       { bg: "#DCFCE7", color: "#15803D", label: "Rail", icon: "🚆" },
+  Air:        { bg: "#FCE7F3", color: "#DB2777", label: "Air", icon: "✈️" },
+  Multimodal: { bg: "#F5F3FF", color: "#7C3AED", label: "Multimodal", icon: "🔀" },
 };
 
 const PURPOSE_LABELS = {
@@ -702,7 +702,9 @@ function buildShipmentFromSO(so, opts, shipments, lots) {
   const id = Date.now();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
-  const carrierId = opts.carrierId ? parseNum(opts.carrierId) : 17;
+  // No carrier chosen (e.g. EXW sale where the client arranges transport) → leave the
+  // road leg unassigned (TBD) rather than forcing a default carrier.
+  const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
   const firstLine = (so.items || [])[0] || {};
   const firstLot = findLotForLine(lots, firstLine, firstLine.sourceType === "PO" ? firstLine.sourceRef : "");
@@ -733,7 +735,7 @@ function buildShipmentFromSO(so, opts, shipments, lots) {
       description: `${it.product || "Goods"} ${it.packaging || ""}`.trim(),
     };
   });
-  const amount = parseNum(opts.amount, 1450);
+  const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || "PLN";
   const fxRate = parseNum(opts.fxRate, currency === "PLN" ? 1 : currency === "EUR" ? 4.25 : 3.9);
   return {
@@ -858,7 +860,7 @@ function StatusBadge({ status }: any) {
 }
 function ModeBadge({ mode }: any) {
   const m = MODE_CONFIG[mode] || MODE_CONFIG.Road;
-  return <span style={{ background: m.bg, color: m.color, padding: "3px 9px", borderRadius: 6, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{m.label}</span>;
+  return <span style={{ background: m.bg, color: m.color, padding: "3px 9px", borderRadius: 6, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{m.icon ? m.icon + " " : ""}{m.label}</span>;
 }
 function BillingBadge({ status }: any) {
   const color = status === "Cost allocated" || status === "Closed" ? "#059669" : status === "Ready for supplier invoice" ? "#D97706" : "#6B7280";
@@ -916,8 +918,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [form, setForm] = useState({
     mode: "Road",
-    carrierId: roadProviders[0]?.id || 1001,
-    forwarderId: seaProviders[0]?.id || 15,
+    carrierId: null,
+    forwarderId: null,
     amount: "",
     currency: "PLN",
     fxRate: "1",
@@ -1563,8 +1565,8 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
     <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 14 }}>
       <Card>
         <SectionTitle>Route / legs</SectionTitle>
-        {(shipment.legs || []).map((leg, i) => <div key={leg.id || i} style={{ display: "grid", gridTemplateColumns: "36px 70px 1fr 1fr 1.1fr", gap: 10, alignItems: "start", padding: "10px 0", borderBottom: i === (shipment.legs || []).length - 1 ? "none" : "1px solid #F1F5F9" }}>
-          <div style={{ width: 26, height: 26, borderRadius: 999, background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>{i + 1}</div>
+        {(shipment.legs || []).map((leg, i) => { const mc = MODE_CONFIG[leg.mode] || MODE_CONFIG.Road; return <div key={leg.id || i} style={{ display: "grid", gridTemplateColumns: "36px 70px 1fr 1fr 1.1fr", gap: 10, alignItems: "start", padding: "10px 0 10px 10px", borderLeft: `3px solid ${mc.color}`, borderBottom: i === (shipment.legs || []).length - 1 ? "none" : "1px solid #F1F5F9" }}>
+          <div style={{ width: 26, height: 26, borderRadius: 999, background: mc.color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>{i + 1}</div>
           <div><ModeBadge mode={leg.mode} /><div style={{ marginTop: 4 }}><StatusBadge status={leg.status} /></div></div>
           <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>FROM</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{leg.plannedPickupDate || "-"}</div></div>
           <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>TO</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{leg.plannedDeliveryDate || "-"}</div></div>
@@ -1579,7 +1581,7 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
               </div>
             )) : <div>Transport unit details: TBA</div>}
           </div>
-        </div>)}
+        </div>; })}
       </Card>
       <Card>
         <SectionTitle>Operational checklist</SectionTitle>

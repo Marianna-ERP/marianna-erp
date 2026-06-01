@@ -1648,7 +1648,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
 
   // filters
   const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState("Active");
+  const [filterStatus, setFilterStatus] = useState("All");
   const [filterFlow, setFilterFlow] = useState("All");
   const [filterSupplier, setFilterSupplier] = useState("All");
 
