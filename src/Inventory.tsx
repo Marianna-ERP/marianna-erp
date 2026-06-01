@@ -87,21 +87,86 @@ function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?
 }
 // On-the-fly journey for a lot that has a flow but no stored journey (seed/old lots).
 function journeyForLot(lot: any) {
-  if (Array.isArray(lot.journey) && lot.journey.length > 0) return lot.journey;
-  const f = FLOW_TYPES[lot.flow];
-  if (!f || !Array.isArray(f.stageTemplate)) return [];
-  const load = lot.loadingDate || null;
-  const arrive = lot.arrivalDate || null;
-  const n = f.stageTemplate.length;
-  return f.stageTemplate.map((st: any, i: number) => {
-    let plannedDate: string | null = null;
-    if (load && arrive && n > 1) {
-      const t0 = new Date(load).getTime(), t1 = new Date(arrive).getTime();
-      plannedDate = new Date(t0 + (t1 - t0) * (i / (n - 1))).toISOString().split("T")[0];
-    } else if (i === 0) plannedDate = load;
-    else if (i === n - 1) plannedDate = arrive;
-    return { seq: i + 1, kind: st.kind, label: st.label, ownership: ownershipForStage(lot.flow, st.kind, f.stageTemplate, i), plannedDate, actualDate: null, status: "pending" };
+  const base = (Array.isArray(lot.journey) && lot.journey.length > 0)
+    ? lot.journey
+    : (() => {
+        const f = FLOW_TYPES[lot.flow];
+        if (!f || !Array.isArray(f.stageTemplate)) return [];
+        const load = lot.loadingDate || null;
+        const arrive = lot.arrivalDate || null;
+        const n = f.stageTemplate.length;
+        return f.stageTemplate.map((st: any, i: number) => {
+          let plannedDate: string | null = null;
+          if (load && arrive && n > 1) {
+            const t0 = new Date(load).getTime(), t1 = new Date(arrive).getTime();
+            plannedDate = new Date(t0 + (t1 - t0) * (i / (n - 1))).toISOString().split("T")[0];
+          } else if (i === 0) plannedDate = load;
+          else if (i === n - 1) plannedDate = arrive;
+          return { seq: i + 1, kind: st.kind, label: st.label, ownership: ownershipForStage(lot.flow, st.kind, f.stageTemplate, i), plannedDate, actualDate: null, status: "pending" };
+        });
+      })();
+  // v6.1d: drive stage status from actual movements + customs. We infer how far the
+  // goods have physically progressed and mark stages done/active accordingly.
+  return applyProgressToJourney(base, lot);
+}
+
+// Map the lot's physical reality (movements + status + customs) to a "reached point"
+// index along OWNERSHIP_POINT_ORDER, then mark journey stages done/active/pending.
+function reachedPointIndex(lot: any) {
+  const movements = lot.movements || [];
+  let idx = 0; // default: at supplier / origin
+  // Receiving into a location implies arrival at that location's point.
+  const loc = locById(lot.locationId);
+  if (loc?.type === "OWN") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("our_wh"));
+  else if (loc?.type === "PORT") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("dest_port"));
+  else if (loc?.type === "CLIENT") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("client"));
+  // Status hints
+  if (lot.status === "Customs") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("dest_port"));
+  if (lot.status === "In Stock") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("our_wh"));
+  if (lot.status === "Shipped Out" || lot.status === "Delivered") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("client"));
+  // Any IN movement means at least left the supplier
+  if (movements.some((m: any) => m.type === "IN")) idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("dest_port"));
+  if (movements.some((m: any) => m.type === "SHIP_OUT")) idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("client"));
+  return idx;
+}
+
+function applyProgressToJourney(journey: any[], lot: any) {
+  if (!journey.length) return journey;
+  const reached = reachedPointIndex(lot);
+  const customs = lot.customs || {};
+  let firstPendingMarked = false;
+  return journey.map((s: any) => {
+    const point = STAGE_KIND_TO_POINT[s.kind] || "supplier";
+    const pIdx = OWNERSHIP_POINT_ORDER.indexOf(point);
+    let status = "pending";
+    if (pIdx >= 0 && pIdx < reached) {
+      status = "done";
+    } else if (pIdx >= 0 && pIdx === reached && !firstPendingMarked) {
+      status = "active";
+      firstPendingMarked = true;
+    }
+    // Customs stages reflect the customs overlay state if present.
+    if (s.kind === "customs_export" && customs.export) {
+      if (customs.export.status === "Cleared") status = "done";
+      else if (customs.export.status === "In progress") status = "active";
+    }
+    if (s.kind === "customs_import" && customs.import) {
+      if (customs.import.status === "Cleared") status = "done";
+      else if (customs.import.status === "In progress") status = "active";
+    }
+    return { ...s, status };
   });
+}
+
+// The customs clearances relevant to a lot's flow (export and/or import).
+function customsStagesForFlow(flow: string) {
+  const f = FLOW_TYPES[flow];
+  if (!f || !Array.isArray(f.stageTemplate)) return [];
+  const kinds = f.stageTemplate.map((s: any) => s.kind);
+  const out: string[] = [];
+  if (kinds.includes("customs_export")) out.push("export");
+  if (kinds.includes("customs_import")) out.push("import");
+  return out;
 }
 
 const FLOW_GROUPS = [
@@ -620,8 +685,46 @@ function MovementModal({ lot, liveSOs = [], onCancel, onConfirm }: any) {
   );
 }
 
+// ─── CUSTOMS MODAL (v6.1d) ──────────────────────────────────────────────────
+function CustomsModal({ lot, kind, brokers = [], onCancel, onConfirm }: any) {
+  const existing = (lot.customs && lot.customs[kind]) || {};
+  const [status, setStatus] = useState(existing.status || "Not started");
+  const [declRef, setDeclRef] = useState(existing.declRef || "");
+  const [brokerId, setBrokerId] = useState(existing.brokerId || "");
+  const [date, setDate] = useState(existing.date || "");
+  const [cost, setCost] = useState(existing.cost != null ? String(existing.cost) : "");
+  const [currency, setCurrency] = useState(existing.currency || "PLN");
+  const title = kind === "export" ? "Export customs clearance" : "Import customs clearance";
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90, padding: 20 }}>
+      <div style={{ width: 480, background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <strong>🛃 {title}</strong>
+          <span style={{ fontSize: 12, color: "#888" }}>{lot.number}</span>
+        </div>
+        <div style={{ padding: 20, display: "grid", gap: 12 }}>
+          <div><Lbl>Status</Lbl><Sel value={status} onChange={e => setStatus(e.target.value)}>{["Not started", "In progress", "Cleared", "Held"].map(s => <option key={s}>{s}</option>)}</Sel></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div><Lbl>Declaration ref (SAD / MRN)</Lbl><Inp value={declRef} onChange={e => setDeclRef(e.target.value)} placeholder="e.g. 26PL..." /></div>
+            <div><Lbl>Clearance date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+          </div>
+          <div><Lbl>Customs broker</Lbl><Sel value={brokerId} onChange={e => setBrokerId(e.target.value)}><option value="">— none —</option>{brokers.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}</Sel></div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+            <div><Lbl>Customs cost (flows into lot cost)</Lbl><Inp type="number" value={cost} onChange={e => setCost(e.target.value)} placeholder="0" /></div>
+            <div><Lbl>Currency</Lbl><Sel value={currency} onChange={e => setCurrency(e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+            <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button onClick={() => onConfirm(kind, { status, declRef, brokerId: brokerId ? parseInt(brokerId) : null, date, cost: parseFloat(cost) || 0, currency })} style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: "#DB2777", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save clearance</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onDelete, liveSOs }: any) {
+function LotDetail({ lot, onBack, onMove, onDelete, onCustoms, liveSOs }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -738,16 +841,18 @@ function LotDetail({ lot, onBack, onMove, onDelete, liveSOs }: any) {
                     {journey.map((s, i) => {
                       const owned = s.ownership === "owned";
                       const tagText = s.ownership === "owned" ? "OURS" : s.ownership === "not_owned" ? "not ours yet" : "client's";
-                      const dotColor = owned ? "#16A34A" : "#CBD5E1";
-                      const textColor = owned ? "#111" : "#94A3B8";
+                      const done = s.status === "done";
+                      const active = s.status === "active";
+                      const dotColor = done ? "#16A34A" : active ? "#D97706" : (owned ? "#86EFAC" : "#CBD5E1");
+                      const textColor = done || active ? "#111" : (owned ? "#334155" : "#94A3B8");
                       const last = i === journey.length - 1;
                       return (
                         <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", paddingBottom: last ? 0 : 16, position: "relative" }}>
-                          {!last && <div style={{ position: "absolute", left: 7, top: 18, bottom: 0, width: 2, background: owned ? "#BBF7D0" : "#E5E7EB" }} />}
-                          <div style={{ width: 16, height: 16, borderRadius: "50%", background: dotColor, flexShrink: 0, marginTop: 2, border: "2px solid #fff", boxShadow: "0 0 0 1px " + dotColor }} />
+                          {!last && <div style={{ position: "absolute", left: 7, top: 18, bottom: 0, width: 2, background: done ? "#16A34A" : "#E5E7EB" }} />}
+                          <div style={{ width: 16, height: 16, borderRadius: "50%", background: dotColor, flexShrink: 0, marginTop: 2, border: "2px solid #fff", boxShadow: "0 0 0 1px " + dotColor, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#fff", fontWeight: 900 }}>{done ? "✓" : ""}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: textColor }}>{s.label}</span>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: textColor }}>{s.label}{active && <span style={{ color: "#D97706", fontWeight: 700, fontSize: 10, marginLeft: 6 }}>● IN PROGRESS</span>}</span>
                               <span style={{ fontSize: 10, fontWeight: 700, color: owned ? "#16A34A" : "#94A3B8", background: owned ? "#DCFCE7" : "#F1F5F9", padding: "1px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{tagText}</span>
                             </div>
                             <div style={{ fontSize: 11, color: "#AAA", marginTop: 2 }}>
@@ -760,6 +865,40 @@ function LotDetail({ lot, onBack, onMove, onDelete, liveSOs }: any) {
                   </div>
                 </Card>
               ); })()}
+
+              {/* Customs overlay (v6.1d) — independent clearance events, editable */}
+              {(() => {
+                const kinds = customsStagesForFlow(lot.flow);
+                if (kinds.length === 0) return null;
+                const customs = lot.customs || {};
+                const statusColor = (st: string) => st === "Cleared" ? { c: "#16A34A", bg: "#DCFCE7" } : st === "In progress" ? { c: "#D97706", bg: "#FEF3C7" } : st === "Held" ? { c: "#DC2626", bg: "#FEE2E2" } : { c: "#6B7280", bg: "#F3F4F6" };
+                return (
+                  <Card style={{ marginBottom: 16 }}>
+                    <SectionTitle>CUSTOMS</SectionTitle>
+                    {kinds.map((k) => {
+                      const c = customs[k] || {};
+                      const st = c.status || "Not started";
+                      const sc = statusColor(st);
+                      return (
+                        <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 0", borderBottom: "1px solid #F3F4F6" }}>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>🛃 {k === "export" ? "Export clearance" : "Import clearance"}</div>
+                            <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>
+                              {c.declRef ? `Ref ${c.declRef}` : "No declaration ref"}{c.date ? ` · ${c.date}` : ""}
+                              {c.cost ? ` · ${fmtNum(c.cost)} ${c.currency || "PLN"}` : ""}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 10.5, fontWeight: 700, color: sc.c, background: sc.bg, padding: "2px 9px", borderRadius: 10 }}>{st}</span>
+                            <button onClick={() => onCustoms(k)} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", color: "#555" }}>Edit</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 8, fontStyle: "italic" }}>Customs cost entered here flows into the lot's cost breakdown and marks the matching journey stage.</div>
+                  </Card>
+                );
+              })()}
 
               {/* Movement history */}
               <Card style={{ marginBottom: 16 }}>
@@ -890,7 +1029,7 @@ function LotDetail({ lot, onBack, onMove, onDelete, liveSOs }: any) {
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [] }: any = {}) {
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState(INIT_LOTS);
   const lots = extLots ?? localLots;
@@ -902,8 +1041,9 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [selectedId, setSelectedId] = useState(null);
   const selected = useMemo(() => lots.find(l => l.id === selectedId) ?? null, [lots, selectedId]);
   const [showMovement, setShowMovement] = useState(false);
+  const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
   const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState("inPossession"); // inPossession | all | <specific>
+  const [filterStatus, setFilterStatus] = useState("all"); // all | inPossession | <specific>
   const [filterLocationType, setFilterLocationType] = useState("All");
   const [filterProduct, setFilterProduct] = useState("All");
   const [filterQuality, setFilterQuality] = useState("All");
@@ -991,6 +1131,24 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     setShowMovement(false);
   }
 
+  function saveCustoms(kind, data) {
+    setLots(prev => prev.map(l => {
+      if (l.id !== selected.id) return l;
+      const customs = { ...(l.customs || {}), [kind]: data };
+      // Mirror the customs cost into the lot's cost breakdown (replace any prior
+      // customs cost line for this kind, so editing doesn't double-count).
+      const tag = kind === "export" ? "Export customs" : "Import customs";
+      const fx = data.currency === "PLN" ? 1 : data.currency === "EUR" ? 4.25 : 3.9;
+      const otherCosts = (l.costs || []).filter(c => c.label !== tag);
+      const costs = data.cost > 0
+        ? [...otherCosts, { type: "customs", label: tag, source: data.declRef || "customs", amount: data.cost, currency: data.currency, pln: Math.round(data.cost * fx * 100) / 100 }]
+        : otherCosts;
+      const next = { ...l, customs, costs };
+      return next;
+    }));
+    setShowCustoms(null);
+  }
+
   function deleteLot() {
     if (!selected) return;
     if (!window.confirm(`Delete lot ${selected.number}? It will be soft-deleted.`)) return;
@@ -1001,13 +1159,16 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 
   // ── routes ──────────────────────────────────────────────────────────
   if (view === "detail" && selected) {
+    const brokers = (extContacts || []).filter((c: any) => c.type === "Broker" || c.type === "Forwarder" || (c.services || []).includes("Customs"));
     return (
       <>
         {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} onCancel={() => setShowMovement(false)} onConfirm={recordMovement} />}
+        {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
         <LotDetail
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
           onMove={() => setShowMovement(true)}
+          onCustoms={(k: any) => setShowCustoms(k)}
           onDelete={deleteLot}
           liveSOs={liveSOs}
         />
