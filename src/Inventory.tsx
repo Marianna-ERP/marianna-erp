@@ -622,6 +622,10 @@ function fmtNum(n) {
   if (n === undefined || n === null || isNaN(n)) return "—";
   return Number(n).toLocaleString("pl-PL");
 }
+function parseNum(v, fallback = 0) {
+  const n = parseFloat(v);
+  return isNaN(n) ? fallback : n;
+}
 function fmtMoney(n, cur = "PLN") {
   if (n === undefined || n === null || isNaN(n)) return "—";
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
@@ -642,68 +646,121 @@ function valueInStock(lot) {
   return (lot.physicalKg || 0) * costPerKg(lot);
 }
 
+// Replay a lot's full movement list to derive its running quantities, location and
+// status from scratch. Used whenever movements are added, edited or deleted, so the
+// lot stays consistent no matter what changed. (Replay-from-zero is valid because
+// every quantity change is represented by a movement.)
+function recomputeLotFromMovements(lot: any, movements: any[]) {
+  let receivedKg = 0, physicalKg = 0, damagedKg = 0;
+  let locationId = lot.baseLocationId ?? lot.locationId;
+  let status = lot.expectedKg && movements.length === 0 ? "Expected" : (lot.status || "Expected");
+  const ordered = [...movements].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0));
+  let sawIn = false, sawShipOut = false;
+  ordered.forEach(m => {
+    const q = parseNum(m.qtyKg);
+    switch (m.type) {
+      case "IN": receivedKg += q; physicalKg += q; locationId = m.toId; sawIn = true; break;
+      case "TRANSFER": locationId = m.toId; break;
+      case "SHIP_OUT": physicalKg = Math.max(0, physicalKg - q); locationId = m.toId || locationId; sawShipOut = true; break;
+      case "REVERSAL": physicalKg += q; break;
+      case "DAMAGE": physicalKg = Math.max(0, physicalKg - q); damagedKg += q; break;
+      case "RECLASS": break;
+      default: break;
+    }
+  });
+  // Derive status from the final physical state + location.
+  const loc = locById(locationId);
+  if (sawShipOut && physicalKg === 0) status = "Shipped Out";
+  else if (sawIn || physicalKg > 0) {
+    if (loc?.type === "OWN") status = "In Stock";
+    else if (loc?.type === "PORT") status = "Customs";
+    else if (loc?.type === "CLIENT") status = "Shipped Out";
+    else status = "In Transit";
+  } else if (movements.length === 0 && lot.expectedKg) {
+    status = "Expected";
+  }
+  return { ...lot, movements: ordered, receivedKg, physicalKg, damagedKg, locationId, status };
+}
+
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
-function MovementModal({ lot, liveSOs = [], onCancel, onConfirm }: any) {
-  // Default to TRANSFER for in-stock lots; IN for Expected lots
-  const [type, setType] = useState(lot.status === "Expected" ? "IN" : "TRANSFER");
-  const [qty, setQty] = useState("");
-  const [fromId, setFromId] = useState(lot.locationId);
-  const [toId, setToId] = useState(lot.locationId);
-  const [note, setNote] = useState("");
-  // Max-by-type: physical operations bounded by physicalKg. Generic manual SHIP_OUT
-  // is bounded by live available stock so it cannot consume kg reserved for an SO.
+function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm }: any) {
+  // Default to TRANSFER for in-stock lots; IN for Expected lots. In edit mode, prefill.
+  const [type, setType] = useState(editing?.type || (lot.status === "Expected" ? "IN" : "TRANSFER"));
+  const [qty, setQty] = useState(editing ? String(editing.qtyKg ?? "") : "");
+  const [fromId, setFromId] = useState(editing?.fromId ?? lot.locationId);
+  const [toId, setToId] = useState(editing?.toId ?? lot.locationId);
+  const [note, setNote] = useState(editing?.note || "");
+  const [date, setDate] = useState(editing?.date || today);
   const reservationState = lotReservations(lot, liveSOs);
   const liveAvailableKg = reservationState.liveAvailable;
+  // In edit mode the max should add back this movement's own effect so it isn't
+  // double-counted against itself.
+  const selfQty = editing && (editing.type === type) ? parseNum(editing.qtyKg) : 0;
   const maxByType = {
-    IN:       Infinity,                  // No upper bound on receiving more
-    TRANSFER: lot.physicalKg || 0,       // Can only move what's physically here
-    SHIP_OUT: liveAvailableKg || 0,      // Manual ship-out cannot consume reserved kg
-    DAMAGE:   lot.physicalKg || 0,       // Can only write off what's here
-    RECLASS:  lot.physicalKg || 0,       // Reclass what's here
+    IN:       Infinity,
+    TRANSFER: (lot.physicalKg || 0) + selfQty,
+    SHIP_OUT: (liveAvailableKg || 0) + selfQty,
+    DAMAGE:   (lot.physicalKg || 0) + selfQty,
+    RECLASS:  (lot.physicalKg || 0) + selfQty,
   };
   const max = maxByType[type];
   const qtyNum = parseFloat(qty) || 0;
   const isInvalid = qtyNum <= 0 || qtyNum > max;
+  const typeInfo = MOVEMENT_TYPES[type] || {};
+  const showRoute = type === "TRANSFER" || type === "IN" || type === "SHIP_OUT";
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-      <div style={{ background: "#fff", borderRadius: 14, width: 520, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 540, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px", borderBottom: "1px solid #EBEBEB" }}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>Record movement</div>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? "Edit movement" : "Record movement"}</div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
         </div>
         <div style={{ padding: 24 }}>
-          <div style={{ padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11, color: "#92400E", lineHeight: 1.45, marginBottom: 16 }}>
-            Use Inventory movement for receipt, adjustment or exceptional correction. If the movement requires a truck/forwarder/cost, create it from Shipments so transport cost and documents stay linked.
+          <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
+            <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
           </div>
+
+          <div style={{ marginBottom: 4 }}><Lbl>Movement type</Lbl>
+            <Sel value={type} onChange={e => setType(e.target.value)}>
+              {Object.entries(MOVEMENT_TYPES).filter(([k]) => k !== "REVERSAL").map(([k, v]: any) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+            </Sel>
+          </div>
+          {/* Live plain-language description of the selected type */}
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#F8FAFC", border: "1px solid #EEF2F7", borderRadius: 8, padding: "8px 10px", marginBottom: 14 }}>
+            <span style={{ color: typeInfo.color, fontWeight: 800, fontSize: 14, lineHeight: 1 }}>{typeInfo.icon}</span>
+            <span style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.4 }}>{typeInfo.desc}{type === "IN" ? " — increases stock on hand." : type === "TRANSFER" ? " — same quantity, new location." : type === "SHIP_OUT" ? " — reduces stock on hand. Use for an EXW sale where the client collects with their own truck (no transport on our side)." : type === "DAMAGE" ? " — reduces stock on hand and records a write-off." : type === "RECLASS" ? " — no quantity change." : ""}</span>
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div>
-              <Lbl>Movement type</Lbl>
-              <Sel value={type} onChange={e => setType(e.target.value)}>
-                {Object.entries(MOVEMENT_TYPES).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
-              </Sel>
-            </div>
             <div>
               <Lbl>Quantity (kg) <span style={{ color: "#AAA", fontWeight: 400 }}>· max {max === Infinity ? "∞" : max.toLocaleString()}</span></Lbl>
               <Inp value={qty} onChange={e => setQty(e.target.value)} type="number" placeholder="0" />
             </div>
+            <div>
+              <Lbl>Date</Lbl>
+              <Inp value={date} onChange={e => setDate(e.target.value)} type="date" />
+            </div>
           </div>
-          {(type === "TRANSFER" || type === "IN" || type === "SHIP_OUT") && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+
+          {showRoute && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 24px 1fr", gap: 8, alignItems: "end", marginBottom: 12 }}>
               <div>
-                <Lbl>From</Lbl>
+                <Lbl>{type === "IN" ? "Received from" : "From"}</Lbl>
                 <Sel value={fromId} onChange={e => setFromId(parseInt(e.target.value))}>
                   {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
                 </Sel>
               </div>
+              <div style={{ textAlign: "center", paddingBottom: 9, color: "#94A3B8", fontSize: 16 }}>→</div>
               <div>
-                <Lbl>To</Lbl>
+                <Lbl>{type === "SHIP_OUT" ? "Shipped to" : "To"}</Lbl>
                 <Sel value={toId} onChange={e => setToId(parseInt(e.target.value))}>
                   {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
                 </Sel>
               </div>
             </div>
           )}
+
           <div style={{ marginBottom: 18 }}>
             <Lbl>Note</Lbl>
             <Inp value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Reserved for SO-2026-0094 (Biedronka)" />
@@ -715,9 +772,9 @@ function MovementModal({ lot, liveSOs = [], onCancel, onConfirm }: any) {
           )}
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm({ type, qtyKg: qtyNum, fromId, toId, note })} disabled={isInvalid}
+            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date })} disabled={isInvalid}
               style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: isInvalid ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: isInvalid ? "not-allowed" : "pointer" }}>
-              Record movement
+              {editing ? "Save changes" : "Record movement"}
             </button>
           </div>
         </div>
@@ -765,7 +822,7 @@ function CustomsModal({ lot, kind, brokers = [], onCancel, onConfirm }: any) {
 }
 
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onDelete, onCustoms, liveSOs }: any) {
+function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, liveSOs }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -962,13 +1019,17 @@ function LotDetail({ lot, onBack, onMove, onDelete, onCustoms, liveSOs }: any) {
                         <div key={i} style={{ display: "flex", gap: 14, paddingBottom: 14, position: "relative" }}>
                           <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff", border: `2px solid ${mt.color}`, color: mt.color, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, zIndex: 1 }}>{mt.icon}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
                               <div style={{ fontSize: 12.5 }}>
                                 <span style={{ fontWeight: 600, color: mt.color }}>{mt.label}</span>
                                 <span style={{ color: "#444", marginLeft: 6 }}>· {fmtNum(m.qtyKg)} kg</span>
                                 {isMove && <span style={{ color: "#666", marginLeft: 6 }}>· {fromLoc?.name} → {toLoc?.name}</span>}
                               </div>
-                              <div style={{ fontSize: 11, color: "#AAA", whiteSpace: "nowrap" }}>{m.date}</div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                                <span style={{ fontSize: 11, color: "#AAA" }}>{m.date}</span>
+                                {onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#555" }}>Edit</button>}
+                                {onDeleteMovement && <button onClick={() => onDeleteMovement(m.id)} title="Delete movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #FECACA", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#DC2626" }}>✕</button>}
+                              </div>
                             </div>
                             {m.note && <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{m.note}</div>}
                           </div>
@@ -1085,6 +1146,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [selectedId, setSelectedId] = useState(null);
   const selected = useMemo(() => lots.find(l => l.id === selectedId) ?? null, [lots, selectedId]);
   const [showMovement, setShowMovement] = useState(false);
+  const [editingMovement, setEditingMovement] = useState(null);
   const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all"); // all | inPossession | <specific>
@@ -1123,56 +1185,34 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality]);
 
   // ── mutations ───────────────────────────────────────────────────────
-  function recordMovement({ type, qtyKg, fromId, toId, note }: any) {
+  function recordMovement({ id, type, qtyKg, fromId, toId, note, date }: any) {
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
-      const m = { id: Date.now(), date: today, type, qtyKg, fromId, toId, note };
-      const next = { ...l, movements: [...l.movements, m] };
-      switch (type) {
-        case "IN":
-          // Receiving stock: bumps both receivedKg (cumulative) and physicalKg (currently here)
-          next.receivedKg = (next.receivedKg || 0) + qtyKg;
-          next.physicalKg = (next.physicalKg || 0) + qtyKg;
-          next.locationId = toId;
-          break;
-        case "TRANSFER":
-          // Physical move — physicalKg unchanged, location updates
-          next.locationId = toId;
-          break;
-        case "SHIP_OUT":
-          // Goods physically leave — decrement physicalKg
-          next.physicalKg = Math.max(0, (next.physicalKg || 0) - qtyKg);
-          break;
-        case "DAMAGE":
-          // Write-off — decrement physicalKg, bump damagedKg
-          next.physicalKg = Math.max(0, (next.physicalKg || 0) - qtyKg);
-          next.damagedKg = (next.damagedKg || 0) + qtyKg;
-          break;
-        case "RECLASS":
-          // Quality grade change — recorded in movement, no quantity change
-          // (Future: split into two sub-lots — Phase 2)
-          break;
-        default: break;
+      // Capture a stable base location for replay (origin before any movement).
+      const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      let movements;
+      if (id != null) {
+        // EDIT: replace the existing movement by id.
+        movements = (l.movements || []).map(m => m.id === id ? { ...m, type, qtyKg, fromId, toId, note, date } : m);
+      } else {
+        // ADD: append a new movement.
+        movements = [...(l.movements || []), { id: Date.now(), date: date || today, type, qtyKg, fromId, toId, note }];
       }
-      // Auto-status transitions based on physical state
-      if (type === "TRANSFER") {
-        const newLoc = locById(toId);
-        if (newLoc?.type === "OWN") next.status = "In Stock";
-        else if (newLoc?.type === "PORT") next.status = "Customs";
-        // CLIENT location is reached via SHIP_OUT, not TRANSFER (in this model)
-      }
-      if (type === "SHIP_OUT" && next.physicalKg === 0) {
-        next.status = "Shipped Out";
-      }
-      if (type === "IN" && next.status === "Expected") {
-        const newLoc = locById(toId);
-        if (newLoc?.type === "OWN") next.status = "In Stock";
-        else if (newLoc?.type === "PORT") next.status = "Customs";
-        else next.status = "In Transit";
-      }
-      return next;
+      // Recompute all derived quantities/status/location from the full movement list.
+      return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
     }));
     setShowMovement(false);
+    setEditingMovement(null);
+  }
+
+  function deleteMovement(movId) {
+    if (!window.confirm("Delete this movement? Stock will be recalculated.")) return;
+    setLots(prev => prev.map(l => {
+      if (l.id !== selected.id) return l;
+      const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      const movements = (l.movements || []).filter(m => m.id !== movId);
+      return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
+    }));
   }
 
   function saveCustoms(kind, data) {
@@ -1206,12 +1246,14 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     const brokers = (extContacts || []).filter((c: any) => c.type === "Broker" || c.type === "Forwarder" || (c.services || []).includes("Customs"));
     return (
       <>
-        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} onCancel={() => setShowMovement(false)} onConfirm={recordMovement} />}
+        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
         {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
         <LotDetail
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
-          onMove={() => setShowMovement(true)}
+          onMove={() => { setEditingMovement(null); setShowMovement(true); }}
+          onEditMovement={(m: any) => { setEditingMovement(m); setShowMovement(true); }}
+          onDeleteMovement={deleteMovement}
           onCustoms={(k: any) => setShowCustoms(k)}
           onDelete={deleteLot}
           liveSOs={liveSOs}
