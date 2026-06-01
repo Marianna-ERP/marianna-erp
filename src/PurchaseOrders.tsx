@@ -142,9 +142,13 @@ const STATUS_LIFECYCLE = ["Draft", "Confirmed", "In Production", "Shipped", "Arr
 // Destination location pool (mirrors Inventory/Shipments)
 const LOCATION_TYPES: Record<string, any> = {
   OWN:      { label: "Our Warehouse",  color: "#0284C7", icon: "🏢" },
+  SUPPLIER: { label: "Supplier Site",  color: "#16A34A", icon: "🚜" },
   PORT:     { label: "Port / Transit", color: "#D97706", icon: "⚓" },
   CLIENT:   { label: "Client Site",    color: "#7C3AED", icon: "🎯" },
+  BROKER:   { label: "Customs / Broker", color: "#DB2777", icon: "🛃" },
 };
+const DEFAULT_LOCATION_TYPE = { label: "Location", color: "#6B7280", icon: "📍" };
+function locType(t: string) { return LOCATION_TYPES[t] || DEFAULT_LOCATION_TYPE; }
 // LOCATIONS now comes from the shared ./locations source of truth.
 // Mapped so the legacy single-word `type` field still works in existing UI code.
 const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
@@ -1008,7 +1012,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     return sortedTypes.map(t => {
                       const locs = LOCATIONS.filter(l => l.type === t);
                       if (locs.length === 0) return null;
-                      const label = `${LOCATION_TYPES[t].icon} ${LOCATION_TYPES[t].label}${preferred === t ? "  · typical for this flow" : ""}`;
+                      const label = `${locType(t).icon} ${locType(t).label}${preferred === t ? "  · typical for this flow" : ""}`;
                       return (
                         <optgroup key={t} label={label}>
                           {locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}

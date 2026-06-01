@@ -464,6 +464,9 @@ function blankTransportUnit(mode = "Road") {
     blNumber: "",
     awbNumber: "",
     shippingLine: "",
+    actualLoadDate: "",
+    actualUnloadDate: "",
+    costAmount: 0,
     notes: "",
   };
 }
@@ -1212,6 +1215,11 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
                   <div><Lbl>Seal</Lbl><Inp value={u.sealNumber || ""} onChange={e => updateVehicle(i, ui, "sealNumber", e.target.value)} /></div>
                   <div><Lbl>BL / AWB</Lbl><Inp value={[u.blNumber, u.awbNumber].filter(Boolean).join(" / ")} onChange={e => { const parts = String(e.target.value).split("/").map(x => x.trim()); updateVehicle(i, ui, "blNumber", parts[0] || ""); updateVehicle(i, ui, "awbNumber", parts[1] || ""); }} /></div>
                 </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
+                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} /></div>
+                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" value={u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "actualUnloadDate", e.target.value)} /></div>
+                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Real per-truck loading/unloading dates — separate from the leg's planned pickup/delivery on the transport order.</div>
+                </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Price for this unit</Lbl><Inp type="number" value={u.costAmount || ""} onChange={e => updateVehicle(i, ui, "costAmount", parseNum(e.target.value))} placeholder="0" /></div>
                   <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Optional — set this when each truck/container has a different price. The transport order totals all unit prices for the carrier.</div>
@@ -1553,6 +1561,7 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
                 {(u.truckPlate || u.trailerPlate || u.driverName || leg.mode === "Road" || leg.mode === "Rail") && <div>Truck: <strong>{u.truckPlate || u.vehiclePlate || "TBA"}</strong> / trailer {u.trailerPlate || "TBA"} · Driver: {u.driverName || "TBA"} {u.driverPhone ? `(${u.driverPhone})` : ""}</div>}
                 {(u.containerNumber || u.sealNumber || u.blNumber || leg.mode === "Sea") && <div>Container: <strong>{u.containerNumber || "TBA"}</strong> / seal {u.sealNumber || "TBA"} · BL {u.blNumber || "pending"} · Booking {u.bookingNumber || "TBA"}</div>}
                 {(u.awbNumber || leg.mode === "Air") && <div>AWB: <strong>{u.awbNumber || "TBA"}</strong></div>}
+                {(u.actualLoadDate || u.actualUnloadDate) && <div>Actual: loaded <strong>{u.actualLoadDate || "—"}</strong> · unloaded <strong>{u.actualUnloadDate || "—"}</strong></div>}
               </div>
             )) : <div>Transport unit details: TBA</div>}
           </div>

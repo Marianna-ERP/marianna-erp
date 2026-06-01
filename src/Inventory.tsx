@@ -9,7 +9,16 @@ const LOCATION_TYPES: Record<string, any> = {
   SUPPLIER: { label: "Supplier Site",   color: "#16A34A", bg: "#DCFCE7", icon: "🚜" },
   PORT:     { label: "Port / Transit",  color: "#D97706", bg: "#FEF3C7", icon: "⚓" },
   CLIENT:   { label: "Client Site",     color: "#7C3AED", bg: "#EDE9FE", icon: "🎯" },
+  BROKER:   { label: "Customs / Broker", color: "#DB2777", bg: "#FCE7F3", icon: "🛃" },
+  CUSTOMS:  { label: "Customs",         color: "#DB2777", bg: "#FCE7F3", icon: "🛃" },
 };
+
+// Safe lookup: never throws if a location carries a type not in the table above
+// (e.g. a new legacyType added later). Falls back to a neutral default.
+const DEFAULT_LOCATION_TYPE = { label: "Location", color: "#6B7280", bg: "#F3F4F6", icon: "📍" };
+function locType(t: string) {
+  return LOCATION_TYPES[t] || DEFAULT_LOCATION_TYPE;
+}
 
 // LOCATIONS now comes from the shared ./locations source of truth. We map the
 // rich `type` back onto the legacy single-word `type` field that this module's
@@ -418,7 +427,7 @@ function QualityBadge({ quality }: any) {
 function LocationPill({ locationId }: any) {
   const loc = locById(locationId);
   if (!loc) return <span style={{ color: "#CCC" }}>—</span>;
-  const t = LOCATION_TYPES[loc.type];
+  const t = locType(loc.type);
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#444" }}>
       <span style={{ fontSize: 11 }}>{t.icon}</span>
@@ -528,13 +537,13 @@ function MovementModal({ lot, liveSOs = [], onCancel, onConfirm }: any) {
               <div>
                 <Lbl>From</Lbl>
                 <Sel value={fromId} onChange={e => setFromId(parseInt(e.target.value))}>
-                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{LOCATION_TYPES[l.type].icon} {l.name}</option>)}
+                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
                 </Sel>
               </div>
               <div>
                 <Lbl>To</Lbl>
                 <Sel value={toId} onChange={e => setToId(parseInt(e.target.value))}>
-                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{LOCATION_TYPES[l.type].icon} {l.name}</option>)}
+                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
                 </Sel>
               </div>
             </div>
@@ -982,7 +991,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>LOCATION</span>
           {["All", ...Object.keys(LOCATION_TYPES)].map(t => (
             <button key={t} onClick={() => setFilterLocationType(t)} style={chipStyle(filterLocationType === t)}>
-              {t === "All" ? "All" : `${LOCATION_TYPES[t].icon} ${LOCATION_TYPES[t].label}`}
+              {t === "All" ? "All" : `${locType(t).icon} ${locType(t).label}`}
             </button>
           ))}
         </div>
