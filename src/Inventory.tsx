@@ -821,8 +821,93 @@ function CustomsModal({ lot, kind, brokers = [], onCancel, onConfirm }: any) {
   );
 }
 
+// ─── INSPECTION MODAL (v6.2) ────────────────────────────────────────────────
+const INSPECTION_CONTEXTS = [
+  { code: "arrival", label: "Arrival QC (our inspection on receipt)" },
+  { code: "warehouse", label: "Warehouse-reported (during storage)" },
+  { code: "client", label: "Client feedback (after delivery)" },
+  { code: "customs", label: "Customs examination" },
+];
+const INSPECTION_OUTCOMES = [
+  { code: "ok", label: "Passed — no issue" },
+  { code: "weight_loss", label: "Weight loss / shrinkage" },
+  { code: "damage", label: "Damaged / spoiled (write-off)" },
+  { code: "downgrade", label: "Quality downgrade" },
+  { code: "rejection", label: "Client rejection" },
+];
+function InspectionModal({ lot, onCancel, onConfirm }: any) {
+  const [context, setContext] = useState("arrival");
+  const [date, setDate] = useState(today);
+  const [outcome, setOutcome] = useState("ok");
+  const [lossKg, setLossKg] = useState("");
+  const [findings, setFindings] = useState("");
+  const [proposeCN, setProposeCN] = useState(false);
+  const [cnAmount, setCnAmount] = useState("");
+  const [cnCurrency, setCnCurrency] = useState(lot.currency || "PLN");
+  const affectsStock = outcome === "weight_loss" || outcome === "damage" || outcome === "rejection";
+  const maxLoss = lot.physicalKg || 0;
+  const lossNum = parseFloat(lossKg) || 0;
+  const lossInvalid = affectsStock && (lossNum <= 0 || lossNum > maxLoss);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 95, padding: 20 }}>
+      <div style={{ width: 540, maxHeight: "88vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <strong>🔍 Record inspection</strong>
+          <span style={{ fontSize: 12, color: "#888" }}>{lot.number} · {lot.product}</span>
+        </div>
+        <div style={{ padding: 20, display: "grid", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+            <div><Lbl>When / context</Lbl><Sel value={context} onChange={e => setContext(e.target.value)}>{INSPECTION_CONTEXTS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}</Sel></div>
+            <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+          </div>
+          <div><Lbl>Outcome</Lbl><Sel value={outcome} onChange={e => setOutcome(e.target.value)}>{INSPECTION_OUTCOMES.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}</Sel></div>
+          {affectsStock && (
+            <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: 12 }}>
+              <Lbl>Affected quantity (kg) · max {maxLoss.toLocaleString()}</Lbl>
+              <Inp type="number" value={lossKg} onChange={e => setLossKg(e.target.value)} placeholder="0" />
+              <div style={{ fontSize: 10.5, color: "#9A3412", marginTop: 6 }}>This records a write-off movement that reduces stock on hand by this amount.</div>
+            </div>
+          )}
+          <div><Lbl>Findings / notes</Lbl>
+            <textarea value={findings} onChange={e => setFindings(e.target.value)} rows={3}
+              style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }}
+              placeholder="e.g. 3% shrinkage on arrival; soft fruit in 2 pallets; client reported mould on delivery" />
+          </div>
+          <div style={{ borderTop: "1px solid #F3F4F6", paddingTop: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+              <input type="checkbox" checked={proposeCN} onChange={e => setProposeCN(e.target.checked)} />
+              Propose a credit note for this inspection
+            </label>
+            {proposeCN && (
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginTop: 10 }}>
+                <div><Lbl>Proposed credit amount</Lbl><Inp type="number" value={cnAmount} onChange={e => setCnAmount(e.target.value)} placeholder="0" /></div>
+                <div><Lbl>Currency</Lbl><Sel value={cnCurrency} onChange={e => setCnCurrency(e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
+                <div style={{ gridColumn: "span 2", fontSize: 10.5, color: "#92400E", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "6px 9px" }}>This records a <strong>proposed</strong> credit note on the lot. Issuing it formally happens in the Invoicing module (later).</div>
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+            <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button
+              disabled={lossInvalid || (proposeCN && (parseFloat(cnAmount) || 0) <= 0)}
+              onClick={() => onConfirm({
+                context, date, outcome,
+                lossKg: affectsStock ? lossNum : 0,
+                findings,
+                creditNote: proposeCN ? { amount: parseFloat(cnAmount) || 0, currency: cnCurrency } : null,
+              })}
+              style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: (lossInvalid || (proposeCN && (parseFloat(cnAmount) || 0) <= 0)) ? "#D1D5DB" : "#0E7490", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              Save inspection
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, liveSOs }: any) {
+function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1001,6 +1086,30 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
                 );
               })()}
 
+              {/* Inspections (v6.2) — recordable at any stage */}
+              <Card style={{ marginBottom: 16 }}>
+                <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ Record inspection</button>}>INSPECTIONS{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
+                {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No inspections recorded. Record one when goods are checked on arrival, in storage, by a client, or at customs.</div>}
+                {(lot.inspections || []).map((ins, i) => {
+                  const ctx = INSPECTION_CONTEXTS.find(c => c.code === ins.context);
+                  const out = INSPECTION_OUTCOMES.find(o => o.code === ins.outcome);
+                  const bad = ins.outcome !== "ok";
+                  return (
+                    <div key={i} style={{ padding: "10px 0", borderBottom: i < lot.inspections.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111" }}>🔍 {ctx ? ctx.label.split(" (")[0] : ins.context}</div>
+                        <span style={{ fontSize: 10.5, color: "#AAA" }}>{ins.date}</span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: bad ? "#B91C1C" : "#16A34A", fontWeight: 600, marginTop: 3 }}>
+                        {out ? out.label : ins.outcome}{ins.lossKg ? ` · −${fmtNum(ins.lossKg)} kg` : ""}
+                      </div>
+                      {ins.findings && <div style={{ fontSize: 11.5, color: "#666", marginTop: 3 }}>{ins.findings}</div>}
+                      {ins.creditNote && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "4px 8px", display: "inline-block" }}>Proposed credit note: {fmtNum(ins.creditNote.amount)} {ins.creditNote.currency} (to be issued in Invoicing)</div>}
+                    </div>
+                  );
+                })}
+              </Card>
+
               {/* Movement history */}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>MOVEMENT HISTORY ({lot.movements.length})</SectionTitle>
@@ -1148,6 +1257,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [showMovement, setShowMovement] = useState(false);
   const [editingMovement, setEditingMovement] = useState(null);
   const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
+  const [showInspection, setShowInspection] = useState(false);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all"); // all | inPossession | <specific>
   const [filterLocationType, setFilterLocationType] = useState("All");
@@ -1233,6 +1343,27 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     setShowCustoms(null);
   }
 
+  function saveInspection(data) {
+    setLots(prev => prev.map(l => {
+      if (l.id !== selected.id) return l;
+      const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      const inspections = [...(l.inspections || []), {
+        context: data.context, date: data.date, outcome: data.outcome,
+        lossKg: data.lossKg || 0, findings: data.findings || "",
+        creditNote: data.creditNote || null,
+      }];
+      let movements = l.movements || [];
+      // A weight-loss / damage / rejection outcome records a DAMAGE write-off movement.
+      if (data.lossKg > 0) {
+        const label = data.outcome === "weight_loss" ? "Inspection: weight loss" : data.outcome === "rejection" ? "Inspection: client rejection" : "Inspection: damage";
+        movements = [...movements, { id: Date.now(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${data.findings ? " — " + data.findings : ""}` }];
+      }
+      const recomputed = recomputeLotFromMovements({ ...l, baseLocationId, inspections }, movements);
+      return recomputed;
+    }));
+    setShowInspection(false);
+  }
+
   function deleteLot() {
     if (!selected) return;
     if (!window.confirm(`Delete lot ${selected.number}? It will be soft-deleted.`)) return;
@@ -1248,6 +1379,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       <>
         {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
         {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
+        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
@@ -1255,6 +1387,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           onEditMovement={(m: any) => { setEditingMovement(m); setShowMovement(true); }}
           onDeleteMovement={deleteMovement}
           onCustoms={(k: any) => setShowCustoms(k)}
+          onInspect={() => setShowInspection(true)}
           onDelete={deleteLot}
           liveSOs={liveSOs}
         />
