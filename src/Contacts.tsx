@@ -1114,6 +1114,22 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
               </div>
             </div>
 
+            {/* Duplicate resolution — choose how to handle the whole import */}
+            {duplicateCount > 0 && (
+              <div style={{ padding: "10px 24px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11.5, color: "#92400E", fontWeight: 600 }}>Duplicates found — how to handle?</span>
+                <button onClick={() => setParsedRows(rows => rows.map(r => ({ ...r, _selected: true })))}
+                  style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#92400E", cursor: "pointer", fontWeight: 600 }}>
+                  Import all (incl. duplicates)
+                </button>
+                <button onClick={() => setParsedRows(rows => rows.map(r => ({ ...r, _selected: !r._duplicate })))}
+                  style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#92400E", cursor: "pointer", fontWeight: 600 }}>
+                  Keep originals (skip duplicates)
+                </button>
+                <span style={{ fontSize: 11, color: "#B45309" }}>…or tick/untick individual rows below to choose.</span>
+              </div>
+            )}
+
             {/* Filters + bulk actions */}
             <div style={{ padding: "10px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / NIP / country…" style={{ flex: "1 1 220px", minWidth: 180, border: "1px solid #E5E7EB", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, outline: "none" }} />

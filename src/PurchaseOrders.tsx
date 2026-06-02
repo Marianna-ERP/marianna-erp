@@ -1688,7 +1688,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
       if (filterStatus === "Active" && !activeStatuses.has(o.status)) return false;
       if (filterStatus !== "All" && filterStatus !== "Active" && o.status !== filterStatus) return false;
       if (filterFlow !== "All" && o.flow !== filterFlow) return false;
-      if (filterSupplier !== "All" && o.supplier?.name !== filterSupplier) return false;
+      if (filterSupplier !== "All" && !(o.supplier?.name || "").toLowerCase().includes(filterSupplier.toLowerCase())) return false;
       if (q) {
         const hay = `${o.number} ${o.supplier?.name || ""} ${o.items.map(i => i.product).join(" ")} ${o.linkedShipments?.join(" ") || ""} ${o.linkedLots?.join(" ") || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -1895,29 +1895,23 @@ ${blockNote}`.trim(),
         </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
-        {/* KPI strip */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginTop: 6 }}>{activeCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>Draft → Shipped</div>
-          </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ARRIVED · NOT CLOSED</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: arrivedCount > 0 ? "#16A34A" : "#111", marginTop: 6 }}>{arrivedCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>awaiting invoicing</div>
-          </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>PENDING VALUE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginTop: 6 }}>{fmtMoney(pendingValue, "PLN")}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>all active + arrived</div>
-          </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>LOADING OVERDUE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: overdueLoading > 0 ? "#DC2626" : "#111", marginTop: 6 }}>{overdueLoading}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>POs past loading date</div>
-          </Card>
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
+        {/* KPI strip — compact */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+          {[
+            { label: "ACTIVE", value: activeCount, color: "#111", sub: "Draft → Shipped" },
+            { label: "ARRIVED · NOT CLOSED", value: arrivedCount, color: arrivedCount > 0 ? "#16A34A" : "#111", sub: "awaiting invoicing" },
+            { label: "PENDING VALUE", value: fmtMoney(pendingValue, "PLN"), color: "#111", sub: "all active + arrived" },
+            { label: "LOADING OVERDUE", value: overdueLoading, color: overdueLoading > 0 ? "#DC2626" : "#111", sub: "past loading date" },
+          ].map((k, i) => (
+            <div key={i} style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.04em" }}>{k.label}</div>
+                <div style={{ fontSize: 11, color: "#BBB", marginTop: 1 }}>{k.sub}</div>
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: k.color, whiteSpace: "nowrap" }}>{k.value}</div>
+            </div>
+          ))}
         </div>
 
         {/* Filters */}
@@ -1948,12 +1942,17 @@ ${blockNote}`.trim(),
         ))}
         <div style={{ height: 10 }} />
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>SUPPLIER</span>
-          <button onClick={() => setFilterSupplier("All")} style={chipStyle(filterSupplier === "All")}>All</button>
-          {suppliers.map(s => (
-            <button key={s.id} onClick={() => setFilterSupplier(s.name)} style={chipStyle(filterSupplier === s.name)}>{s.name}</button>
-          ))}
+          <input
+            value={filterSupplier === "All" ? "" : filterSupplier}
+            onChange={e => setFilterSupplier(e.target.value || "All")}
+            placeholder="Type to filter by supplier name…"
+            style={{ flex: "1 1 260px", minWidth: 220, border: "1px solid #E5E7EB", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, outline: "none", background: "#fff" }}
+          />
+          {filterSupplier !== "All" && (
+            <button onClick={() => setFilterSupplier("All")} style={{ fontSize: 11, padding: "5px 10px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", color: "#555" }}>Clear</button>
+          )}
         </div>
 
         {/* Table */}

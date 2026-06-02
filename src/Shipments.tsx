@@ -448,6 +448,20 @@ function providerCosts(shipment, providerId) {
   return [];
 }
 
+// Mode-driven field prefill: fields irrelevant to a leg/unit's mode get "TBA" (only
+// when empty — never overwrites typed values, always editable). Used both when a mode
+// is chosen in the editor and when the editor first loads existing legs.
+function applyModeTBA(obj: any, mode: string) {
+  const out = { ...obj };
+  const fill = (k: string) => { if (!out[k] || out[k] === "") out[k] = "TBA"; };
+  if (mode === "Road") {
+    ["containerNumber", "sealNumber", "bookingNumber", "blNumber", "shippingLine"].forEach(fill);
+  } else if (mode === "Sea" || mode === "Rail" || mode === "Air") {
+    ["vehiclePlate", "truckPlate", "trailerPlate", "driverName", "driverPhone"].forEach(fill);
+  }
+  return out;
+}
+
 function blankTransportUnit(mode = "Road") {
   return {
     id: Date.now() + Math.round(Math.random() * 100000),
@@ -1060,23 +1074,20 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
 }
 
 function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
-  const [draft, setDraft] = useState(JSON.parse(JSON.stringify(shipment)));
+  const [draft, setDraft] = useState(() => {
+    const d = JSON.parse(JSON.stringify(shipment));
+    // Apply the mode-driven TBA prefill to existing legs/units on load, so the
+    // initial leg follows the same rule as legs added later.
+    d.legs = (d.legs || []).map((l: any) => {
+      const leg = applyModeTBA(l, l.mode);
+      leg.vehicles = (l.vehicles || l.transportUnits || []).map((u: any) => applyModeTBA(u, u.mode || l.mode));
+      return leg;
+    });
+    return d;
+  });
   const roadProviders = logisticsProviders(contacts, "Road");
   const seaProviders = logisticsProviders(contacts, "Sea");
   function sf(k, v) { setDraft(prev => ({ ...prev, [k]: v })); }
-  // v6.x: when a leg/unit mode is chosen, the fields irrelevant to that mode are
-  // prefilled with "TBA" (only if empty — never overwrites typed values, always
-  // editable). Road has no container/sea fields; Sea/Rail/Air have no truck fields.
-  function applyModeTBA(obj, mode) {
-    const out = { ...obj };
-    const fill = (k) => { if (!out[k] || out[k] === "") out[k] = "TBA"; };
-    if (mode === "Road") {
-      ["containerNumber", "sealNumber", "bookingNumber", "blNumber", "shippingLine"].forEach(fill);
-    } else if (mode === "Sea" || mode === "Rail" || mode === "Air") {
-      ["vehiclePlate", "truckPlate", "trailerPlate", "driverName", "driverPhone"].forEach(fill);
-    }
-    return out;
-  }
   function updateLeg(idx, k, v) {
     setDraft(prev => ({ ...prev, legs: (prev.legs || []).map((l, i) => {
       if (i !== idx) return l;
@@ -1206,6 +1217,16 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
               <div><Lbl>Delivery</Lbl><Inp type="date" value={String(leg.plannedDeliveryDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedDeliveryDate", e.target.value)} /></div>
               <div><Lbl>&nbsp;</Lbl>{(draft.legs || []).length > 2 && <SmallButton onClick={() => removeLeg(i)}>Remove</SmallButton>}</div>
             </div>
+            {(() => {
+              if (i === 0) return null;
+              const prev = (draft.legs || [])[i - 1];
+              const prevDeliver = String(prev?.plannedDeliveryDate || "").slice(0, 10);
+              const thisPickup = String(leg.plannedPickupDate || "").slice(0, 10);
+              if (prevDeliver && thisPickup && thisPickup < prevDeliver) {
+                return <div style={{ marginTop: 8, padding: "6px 10px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, fontSize: 11, color: "#B91C1C" }}>⚠ This leg's pickup ({thisPickup}) is before the previous leg's delivery ({prevDeliver}). Legs run in sequence — the cargo must arrive before the next leg can start.</div>;
+              }
+              return null;
+            })()}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 9, marginTop: 9 }}>
               <div><Lbl>Truck plate</Lbl><Inp value={leg.vehiclePlate} onChange={e => updateLeg(i, "vehiclePlate", e.target.value)} /></div>
               <div><Lbl>Trailer plate</Lbl><Inp value={leg.trailerPlate} onChange={e => updateLeg(i, "trailerPlate", e.target.value)} /></div>
@@ -1432,8 +1453,8 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
         <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={locationTextFromFields(lastLeg.toLocationId || shipment.destinationLocationId, lastLeg.toCustom || shipment.destinationCustom)} />
         <FieldPrint en="Customs clearance" pl="Odprawa celna" value={shipment.customsClearance || (broker ? `${broker.name}\n${broker.address || ""}` : "TBA")} />
         <FieldPrint en="Temperature" pl="Temperatura" value={tempText} />
-        <FieldPrint en="Loading date" pl="Data zaladunku" value={shipment.loadingDate || firstLeg.plannedPickupDate || "TBA"} />
-        <FieldPrint en="Expected delivery date" pl="Data rozladunku" value={shipment.expectedDeliveryDate || lastLeg.plannedDeliveryDate || "TBA"} />
+        <FieldPrint en="Loading date" pl="Data zaladunku" value={firstLeg.plannedPickupDate || shipment.loadingDate || "TBA"} />
+        <FieldPrint en="Expected delivery date" pl="Data rozladunku" value={lastLeg.plannedDeliveryDate || shipment.expectedDeliveryDate || "TBA"} />
         <FieldPrint en="Goods" pl="Towar" value="Food goods - clean trailer / Towar spozywczy - czysta naczepa" />
         <FieldPrint en={`Agreed price for this ${providerRole.toLowerCase()} order`} pl="Uzgodniony fracht dla tego zlecenia" value={agreedPriceText} />
       </div>
