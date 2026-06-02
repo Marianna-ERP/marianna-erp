@@ -791,7 +791,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
 
           <div style={{ marginBottom: 4 }}><Lbl>Movement type</Lbl>
             <Sel value={type} onChange={e => setType(e.target.value)}>
-              {Object.entries(MOVEMENT_TYPES).filter(([k]) => k !== "REVERSAL").map(([k, v]: any) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+              {Object.entries(MOVEMENT_TYPES).filter(([k]) => k !== "REVERSAL" && k !== "DAMAGE" && k !== "RECLASS").map(([k, v]: any) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
             </Sel>
           </div>
           {/* Live plain-language description of the selected type */}
@@ -897,19 +897,29 @@ const INSPECTION_CONTEXTS = [
   { code: "customs", label: "Customs examination" },
 ];
 const INSPECTION_OUTCOMES = [
-  { code: "ok", label: "Passed — no issue" },
+  { code: "damage", label: "Damage / spoiled (write-off)" },
   { code: "weight_loss", label: "Weight loss / shrinkage" },
-  { code: "damage", label: "Damaged / spoiled (write-off)" },
-  { code: "downgrade", label: "Quality downgrade" },
+  { code: "reclass", label: "Reclassify (quality downgrade)" },
   { code: "rejection", label: "Client rejection" },
+  { code: "ok", label: "Checked — no action" },
+];
+// Where the problem occurred → which invoice a credit note would target.
+const CN_TARGETS = [
+  { code: "supplier", label: "Supplier invoice (goods fault at origin)" },
+  { code: "carrier", label: "Carrier invoice (1st leg — road damage/temperature)" },
+  { code: "forwarder", label: "Forwarder invoice (sea leg — reefer/temperature)" },
+  { code: "client", label: "Client sales invoice (we credit the client)" },
+  { code: "other", label: "Other / to be decided" },
 ];
 function InspectionModal({ lot, onCancel, onConfirm }: any) {
   const [context, setContext] = useState("arrival");
   const [date, setDate] = useState(today);
-  const [outcome, setOutcome] = useState("ok");
+  const [outcome, setOutcome] = useState("damage");
   const [lossKg, setLossKg] = useState("");
+  const [whereNote, setWhereNote] = useState("");
   const [findings, setFindings] = useState("");
-  const [proposeCN, setProposeCN] = useState(false);
+  const [proposeCN, setProposeCN] = useState(true);
+  const [cnTarget, setCnTarget] = useState("supplier");
   const [cnAmount, setCnAmount] = useState("");
   const [cnCurrency, setCnCurrency] = useState(lot.currency || "PLN");
   const affectsStock = outcome === "weight_loss" || outcome === "damage" || outcome === "rejection";
@@ -918,39 +928,46 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
   const lossInvalid = affectsStock && (lossNum <= 0 || lossNum > maxLoss);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 95, padding: 20 }}>
-      <div style={{ width: 540, maxHeight: "88vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
+      <div style={{ width: 560, maxHeight: "90vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <strong>🔍 Record inspection</strong>
+          <strong>⚠ Record quality issue</strong>
           <span style={{ fontSize: 12, color: "#888" }}>{lot.number} · {lot.product}</span>
         </div>
         <div style={{ padding: 20, display: "grid", gap: 12 }}>
+          <div style={{ fontSize: 11.5, color: "#64748B", lineHeight: 1.5, background: "#F8FAFC", border: "1px solid #EEF2F7", borderRadius: 8, padding: "8px 10px" }}>
+            Record a damage, weight loss, downgrade or rejection found at any point — on arrival, in storage, at customs, or reported by the client after delivery. A quality issue can be the basis for a credit note against whichever invoice carries the fault.
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
             <div><Lbl>When / context</Lbl><Sel value={context} onChange={e => setContext(e.target.value)}>{INSPECTION_CONTEXTS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}</Sel></div>
             <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
           </div>
-          <div><Lbl>Outcome</Lbl><Sel value={outcome} onChange={e => setOutcome(e.target.value)}>{INSPECTION_OUTCOMES.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}</Sel></div>
+          <div><Lbl>Issue type</Lbl><Sel value={outcome} onChange={e => setOutcome(e.target.value)}>{INSPECTION_OUTCOMES.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}</Sel></div>
+          <div><Lbl>Where it happened (free note)</Lbl>
+            <Inp value={whereNote} onChange={e => setWhereNote(e.target.value)} placeholder="e.g. collapsed on 1st leg (bad driving); reefer too warm on sea leg; mould reported by client" />
+          </div>
           {affectsStock && (
             <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: 12 }}>
               <Lbl>Affected quantity (kg) · max {maxLoss.toLocaleString()}</Lbl>
               <Inp type="number" value={lossKg} onChange={e => setLossKg(e.target.value)} placeholder="0" />
-              <div style={{ fontSize: 10.5, color: "#9A3412", marginTop: 6 }}>This records a write-off movement that reduces stock on hand by this amount.</div>
+              <div style={{ fontSize: 10.5, color: "#9A3412", marginTop: 6 }}>Records a write-off movement that reduces stock on hand by this amount. (Reclassify does not change quantity.)</div>
             </div>
           )}
-          <div><Lbl>Findings / notes</Lbl>
-            <textarea value={findings} onChange={e => setFindings(e.target.value)} rows={3}
+          <div><Lbl>Findings / detail</Lbl>
+            <textarea value={findings} onChange={e => setFindings(e.target.value)} rows={2}
               style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }}
-              placeholder="e.g. 3% shrinkage on arrival; soft fruit in 2 pallets; client reported mould on delivery" />
+              placeholder="What was found, photo reference, which pallets, etc." />
           </div>
           <div style={{ borderTop: "1px solid #F3F4F6", paddingTop: 12 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer", fontWeight: 600 }}>
               <input type="checkbox" checked={proposeCN} onChange={e => setProposeCN(e.target.checked)} />
-              Propose a credit note for this inspection
+              Propose a credit note for this issue
             </label>
             {proposeCN && (
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginTop: 10 }}>
-                <div><Lbl>Proposed credit amount</Lbl><Inp type="number" value={cnAmount} onChange={e => setCnAmount(e.target.value)} placeholder="0" /></div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                <div style={{ gridColumn: "span 2" }}><Lbl>Credit note against</Lbl><Sel value={cnTarget} onChange={e => setCnTarget(e.target.value)}>{CN_TARGETS.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
+                <div><Lbl>Proposed amount</Lbl><Inp type="number" value={cnAmount} onChange={e => setCnAmount(e.target.value)} placeholder="0" /></div>
                 <div><Lbl>Currency</Lbl><Sel value={cnCurrency} onChange={e => setCnCurrency(e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
-                <div style={{ gridColumn: "span 2", fontSize: 10.5, color: "#92400E", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "6px 9px" }}>This records a <strong>proposed</strong> credit note on the lot. Issuing it formally happens in the Invoicing module (later).</div>
+                <div style={{ gridColumn: "span 2", fontSize: 10.5, color: "#92400E", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "6px 9px" }}>Records a <strong>proposed</strong> credit note on the lot, tagged to the chosen invoice. Formal issuing happens in the Invoicing module (later).</div>
               </div>
             )}
           </div>
@@ -961,11 +978,11 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
               onClick={() => onConfirm({
                 context, date, outcome,
                 lossKg: affectsStock ? lossNum : 0,
-                findings,
-                creditNote: proposeCN ? { amount: parseFloat(cnAmount) || 0, currency: cnCurrency } : null,
+                whereNote, findings,
+                creditNote: proposeCN ? { amount: parseFloat(cnAmount) || 0, currency: cnCurrency, target: cnTarget } : null,
               })}
-              style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: (lossInvalid || (proposeCN && (parseFloat(cnAmount) || 0) <= 0)) ? "#D1D5DB" : "#0E7490", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-              Save inspection
+              style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: (lossInvalid || (proposeCN && (parseFloat(cnAmount) || 0) <= 0)) ? "#D1D5DB" : "#DC2626", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              Save quality issue
             </button>
           </div>
         </div>
@@ -998,6 +1015,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Inventory</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
           <button onClick={onMove} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Record movement</button>
+          <button onClick={onInspect} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -1072,7 +1090,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
             <div>
               {/* Journey (v6.1b) — planned stages from the PO flow, with ownership coding */}
-              {(() => { const journey = journeyForLot(lot, shipments || [], liveSOs || []); return journey.length > 0 && (
+              {(() => { if (lot.category === "packaging") return null; const journey = journeyForLot(lot, shipments || [], liveSOs || []); return journey.length > 0 && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>JOURNEY · {journey.length} STAGES</SectionTitle>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>
@@ -1148,25 +1166,27 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
                 );
               })()}
 
-              {/* Inspections (v6.2) — recordable at any stage */}
+              {/* Quality issues — recordable at any stage; basis for credit notes */}
               <Card style={{ marginBottom: 16 }}>
-                <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ Record inspection</button>}>INSPECTIONS{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
-                {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No inspections recorded. Record one when goods are checked on arrival, in storage, by a client, or at customs.</div>}
+                <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>⚠ Record quality issue</button>}>QUALITY ISSUES{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
+                {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No quality issues recorded. Use “Record quality issue” for damage, weight loss, downgrade or client rejection — found on arrival, in storage, at customs, on a transport leg, or reported by the client after delivery.</div>}
                 {(lot.inspections || []).map((ins, i) => {
                   const ctx = INSPECTION_CONTEXTS.find(c => c.code === ins.context);
                   const out = INSPECTION_OUTCOMES.find(o => o.code === ins.outcome);
+                  const cnt = ins.creditNote && CN_TARGETS.find(t => t.code === ins.creditNote.target);
                   const bad = ins.outcome !== "ok";
                   return (
                     <div key={i} style={{ padding: "10px 0", borderBottom: i < lot.inspections.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111" }}>🔍 {ctx ? ctx.label.split(" (")[0] : ins.context}</div>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111" }}>⚠ {ctx ? ctx.label.split(" (")[0] : ins.context}</div>
                         <span style={{ fontSize: 10.5, color: "#AAA" }}>{ins.date}</span>
                       </div>
                       <div style={{ fontSize: 11.5, color: bad ? "#B91C1C" : "#16A34A", fontWeight: 600, marginTop: 3 }}>
                         {out ? out.label : ins.outcome}{ins.lossKg ? ` · −${fmtNum(ins.lossKg)} kg` : ""}
                       </div>
-                      {ins.findings && <div style={{ fontSize: 11.5, color: "#666", marginTop: 3 }}>{ins.findings}</div>}
-                      {ins.creditNote && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "4px 8px", display: "inline-block" }}>Proposed credit note: {fmtNum(ins.creditNote.amount)} {ins.creditNote.currency} (to be issued in Invoicing)</div>}
+                      {ins.whereNote && <div style={{ fontSize: 11.5, color: "#444", marginTop: 3 }}><span style={{ color: "#888" }}>Where:</span> {ins.whereNote}</div>}
+                      {ins.findings && <div style={{ fontSize: 11.5, color: "#666", marginTop: 2 }}>{ins.findings}</div>}
+                      {ins.creditNote && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "4px 8px", display: "inline-block" }}>Proposed credit note: {fmtNum(ins.creditNote.amount)} {ins.creditNote.currency}{cnt ? ` · against ${cnt.label.split(" (")[0]}` : ""} (to be issued in Invoicing)</div>}
                     </div>
                   );
                 })}
@@ -1405,20 +1425,60 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     setShowCustoms(null);
   }
 
+  function addPackaging() {
+    const name = window.prompt("Packaging material name (e.g. Wooden crate 30×40, Carton 5 kg, EUR pallet):", "");
+    if (!name) return;
+    const qty = parseFloat(window.prompt("Quantity received into our warehouse (units):", "0") || "0") || 0;
+    // A packaging material is a simple lot: category "packaging", lives at our WH,
+    // no flow/journey/quality machinery. It uses the same movement engine (IN to
+    // receive, SHIP_OUT or a shipment to dispatch to a supplier).
+    const ownWh = LOCATIONS.find(l => l.type === "OWN");
+    const baseLoc = ownWh ? ownWh.id : (LOCATIONS[0] && LOCATIONS[0].id);
+    const id = Date.now();
+    const lot = {
+      id, number: `PKG-${new Date().getFullYear()}-${String(id).slice(-4)}`,
+      category: "packaging",
+      product: name, size: "", quality: "", origin: "",
+      flow: null, directFlow: false,
+      poRef: null, soRef: null,
+      expectedKg: 0, receivedKg: 0, physicalKg: 0, damagedKg: 0,
+      unit: "units",
+      locationId: baseLoc, baseLocationId: baseLoc,
+      status: "In Stock",
+      currency: "PLN",
+      costs: [], movements: [], journey: [], inspections: [],
+      customs: {}, notes: "Packaging material — own stock, dispatched to suppliers.",
+      createdAt: today,
+    };
+    let withQty = lot;
+    if (qty > 0) {
+      withQty = recomputeLotFromMovements({ ...lot }, [{ id: id + 1, date: today, type: "IN", qtyKg: qty, fromId: baseLoc, toId: baseLoc, note: "Packaging received into our warehouse" }]);
+    }
+    setLots(prev => [...prev, withQty]);
+    setSelectedId(id);
+    setView("detail");
+  }
+
   function saveInspection(data) {
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
       const inspections = [...(l.inspections || []), {
         context: data.context, date: data.date, outcome: data.outcome,
-        lossKg: data.lossKg || 0, findings: data.findings || "",
+        lossKg: data.lossKg || 0, whereNote: data.whereNote || "", findings: data.findings || "",
         creditNote: data.creditNote || null,
       }];
       let movements = l.movements || [];
-      // A weight-loss / damage / rejection outcome records a DAMAGE write-off movement.
+      // Damage / weight-loss / rejection write off stock via a DAMAGE movement.
       if (data.lossKg > 0) {
-        const label = data.outcome === "weight_loss" ? "Inspection: weight loss" : data.outcome === "rejection" ? "Inspection: client rejection" : "Inspection: damage";
-        movements = [...movements, { id: Date.now(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${data.findings ? " — " + data.findings : ""}` }];
+        const label = data.outcome === "weight_loss" ? "Quality: weight loss" : data.outcome === "rejection" ? "Quality: client rejection" : "Quality: damage";
+        const detail = [data.whereNote, data.findings].filter(Boolean).join(" — ");
+        movements = [...movements, { id: Date.now(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${detail ? " — " + detail : ""}` }];
+      }
+      // Reclassify records a RECLASS movement (no quantity change) for the audit trail.
+      if (data.outcome === "reclass") {
+        const detail = [data.whereNote, data.findings].filter(Boolean).join(" — ");
+        movements = [...movements, { id: Date.now() + 1, date: data.date || today, type: "RECLASS", qtyKg: 0, fromId: l.locationId, toId: l.locationId, note: `Quality: reclassify${detail ? " — " + detail : ""}` }];
       }
       const recomputed = recomputeLotFromMovements({ ...l, baseLocationId, inspections }, movements);
       return recomputed;
@@ -1463,8 +1523,10 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>
       {/* Top bar */}
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Inventory Lots</div>
-        <div style={{ marginLeft: "auto", fontSize: 12, color: "#AAA" }}>Phase 1 — lot tracking · cost view · movements</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Inventory</div>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={addPackaging} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ New packaging material</button>
+        </div>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
