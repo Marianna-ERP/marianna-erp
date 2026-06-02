@@ -872,9 +872,10 @@ function SmallButton({ children, onClick, kind = "default", disabled = false, ti
   const green = kind === "green";
   const amber = kind === "amber";
   const red = kind === "red";
+  const blue = kind === "blue";
   const bg = disabled ? "#F3F4F6" : dark ? "#111" : green ? "#16A34A" : amber ? "#D97706" : red ? "#DC2626" : "#fff";
-  const color = disabled ? "#AAA" : dark || green || amber || red ? "#fff" : "#444";
-  const border = dark || green || amber || red ? "none" : "1px solid #E5E7EB";
+  const color = disabled ? "#AAA" : dark || green || amber || red ? "#fff" : blue ? "#2563EB" : "#444";
+  const border = dark || green || amber || red ? "none" : blue ? "1px solid #2563EB" : "1px solid #E5E7EB";
   return <button disabled={disabled} title={title} onClick={onClick} style={{ padding: "7px 11px", borderRadius: 7, border, background: bg, color, fontSize: 12, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{children}</button>;
 }
 function EmptyState({ title, sub }: any) {
@@ -1021,7 +1022,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           <SectionTitle>Dates and temperature</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div><Lbl>Loading date</Lbl><Inp type="date" value={form.loadingDate} onChange={e => sf("loadingDate", e.target.value)} /></div>
-            <div><Lbl>Delivery date</Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
+            <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
             <div><Lbl>Temp min C</Lbl><Inp type="number" value={form.temperatureMinC} onChange={e => sf("temperatureMinC", e.target.value)} /></div>
             <div><Lbl>Temp max C</Lbl><Inp type="number" value={form.temperatureMaxC} onChange={e => sf("temperatureMaxC", e.target.value)} /></div>
           </div>
@@ -1052,7 +1053,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="dark" onClick={create}>Create shipment</SmallButton>
+        <SmallButton kind="green" onClick={create}>Create shipment</SmallButton>
       </div>
     </div>
   </div>;
@@ -1063,8 +1064,26 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
   const roadProviders = logisticsProviders(contacts, "Road");
   const seaProviders = logisticsProviders(contacts, "Sea");
   function sf(k, v) { setDraft(prev => ({ ...prev, [k]: v })); }
+  // v6.x: when a leg/unit mode is chosen, the fields irrelevant to that mode are
+  // prefilled with "TBA" (only if empty — never overwrites typed values, always
+  // editable). Road has no container/sea fields; Sea/Rail/Air have no truck fields.
+  function applyModeTBA(obj, mode) {
+    const out = { ...obj };
+    const fill = (k) => { if (!out[k] || out[k] === "") out[k] = "TBA"; };
+    if (mode === "Road") {
+      ["containerNumber", "sealNumber", "bookingNumber", "blNumber", "shippingLine"].forEach(fill);
+    } else if (mode === "Sea" || mode === "Rail" || mode === "Air") {
+      ["vehiclePlate", "truckPlate", "trailerPlate", "driverName", "driverPhone"].forEach(fill);
+    }
+    return out;
+  }
   function updateLeg(idx, k, v) {
-    setDraft(prev => ({ ...prev, legs: (prev.legs || []).map((l, i) => i === idx ? { ...l, [k]: v } : l) }));
+    setDraft(prev => ({ ...prev, legs: (prev.legs || []).map((l, i) => {
+      if (i !== idx) return l;
+      let next = { ...l, [k]: v };
+      if (k === "mode") next = applyModeTBA(next, v);
+      return next;
+    }) }));
   }
   function updateGood(idx, k, v) {
     setDraft(prev => ({ ...prev, goods: (prev.goods || []).map((g, i) => i === idx ? { ...g, [k]: v } : g) }));
@@ -1101,7 +1120,12 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
       legs: (prev.legs || []).map((leg, i) => {
         if (i !== legIdx) return leg;
         const units = transportUnitsForLeg(leg);
-        const nextUnits = (units.length ? units : [blankTransportUnit(leg.mode)]).map((u, ui) => ui === unitIdx ? { ...u, [k]: v } : u);
+        const nextUnits = (units.length ? units : [blankTransportUnit(leg.mode)]).map((u, ui) => {
+          if (ui !== unitIdx) return u;
+          let nu = { ...u, [k]: v };
+          if (k === "mode") nu = applyModeTBA(nu, v);
+          return nu;
+        });
         return { ...leg, vehicles: nextUnits };
       })
     }));
@@ -1155,7 +1179,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
             <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             <div><Lbl>Loading date</Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} /></div>
-            <div><Lbl>Expected delivery</Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
+            <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
             <div><Lbl>Vehicles</Lbl><Inp type="number" value={draft.vehicleCount} onChange={e => sf("vehicleCount", parseNum(e.target.value, 1))} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
@@ -1198,7 +1222,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
             <div style={{ marginTop: 12, borderTop: "1px dashed #CBD5E1", paddingTop: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Transport units for this leg · trucks / containers / AWB</div>
-                <SmallButton onClick={() => addVehicle(i)}>+ Add unit</SmallButton>
+                <SmallButton kind="green" onClick={() => addVehicle(i)}>+ Add unit</SmallButton>
               </div>
               {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => <div key={u.id || ui} style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#FCFCFD" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -1246,7 +1270,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
           </div>)}
         </Card>
         <Card>
-          <SectionTitle right={<SmallButton onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
+          <SectionTitle right={<SmallButton kind="green" onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
           {(draft.costs || []).map((c, i) => <div key={c.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.7fr 0.6fr 0.8fr 1fr 1fr 0.5fr", gap: 8, marginBottom: 8 }}>
             <div><Lbl>Type</Lbl><Sel value={c.type} onChange={e => updateCost(i, "type", e.target.value)}>{COST_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
             <div><Lbl>Supplier</Lbl><Sel value={c.supplierId || ""} onChange={e => updateCost(i, "supplierId", e.target.value ? parseNum(e.target.value) : null)}>{logisticsProviders(contacts).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
@@ -1408,8 +1432,8 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
         <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={locationTextFromFields(lastLeg.toLocationId || shipment.destinationLocationId, lastLeg.toCustom || shipment.destinationCustom)} />
         <FieldPrint en="Customs clearance" pl="Odprawa celna" value={shipment.customsClearance || (broker ? `${broker.name}\n${broker.address || ""}` : "TBA")} />
         <FieldPrint en="Temperature" pl="Temperatura" value={tempText} />
-        <FieldPrint en="Loading date" pl="Data zaladunku" value={firstLeg.plannedPickupDate || shipment.loadingDate || "TBA"} />
-        <FieldPrint en="Delivery date" pl="Data rozladunku" value={lastLeg.plannedDeliveryDate || shipment.expectedDeliveryDate || "TBA"} />
+        <FieldPrint en="Loading date" pl="Data zaladunku" value={shipment.loadingDate || firstLeg.plannedPickupDate || "TBA"} />
+        <FieldPrint en="Expected delivery date" pl="Data rozladunku" value={shipment.expectedDeliveryDate || lastLeg.plannedDeliveryDate || "TBA"} />
         <FieldPrint en="Goods" pl="Towar" value="Food goods - clean trailer / Towar spozywczy - czysta naczepa" />
         <FieldPrint en={`Agreed price for this ${providerRole.toLowerCase()} order`} pl="Uzgodniony fracht dla tego zlecenia" value={agreedPriceText} />
       </div>
@@ -1549,7 +1573,7 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}>{r}</span>)}{(shipment.soRefs || []).map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}>{r}</span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <SmallButton onClick={onEdit}>Edit</SmallButton>
+          <SmallButton kind="blue" onClick={onEdit}>✎ Edit</SmallButton>
           <SmallButton onClick={onPrint} kind="dark">Transport order</SmallButton>
           <SmallButton onClick={onEmail} kind="blue">Email order</SmallButton>
           <SmallButton onClick={() => onQuickStatus("Confirmed")}>Confirm</SmallButton>
@@ -1831,7 +1855,7 @@ export default function Shipments({
       <div style={{ maxWidth: 1460, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
           <div><div style={{ fontSize: 23, fontWeight: 850, letterSpacing: "-0.4px" }}>Shipments / Logistics</div><div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>Road, sea and multimodal transport tracking, carrier confirmation, BL/container data, freight costs and costing allocation.</div></div>
-          <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={exportJson}>Export JSON</SmallButton><SmallButton onClick={() => onNavigate("contacts")}>Open contacts</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="dark">+ New shipment</SmallButton></div>
+          <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={exportJson}>Export JSON</SmallButton><SmallButton onClick={() => onNavigate("contacts")}>Open contacts</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
           <Kpi label="OPEN SHIPMENTS" value={kpis.open} sub="not closed / not cancelled" />

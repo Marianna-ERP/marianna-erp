@@ -82,10 +82,7 @@ function standardStageLabel(kind: string, flow: string) {
   const buy = incotermFamily(flow, "buy");
   switch (kind) {
     case "supplier":
-      return buy === "EXW" ? "EXW — at supplier (ex works)"
-           : buy === "FOB" ? "At supplier (before FOB)"
-           : buy === "CIF" ? "At supplier (supplier ships CIF)"
-           : buy === "DDP" ? "At supplier (supplier delivers DDP)"
+      return buy === "EXW" ? "EXW — at supplier"
            : "At supplier";
     case "transit_road": return "Road carriage";
     case "transit_sea":  return buy === "CIF" ? "Sea freight (CIF — supplier's risk)" : "Sea freight";
@@ -127,7 +124,7 @@ function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?
   return "owned";
 }
 // On-the-fly journey for a lot that has a flow but no stored journey (seed/old lots).
-function journeyForLot(lot: any) {
+function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = []) {
   const base = (Array.isArray(lot.journey) && lot.journey.length > 0)
     ? lot.journey
     : (() => {
@@ -146,56 +143,127 @@ function journeyForLot(lot: any) {
           return { seq: i + 1, kind: st.kind, label: st.label, ownership: ownershipForStage(lot.flow, st.kind, f.stageTemplate, i), plannedDate, actualDate: null, status: "pending" };
         });
       })();
-  // v6.1d: drive stage status from actual movements + customs. We infer how far the
-  // goods have physically progressed and mark stages done/active accordingly.
-  return applyProgressToJourney(base, lot);
+  // Drive each stage's status + actual date from real shipment legs, customs,
+  // movements and SO status (mapping legs to stages by mode/sequence).
+  return applyProgressToJourney(base, lot, shipments, orders);
 }
 
 // Map the lot's physical reality (movements + status + customs) to a "reached point"
 // index along OWNERSHIP_POINT_ORDER, then mark journey stages done/active/pending.
-function reachedPointIndex(lot: any) {
-  const movements = lot.movements || [];
-  let idx = 0; // default: at supplier / origin
-  // Receiving into a location implies arrival at that location's point.
-  const loc = locById(lot.locationId);
-  if (loc?.type === "OWN") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("our_wh"));
-  else if (loc?.type === "PORT") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("dest_port"));
-  else if (loc?.type === "CLIENT") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("client"));
-  // Status hints
-  if (lot.status === "Customs") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("dest_port"));
-  if (lot.status === "In Stock") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("our_wh"));
-  if (lot.status === "Shipped Out" || lot.status === "Delivered") idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("client"));
-  // Any IN movement means at least left the supplier
-  if (movements.some((m: any) => m.type === "IN")) idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("dest_port"));
-  if (movements.some((m: any) => m.type === "SHIP_OUT")) idx = Math.max(idx, OWNERSHIP_POINT_ORDER.indexOf("client"));
-  return idx;
+// Find the shipment(s) that carry this lot (by lotRef / poRef / soRef).
+function shipmentsForLot(lot: any, shipments: any[]) {
+  if (!Array.isArray(shipments)) return [];
+  return shipments.filter((sh: any) => {
+    const lotRefs = sh.lotRefs || [];
+    const poRefs = sh.poRefs || [];
+    const soRefs = sh.soRefs || [];
+    return (lot.number && lotRefs.includes(lot.number))
+        || (lot.poRef && poRefs.includes(lot.poRef))
+        || (lot.soRef && soRefs.includes(lot.soRef));
+  });
 }
 
-function applyProgressToJourney(journey: any[], lot: any) {
+// Pull ordered legs (by their natural order) from the lot's shipments, tagged by mode.
+function legsForLot(lot: any, shipments: any[]) {
+  const shs = shipmentsForLot(lot, shipments);
+  const legs: any[] = [];
+  shs.forEach((sh: any) => (sh.legs || []).forEach((lg: any) => legs.push(lg)));
+  return legs;
+}
+function legActualLoad(leg: any) {
+  if (!leg) return null;
+  // Prefer a per-unit actual load date, else the leg's actual loading date.
+  const units = leg.transportUnits || leg.units || [];
+  const u = units.find((x: any) => x.actualLoadDate);
+  return (u && u.actualLoadDate) || leg.actualLoadingDate || null;
+}
+function legActualDeliver(leg: any) {
+  if (!leg) return null;
+  const units = leg.transportUnits || leg.units || [];
+  const u = units.find((x: any) => x.actualUnloadDate);
+  return (u && u.actualUnloadDate) || leg.actualDeliveryDate || null;
+}
+
+// v6.x: drive each journey stage's status + actual date from real data — matching
+// shipment legs to stages by mode/sequence, plus customs, movements and SO status.
+function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [], orders: any[] = []) {
   if (!journey.length) return journey;
-  const reached = reachedPointIndex(lot);
   const customs = lot.customs || {};
-  let firstPendingMarked = false;
-  return journey.map((s: any) => {
-    const point = STAGE_KIND_TO_POINT[s.kind] || "supplier";
-    const pIdx = OWNERSHIP_POINT_ORDER.indexOf(point);
+  const movements = lot.movements || [];
+  const legs = legsForLot(lot, shipments);
+  const roadLegs = legs.filter((l: any) => l.mode === "Road");
+  const seaLeg = legs.find((l: any) => l.mode === "Sea");
+  const so = lot.soRef ? (orders || []).find((o: any) => o.number === lot.soRef) : null;
+  const soDelivered = so && (so.status === "Delivered" || so.status === "Invoiced");
+
+  const firstInMove = movements.find((m: any) => m.type === "IN");
+  const shipOutMove = movements.find((m: any) => m.type === "SHIP_OUT");
+  const ownMove = [...movements].reverse().find((m: any) => { const lc = locById(m.toId); return lc?.type === "OWN"; });
+  const portMove = [...movements].reverse().find((m: any) => { const lc = locById(m.toId); return lc?.type === "PORT"; });
+
+  // Track which road leg each transit_road stage uses (first road = pre-carriage,
+  // a later transit_road = on-carriage → last road leg).
+  let roadIdx = 0;
+
+  return journey.map((s: any, i: number) => {
     let status = "pending";
-    if (pIdx >= 0 && pIdx < reached) {
-      status = "done";
-    } else if (pIdx >= 0 && pIdx === reached && !firstPendingMarked) {
-      status = "active";
-      firstPendingMarked = true;
+    let actualDate: string | null = s.actualDate || null;
+
+    switch (s.kind) {
+      case "supplier":
+        // Goods are ready at the supplier once the lot exists (PO confirmed).
+        status = "done"; actualDate = actualDate || lot.loadingDate || s.plannedDate || null;
+        break;
+      case "transit_road": {
+        const leg = roadLegs[Math.min(roadIdx, roadLegs.length - 1)];
+        roadIdx += 1;
+        const d = legActualLoad(leg);
+        if (d) { status = "done"; actualDate = d; }
+        break;
+      }
+      case "origin_port": {
+        // Loaded at port of loading: the (first) road leg has delivered, or the sea leg loaded.
+        const d = legActualDeliver(roadLegs[0]) || legActualLoad(seaLeg);
+        if (d) { status = "done"; actualDate = d; }
+        break;
+      }
+      case "customs_export":
+        if (customs.export?.status === "Cleared") { status = "done"; actualDate = customs.export.date || actualDate; }
+        else if (customs.export?.status === "In progress") status = "active";
+        break;
+      case "transit_sea": {
+        const d = legActualLoad(seaLeg);
+        if (d) { status = "done"; actualDate = d; }
+        break;
+      }
+      case "dest_port": {
+        const d = legActualDeliver(seaLeg) || (portMove && portMove.date);
+        if (d) { status = "done"; actualDate = d; }
+        break;
+      }
+      case "customs_import":
+        if (customs.import?.status === "Cleared") { status = "done"; actualDate = customs.import.date || actualDate; }
+        else if (customs.import?.status === "In progress") status = "active";
+        break;
+      case "our_wh":
+        if (ownMove || lot.status === "In Stock") { status = "done"; actualDate = (ownMove && ownMove.date) || actualDate; }
+        break;
+      case "client":
+        if (shipOutMove || soDelivered || lot.status === "Shipped Out" || lot.status === "Delivered") {
+          status = "done"; actualDate = (shipOutMove && shipOutMove.date) || actualDate;
+        }
+        break;
+      default: break;
     }
-    // Customs stages reflect the customs overlay state if present.
-    if (s.kind === "customs_export" && customs.export) {
-      if (customs.export.status === "Cleared") status = "done";
-      else if (customs.export.status === "In progress") status = "active";
+    return { ...s, status, actualDate };
+  }).map((s: any, i: number, arr: any[]) => {
+    // The first non-done stage becomes "active" (current frontier, shown orange).
+    if (s.status === "pending") {
+      const anyEarlierActive = arr.slice(0, i).some((x: any) => x.status === "active");
+      const allEarlierDone = arr.slice(0, i).every((x: any) => x.status === "done");
+      if (allEarlierDone && !anyEarlierActive) return { ...s, status: "active" };
     }
-    if (s.kind === "customs_import" && customs.import) {
-      if (customs.import.status === "Cleared") status = "done";
-      else if (customs.import.status === "In progress") status = "active";
-    }
-    return { ...s, status };
+    return s;
   });
 }
 
@@ -907,7 +975,7 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
 }
 
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs }: any) {
+function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -929,7 +997,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Inventory</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          <button onClick={onMove} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #111", background: "#111", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Record movement</button>
+          <button onClick={onMove} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Record movement</button>
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -955,35 +1023,25 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
             </div>
           </div>
 
-          {/* Qty breakdown bar — five numbers showing the lifecycle */}
+          {/* Qty breakdown — compact: five figures + a proportion bar */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>QUANTITY BREAKDOWN</SectionTitle>
-            <div style={{ marginBottom: 14, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-              <div><div style={{ fontSize: 10, color: "#888" }}>EXPECTED</div><div style={{ fontSize: 16, fontWeight: 600, color: "#555" }}>{fmtNum(lot.expectedKg)} kg</div></div>
-              <div><div style={{ fontSize: 10, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>{fmtNum(lot.receivedKg)} kg</div></div>
-              <div title="Live: physicalKg − reservations from pre-dispatch SOs"><div style={{ fontSize: 10, color: "#16A34A" }}>AVAILABLE (live)</div><div style={{ fontSize: 16, fontWeight: 700, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} kg</div></div>
-              <div title="From Confirmed/Reserved/Loading SOs"><div style={{ fontSize: 10, color: "#7C3AED" }}>RESERVED (live)</div><div style={{ fontSize: 16, fontWeight: 700, color: "#7C3AED" }}>{fmtNum(res.totalReserved)} kg</div></div>
-              <div><div style={{ fontSize: 10, color: "#DC2626" }}>DAMAGED</div><div style={{ fontSize: 16, fontWeight: 700, color: "#DC2626" }}>{fmtNum(lot.damagedKg)} kg</div></div>
+            <div style={{ marginBottom: 10, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+              <div><div style={{ fontSize: 9.5, color: "#888" }}>EXPECTED</div><div style={{ fontSize: 13.5, fontWeight: 600, color: "#555" }}>{fmtNum(lot.expectedKg)} kg</div></div>
+              <div><div style={{ fontSize: 9.5, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#111" }}>{fmtNum(lot.receivedKg)} kg</div></div>
+              <div title="Live: physicalKg − reservations from pre-dispatch SOs"><div style={{ fontSize: 9.5, color: "#16A34A" }}>AVAILABLE</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} kg</div></div>
+              <div title="From Confirmed/Reserved/Loading SOs"><div style={{ fontSize: 9.5, color: "#7C3AED" }}>RESERVED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#7C3AED" }}>{fmtNum(res.totalReserved)} kg</div></div>
+              <div><div style={{ fontSize: 9.5, color: "#DC2626" }}>DAMAGED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#DC2626" }}>{fmtNum(lot.damagedKg)} kg</div></div>
             </div>
             {totalKg > 0 && (
-              <>
-                <div style={{ display: "flex", height: 12, borderRadius: 6, overflow: "hidden", border: "1px solid #F3F4F6" }}>
-                  {segments.map((s, i) => (
-                    <div key={i} title={`${s.key}: ${s.kg.toLocaleString()} kg`} style={{ background: s.color, width: `${(s.kg / totalKg) * 100}%` }} />
-                  ))}
-                </div>
-                <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 11, color: "#888", flexWrap: "wrap" }}>
-                  {segments.map((s, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      <div style={{ width: 8, height: 8, background: s.color, borderRadius: 2 }} />
-                      <span>{s.key}: {fmtNum(s.kg)} kg ({((s.kg / totalKg) * 100).toFixed(1)}%)</span>
-                    </div>
-                  ))}
-                </div>
-              </>
+              <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", border: "1px solid #F3F4F6" }} title={segments.map(s => `${s.key}: ${s.kg.toLocaleString()} kg`).join("  ·  ")}>
+                {segments.map((s, i) => (
+                  <div key={i} title={`${s.key}: ${s.kg.toLocaleString()} kg (${((s.kg / totalKg) * 100).toFixed(1)}%)`} style={{ background: s.color, width: `${(s.kg / totalKg) * 100}%` }} />
+                ))}
+              </div>
             )}
             {variance !== 0 && lot.receivedKg > 0 && (
-              <div style={{ marginTop: 14, padding: "10px 12px", background: variance < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${variance < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 8, fontSize: 12, color: variance < 0 ? "#92400E" : "#1E40AF" }}>
+              <div style={{ marginTop: 10, padding: "8px 10px", background: variance < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${variance < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 8, fontSize: 11.5, color: variance < 0 ? "#92400E" : "#1E40AF" }}>
                 <strong>{variance > 0 ? "Surplus" : "Shortfall"}:</strong> {Math.abs(variance).toLocaleString()} kg ({((variance / lot.expectedKg) * 100).toFixed(2)}%) vs PO {lot.poRef}.
                 {variance < 0 ? " Common causes: moisture loss in transit, weight check at port, damage. Consider raising a damage report if responsibility lies with carrier or supplier." : " Higher than ordered — confirm with supplier."}
               </div>
@@ -1014,7 +1072,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
             <div>
               {/* Journey (v6.1b) — planned stages from the PO flow, with ownership coding */}
-              {(() => { const journey = journeyForLot(lot); return journey.length > 0 && (
+              {(() => { const journey = journeyForLot(lot, shipments || [], liveSOs || []); return journey.length > 0 && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>JOURNEY · {journey.length} STAGES</SectionTitle>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>
@@ -1041,8 +1099,12 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
                               <span style={{ fontSize: 13, fontWeight: owned ? 700 : 500, color: textColor }}>{labelText}{active && <span style={{ color: "#D97706", fontWeight: 700, fontSize: 10, marginLeft: 6 }}>● IN PROGRESS</span>}</span>
                               <span style={{ fontSize: 10, fontWeight: 700, color: owned ? "#16A34A" : "#9CA3AF", background: owned ? "#DCFCE7" : "#F3F4F6", padding: "1px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{tagText}</span>
                             </div>
-                            <div style={{ fontSize: 11, color: owned ? "#9CA3AF" : "#CBD5E1", marginTop: 2 }}>
-                              {s.plannedDate ? `planned ${s.plannedDate}` : "date TBA"}{s.actualDate ? ` · actual ${s.actualDate}` : ""} · {s.status}
+                            <div style={{ fontSize: 11, marginTop: 2, color: done ? "#9CA3AF" : active ? "#D97706" : "#9CA3AF" }}>
+                              {done
+                                ? `${s.actualDate || s.plannedDate || ""} · done`
+                                : active
+                                  ? `${s.plannedDate ? "planned " + s.plannedDate : "date TBA"} · in progress`
+                                  : `${s.plannedDate ? "planned " + s.plannedDate : "date TBA"}`}
                             </div>
                           </div>
                         </div>
@@ -1076,7 +1138,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
                           </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <span style={{ fontSize: 10.5, fontWeight: 700, color: sc.c, background: sc.bg, padding: "2px 9px", borderRadius: 10 }}>{st}</span>
-                            <button onClick={() => onCustoms(k)} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", color: "#555" }}>Edit</button>
+                            <button onClick={() => onCustoms(k)} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #2563EB", background: "#fff", borderRadius: 6, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>
                           </div>
                         </div>
                       );
@@ -1136,7 +1198,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
                                 <span style={{ fontSize: 11, color: "#AAA" }}>{m.date}</span>
-                                {onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#555" }}>Edit</button>}
+                                {onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #2563EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>}
                                 {onDeleteMovement && <button onClick={() => onDeleteMovement(m.id)} title="Delete movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #FECACA", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#DC2626" }}>✕</button>}
                               </div>
                             </div>
@@ -1243,7 +1305,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [] }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [] }: any = {}) {
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState(INIT_LOTS);
   const lots = extLots ?? localLots;
@@ -1390,6 +1452,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           onInspect={() => setShowInspection(true)}
           onDelete={deleteLot}
           liveSOs={liveSOs}
+          shipments={extShipments}
         />
       </>
     );

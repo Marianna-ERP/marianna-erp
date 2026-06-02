@@ -525,9 +525,8 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
                 </div>
               </div>
               <div><Lbl>Country</Lbl><Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" /></div>
-              <div><Lbl>NIP / Local Tax ID</Lbl><Inp value={form.nip} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787" /></div>
+              <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
               <div style={{ gridColumn: "span 2" }}><Lbl>Address</Lbl><Inp value={form.address} onChange={e => sf("address", e.target.value)} placeholder="Street, City, Postcode" /></div>
-              <div><Lbl>EU VAT number</Lbl><Inp value={form.vatEuId} onChange={e => sf("vatEuId", e.target.value)} placeholder="PL5252842787" /></div>
               <div><Lbl>Default currency</Lbl><Sel value={form.defaultCurrency} onChange={e => sf("defaultCurrency", e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</Sel></div>
               <div style={{ gridColumn: "span 2" }}>
                 <Lbl>Default payment terms</Lbl>
@@ -664,8 +663,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
             </div>
           </div>
           {[
-            { label: "NIP / Tax ID", value: counterparty.nip },
-            { label: "EU VAT", value: counterparty.vatEuId },
+            { label: "NIP / Local Tax ID / EU VAT number", value: counterparty.nip || counterparty.vatEuId },
             { label: "Address", value: counterparty.address },
             { label: "Payment terms", value: counterparty.paymentTerms === "Other" ? (counterparty.paymentTermsOther || "Other (unspecified)") : counterparty.paymentTerms },
           ].map(({ label, value }) => value ? (
@@ -729,7 +727,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>CONTACT PEOPLE ({counterparty.contacts.length})</div>
             {editingPersonId !== "new" && (
-              <button onClick={() => setEditingPersonId("new")} style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 11, padding: "3px 10px", cursor: "pointer", color: "#555", fontWeight: 600 }}>+ Add</button>
+              <button onClick={() => setEditingPersonId("new")} style={{ background: "#16A34A", border: "1px solid #16A34A", borderRadius: 6, fontSize: 11, padding: "3px 10px", cursor: "pointer", color: "#fff", fontWeight: 600 }}>+ Add contact</button>
             )}
           </div>
 
@@ -752,7 +750,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
                 <div style={{ display: "flex", gap: 4 }}>
                   {p.email && <button onClick={() => onEmail(counterparty, p)} title="Email" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>✉</button>}
                   {!p.isPrimary && <button onClick={() => onSetPrimary(counterparty.id, p.id)} title="Make primary" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>★</button>}
-                  <button onClick={() => setEditingPersonId(p.id)} title="Edit" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>✎</button>
+                  <button onClick={() => setEditingPersonId(p.id)} title="Edit contact" style={{ background: "#fff", border: "1px solid #2563EB", borderRadius: 4, fontSize: 11, padding: "2px 8px", cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>✎ Edit contact</button>
                   {counterparty.contacts.length > 1 && (
                     <button onClick={() => { if (window.confirm(`Remove ${p.name}?`)) onDeletePerson(counterparty.id, p.id); }} title="Delete" style={{ background: "none", border: "1px solid #FECACA", color: "#DC2626", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>🗑</button>
                   )}
@@ -777,7 +775,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
       </div>
 
       <div style={{ padding: "12px 20px", borderTop: "1px solid #F3F4F6", display: "flex", gap: 8 }}>
-        <button onClick={() => onEditCompany(counterparty)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit company</button>
+        <button onClick={() => onEditCompany(counterparty)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit company</button>
         <button onClick={() => { if (window.confirm(`Delete ${counterparty.name} and all ${counterparty.contacts.length} contact(s)?`)) { onDeleteCompany(counterparty.id); onClose(); } }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>
       </div>
     </div>
@@ -1413,7 +1411,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
         </div>
         <button onClick={() => setShowImport(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
         <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ Export CSV</button>
-        <button onClick={() => setModal("new")} style={{ background: "#111", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
+        <button onClick={() => setModal("new")} style={{ background: "#16A34A", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
       </div>
 
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
@@ -1534,7 +1532,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
             </div>
             <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
               {primary?.email && <button onClick={() => onEmail(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Email primary">✉</button>}
-              <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Edit">✎</button>
+              <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Edit">✎ Edit</button>
               <button onClick={() => { if (window.confirm(`Delete ${c.name} and ${c.contacts.length} contact(s)?`)) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>
             </div>
           </div>
