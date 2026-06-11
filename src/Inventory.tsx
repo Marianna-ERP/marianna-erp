@@ -392,7 +392,7 @@ function lotReservations(lot, sourceSOs) {
 
 // Returns array of SO references this lot has ever been linked to
 // (across all statuses including Shipped+ historical).
-function soRefsFor(lot, sourceSOs) {
+function soRefsFor(lot, sourceSOs, shipmentsList = []) {
   const list = sourceSOs ?? SOS;
   const refs = [];
   list.forEach(o => {
@@ -408,7 +408,37 @@ function soRefsFor(lot, sourceSOs) {
       }
     });
   });
+  // v6.3.0: also surface SOs linked to this lot THROUGH A SHIPMENT — the shipment
+  // knows the SO (header soRefs and per-goods soRef) even when the SO line itself
+  // isn't sourced from this lot/PO directly.
+  (shipmentsList || []).forEach(sh => {
+    if (!sh || sh.status === "Cancelled") return;
+    const carriesLot = (sh.lotRefs || []).includes(lot.number)
+      || (sh.goods || []).some(g => g.lotRef === lot.number);
+    if (!carriesLot) return;
+    const shipmentSONumbers = uniqStrings([
+      ...(sh.soRefs || []),
+      ...((sh.goods || []).filter(g => g.lotRef === lot.number).map(g => g.soRef)),
+    ]);
+    shipmentSONumbers.forEach(soNumber => {
+      if (!soNumber) return;
+      if (refs.find(r => r.number === soNumber)) return;
+      const so = list.find(o => o.number === soNumber);
+      if (so && so.status === "Cancelled") return;
+      refs.push({
+        number: soNumber,
+        status: so ? so.status : "—",
+        clientName: so ? _soClientName(so) : "",
+        sourceType: "SHIPMENT",
+        viaShipment: sh.number,
+      });
+    });
+  });
   return refs;
+}
+
+function uniqStrings(arr) {
+  return Array.from(new Set((arr || []).map(x => String(x || "")).filter(Boolean)));
 }
 
 export const INIT_LOTS = [
@@ -737,12 +767,15 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
     }
   });
   // Derive status from the final physical state + location.
+  // v6.3.0 fix: locById returns the shared (rich) taxonomy — the legacy OWN/PORT/CLIENT
+  // strings this logic was written against now live in legacyType.
   const loc = locById(locationId);
+  const legacyLocType = (loc as any)?.legacyType || loc?.type;
   if (sawShipOut && physicalKg === 0) status = "Shipped Out";
   else if (sawIn || physicalKg > 0) {
-    if (loc?.type === "OWN") status = "In Stock";
-    else if (loc?.type === "PORT") status = "Customs";
-    else if (loc?.type === "CLIENT") status = "Shipped Out";
+    if (legacyLocType === "OWN") status = "In Stock";
+    else if (legacyLocType === "PORT") status = "Customs";
+    else if (legacyLocType === "CLIENT") status = "Shipped Out";
     else status = "In Transit";
   } else if (movements.length === 0 && lot.expectedKg) {
     status = "Expected";
@@ -752,8 +785,11 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
 function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm }: any) {
-  // Default to TRANSFER for in-stock lots; IN for Expected lots. In edit mode, prefill.
-  const [type, setType] = useState(editing?.type || (lot.status === "Expected" ? "IN" : "TRANSFER"));
+  // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
+  // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
+  // was 0 kg, making every quantity error out). In edit mode, prefill.
+  const isExpectedLike = lot.status === "Expected" || lot.status === "Direct Expected";
+  const [type, setType] = useState(editing?.type || (isExpectedLike ? "IN" : "TRANSFER"));
   const [qty, setQty] = useState(editing ? String(editing.qtyKg ?? "") : "");
   const [fromId, setFromId] = useState(editing?.fromId ?? lot.locationId);
   const [toId, setToId] = useState(editing?.toId ?? lot.locationId);
@@ -761,15 +797,22 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
   const [date, setDate] = useState(editing?.date || today);
   const reservationState = lotReservations(lot, liveSOs);
   const liveAvailableKg = reservationState.liveAvailable;
+  // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
+  // so quantity-reducing movements validate against the expected/direct quantity —
+  // consistent with how lotReservations computes availability for direct lots.
+  const isDirect = !!lot.directFlow || lot.status === "Direct Expected";
+  const physicalBasis = isDirect
+    ? Math.max(parseNum(lot.expectedKg), lot.physicalKg || 0)
+    : (lot.physicalKg || 0);
   // In edit mode the max should add back this movement's own effect so it isn't
   // double-counted against itself.
   const selfQty = editing && (editing.type === type) ? parseNum(editing.qtyKg) : 0;
   const maxByType = {
     IN:       Infinity,
-    TRANSFER: (lot.physicalKg || 0) + selfQty,
+    TRANSFER: physicalBasis + selfQty,
     SHIP_OUT: (liveAvailableKg || 0) + selfQty,
-    DAMAGE:   (lot.physicalKg || 0) + selfQty,
-    RECLASS:  (lot.physicalKg || 0) + selfQty,
+    DAMAGE:   physicalBasis + selfQty,
+    RECLASS:  physicalBasis + selfQty,
   };
   const max = maxByType[type];
   const qtyNum = parseFloat(qty) || 0;
@@ -836,6 +879,13 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
           {isInvalid && qty && (
             <div style={{ padding: "8px 12px", background: "#FEE2E2", color: "#9A1B1B", fontSize: 12, borderRadius: 6, marginBottom: 12 }}>
               {qtyNum > max ? `Quantity exceeds max (${max.toLocaleString()} kg)` : "Quantity must be greater than zero"}
+            </div>
+          )}
+          {max === 0 && type !== "IN" && (
+            <div style={{ padding: "8px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontSize: 12, borderRadius: 6, marginBottom: 12 }}>
+              This lot has <strong>no {type === "SHIP_OUT" ? "available" : "physical"} stock yet</strong>, so a {String(typeInfo.label || type).toLowerCase()} of any quantity is blocked.
+              {(lot.physicalKg || 0) === 0 && !isDirect && <> Record a <strong>⊕ Receipt (IN)</strong> first to bring goods into stock, then come back to this movement.</>}
+              {type === "SHIP_OUT" && (lot.physicalKg || 0) > 0 && <> All physical stock is currently reserved by confirmed SOs.</>}
             </div>
           )}
           <div style={{ display: "flex", gap: 10 }}>
@@ -913,7 +963,10 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
   const [cnAmount, setCnAmount] = useState("");
   const [cnCurrency, setCnCurrency] = useState(lot.currency || "PLN");
   const affectsStock = outcome === "weight_loss" || outcome === "damage" || outcome === "rejection";
-  const maxLoss = lot.physicalKg || 0;
+  // v6.3.0: direct-flow lots never enter our warehouse (physicalKg 0), so quality
+  // write-offs validate against the expected/direct quantity instead.
+  const lotIsDirect = !!lot.directFlow || lot.status === "Direct Expected";
+  const maxLoss = lotIsDirect ? Math.max(parseFloat(lot.expectedKg) || 0, lot.physicalKg || 0) : (lot.physicalKg || 0);
   const lossNum = parseFloat(lossKg) || 0;
   const lossInvalid = affectsStock && (lossNum <= 0 || lossNum > maxLoss);
   return (
@@ -1023,27 +1076,29 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
             </div>
           </div>
 
-          {/* Qty breakdown — compact: five figures + a proportion bar */}
-          <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>QUANTITY BREAKDOWN</SectionTitle>
-            <div style={{ marginBottom: 10, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
-              <div><div style={{ fontSize: 9.5, color: "#888" }}>EXPECTED</div><div style={{ fontSize: 13.5, fontWeight: 600, color: "#555" }}>{fmtNum(lot.expectedKg)} kg</div></div>
-              <div><div style={{ fontSize: 9.5, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#111" }}>{fmtNum(lot.receivedKg)} kg</div></div>
-              <div title="Live: physicalKg − reservations from pre-dispatch SOs"><div style={{ fontSize: 9.5, color: "#16A34A" }}>AVAILABLE</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} kg</div></div>
-              <div title="From Confirmed/Reserved/Loading SOs"><div style={{ fontSize: 9.5, color: "#7C3AED" }}>RESERVED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#7C3AED" }}>{fmtNum(res.totalReserved)} kg</div></div>
-              <div><div style={{ fontSize: 9.5, color: "#DC2626" }}>DAMAGED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#DC2626" }}>{fmtNum(lot.damagedKg)} kg</div></div>
-            </div>
-            {totalKg > 0 && (
-              <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", border: "1px solid #F3F4F6" }} title={segments.map(s => `${s.key}: ${s.kg.toLocaleString()} kg`).join("  ·  ")}>
-                {segments.map((s, i) => (
-                  <div key={i} title={`${s.key}: ${s.kg.toLocaleString()} kg (${((s.kg / totalKg) * 100).toFixed(1)}%)`} style={{ background: s.color, width: `${(s.kg / totalKg) * 100}%` }} />
-                ))}
+          {/* Qty breakdown — v6.3.0 compact strip (PO-module density): figures + bar on one row */}
+          <Card style={{ marginBottom: 12, padding: "12px 16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "110px repeat(5, minmax(72px, 1fr)) 1.5fr", gap: 10, alignItems: "center" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>QUANTITY<br />BREAKDOWN</div>
+              <div><div style={{ fontSize: 9, color: "#888" }}>EXPECTED</div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#555" }}>{fmtNum(lot.expectedKg)} kg</div></div>
+              <div><div style={{ fontSize: 9, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#111" }}>{fmtNum(lot.receivedKg)} kg</div></div>
+              <div title="Live: physicalKg − reservations from pre-dispatch SOs"><div style={{ fontSize: 9, color: "#16A34A" }}>AVAILABLE</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} kg</div></div>
+              <div title="From Confirmed/Reserved/Loading SOs"><div style={{ fontSize: 9, color: "#7C3AED" }}>RESERVED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#7C3AED" }}>{fmtNum(res.totalReserved)} kg</div></div>
+              <div><div style={{ fontSize: 9, color: "#DC2626" }}>DAMAGED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#DC2626" }}>{fmtNum(lot.damagedKg)} kg</div></div>
+              <div>
+                {totalKg > 0 && (
+                  <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", border: "1px solid #F3F4F6" }} title={segments.map(s => `${s.key}: ${s.kg.toLocaleString()} kg`).join("  ·  ")}>
+                    {segments.map((s, i) => (
+                      <div key={i} title={`${s.key}: ${s.kg.toLocaleString()} kg (${((s.kg / totalKg) * 100).toFixed(1)}%)`} style={{ background: s.color, width: `${(s.kg / totalKg) * 100}%` }} />
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
             {variance !== 0 && lot.receivedKg > 0 && (
-              <div style={{ marginTop: 10, padding: "8px 10px", background: variance < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${variance < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 8, fontSize: 11.5, color: variance < 0 ? "#92400E" : "#1E40AF" }}>
-                <strong>{variance > 0 ? "Surplus" : "Shortfall"}:</strong> {Math.abs(variance).toLocaleString()} kg ({((variance / lot.expectedKg) * 100).toFixed(2)}%) vs PO {lot.poRef}.
-                {variance < 0 ? " Common causes: moisture loss in transit, weight check at port, damage. Consider raising a damage report if responsibility lies with carrier or supplier." : " Higher than ordered — confirm with supplier."}
+              <div style={{ marginTop: 8, padding: "5px 9px", background: variance < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${variance < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 6, fontSize: 11, color: variance < 0 ? "#92400E" : "#1E40AF" }}>
+                <strong>{variance > 0 ? "Surplus" : "Shortfall"}:</strong> {Math.abs(variance).toLocaleString()} kg ({((variance / lot.expectedKg) * 100).toFixed(2)}%) vs PO {lot.poRef}
+                <span title={variance < 0 ? "Common causes: moisture loss in transit, weight check at port, damage. Consider raising a damage report if responsibility lies with carrier or supplier." : "Higher than ordered — confirm with supplier."} style={{ marginLeft: 6, cursor: "help", color: "inherit", opacity: 0.7 }}>ⓘ</span>
               </div>
             )}
           </Card>
@@ -1233,11 +1288,13 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
                     ) : <span style={{ fontSize: 12, color: "#AAA" }}>—</span>}
                   </div>
                   <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>SALES ORDERS ({soRefsFor(lot, liveSOs).length})</div>
-                    {soRefsFor(lot, liveSOs).length > 0 ? (
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>SALES ORDERS ({soRefsFor(lot, liveSOs, shipments).length})</div>
+                    {soRefsFor(lot, liveSOs, shipments).length > 0 ? (
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                        {soRefsFor(lot, liveSOs).map(s => (
-                          <div key={s.number} title={`${s.clientName} · ${s.status}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>{s.number}</div>
+                        {soRefsFor(lot, liveSOs, shipments).map(s => (
+                          <div key={s.number} title={`${s.clientName || ""}${s.status && s.status !== "—" ? ` · ${s.status}` : ""}${s.viaShipment ? ` · linked via shipment ${s.viaShipment}` : ""}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                            {s.number}{s.viaShipment ? <span style={{ fontSize: 9, color: "#16A34A", fontWeight: 700, marginLeft: 4 }}>via {s.viaShipment}</span> : null}
+                          </div>
                         ))}
                       </div>
                     ) : <span style={{ fontSize: 12, color: "#AAA" }}>Not yet linked</span>}
@@ -1313,6 +1370,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   // Live SOs from shell (replaces the standalone-only module-scope SOS).
   // If shell doesn't pass any (standalone), helpers fall through to local SOS via their default param.
   const liveSOs = extOrders;
+  const shipments = extShipments;
   const [view, setView] = useState("list");
   const [selectedId, setSelectedId] = useState(null);
   const selected = useMemo(() => lots.find(l => l.id === selectedId) ?? null, [lots, selectedId]);
@@ -1348,7 +1406,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       if (filterProduct !== "All" && l.product !== filterProduct) return false;
       if (filterQuality !== "All" && l.quality !== filterQuality) return false;
       if (q) {
-        const soList = soRefsFor(l, liveSOs).map(s => s.number).join(" ");
+        const soList = soRefsFor(l, liveSOs, shipments).map(s => s.number).join(" ");
         const hay = `${l.number} ${l.product} ${l.poRef || ""} ${soList} ${loc?.name || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
@@ -1543,7 +1601,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             const loc = locById(l.locationId);
             const cpk = costPerKg(l);
             const res = lotReservations(l, liveSOs);
-            const soList = soRefsFor(l, liveSOs);
+            const soList = soRefsFor(l, liveSOs, shipments);
             return (
               <div key={l.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 140px 130px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
                 onClick={() => { setSelectedId(l.id); setView("detail"); }}

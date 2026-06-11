@@ -896,6 +896,8 @@ function SODoc({ order }: any) {
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
     { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationLabel },
+    ...(order.importPermitNo ? [{ en: "Import permit no.", pl: "Nr pozwolenia importowego", value: order.importPermitNo, strong: true }] : []),
+    ...(order.acidNo ? [{ en: "ACID no.", pl: "Nr ACID", value: order.acidNo, strong: true }] : []),
   ];
   const clientRows = [
     { en: "Name",      pl: "Nazwa",     value: order.client?.name    || "—" },
@@ -1126,7 +1128,7 @@ function PrintModal({ order, onClose }: any) {
 function EmailModal({ order, onClose }: any) {
   const recipient = order.client?.email || order.client?.contact || "";
   const [subject, setSubject] = useState(`Sales Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nDelivery date: ${order.deliveryDate || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nDelivery date: ${order.deliveryDate || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}${order.importPermitNo ? `\nImport permit no.: ${order.importPermitNo}` : ""}${order.acidNo ? `\nACID no.: ${order.acidNo}` : ""}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
 
   function openPrintForPdf() {
     const node = document.getElementById("so-print-doc-email");
@@ -1341,6 +1343,19 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
     const c = clients.find(c => c.name === name);
     sf("client", c || null);
   };
+
+  // v6.3.0: live duplicate check for import-document numbers. Import permits and
+  // ACID numbers are single-use — flag immediately if another SO already carries them.
+  const permitDupes = React.useMemo(() => {
+    const result: any = {};
+    (["importPermitNo", "acidNo"] as const).forEach(field => {
+      const v = String(order[field] || "").trim().toLowerCase();
+      if (!v) return;
+      const clash = (allOrders || []).find(p => p.id !== order.id && String(p[field] || "").trim().toLowerCase() === v);
+      if (clash) result[field] = clash.number;
+    });
+    return result;
+  }, [order.importPermitNo, order.acidNo, order.id, allOrders]);
 
   // Source picker state
   const [sourceFor, setSourceFor] = useState(null); // index of item being sourced, or null
@@ -1612,6 +1627,20 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 </Sel>
                 {order.paymentTerms === "Other" && (
                   <Inp value={order.paymentTermsOther} onChange={e => sf("paymentTermsOther", e.target.value)} placeholder="Specify terms…" style={{ marginTop: 6 }} />
+                )}
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <Lbl>Import permit no. <span style={{ color: "#AAA", fontWeight: 400 }}>· client-country import licence</span></Lbl>
+                <Inp value={order.importPermitNo || ""} onChange={e => sf("importPermitNo", e.target.value)} placeholder="e.g. IP-2026-00871" />
+                {permitDupes.importPermitNo && (
+                  <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.importPermitNo}</div>
+                )}
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <Lbl>ACID no. <span style={{ color: "#AAA", fontWeight: 400 }}>· Egypt Advance Cargo Information Declaration</span></Lbl>
+                <Inp value={order.acidNo || ""} onChange={e => sf("acidNo", e.target.value)} placeholder="19-digit ACID" />
+                {permitDupes.acidNo && (
+                  <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.acidNo}</div>
                 )}
               </div>
             </div>
@@ -2075,6 +2104,8 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                   <div><div style={{ fontSize: 10, color: "#888" }}>CURRENCY</div><div style={{ fontWeight: 600 }}>{order.currency} {order.fxLockedAt ? "🔒" : ""}</div></div>
                   <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>PAYMENT TERMS</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}</div></div>
                   <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${destination ? LOCATION_TYPES[destination.type]?.icon : "📍"} ${destinationLabel}` : "—"}</div></div>
+                  {order.importPermitNo && <div><div style={{ fontSize: 10, color: "#888" }}>IMPORT PERMIT NO.</div><div style={{ fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{order.importPermitNo}</div></div>}
+                  {order.acidNo && <div><div style={{ fontSize: 10, color: "#888" }}>ACID NO.</div><div style={{ fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{order.acidNo}</div></div>}
                 </div>
               </Card>
 
@@ -2218,6 +2249,8 @@ export default function SalesOrders({
       deliveryDate: "",
       promisedDateMeans: "Delivery to client",
       actualDeliveryDate: null,
+      importPermitNo: "",
+      acidNo: "",
       paymentTerms: "30 days from invoice date",
       paymentTermsOther: "",
       sellIncoterm: "DAP",
@@ -2279,6 +2312,39 @@ export default function SalesOrders({
     // Duplicate number guard
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
     if (dup) { alert(`SO number ${o.number} already exists.`); return; }
+    // v6.3.0: import-document duplicate guard. Import permits and ACID numbers are
+    // single-use — re-using one across orders/shipments risks customs rejection.
+    // Block by default; allow an explicit, recorded override.
+    {
+      const conflicts: any[] = [];
+      (["importPermitNo", "acidNo"] as const).forEach(field => {
+        const v = String(o[field] || "").trim();
+        if (!v) return;
+        orders.forEach(p => {
+          if (p.id === o.id) return;
+          if (String(p[field] || "").trim().toLowerCase() !== v.toLowerCase()) return;
+          const linkedShipments = (extShipments || [])
+            .filter((sh: any) => (sh.soRefs || []).includes(p.number))
+            .map((sh: any) => sh.number);
+          conflicts.push({ field, value: v, soNumber: p.number, shipments: linkedShipments });
+        });
+      });
+      if (conflicts.length) {
+        const label = (f: string) => f === "importPermitNo" ? "Import permit" : "ACID number";
+        const lines = conflicts.map(c =>
+          `• ${label(c.field)} "${c.value}" already used on ${c.soNumber}${c.shipments.length ? ` (shipment${c.shipments.length > 1 ? "s" : ""} ${c.shipments.join(", ")})` : ""}`
+        ).join("\n");
+        const ok = window.confirm(
+          `⚠ DUPLICATE IMPORT DOCUMENT NUMBER\n\n${lines}\n\n` +
+          `Import permits and ACID numbers are normally single-use. Saving this SO with a number that was already used may cause customs rejection at destination.\n\n` +
+          `Press OK to OVERRIDE and save anyway (the override is recorded in the SO notes), or Cancel to go back and change the number.`
+        );
+        if (!ok) return;
+        const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+        const overrideNote = `[${stamp}] OVERRIDE: saved despite duplicate ${conflicts.map(c => `${label(c.field)} "${c.value}" (also on ${c.soNumber})`).join("; ")}.`;
+        o = { ...o, notes: o.notes ? `${o.notes}\n${overrideNote}` : overrideNote };
+      }
+    }
     // Sourcing rule guard — defensive, even though the UI already blocks this
     const src = validateSourcing(o.items);
     const needsSource = !src.allSourced && o.status !== "Draft" && o.status !== "Cancelled";

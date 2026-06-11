@@ -1,5 +1,6 @@
 import React, { useRef, useState } from "react";
 import { exportAllData, importAllData, clearAllData, STORAGE_VERSION } from "./useLocalStoredState";
+import { readCustomLocations, addCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS } from "./locations";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -53,6 +54,28 @@ export default function Settings({
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
+  const [customLocations, setCustomLocations] = useState<any[]>(() => readCustomLocations());
+  const [newLoc, setNewLoc] = useState<{ name: string; country: string; type: string; address: string }>({ name: "", country: "", type: "Port", address: "" });
+
+  function handleAddLocation() {
+    const name = newLoc.name.trim();
+    if (!name) return;
+    const clash = customLocations.find(l => String(l.name).trim().toLowerCase() === name.toLowerCase());
+    if (clash) { setMessage({ kind: "error", text: `A custom location named "${name}" already exists.` }); return; }
+    addCustomLocation({ name, country: newLoc.country, type: newLoc.type as any, address: newLoc.address });
+    setCustomLocations(readCustomLocations());
+    setNewLoc({ name: "", country: "", type: newLoc.type, address: "" });
+    setMessage({ kind: "success", text: `Location "${name}" added. Reloading so all modules see it...` });
+    setTimeout(() => window.location.reload(), 900);
+  }
+
+  function handleRemoveLocation(id: number, name: string) {
+    if (!window.confirm(`Remove location "${name}"?\n\nAny PO/SO/shipment that references it will show it as a missing location until you pick a new one.`)) return;
+    removeCustomLocation(id);
+    setCustomLocations(readCustomLocations());
+    setMessage({ kind: "info", text: `Location "${name}" removed. Reloading...` });
+    setTimeout(() => window.location.reload(), 900);
+  }
 
   function handleExport() {
     try {
@@ -166,6 +189,60 @@ export default function Settings({
                 style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}
               />
             </div>
+          </div>
+        </Card>
+
+        <Card style={{ marginBottom: 16 }}>
+          <SectionTitle>LOCATIONS &amp; PORTS</SectionTitle>
+          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+            Add ports, airports, warehouses, client sites or customs points that are missing from the built-in list.
+            They appear in every destination and leg From/To dropdown across PO, SO, Inventory and Shipments.
+            Custom locations are saved with your data and included in the JSON export.
+          </div>
+          {customLocations.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              {customLocations.map((l: any) => (
+                <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 10, alignItems: "center", padding: "7px 10px", border: "1px solid #F3F4F6", borderRadius: 7, marginBottom: 6, background: "#FAFAFA" }}>
+                  <div>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{l.name}</span>
+                    <span style={{ fontSize: 11.5, color: "#888", marginLeft: 8 }}>{l.country}{l.address ? ` · ${l.address}` : ""}</span>
+                  </div>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: "#2563EB", background: "#EFF6FF", padding: "2px 8px", borderRadius: 5 }}>
+                    {(CUSTOM_LOCATION_TYPE_OPTIONS.find(o => o.key === l.type) || {}).label || l.type}
+                  </span>
+                  <button onClick={() => handleRemoveLocation(l.id, l.name)} title="Remove this location"
+                    style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "3px 9px", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.9fr 1.1fr 1.4fr auto", gap: 10, alignItems: "end" }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Name</label>
+              <input value={newLoc.name} onChange={e => setNewLoc({ ...newLoc, name: e.target.value })} placeholder="e.g. Sokhna Port"
+                style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Country</label>
+              <input value={newLoc.country} onChange={e => setNewLoc({ ...newLoc, country: e.target.value })} placeholder="e.g. Egypt"
+                style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Type</label>
+              <select value={newLoc.type} onChange={e => setNewLoc({ ...newLoc, type: e.target.value })}
+                style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}>
+                {CUSTOM_LOCATION_TYPE_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Address (optional)</label>
+              <input value={newLoc.address} onChange={e => setNewLoc({ ...newLoc, address: e.target.value })} placeholder="street, city"
+                style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }} />
+            </div>
+            <Button onClick={handleAddLocation} variant="success" disabled={!newLoc.name.trim()}>+ Add</Button>
+          </div>
+          <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 6, padding: "7px 10px", marginTop: 12 }}>
+            After adding or removing a location the page reloads so all modules pick it up.
           </div>
         </Card>
 

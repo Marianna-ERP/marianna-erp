@@ -100,3 +100,13 @@ This version adds integrity rules requested during testing:
 - Cancelled POs block related expected lots and return non-terminal related SOs to Draft for sourcing review.
 
 See `V5_8_INTEGRITY_WORKFLOWS.md` for details.
+
+## Update V6.3.0 - Feedback batch
+
+- Contacts: duplicate detection on save (tax-ID strict + fuzzy name), a field-by-field merge dialog that combines people/linked docs and re-points existing documents, and a "Find duplicates" scan.
+- Inventory: fixed Record movement / Record inspection erroring on any quantity for direct-flow lots; fixed lot status derivation after the v5.8 location consolidation; Linked now also shows SOs connected via shipments; compact quantity breakdown.
+- Shipments: loading/expected-delivery date semantics clarified; Vehicles field removed (derived unit count); customs/broker dropdown from Contacts; billing status moved to Costs and billing; standard conditional document checklist + DHL courier tracking for documents sent to client; numbered legs; grouped From/To selectors with auto-chaining; mode-driven leg/unit fields; Multimodal defaults to 2 legs, other modes to 1.
+- Sales Orders: Import permit no. and ACID no. fields (printed and emailed), with a single-use duplicate alarm and recorded override.
+- Settings: user-managed custom locations/ports available across all modules and included in JSON export/import.
+
+See `CHANGELOG_v6.3.0.md` for details.

@@ -1222,6 +1222,233 @@ function bulkStyle(color) {
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
+// ─── v6.3.0: DUPLICATE DETECTION & MERGE ────────────────────────────────────
+// Fuzzy company-name matching (strips punctuation and legal suffixes) plus
+// strict tax-ID matching. Used when saving a counterparty manually and by the
+// "Find duplicates" scan. Merging keeps one record (its id survives), combines
+// contact people and linked docs, and remembers the absorbed id in
+// mergedFromIds so App-level snapshot refreshing re-points old documents.
+
+const LEGAL_SUFFIX_TOKENS = new Set([
+  "sp", "z", "o", "oo", "k", "j", "sa", "s", "a", "c", "srl", "r", "l", "gmbh",
+  "ltd", "llc", "inc", "bv", "b", "v", "sarl", "sas", "plc", "oy", "ab", "as",
+  "doo", "d", "sl", "spzoo", "co", "company", "spolka", "spółka", "zoo",
+]);
+
+function normalizeCompanyName(name) {
+  const tokens = String(name || "")
+    .toLowerCase()
+    .replace(/[.,;:()"'’&/\\-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  // Drop trailing legal-form tokens ("sp z o o", "s r l", "gmbh"...) but never
+  // drop everything — keep at least the first token.
+  let end = tokens.length;
+  while (end > 1 && LEGAL_SUFFIX_TOKENS.has(tokens[end - 1])) end--;
+  return tokens.slice(0, end).join(" ");
+}
+
+function taxDigits(value) {
+  return String(value || "").replace(/[^0-9]/g, "");
+}
+
+function namesFuzzyMatch(a, b) {
+  const na = normalizeCompanyName(a);
+  const nb = normalizeCompanyName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // containment ("owoce polska" vs "owoce polska sp z o o" already handled by
+  // suffix stripping; this also catches "freshfarm" vs "freshfarm valencia")
+  if (na.length >= 5 && nb.length >= 5 && (na.includes(nb) || nb.includes(na))) return true;
+  return false;
+}
+
+function findCounterpartyDuplicates(candidate, list, excludeId) {
+  const candTax = taxDigits(candidate.nip || candidate.vatEuId);
+  const matches = [];
+  (list || []).forEach(c => {
+    if (excludeId != null && String(c.id) === String(excludeId)) return;
+    const cTax = taxDigits(c.nip || c.vatEuId);
+    if (candTax && cTax && candTax.length >= 6 && candTax === cTax) {
+      matches.push({ counterparty: c, reason: "tax", detail: `same tax ID ${candidate.nip || candidate.vatEuId}` });
+      return;
+    }
+    if (namesFuzzyMatch(candidate.name, c.name)) {
+      matches.push({ counterparty: c, reason: "name", detail: `similar name "${c.name}"` });
+    }
+  });
+  return matches;
+}
+
+// Fields offered for per-field choice in the merge dialog.
+const MERGE_FIELDS = [
+  { key: "name", label: "Company name" },
+  { key: "type", label: "Main type" },
+  { key: "country", label: "Country" },
+  { key: "address", label: "Address" },
+  { key: "nip", label: "NIP / Tax ID / EU VAT" },
+  { key: "defaultCurrency", label: "Default currency" },
+  { key: "paymentTerms", label: "Payment terms" },
+  { key: "paymentTermsOther", label: "Payment terms (other)" },
+  { key: "notes", label: "Notes" },
+];
+
+function mergeValueDisplay(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (Array.isArray(v)) return v.join(", ") || "—";
+  return String(v);
+}
+
+function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
+  // Per-field choice: "keep" | "incoming". Default: keep, unless keep's value is empty.
+  const [choices, setChoices] = useState(() => {
+    const init: any = {};
+    MERGE_FIELDS.forEach(f => {
+      const kv = keep[f.key], iv = incoming[f.key];
+      init[f.key] = (!kv && iv) ? "incoming" : "keep";
+    });
+    return init;
+  });
+  const differing = MERGE_FIELDS.filter(f => {
+    const kv = keep[f.key] ?? "", iv = incoming[f.key] ?? "";
+    return String(kv) !== String(iv) && (kv !== "" || iv !== "");
+  });
+  function buildMerged() {
+    const merged: any = { ...keep };
+    MERGE_FIELDS.forEach(f => {
+      merged[f.key] = choices[f.key] === "incoming" ? (incoming[f.key] ?? "") : (keep[f.key] ?? "");
+    });
+    // Union of secondary types and services
+    merged.additionalTypes = Array.from(new Set([...(keep.additionalTypes || []), ...(incoming.additionalTypes || []), ...(incoming.type && incoming.type !== merged.type ? [incoming.type] : [])])).filter(t => t !== merged.type);
+    merged.services = Array.from(new Set([...(keep.services || []), ...(incoming.services || [])]));
+    // Combine people (dedupe by name+email) and linked docs
+    const people = [...(keep.contacts || [])];
+    (incoming.contacts || []).forEach(p => {
+      const dup = people.find(x => String(x.name || "").trim().toLowerCase() === String(p.name || "").trim().toLowerCase() && String(x.email || "").trim().toLowerCase() === String(p.email || "").trim().toLowerCase());
+      if (!dup) people.push({ ...p, id: Math.max(0, ...people.map(x => x.id || 0)) + 1, isPrimary: false });
+    });
+    merged.contacts = people;
+    merged.linkedDocs = Array.from(new Set([...(keep.linkedDocs || []), ...(incoming.linkedDocs || [])]));
+    // Finance: keep's unless empty
+    merged.finance = {
+      bankName: keep.finance?.bankName || incoming.finance?.bankName || "",
+      accountNumber: keep.finance?.accountNumber || incoming.finance?.accountNumber || "",
+      swift: keep.finance?.swift || incoming.finance?.swift || "",
+    };
+    // Remember absorbed ids so saved PO/SO snapshots re-point to the survivor
+    merged.mergedFromIds = Array.from(new Set([...(keep.mergedFromIds || []), ...(incoming.id != null ? [String(incoming.id)] : []), ...(incoming.mergedFromIds || [])]));
+    return merged;
+  }
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130, padding: 20 }}>
+      <div style={{ width: 720, maxHeight: "88vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid #EBEBEB" }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Merge duplicate counterparties</div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>
+            Keeping <strong style={{ color: "#111" }}>{keep.name}</strong>{incoming.id != null ? <> — absorbing <strong style={{ color: "#DC2626" }}>{incoming.name}</strong> (it will be removed; its contact people, linked documents and references move to the kept record)</> : <> — folding in the data you just entered</>}.
+          </div>
+        </div>
+        <div style={{ padding: "16px 24px" }}>
+          {differing.length === 0 && (
+            <div style={{ fontSize: 13, color: "#666", padding: "10px 0" }}>All compared fields are identical — contact people and linked documents will simply be combined.</div>
+          )}
+          {differing.map(f => (
+            <div key={f.key} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#888", letterSpacing: "0.04em", marginBottom: 5 }}>{f.label.toUpperCase()}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {(["keep", "incoming"] as const).map(side => {
+                  const rec = side === "keep" ? keep : incoming;
+                  const active = choices[f.key] === side;
+                  return (
+                    <label key={side} style={{ display: "flex", gap: 8, alignItems: "flex-start", border: `1.5px solid ${active ? "#16A34A" : "#E5E7EB"}`, background: active ? "#F0FDF4" : "#fff", borderRadius: 8, padding: "8px 10px", cursor: "pointer" }}>
+                      <input type="radio" checked={active} onChange={() => setChoices(prev => ({ ...prev, [f.key]: side }))} style={{ marginTop: 2 }} />
+                      <span>
+                        <span style={{ fontSize: 9.5, fontWeight: 700, color: side === "keep" ? "#16A34A" : "#D97706", display: "block" }}>{side === "keep" ? "KEPT RECORD" : (incoming.id != null ? "DUPLICATE RECORD" : "NEW ENTRY")}</span>
+                        <span style={{ fontSize: 12.5, color: "#111" }}>{mergeValueDisplay(rec[f.key])}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: "#1E40AF", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 7, padding: "8px 10px", marginTop: 4 }}>
+            Contact people and linked documents from both records are combined automatically. Existing POs, SOs and shipments that pointed at the removed record re-point to the kept one.
+          </div>
+        </div>
+        <div style={{ padding: "14px 24px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={onCancel} style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button onClick={() => onApply(buildMerged(), incoming.id ?? null)} style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Merge records</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DuplicateReviewModal({ candidate, matches, onOpenExisting, onMergeInto, onSaveAnyway, onCancel }: any) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 125, padding: 20 }}>
+      <div style={{ width: 640, maxHeight: "85vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid #EBEBEB" }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>⚠ Possible duplicate counterparty</div>
+          <div style={{ fontSize: 12.5, color: "#666", marginTop: 4, lineHeight: 1.5 }}>
+            You're saving <strong>"{candidate.name}"</strong>, but {matches.length === 1 ? "a similar record already exists" : `${matches.length} similar records already exist`}. Check below before creating a duplicate.
+          </div>
+        </div>
+        <div style={{ padding: "14px 24px" }}>
+          {matches.map((m, i) => (
+            <div key={i} style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 9, padding: "11px 13px", marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: "#111" }}>{m.counterparty.name}</div>
+                  <div style={{ fontSize: 11.5, color: "#92400E", marginTop: 2 }}>
+                    Match: {m.reason === "tax" ? "same tax ID" : "similar name"} · {m.counterparty.country || "—"} · {m.counterparty.type}{m.counterparty.nip ? ` · ${m.counterparty.nip}` : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                  <button onClick={() => onOpenExisting(m.counterparty)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open existing</button>
+                  <button onClick={() => onMergeInto(m.counterparty)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "#2563EB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Merge…</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "14px 24px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", gap: 10 }}>
+          <button onClick={onCancel} style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>← Go back &amp; edit</button>
+          <button onClick={onSaveAnyway} style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>These are different companies — save anyway</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 125, padding: 20 }}>
+      <div style={{ width: 640, maxHeight: "85vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>Find duplicates</div>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{pairs.length ? `${pairs.length} suspected duplicate pair${pairs.length !== 1 ? "s" : ""} found — review and merge.` : "No suspected duplicates found. 🎉"}</div>
+          </div>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 22, color: "#888", cursor: "pointer" }}>×</button>
+        </div>
+        <div style={{ padding: "14px 24px" }}>
+          {pairs.map((p, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, border: "1px solid #F3F4F6", borderRadius: 9, padding: "10px 13px", marginBottom: 8 }}>
+              <div style={{ fontSize: 12.5, color: "#111", lineHeight: 1.5 }}>
+                <strong>{p.a.name}</strong> <span style={{ color: "#AAA" }}>↔</span> <strong>{p.b.name}</strong>
+                <div style={{ fontSize: 11, color: "#92400E" }}>{p.reason === "tax" ? "Same tax ID" : "Similar name"} · {p.a.type}/{p.b.type}</div>
+              </div>
+              <button onClick={() => onReview(p)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "#2563EB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>Review &amp; merge</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Contacts({ contacts: extContacts, setContacts: extSetContacts }: any = {}) {
   // Integration mode: if parent passes state in, use it (shell owns state).
   // Standalone mode: use local state with the baked-in seed.
@@ -1236,6 +1463,10 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
   const [showImport, setShowImport] = useState(false);
   const [importResult, setImportResult] = useState(null); // toast { count } | null
+  // v6.3.0 duplicate handling
+  const [dupReview, setDupReview] = useState(null);   // { candidate, matches } | null
+  const [mergeTarget, setMergeTarget] = useState(null); // { keep, incoming } | null
+  const [dupePairs, setDupePairs] = useState(null);   // array | null (Find duplicates results)
 
   const selected = counterparties.find(c => c.id === selectedId) || null;
 
@@ -1287,6 +1518,29 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
 
   // ── mutations ──────────────────────────────────────────────────────────
   function saveCounterparty(c) {
+    // v6.3.0: duplicate guard — on a NEW record, or when an existing record's
+    // name/tax-ID changed, check for matches (tax-ID strict, name fuzzy) and
+    // let the user open the existing record, merge, or save anyway.
+    let shouldCheck = true;
+    if (c.id) {
+      const before = counterparties.find(p => p.id === c.id);
+      if (before
+        && normalizeCompanyName(before.name) === normalizeCompanyName(c.name)
+        && taxDigits(before.nip || before.vatEuId) === taxDigits(c.nip || c.vatEuId)) {
+        shouldCheck = false; // name and tax unchanged — don't nag on routine edits
+      }
+    }
+    if (shouldCheck) {
+      const matches = findCounterpartyDuplicates(c, counterparties, c.id);
+      if (matches.length) {
+        setDupReview({ candidate: c, matches });
+        return;
+      }
+    }
+    commitCounterparty(c);
+  }
+
+  function commitCounterparty(c) {
     setCounterparties(prev => {
       if (c.id) return prev.map(p => p.id === c.id ? { ...p, ...c } : p);
       const newC = { ...c, id: Date.now(), contacts: [], linkedDocs: [] };
@@ -1294,6 +1548,31 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
       return [...prev, newC];
     });
     setModal(null);
+    setDupReview(null);
+  }
+
+  function applyMerge(merged, removeId) {
+    setCounterparties(prev => prev
+      .filter(p => removeId == null || String(p.id) !== String(removeId))
+      .map(p => String(p.id) === String(merged.id) ? merged : p));
+    setSelectedId(merged.id);
+    setMergeTarget(null);
+    setDupReview(null);
+    setModal(null);
+    setDupePairs(null);
+  }
+
+  function scanForDuplicates() {
+    const pairs: any[] = [];
+    for (let i = 0; i < counterparties.length; i++) {
+      for (let j = i + 1; j < counterparties.length; j++) {
+        const a = counterparties[i], b = counterparties[j];
+        const aTax = taxDigits(a.nip || a.vatEuId), bTax = taxDigits(b.nip || b.vatEuId);
+        if (aTax && bTax && aTax.length >= 6 && aTax === bTax) { pairs.push({ a, b, reason: "tax" }); continue; }
+        if (namesFuzzyMatch(a.name, b.name)) pairs.push({ a, b, reason: "name" });
+      }
+    }
+    setDupePairs(pairs);
   }
   function deleteCounterparty(id) {
     setCounterparties(prev => prev.filter(c => c.id !== id));
@@ -1385,6 +1664,31 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           onClose={() => setModal(null)}
         />
       )}
+      {dupReview && !mergeTarget && (
+        <DuplicateReviewModal
+          candidate={dupReview.candidate}
+          matches={dupReview.matches}
+          onOpenExisting={(c) => { setDupReview(null); setModal(null); setSelectedId(c.id); }}
+          onMergeInto={(c) => setMergeTarget({ keep: c, incoming: dupReview.candidate })}
+          onSaveAnyway={() => commitCounterparty(dupReview.candidate)}
+          onCancel={() => setDupReview(null)}
+        />
+      )}
+      {mergeTarget && (
+        <MergeCounterpartiesModal
+          keep={mergeTarget.keep}
+          incoming={mergeTarget.incoming}
+          onApply={applyMerge}
+          onCancel={() => setMergeTarget(null)}
+        />
+      )}
+      {dupePairs && !mergeTarget && (
+        <FindDuplicatesModal
+          pairs={dupePairs}
+          onReview={(p) => setMergeTarget({ keep: p.a, incoming: p.b })}
+          onClose={() => setDupePairs(null)}
+        />
+      )}
       {emailTarget && <EmailModal counterparty={emailTarget.counterparty} person={emailTarget.person} onClose={() => setEmailTarget(null)} />}
       {showImport && <ImportModal existingCounterparties={counterparties} onCancel={() => setShowImport(false)} onImport={handleImport} />}
       {importResult && (
@@ -1411,6 +1715,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
         </div>
         <button onClick={() => setShowImport(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
         <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ Export CSV</button>
+        <button onClick={scanForDuplicates} title="Scan all counterparties for suspected duplicates (same tax ID or similar name)" style={{ background: "#fff", color: "#2563EB", border: "1px solid #BFDBFE", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>⧉ Find duplicates</button>
         <button onClick={() => setModal("new")} style={{ background: "#16A34A", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
       </div>
 

@@ -48,8 +48,11 @@ function counterpartySnapshot(c: any) {
 function resolveCounterpartySnapshot(saved: any, contacts: any[]) {
   if (!saved) return saved;
   const byId = contacts.find((c: any) => String(c.id) === String(saved.id));
+  // Merged duplicates: the surviving record keeps the absorbed record's id in
+  // mergedFromIds, so documents that referenced the removed duplicate re-point here.
+  const byMergedId = contacts.find((c: any) => (c.mergedFromIds || []).map(String).includes(String(saved.id)));
   const byName = contacts.find((c: any) => normalizeName(c.name) === normalizeName(saved.name));
-  const c = byId || byName;
+  const c = byId || byMergedId || byName;
   return c ? counterpartySnapshot(c) : saved;
 }
 

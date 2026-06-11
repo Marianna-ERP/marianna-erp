@@ -102,6 +102,90 @@ export const LOCATIONS: Location[] = [
   L(202, "Airport", "PORT", "Frankfurt Cargo Airport", "Germany"),
 ];
 
+// ─── CUSTOM LOCATIONS (v6.3.0) ──────────────────────────────────────────────
+// User-managed locations (new ports, airports, warehouses, client sites...)
+// added via Settings → Locations & ports. Stored in localStorage under the
+// same namespaced key scheme as all other app data, so they travel with the
+// Settings JSON export/import. IDs start at 10000 to never clash with the
+// built-in reference list above.
+
+export const CUSTOM_LOCATION_ID_BASE = 10000;
+const CUSTOM_LOCATIONS_KEY = "marianna-erp:v1:customLocations";
+
+// Options offered in the Settings UI → mapped to (type, legacyType) pairs.
+export const CUSTOM_LOCATION_TYPE_OPTIONS: { key: LocationType; label: string; legacyType: string }[] = [
+  { key: "Port",             label: "Port",                          legacyType: "PORT" },
+  { key: "Airport",          label: "Airport (cargo)",               legacyType: "PORT" },
+  { key: "ClientFacility",   label: "Client site / DC",              legacyType: "CLIENT" },
+  { key: "SupplierFacility", label: "Supplier / producer site",      legacyType: "SUPPLIER" },
+  { key: "RentedWarehouse",  label: "Our warehouse (own or rented)", legacyType: "OWN" },
+  { key: "Customs",          label: "Customs / border point",        legacyType: "BROKER" },
+];
+
+function legacyTypeFor(type: LocationType): string {
+  const opt = CUSTOM_LOCATION_TYPE_OPTIONS.find(o => o.key === type);
+  return opt ? opt.legacyType : "PORT";
+}
+
+export function readCustomLocations(): Location[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_LOCATIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((l: any) => l && l.name)
+      .map((l: any) => ({
+        id: Number(l.id),
+        type: (l.type || "Port") as LocationType,
+        legacyType: l.legacyType || legacyTypeFor(l.type || "Port"),
+        name: String(l.name),
+        country: String(l.country || ""),
+        address: l.address || undefined,
+        custom: true,
+      } as Location & { custom: boolean }));
+  } catch (err) {
+    console.warn("[locations] Could not read custom locations:", err);
+    return [];
+  }
+}
+
+function writeCustomLocations(list: Location[]): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(CUSTOM_LOCATIONS_KEY, JSON.stringify(list));
+  } catch (err) {
+    console.warn("[locations] Could not write custom locations:", err);
+  }
+}
+
+export function addCustomLocation(input: { name: string; country: string; type: LocationType; address?: string }): Location {
+  const existing = readCustomLocations();
+  const nextId = Math.max(CUSTOM_LOCATION_ID_BASE, ...existing.map(l => Number(l.id) || 0)) + 1;
+  const loc: Location = {
+    id: nextId,
+    type: input.type,
+    legacyType: legacyTypeFor(input.type),
+    name: input.name.trim(),
+    country: (input.country || "").trim(),
+    address: (input.address || "").trim() || undefined,
+  };
+  writeCustomLocations([...existing, { ...loc, custom: true } as any]);
+  return loc;
+}
+
+export function removeCustomLocation(id: number): void {
+  writeCustomLocations(readCustomLocations().filter(l => Number(l.id) !== Number(id)));
+}
+
+// Merge custom locations into the canonical list at module load. Modules that
+// snapshot LOCATIONS at import time therefore see customs too; Settings reloads
+// the page after add/remove so every module picks up changes consistently.
+readCustomLocations().forEach(cl => {
+  if (!LOCATIONS.find(l => String(l.id) === String(cl.id))) LOCATIONS.push(cl);
+});
+
 // ─── Lookups ────────────────────────────────────────────────────────────────
 
 export function locById(id: any): Location | null {

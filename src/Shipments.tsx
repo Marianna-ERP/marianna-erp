@@ -411,6 +411,79 @@ function locationDatalistId(prefix, legIdx) {
   return `${prefix}-location-options-${legIdx}`;
 }
 
+// ─── v6.3.0: grouped, mode-aware From/To selector ──────────────────────────
+// Replaces the free-text datalist (easy to mistype) with a structured dropdown
+// grouped by location type. Sea/Air/Rail legs list ports & airports first.
+// "✏ Custom…" keeps the free-text escape hatch for one-off places.
+const LEG_LOC_GROUPS = [
+  { label: "Our warehouses", type: "OWN" },
+  { label: "Supplier / producer sites", type: "SUPPLIER" },
+  { label: "Ports & airports", type: "PORT" },
+  { label: "Client sites / DCs", type: "CLIENT" },
+  { label: "Customs / border", type: "BROKER" },
+];
+
+function LegLocationSelect({ label, locationId, custom, mode, onChange }: any) {
+  const [customMode, setCustomMode] = React.useState(!locationId && !!custom);
+  React.useEffect(() => { if (locationId) setCustomMode(false); }, [locationId]);
+  const portsFirst = mode === "Sea" || mode === "Air" || mode === "Rail";
+  const ordered = portsFirst
+    ? [LEG_LOC_GROUPS[2], LEG_LOC_GROUPS[1], LEG_LOC_GROUPS[0], LEG_LOC_GROUPS[3], LEG_LOC_GROUPS[4]]
+    : LEG_LOC_GROUPS;
+  const selValue = customMode ? "custom" : (locationId ? String(locationId) : "");
+  return (
+    <div>
+      <Lbl>{label}</Lbl>
+      <Sel value={selValue} onChange={e => {
+        const v = e.target.value;
+        if (v === "custom") { setCustomMode(true); onChange({ locationId: null, custom: custom || "" }); }
+        else if (v === "") { setCustomMode(false); onChange({ locationId: null, custom: "" }); }
+        else { setCustomMode(false); onChange({ locationId: parseNum(v), custom: "" }); }
+      }}>
+        <option value="">—</option>
+        {ordered.map(g => {
+          const locs = LOCATIONS.filter(l => l.type === g.type && !l.aliasOf);
+          if (!locs.length) return null;
+          return (
+            <optgroup key={g.type} label={g.label}>
+              {locs.map(l => <option key={l.id} value={l.id}>{l.name}{l.country ? ` · ${l.country}` : ""}</option>)}
+            </optgroup>
+          );
+        })}
+        <option value="custom">✏ Custom…</option>
+      </Sel>
+      {customMode && (
+        <Inp value={custom || ""} onChange={e => onChange({ locationId: null, custom: e.target.value })}
+          placeholder="type place / address" style={{ marginTop: 4 }} />
+      )}
+    </div>
+  );
+}
+
+// ─── v6.3.0: standard shipment document checklist ───────────────────────────
+// Every shipment carries a standard set of export documents. The set is
+// conditional on the transport modes present (CMR for road, BL for sea, AWB for
+// air) and users can add free manual rows for anything else.
+function standardDocTypesFor(shipment) {
+  const legModes = new Set((shipment.legs || []).map(l => l.mode));
+  if (!legModes.size && shipment.mode) legModes.add(shipment.mode);
+  const types = ["Invoice", "Packing list", "EUR.1", "Phytosanitary certificate", "Export declaration"];
+  if (legModes.has("Road") || shipment.mode === "Road" || shipment.mode === "Multimodal") types.push("CMR");
+  if (legModes.has("Sea") || shipment.mode === "Sea") types.push("BL");
+  if (legModes.has("Air") || shipment.mode === "Air") types.push("AWB");
+  return types;
+}
+
+function withStandardDocs(shipment) {
+  const existing = shipment.documents || [];
+  const have = new Set(existing.map(d => String(d.type || "").trim().toLowerCase()));
+  const missing = standardDocTypesFor(shipment)
+    .filter(t => !have.has(t.toLowerCase()))
+    .map((t, idx) => ({ id: Date.now() + idx + 1, type: t, ref: "", status: "Required", date: "", notes: "" }));
+  if (!missing.length) return shipment;
+  return { ...shipment, documents: [...existing, ...missing] };
+}
+
 function providerRoleForLeg(leg, providerId) {
   if (String(leg.carrierId || "") === String(providerId || "")) return "Carrier";
   if (String(leg.forwarderId || "") === String(providerId || "")) return "Forwarder";
@@ -594,7 +667,13 @@ function norm(v) {
   return String(v || "").trim().toLowerCase();
 }
 
-function buildShipmentFromPO(po, opts, shipments, lots) {
+
+// v6.3.0: every newly built shipment starts with the standard document checklist.
+function buildShipmentFromPO(po, opts, shipments, lots) { return withStandardDocs(buildShipmentFromPO__raw(po, opts, shipments, lots)); }
+function buildShipmentFromSO(so, opts, shipments, lots) { return withStandardDocs(buildShipmentFromSO__raw(so, opts, shipments, lots)); }
+function buildManualShipment(opts, shipments) { return withStandardDocs(buildManualShipment__raw(opts, shipments)); }
+
+function buildShipmentFromPO__raw(po, opts, shipments, lots) {
   const id = Date.now();
   const number = nextShipmentNumber(shipments);
   const isExport = String(po.flow || "").startsWith("EXP");
@@ -645,16 +724,28 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
   const baseCost = { id: 1, type: freightType, supplierId: carrierId || forwarderId || null, amount, currency, fxRate, amountPLN: Math.round(amount * fxRate * 100) / 100, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Expected logistics cost" };
 
   const roadLeg: any = { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: destinationLocationId, toCustom: destinationCustom, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Generated from ${po.number}` };
+  // v6.3.0 leg defaults: Multimodal starts with TWO legs (road pre-carriage + sea
+  // main); every other mode starts with ONE leg of that mode. "+ Add leg" covers
+  // anything extra (e.g. on-carriage after customs).
   let legs: any[] = [roadLeg];
-  if (mode === "Multimodal" || mode === "Sea") {
-    // Multimodal: pre-carriage (road) → main (sea) → on-carriage (road).
-    // Pre-carriage starts at the supplier (origin); the port-of-loading and final
-    // destination are left for the user to set. Each leg starts at ZERO cost.
+  if (mode === "Multimodal") {
     legs = [
       { ...roadLeg, id: 1, mode: "Road", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: null, toCustom: "", costAmount: 0, costPLN: 0, notes: `Pre-carriage for ${po.number}` },
       { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: destinationLocationId, toCustom: destinationCustom, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${po.number}` },
-      { id: 3, mode: "Road", status: "Planned", fromLocationId: null, fromCustom: "", toLocationId: destinationLocationId, toCustom: destinationCustom, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", costAmount: 0, costCurrency: "PLN", costFxRate: 1, costPLN: 0, notes: "On-carriage after customs" },
     ];
+  } else if (mode === "Sea" || mode === "Rail" || mode === "Air") {
+    legs = [{
+      id: 1, mode, status: "Booked",
+      fromLocationId: originLocationId, fromCustom: originCustom,
+      toLocationId: destinationLocationId, toCustom: destinationCustom,
+      forwarderId: forwarderId || null, carrierId: carrierId || null,
+      plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(),
+      plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(),
+      containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", awbNumber: "", shippingLine: "",
+      temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8),
+      costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100,
+      notes: `${mode} leg for ${po.number}`,
+    }];
   }
 
   return {
@@ -698,7 +789,7 @@ function buildShipmentFromPO(po, opts, shipments, lots) {
   };
 }
 
-function buildShipmentFromSO(so, opts, shipments, lots) {
+function buildShipmentFromSO__raw(so, opts, shipments, lots) {
   const id = Date.now();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
@@ -766,8 +857,11 @@ function buildShipmentFromSO(so, opts, shipments, lots) {
     confirmationSentAt: null,
     billingStatus: "Not ready",
     notes: `Created from ${so.number}. Delivery to ${so.client?.name || "client"}.`,
-    legs: [
-      { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, toLocationId: destinationLocationId, carrierId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Delivery for ${so.number}` },
+    legs: mode === "Multimodal" ? [
+      { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, toLocationId: null, carrierId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.loadingDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Pre-carriage for ${so.number}` },
+      { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, toLocationId: destinationLocationId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${so.number}` },
+    ] : [
+      { id: 1, mode, status: "Booked", fromLocationId: originLocationId, toLocationId: destinationLocationId, carrierId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", awbNumber: "", shippingLine: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Delivery for ${so.number}` },
     ],
     goods,
     costs: [
@@ -781,7 +875,7 @@ function buildShipmentFromSO(so, opts, shipments, lots) {
   };
 }
 
-function buildManualShipment(opts, shipments) {
+function buildManualShipment__raw(opts, shipments) {
   const id = Date.now();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
@@ -1021,8 +1115,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         <Card>
           <SectionTitle>Dates and temperature</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div><Lbl>Loading date</Lbl><Inp type="date" value={form.loadingDate} onChange={e => sf("loadingDate", e.target.value)} /></div>
-            <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
+            <div><Lbl>Loading date <span style={{ color: "#AAA", fontWeight: 400 }}>· loaded at supplier</span></Lbl><Inp type="date" value={form.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the shipment — the date the goods are loaded at the supplier (per the purchase agreement)" /></div>
+            <div><Lbl>Expected delivery <span style={{ color: "#AAA", fontWeight: 400 }}>· delivered to client</span></Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="The date the cargo reaches the client (per the sales agreement)" /></div>
             <div><Lbl>Temp min C</Lbl><Inp type="number" value={form.temperatureMinC} onChange={e => sf("temperatureMinC", e.target.value)} /></div>
             <div><Lbl>Temp max C</Lbl><Inp type="number" value={form.temperatureMaxC} onChange={e => sf("temperatureMaxC", e.target.value)} /></div>
           </div>
@@ -1060,30 +1154,29 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
 }
 
 function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
-  const [draft, setDraft] = useState(JSON.parse(JSON.stringify(shipment)));
+  const [draft, setDraft] = useState(() => withStandardDocs(JSON.parse(JSON.stringify(shipment))));
   const roadProviders = logisticsProviders(contacts, "Road");
   const seaProviders = logisticsProviders(contacts, "Sea");
+  const customsProviders = logisticsProviders(contacts, "Customs");
   function sf(k, v) { setDraft(prev => ({ ...prev, [k]: v })); }
-  // v6.x: when a leg/unit mode is chosen, the fields irrelevant to that mode are
-  // prefilled with "TBA" (only if empty — never overwrites typed values, always
-  // editable). Road has no container/sea fields; Sea/Rail/Air have no truck fields.
-  function applyModeTBA(obj, mode) {
-    const out = { ...obj };
-    const fill = (k) => { if (!out[k] || out[k] === "") out[k] = "TBA"; };
-    if (mode === "Road") {
-      ["containerNumber", "sealNumber", "bookingNumber", "blNumber", "shippingLine"].forEach(fill);
-    } else if (mode === "Sea" || mode === "Rail" || mode === "Air") {
-      ["vehiclePlate", "truckPlate", "trailerPlate", "driverName", "driverPhone"].forEach(fill);
-    }
-    return out;
-  }
   function updateLeg(idx, k, v) {
-    setDraft(prev => ({ ...prev, legs: (prev.legs || []).map((l, i) => {
-      if (i !== idx) return l;
-      let next = { ...l, [k]: v };
-      if (k === "mode") next = applyModeTBA(next, v);
-      return next;
-    }) }));
+    setDraft(prev => ({ ...prev, legs: (prev.legs || []).map((l, i) => i === idx ? { ...l, [k]: v } : l) }));
+  }
+  // v6.3.0: set a leg's From/To in one update, and auto-chain — when leg N's "To"
+  // changes and leg N+1 has an empty "From", the next leg starts where this one ends.
+  function updateLegLocation(idx, side, locationId, custom) {
+    setDraft(prev => {
+      const legs = (prev.legs || []).map((l, i) => {
+        if (i !== idx) return l;
+        return side === "from"
+          ? { ...l, fromLocationId: locationId, fromCustom: custom || "" }
+          : { ...l, toLocationId: locationId, toCustom: custom || "" };
+      });
+      if (side === "to" && legs[idx + 1] && !legs[idx + 1].fromLocationId && !legs[idx + 1].fromCustom) {
+        legs[idx + 1] = { ...legs[idx + 1], fromLocationId: locationId, fromCustom: custom || "" };
+      }
+      return { ...prev, legs };
+    });
   }
   function updateGood(idx, k, v) {
     setDraft(prev => ({ ...prev, goods: (prev.goods || []).map((g, i) => i === idx ? { ...g, [k]: v } : g) }));
@@ -1098,6 +1191,14 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
   }
   function updateDoc(idx, k, v) {
     setDraft(prev => ({ ...prev, documents: (prev.documents || []).map((d, i) => i === idx ? { ...d, [k]: v } : d) }));
+  }
+  function addDoc() {
+    setDraft(prev => ({ ...prev, documents: [...(prev.documents || []), { id: Date.now(), type: "", ref: "", status: "Required", date: "", notes: "" }] }));
+  }
+  function removeDoc(idx) {
+    const d = (draft.documents || [])[idx];
+    if (d && (d.type || d.ref) && !window.confirm(`Remove document row "${d.type || d.ref}"?`)) return;
+    setDraft(prev => ({ ...prev, documents: (prev.documents || []).filter((_, i) => i !== idx) }));
   }
   function addCost() {
     // New manual lines default to a non-freight type ("other") so they're freely
@@ -1122,9 +1223,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
         const units = transportUnitsForLeg(leg);
         const nextUnits = (units.length ? units : [blankTransportUnit(leg.mode)]).map((u, ui) => {
           if (ui !== unitIdx) return u;
-          let nu = { ...u, [k]: v };
-          if (k === "mode") nu = applyModeTBA(nu, v);
-          return nu;
+          return { ...u, [k]: v };
         });
         return { ...leg, vehicles: nextUnits };
       })
@@ -1143,27 +1242,35 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
     }));
   }
   function addLeg() {
-    setDraft(prev => ({
-      ...prev,
-      legs: [...(prev.legs || []), {
-        id: Date.now(),
-        mode: prev.mode === "Sea" ? "Sea" : "Road",
-        status: "Booked",
-        fromLocationId: null,
-        toLocationId: null,
-        fromCustom: "",
-        toCustom: "",
-        carrierId: prev.carrierId || null,
-        forwarderId: prev.forwarderId || null,
-        plannedPickupDate: prev.loadingDate || todayISO(),
-        plannedDeliveryDate: prev.expectedDeliveryDate || todayISO(),
-        vehicles: [],
-        notes: ""
-      }]
-    }));
+    setDraft(prev => {
+      const prevLegs = prev.legs || [];
+      const last = prevLegs[prevLegs.length - 1];
+      return {
+        ...prev,
+        legs: [...prevLegs, {
+          id: Date.now(),
+          mode: prev.mode === "Sea" ? "Sea" : "Road",
+          status: "Booked",
+          // auto-chain: a new leg starts where the previous one ends
+          fromLocationId: last ? (last.toLocationId ?? null) : null,
+          toLocationId: null,
+          fromCustom: last ? (last.toLocationId ? "" : (last.toCustom || "")) : "",
+          toCustom: "",
+          carrierId: prev.carrierId || null,
+          forwarderId: prev.forwarderId || null,
+          plannedPickupDate: prev.loadingDate || todayISO(),
+          plannedDeliveryDate: prev.expectedDeliveryDate || todayISO(),
+          vehicles: [],
+          notes: ""
+        }]
+      };
+    });
   }
   function removeLeg(legIdx) {
-    setDraft(prev => ({ ...prev, legs: (prev.legs || []).filter((_, i) => i !== legIdx) }));
+    setDraft(prev => {
+      if ((prev.legs || []).length <= 1) { window.alert("A shipment needs at least one leg."); return prev; }
+      return { ...prev, legs: (prev.legs || []).filter((_, i) => i !== legIdx) };
+    });
   }
 
   return <div style={{ position: "fixed", inset: 0, zIndex: 65, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
@@ -1175,18 +1282,25 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
       <div style={{ padding: 22, display: "grid", gap: 16 }}>
         <Card>
           <SectionTitle>Header</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
-            <div><Lbl>Loading date</Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} /></div>
-            <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
-            <div><Lbl>Vehicles</Lbl><Inp type="number" value={draft.vehicleCount} onChange={e => sf("vehicleCount", parseNum(e.target.value, 1))} /></div>
+            <div><Lbl>Loading date <span style={{ color: "#AAA", fontWeight: 400 }}>· loaded at supplier</span></Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the shipment — the date the goods are loaded at the supplier (per the purchase agreement)" /></div>
+            <div><Lbl>Expected delivery <span style={{ color: "#AAA", fontWeight: 400 }}>· delivered to client</span></Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="The date the cargo reaches the client (per the sales agreement)" /></div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 110px", gap: 10, marginTop: 10 }}>
             <div><Lbl>Carrier</Lbl><Sel value={draft.carrierId || ""} onChange={e => sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">None</option>{roadProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
             <div><Lbl>Forwarder</Lbl><Sel value={draft.forwarderId || ""} onChange={e => sf("forwarderId", e.target.value ? parseNum(e.target.value) : null)}><option value="">None</option>{seaProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
-            <div><Lbl>Customs / broker</Lbl><Inp value={draft.customsClearance} onChange={e => sf("customsClearance", e.target.value)} /></div>
-            <div><Lbl>Billing status</Lbl><Sel value={draft.billingStatus} onChange={e => sf("billingStatus", e.target.value)}>{BILLING_STATUSES.map(s => <option key={s}>{s}</option>)}</Sel></div>
+            <div><Lbl>Customs / broker</Lbl>
+              <Sel value={draft.brokerId || ""} onChange={e => sf("brokerId", e.target.value ? parseNum(e.target.value) : null)}>
+                <option value="">None / not required</option>
+                {customsProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </Sel>
+              {!draft.brokerId && draft.customsClearance && !["Not required / to be confirmed", "To be confirmed"].includes(draft.customsClearance) && (
+                <div style={{ fontSize: 10, color: "#92400E", marginTop: 3 }} title="Legacy free-text value — pick a counterparty above to replace it">prev: {draft.customsClearance}</div>
+              )}
+            </div>
+            <div><Lbl>Units <span style={{ color: "#AAA", fontWeight: 400 }}>· derived</span></Lbl><div style={{ padding: "8px 10px", border: "1px solid #F3F4F6", borderRadius: 6, fontSize: 13, fontWeight: 700, color: "#334155", background: "#FAFAFA" }} title="Counted automatically from the transport units on each leg">{shipmentVehicleCount(draft) || "—"}</div></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "120px 120px 1fr", gap: 10, marginTop: 10 }}>
             <div><Lbl>Temp min C</Lbl><Inp type="number" value={draft.temperatureMinC} onChange={e => sf("temperatureMinC", parseNum(e.target.value))} /></div>
@@ -1197,53 +1311,66 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
         <Card>
           <SectionTitle right={<SmallButton onClick={addLeg}>+ Activate extra leg</SmallButton>}>Legs - route, truck / driver / container / BL</SectionTitle>
           {(draft.legs || []).map((leg, i) => <div key={leg.id || i} style={{ border: "1px solid #E5E7EB", borderRadius: 10, padding: 12, marginBottom: 10, background: "#FAFAFA" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "90px 110px 1fr 1fr 1fr 1fr 80px", gap: 9 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 800, color: "#111" }}>Leg #{i + 1}</span>
+                <ModeBadge mode={leg.mode} />
+              </div>
+              {(draft.legs || []).length > 1 && <SmallButton onClick={() => removeLeg(i)}>Remove leg</SmallButton>}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "90px 110px 1fr 1fr 1fr 1fr", gap: 9 }}>
               <div><Lbl>Mode</Lbl><Sel value={leg.mode} onChange={e => updateLeg(i, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
               <div><Lbl>Status</Lbl><Sel value={leg.status} onChange={e => updateLeg(i, "status", e.target.value)}>{LEG_STATUSES.map(st => <option key={st}>{st}</option>)}</Sel></div>
-              <div><Lbl>From</Lbl><Inp list={locationDatalistId("from", i)} value={locationInputValue(leg.fromLocationId, leg.fromCustom)} onChange={e => { const raw = e.target.value; const found = LOCATIONS.find(l => l.name === raw); updateLeg(i, "fromCustom", found ? "" : raw); updateLeg(i, "fromLocationId", found ? found.id : null); }} /><datalist id={locationDatalistId("from", i)}>{LOCATIONS.map(l => <option key={l.id} value={l.name} />)}</datalist></div>
-              <div><Lbl>To</Lbl><Inp list={locationDatalistId("to", i)} value={locationInputValue(leg.toLocationId, leg.toCustom)} onChange={e => { const raw = e.target.value; const found = LOCATIONS.find(l => l.name === raw); updateLeg(i, "toCustom", found ? "" : raw); updateLeg(i, "toLocationId", found ? found.id : null); }} /><datalist id={locationDatalistId("to", i)}>{LOCATIONS.map(l => <option key={l.id} value={l.name} />)}</datalist></div>
+              <LegLocationSelect label="From" mode={leg.mode} locationId={leg.fromLocationId} custom={leg.fromCustom}
+                onChange={({ locationId, custom }) => updateLegLocation(i, "from", locationId, custom)} />
+              <LegLocationSelect label="To" mode={leg.mode} locationId={leg.toLocationId} custom={leg.toCustom}
+                onChange={({ locationId, custom }) => updateLegLocation(i, "to", locationId, custom)} />
               <div><Lbl>Pickup</Lbl><Inp type="date" value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} /></div>
               <div><Lbl>Delivery</Lbl><Inp type="date" value={String(leg.plannedDeliveryDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedDeliveryDate", e.target.value)} /></div>
-              <div><Lbl>&nbsp;</Lbl>{(draft.legs || []).length > 2 && <SmallButton onClick={() => removeLeg(i)}>Remove</SmallButton>}</div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 9, marginTop: 9 }}>
+            {leg.mode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 9, marginTop: 9 }}>
               <div><Lbl>Truck plate</Lbl><Inp value={leg.vehiclePlate} onChange={e => updateLeg(i, "vehiclePlate", e.target.value)} /></div>
               <div><Lbl>Trailer plate</Lbl><Inp value={leg.trailerPlate} onChange={e => updateLeg(i, "trailerPlate", e.target.value)} /></div>
               <div><Lbl>Driver name</Lbl><Inp value={leg.driverName} onChange={e => updateLeg(i, "driverName", e.target.value)} /></div>
               <div><Lbl>Driver phone</Lbl><Inp value={leg.driverPhone} onChange={e => updateLeg(i, "driverPhone", e.target.value)} /></div>
-            </div>
-            {(draft.mode === "Sea" || draft.mode === "Multimodal" || leg.mode === "Sea") && <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1.3fr 1fr", gap: 9, marginTop: 9 }}>
+            </div>}
+            {(leg.mode === "Sea" || leg.mode === "Rail") && <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1.3fr 1fr", gap: 9, marginTop: 9 }}>
               <div><Lbl>Container</Lbl><Inp value={leg.containerNumber} onChange={e => updateLeg(i, "containerNumber", e.target.value)} placeholder="e.g. MSCU1234567" /></div>
               <div><Lbl>Seal</Lbl><Inp value={leg.sealNumber} onChange={e => updateLeg(i, "sealNumber", e.target.value)} /></div>
               <div><Lbl>Booking</Lbl><Inp value={leg.bookingNumber} onChange={e => updateLeg(i, "bookingNumber", e.target.value)} /></div>
               <div><Lbl>BL</Lbl><Inp value={leg.blNumber} onChange={e => updateLeg(i, "blNumber", e.target.value)} /></div>
-              <div><Lbl>Shipping line</Lbl><Inp value={leg.shippingLine} onChange={e => updateLeg(i, "shippingLine", e.target.value)} title="The shipping company you book with, e.g. MSC, Maersk, CMA CGM" /></div>
+              <div><Lbl>{leg.mode === "Rail" ? "Rail operator" : "Shipping line"}</Lbl><Inp value={leg.shippingLine} onChange={e => updateLeg(i, "shippingLine", e.target.value)} title="The shipping company you book with, e.g. MSC, Maersk, CMA CGM" /></div>
+            </div>}
+            {leg.mode === "Air" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.2fr", gap: 9, marginTop: 9 }}>
+              <div><Lbl>AWB</Lbl><Inp value={leg.awbNumber || ""} onChange={e => updateLeg(i, "awbNumber", e.target.value)} placeholder="e.g. 020-12345675" /></div>
+              <div><Lbl>Booking</Lbl><Inp value={leg.bookingNumber} onChange={e => updateLeg(i, "bookingNumber", e.target.value)} /></div>
+              <div><Lbl>Airline</Lbl><Inp value={leg.shippingLine} onChange={e => updateLeg(i, "shippingLine", e.target.value)} title="e.g. LOT Cargo, Lufthansa Cargo" /></div>
             </div>}
             <div style={{ marginTop: 12, borderTop: "1px dashed #CBD5E1", paddingTop: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Transport units for this leg · trucks / containers / AWB</div>
                 <SmallButton kind="green" onClick={() => addVehicle(i)}>+ Add unit</SmallButton>
               </div>
-              {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => <div key={u.id || ui} style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#FCFCFD" }}>
+              {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => { const uMode = u.mode || leg.mode; return <div key={u.id || ui} style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#FCFCFD" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Unit #{ui + 1}</div>
                   <SmallButton onClick={() => removeVehicle(i, ui)}>Remove</SmallButton>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
-                  <div><Lbl>Mode</Lbl><Sel value={u.mode || leg.mode} onChange={e => updateVehicle(i, ui, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
+                <div style={{ display: "grid", gridTemplateColumns: uMode === "Road" ? "110px 1fr 1fr 1fr" : "110px 1fr", gap: 9, marginBottom: 9 }}>
+                  <div><Lbl>Mode</Lbl><Sel value={uMode} onChange={e => updateVehicle(i, ui, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
                   <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
-                  <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>
-                  <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>
+                  {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
+                  {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr", gap: 9, marginBottom: 9 }}>
+                {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
                   <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.4fr", gap: 9 }}>
+                </div>}
+                {uMode !== "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.4fr", gap: 9 }}>
                   <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
                   <div><Lbl>Seal</Lbl><Inp value={u.sealNumber || ""} onChange={e => updateVehicle(i, ui, "sealNumber", e.target.value)} /></div>
-                  <div><Lbl>BL / AWB</Lbl><Inp value={[u.blNumber, u.awbNumber].filter(Boolean).join(" / ")} onChange={e => { const parts = String(e.target.value).split("/").map(x => x.trim()); updateVehicle(i, ui, "blNumber", parts[0] || ""); updateVehicle(i, ui, "awbNumber", parts[1] || ""); }} /></div>
-                </div>
+                  <div><Lbl>{uMode === "Air" ? "AWB" : "BL"}</Lbl><Inp value={uMode === "Air" ? (u.awbNumber || "") : [u.blNumber, u.awbNumber].filter(Boolean).join(" / ")} onChange={e => { if (uMode === "Air") { updateVehicle(i, ui, "awbNumber", e.target.value); } else { const parts = String(e.target.value).split("/").map(x => x.trim()); updateVehicle(i, ui, "blNumber", parts[0] || ""); updateVehicle(i, ui, "awbNumber", parts[1] || ""); } }} /></div>
+                </div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} /></div>
                   <div><Lbl>Actual unloaded on</Lbl><Inp type="date" value={u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "actualUnloadDate", e.target.value)} /></div>
@@ -1253,7 +1380,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
                   <div><Lbl>Price for this unit</Lbl><Inp type="number" value={u.costAmount || ""} onChange={e => updateVehicle(i, ui, "costAmount", parseNum(e.target.value))} placeholder="0" /></div>
                   <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Optional — set this when each truck/container has a different price. The transport order totals all unit prices for the carrier.</div>
                 </div>
-              </div>)}
+              </div>; })}
               <div style={{ fontSize: 10.5, color: "#64748B" }}>Use several units when one shipment has multiple trucks/containers. Example: 4 sea containers and 5 road trucks at arrival port are recorded as two legs with 4 sea units and 5 road units.</div>
             </div>
           </div>)}
@@ -1271,6 +1398,10 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
         </Card>
         <Card>
           <SectionTitle right={<SmallButton kind="green" onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 10, alignItems: "end", marginBottom: 12, paddingBottom: 12, borderBottom: "1px dashed #E5E7EB" }}>
+            <div><Lbl>Billing status</Lbl><Sel value={draft.billingStatus} onChange={e => sf("billingStatus", e.target.value)}>{BILLING_STATUSES.map(s => <option key={s}>{s}</option>)}</Sel></div>
+            <div style={{ fontSize: 10.5, color: "#888", lineHeight: 1.45, paddingBottom: 7 }}>Tracks where this shipment is in the cost cycle — from waiting for the supplier's freight invoice to costs allocated into lots.</div>
+          </div>
           {(draft.costs || []).map((c, i) => <div key={c.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.7fr 0.6fr 0.8fr 1fr 1fr 0.5fr", gap: 8, marginBottom: 8 }}>
             <div><Lbl>Type</Lbl><Sel value={c.type} onChange={e => updateCost(i, "type", e.target.value)}>{COST_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
             <div><Lbl>Supplier</Lbl><Sel value={c.supplierId || ""} onChange={e => updateCost(i, "supplierId", e.target.value ? parseNum(e.target.value) : null)}>{logisticsProviders(contacts).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
@@ -1286,13 +1417,23 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
           <div style={{ textAlign: "right", fontSize: 13, color: "#444", marginTop: 8 }}>Total: <strong>{fmtMoney(shipmentCostPLN(draft), "PLN")}</strong></div>
         </Card>
         <Card>
-          <SectionTitle>Documents</SectionTitle>
-          {(draft.documents || []).map((d, i) => <div key={d.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+          <SectionTitle right={<SmallButton kind="green" onClick={addDoc}>+ Add document</SmallButton>}>Documents</SectionTitle>
+          <div style={{ fontSize: 10.5, color: "#888", marginBottom: 10, lineHeight: 1.45 }}>
+            Standard checklist (invoice, packing list, EUR.1, phytosanitary certificate, export declaration, plus CMR/BL/AWB per transport mode) is added automatically — extra rows can be added manually.
+          </div>
+          {(draft.documents || []).map((d, i) => <div key={d.id || i} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.9fr 0.9fr 34px", gap: 8, marginBottom: 8, alignItems: "end" }}>
             <div><Lbl>Type</Lbl><Inp value={d.type} onChange={e => updateDoc(i, "type", e.target.value)} /></div>
             <div><Lbl>Ref</Lbl><Inp value={d.ref} onChange={e => updateDoc(i, "ref", e.target.value)} /></div>
-            <div><Lbl>Status</Lbl><Sel value={d.status} onChange={e => updateDoc(i, "status", e.target.value)}><option>Required</option><option>Missing</option><option>Generated</option><option>Sent</option><option>Received</option><option>Approved</option></Sel></div>
+            <div><Lbl>Status</Lbl><Sel value={d.status} onChange={e => updateDoc(i, "status", e.target.value)}><option>Required</option><option>Missing</option><option>Generated</option><option>Sent</option><option>Received</option><option>Approved</option><option>N/A</option></Sel></div>
             <div><Lbl>Date</Lbl><Inp type="date" value={d.date} onChange={e => updateDoc(i, "date", e.target.value)} /></div>
+            <button onClick={() => removeDoc(i)} title="Remove this document row"
+              style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
           </div>)}
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB", alignItems: "end" }}>
+            <div><Lbl>Courier tracking nr (DHL) — original documents to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
+            <div><Lbl>Sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} /></div>
+            <div style={{ fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>The courier waybill number under which the original document set (BL, EUR.1, phyto...) was sent to the client.</div>
+          </div>
         </Card>
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
@@ -1639,7 +1780,12 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
       </Card>
       <Card>
         <SectionTitle>Documents</SectionTitle>
-        {(shipment.documents || []).map(d => <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, borderBottom: "1px solid #F1F5F9", padding: "8px 0" }}><div><div style={{ fontSize: 12, fontWeight: 700 }}>{d.type} {d.ref ? `- ${d.ref}` : ""}</div><div style={{ fontSize: 11, color: "#888" }}>{d.notes}</div></div><div style={{ fontSize: 11, fontWeight: 800, color: ["Received", "Approved", "Generated", "Sent"].includes(d.status) ? "#059669" : "#D97706" }}>{d.status}</div></div>)}
+        {(shipment.documents || []).map(d => <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, borderBottom: "1px solid #F1F5F9", padding: "8px 0" }}><div><div style={{ fontSize: 12, fontWeight: 700 }}>{d.type} {d.ref ? `- ${d.ref}` : ""}</div><div style={{ fontSize: 11, color: "#888" }}>{d.notes}</div></div><div style={{ fontSize: 11, fontWeight: 800, color: d.status === "N/A" ? "#94A3B8" : ["Received", "Approved", "Generated", "Sent"].includes(d.status) ? "#059669" : "#D97706" }}>{d.status}</div></div>)}
+        {(shipment.docsCourierTrackingNo || shipment.docsCourierDate) && (
+          <div style={{ marginTop: 10, padding: "8px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7, fontSize: 11.5, color: "#0C4A6E" }}>
+            📦 Original documents sent to client — courier tracking <strong style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{shipment.docsCourierTrackingNo || "—"}</strong>{shipment.docsCourierDate ? ` · sent ${shipment.docsCourierDate}` : ""}
+          </div>
+        )}
       </Card>
     </div>
     {shipment.notes && <Card><SectionTitle>Notes</SectionTitle><div style={{ fontSize: 12.5, color: "#555", whiteSpace: "pre-line" }}>{shipment.notes}</div></Card>}
