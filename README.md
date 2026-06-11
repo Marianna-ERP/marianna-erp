@@ -110,3 +110,13 @@ See `V5_8_INTEGRITY_WORKFLOWS.md` for details.
 - Settings: user-managed custom locations/ports available across all modules and included in JSON export/import.
 
 See `CHANGELOG_v6.3.0.md` for details.
+
+## Update V6.4.0 - Shipment & transport order rework
+
+- PO supplier filter shows only suppliers with POs (with counts; dropdown when many).
+- Shipments list rows are one compact line (number · mode · status + missing-docs dot); detail header trimmed to number/mode/status/billing + PO/SO/LOT pills, with SO links derived from all sources.
+- Temp recorder no. field (checklist + printed order); per-currency cost subtotals with PLN total and EUR equivalent; per-leg pickup/delivery time fields.
+- Transport order is now strictly leg-scoped: places and date+time from the selected legs only (no shipment-level fallback — fixes the supplier-privacy leak and the CIF date logic); mode-driven unit table without From→To/Kg; SO backfilled in cargo; road orders keep standard CMR terms, sea/air/rail orders use manually entered terms saved per shipment; goods line covers trailer/container.
+- "Port warehouse" custom location type.
+
+See `CHANGELOG_v6.4.0.md` for details.

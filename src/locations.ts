@@ -115,6 +115,7 @@ const CUSTOM_LOCATIONS_KEY = "marianna-erp:v1:customLocations";
 // Options offered in the Settings UI → mapped to (type, legacyType) pairs.
 export const CUSTOM_LOCATION_TYPE_OPTIONS: { key: LocationType; label: string; legacyType: string }[] = [
   { key: "Port",             label: "Port",                          legacyType: "PORT" },
+  { key: "PortWarehouse",    label: "Port warehouse",                legacyType: "PORT" },
   { key: "Airport",          label: "Airport (cargo)",               legacyType: "PORT" },
   { key: "ClientFacility",   label: "Client site / DC",              legacyType: "CLIENT" },
   { key: "SupplierFacility", label: "Supplier / producer site",      legacyType: "SUPPLIER" },

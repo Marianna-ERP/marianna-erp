@@ -484,6 +484,23 @@ function withStandardDocs(shipment) {
   return { ...shipment, documents: [...existing, ...missing] };
 }
 
+// ─── v6.4.0: derive ALL SO links of a shipment ──────────────────────────────
+// Header soRefs ∪ per-goods soRef ∪ SOs whose lines source from this shipment's
+// POs. Fixes the header not showing the SO when the link lives on goods rows or
+// when the SO was attached to the PO after the shipment was created.
+function shipmentSORefs(shipment, orders = []) {
+  const set = new Set(
+    [...(shipment.soRefs || []), ...((shipment.goods || []).map((g: any) => g.soRef))]
+      .map(x => String(x || "")).filter(Boolean)
+  );
+  (orders || []).forEach((o: any) => {
+    if (!o || o.status === "Cancelled") return;
+    const sourcesPO = (o.items || []).some((it: any) => it.sourceType === "PO" && (shipment.poRefs || []).includes(it.sourceRef));
+    if (sourcesPO && o.number) set.add(String(o.number));
+  });
+  return Array.from(set);
+}
+
 function providerRoleForLeg(leg, providerId) {
   if (String(leg.carrierId || "") === String(providerId || "")) return "Carrier";
   if (String(leg.forwarderId || "") === String(providerId || "")) return "Forwarder";
@@ -985,21 +1002,15 @@ function Kpi({ label, value, sub, onClick }: any) {
 }
 
 function ShipmentListRow({ sh, active, onClick, contacts }: any) {
-  const mainProvider = providerName(sh.carrierId || sh.forwarderId, contacts);
+  // v6.4.0: single compact line (number · mode · status) so more shipments fit
+  // on screen. A small amber dot flags missing documents.
   const missingDocs = (sh.documents || []).filter(d => ["Required", "Missing"].includes(d.status)).length;
-  return <div onClick={onClick} style={{ padding: "13px 14px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: active ? "#F9FAFB" : "#fff", borderLeft: active ? "4px solid #111" : "4px solid transparent" }}>
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: "#111" }}>{sh.number}</div>
-      <ModeBadge mode={sh.mode} />
-      <StatusBadge status={sh.status} />
-    </div>
-    <div style={{ fontSize: 12, color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{PURPOSE_LABELS[sh.purpose] || sh.purpose} - {mainProvider}</div>
-    <div style={{ display: "flex", gap: 10, marginTop: 6, fontSize: 11, color: "#888" }}>
-      <span>{sh.loadingDate || "-"} {"->"} {sh.expectedDeliveryDate || "-"}</span>
-      <span>{fmtNum(shipmentKg(sh))} kg</span>
-      <span>{fmtMoney(shipmentCostPLN(sh), "PLN")}</span>
-      {missingDocs > 0 && <span style={{ color: "#D97706", fontWeight: 700 }}>{missingDocs} docs</span>}
-    </div>
+  return <div onClick={onClick} title={`${PURPOSE_LABELS[sh.purpose] || sh.purpose} · ${providerName(sh.carrierId || sh.forwarderId, contacts)} · ${sh.loadingDate || "-"} → ${sh.expectedDeliveryDate || "-"}${missingDocs ? ` · ${missingDocs} document(s) missing` : ""}`}
+    style={{ padding: "9px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: active ? "#F9FAFB" : "#fff", borderLeft: active ? "4px solid #111" : "4px solid transparent", display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+    <div style={{ fontSize: 12.5, fontWeight: 800, color: "#111", whiteSpace: "nowrap" }}>{sh.number}</div>
+    <ModeBadge mode={sh.mode} />
+    <StatusBadge status={sh.status} />
+    {missingDocs > 0 && <span title={`${missingDocs} document(s) missing`} style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0, marginLeft: "auto" }} />}
   </div>;
 }
 
@@ -1302,9 +1313,10 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
             </div>
             <div><Lbl>Units <span style={{ color: "#AAA", fontWeight: 400 }}>· derived</span></Lbl><div style={{ padding: "8px 10px", border: "1px solid #F3F4F6", borderRadius: 6, fontSize: 13, fontWeight: 700, color: "#334155", background: "#FAFAFA" }} title="Counted automatically from the transport units on each leg">{shipmentVehicleCount(draft) || "—"}</div></div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "120px 120px 1fr", gap: 10, marginTop: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "120px 120px 180px 1fr", gap: 10, marginTop: 10 }}>
             <div><Lbl>Temp min C</Lbl><Inp type="number" value={draft.temperatureMinC} onChange={e => sf("temperatureMinC", parseNum(e.target.value))} /></div>
             <div><Lbl>Temp max C</Lbl><Inp type="number" value={draft.temperatureMaxC} onChange={e => sf("temperatureMaxC", parseNum(e.target.value))} /></div>
+            <div><Lbl>Temp recorder no.</Lbl><Inp value={draft.tempRecorderNo || ""} onChange={e => sf("tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial number — printed on the transport order and reported on the invoice" /></div>
             <div><Lbl>Notes</Lbl><Inp value={draft.notes} onChange={e => sf("notes", e.target.value)} /></div>
           </div>
         </Card>
@@ -1325,8 +1337,10 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
                 onChange={({ locationId, custom }) => updateLegLocation(i, "from", locationId, custom)} />
               <LegLocationSelect label="To" mode={leg.mode} locationId={leg.toLocationId} custom={leg.toCustom}
                 onChange={({ locationId, custom }) => updateLegLocation(i, "to", locationId, custom)} />
-              <div><Lbl>Pickup</Lbl><Inp type="date" value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} /></div>
-              <div><Lbl>Delivery</Lbl><Inp type="date" value={String(leg.plannedDeliveryDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedDeliveryDate", e.target.value)} /></div>
+              <div><Lbl>Pickup</Lbl><Inp type="date" value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} />
+                <Inp value={leg.plannedPickupTime || ""} onChange={e => updateLeg(i, "plannedPickupTime", e.target.value)} placeholder="time, e.g. 08:00–14:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Loading time or time window — printed on the transport order" /></div>
+              <div><Lbl>Delivery</Lbl><Inp type="date" value={String(leg.plannedDeliveryDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedDeliveryDate", e.target.value)} />
+                <Inp value={leg.plannedDeliveryTime || ""} onChange={e => updateLeg(i, "plannedDeliveryTime", e.target.value)} placeholder="time, e.g. by 12:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Unloading time or time window — printed on the transport order" /></div>
             </div>
             {leg.mode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 9, marginTop: 9 }}>
               <div><Lbl>Truck plate</Lbl><Inp value={leg.vehiclePlate} onChange={e => updateLeg(i, "vehiclePlate", e.target.value)} /></div>
@@ -1414,7 +1428,23 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
               ? <span title="Freight lines can't be deleted" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", height: 34, width: "100%", color: "#9CA3AF", fontSize: 14 }}>🔒</span>
               : <button onClick={() => removeCost(i)} title="Delete this cost line" style={{ height: 34, width: "100%", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>✕</button>}</div>
           </div>)}
-          <div style={{ textAlign: "right", fontSize: 13, color: "#444", marginTop: 8 }}>Total: <strong>{fmtMoney(shipmentCostPLN(draft), "PLN")}</strong></div>
+          {(() => {
+            // v6.4.0: per-currency subtotals + PLN total + EUR equivalent.
+            const byCur: Record<string, number> = {};
+            (draft.costs || []).forEach((c: any) => { const cur = c.currency || "PLN"; byCur[cur] = (byCur[cur] || 0) + parseNum(c.amount); });
+            const subtotals = Object.entries(byCur).filter(([, v]) => v > 0).map(([cur, v]) => fmtMoney(v, cur)).join(" + ");
+            const totalPLN = shipmentCostPLN(draft);
+            const eurLine = (draft.costs || []).find((c: any) => c.currency === "EUR" && parseNum(c.fxRate) > 0);
+            const eurRate = eurLine ? parseNum(eurLine.fxRate) : 4.25;
+            const totalEUR = eurRate > 0 ? totalPLN / eurRate : 0;
+            return (
+              <div style={{ textAlign: "right", fontSize: 13, color: "#444", marginTop: 8 }}>
+                {subtotals && Object.keys(byCur).length > 1 && <span style={{ fontSize: 11.5, color: "#888", marginRight: 10 }}>{subtotals} →</span>}
+                Total: <strong>{fmtMoney(totalPLN, "PLN")}</strong>
+                <span style={{ color: "#888", marginLeft: 8 }}>≈ <strong style={{ color: "#444" }}>{fmtMoney(totalEUR, "EUR")}</strong> <span style={{ fontSize: 10.5 }}>(at {eurRate.toFixed(2)})</span></span>
+              </div>
+            );
+          })()}
         </Card>
         <Card>
           <SectionTitle right={<SmallButton kind="green" onClick={addDoc}>+ Add document</SmallButton>}>Documents</SectionTitle>
@@ -1490,7 +1520,7 @@ function printHtmlNode(nodeId, title) {
   }
 }
 
-function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any) {
+function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders = [], customTerms = "" }: any) {
   const docNo = shipment.transportOrderNo || shipment.number;
   const effectiveProviderId = providerId || shipment.carrierId || shipment.forwarderId;
   const provider: any = providerById(effectiveProviderId, contacts) || {};
@@ -1504,6 +1534,21 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
   const lastLeg = selectedLegs[selectedLegs.length - 1] || firstLeg;
   const selectedCosts = providerCosts(shipment, effectiveProviderId);
   const providerRole = providerRoleForLeg(firstLeg, effectiveProviderId);
+  // v6.4.0 PRIVACY RULE: this order describes ONLY the selected legs. Places and
+  // dates come from the legs themselves — never from shipment-level origin/
+  // destination — so a sea forwarder's order can't leak the supplier's site that
+  // only the road carrier needs to know.
+  const loadingPlace = locationTextFromFields(firstLeg.fromLocationId, firstLeg.fromCustom);
+  const unloadingPlace = locationTextFromFields(lastLeg.toLocationId, lastLeg.toCustom);
+  const withTime = (date: any, time: any) => {
+    const d = date || "TBA";
+    return time ? `${d}, ${time}` : d;
+  };
+  const loadingDateTime = withTime(firstLeg.plannedPickupDate, firstLeg.plannedPickupTime);
+  const unloadingDateTime = withTime(lastLeg.plannedDeliveryDate, lastLeg.plannedDeliveryTime);
+  const allRoad = selectedLegs.length > 0 && selectedLegs.every((l: any) => l.mode === "Road");
+  const anyRoad = selectedLegs.some((l: any) => l.mode === "Road");
+  const anyNonRoad = selectedLegs.some((l: any) => l.mode !== "Road");
   // Agreed price for this order. There are three possible sources of the freight
   // figure, and they represent the SAME money entered at different granularities —
   // so we pick ONE by priority rather than adding them (which double-counted):
@@ -1517,8 +1562,12 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
   const agreedPriceTotal = unitPriceTotal > 0 ? unitPriceTotal : (costLinesTotal > 0 ? costLinesTotal : legCostTotal);
   const agreedPriceText = agreedPriceTotal > 0
     ? fmtMoney(agreedPriceTotal, orderCurrency)
-    : fmtMoney(shipmentCostPLN(shipment), "PLN");
+    : "TBA / per agreement";
   const tempText = shipment.temperatureMinC || shipment.temperatureMaxC ? `${shipment.temperatureMinC ?? ""}/${shipment.temperatureMaxC ?? ""}°C - continuous reefer / agregat ciagly` : "TBA";
+  // v6.4.0: SO refs backfilled live — goods rows created before the SO link have
+  // empty soRef, so fall back to the shipment's derived SO links.
+  const derivedSORefs = shipmentSORefs(shipment, orders);
+  const soFallback = derivedSORefs.join(", ");
   // Goods scoped to the selected legs: a leg carries goods whose lotRef/poRef/soRef
   // appears on it, OR (fallback) all shipment goods if legs don't carry explicit refs.
   const legGoodsRefs = new Set<string>();
@@ -1530,13 +1579,25 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
     ? (shipment.goods || []).filter((g: any) => legGoodsRefs.has(String(g.lotRef)) || legGoodsRefs.has(String(g.poRef)) || legGoodsRefs.has(String(g.soRef)))
     : (shipment.goods || []);
   const units = selectedLegs.flatMap((leg, li) => {
-    const from = locationTextFromFields(leg.fromLocationId || shipment.originLocationId, leg.fromCustom || shipment.originCustom);
-    const to = locationTextFromFields(leg.toLocationId || shipment.destinationLocationId, leg.toCustom || shipment.destinationCustom);
     const rows = transportUnitsForLeg(leg);
-    if (!rows.length) return [{ ...blankTransportUnit(leg.mode), legNo: li + 1, legMode: leg.mode, from, to, legStatus: leg.status }];
-    return rows.map((u, ui) => ({ ...u, legNo: li + 1, unitNo: ui + 1, legMode: leg.mode, from, to, legStatus: leg.status }));
+    if (!rows.length) return [{ ...blankTransportUnit(leg.mode), legNo: li + 1, legMode: leg.mode, legStatus: leg.status }];
+    return rows.map((u, ui) => ({ ...u, legNo: li + 1, unitNo: ui + 1, legMode: leg.mode, legStatus: leg.status }));
   });
-  const terms = [
+  // v6.4.0: unit-table columns depend on the modes on THIS order (From→To and Kg
+  // removed — places are in the header fields, kg in the cargo table above).
+  const unitCols = [
+    { h: "Leg", render: (u: any, i: number) => `${u.legNo}.${u.unitNo || i + 1}` },
+    { h: "Mode", render: (u: any) => u.mode || u.legMode },
+    ...(anyRoad ? [
+      { h: "Truck / Trailer", render: (u: any) => (u.mode || u.legMode) === "Road" ? ([u.truckPlate || u.vehiclePlate, u.trailerPlate].filter(Boolean).join(" / ") || "TBA") : "—" },
+      { h: "Driver / Phone", render: (u: any) => (u.mode || u.legMode) === "Road" ? ([u.driverName, u.driverPhone].filter(Boolean).join(" / ") || "TBA") : "—" },
+    ] : []),
+    ...(anyNonRoad ? [
+      { h: "Container / Seal", render: (u: any) => (u.mode || u.legMode) !== "Road" ? ([u.containerNumber, u.sealNumber].filter(Boolean).join(" / ") || "TBA") : "—" },
+      { h: "BL / AWB", render: (u: any) => (u.mode || u.legMode) !== "Road" ? ([u.blNumber, u.awbNumber, u.bookingNumber].filter(Boolean).join(" / ") || "TBA") : "—" },
+    ] : []),
+  ];
+  const ROAD_TERMS = [
     ["Payment is due 30 days after receipt of the invoice with confirmed original CMR / POD and loading specification.", "Platnosc nastepuje 30 dni po otrzymaniu faktury wraz z potwierdzonym oryginalem CMR / POD i specyfikacja zaladunku."],
     ["The carrier is financially responsible for the transported cargo.", "Przewoznik odpowiada materialnie za przewozony ladunek."],
     ["The loading space must be clean, free of foreign smells, mould and pest traces.", "Przestrzen ladunkowa musi byc czysta, bez obcych zapachow, plesni i sladow szkodnikow."],
@@ -1548,6 +1609,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
     ["The carrier confirms valid transport insurance and must provide a copy of the policy on request.", "Przewoznik oswiadcza, ze posiada wazne ubezpieczenie przewoznika i przedstawi kopie polisy na zadanie."],
     ["Disputes are subject to Polish transport law / CMR and the competent court for Warsaw.", "Spory podlegaja polskiemu prawu przewozowemu / CMR i sadowi wlasciwemu dla Warszawy."],
   ];
+  const manualTermsLines = String(customTerms || shipment.customOrderTerms || "").split("\n").map(s => s.trim()).filter(Boolean);
 
   return (
     <div style={{ background: "#fff", color: "#111", fontFamily: "Arial, Calibri, sans-serif", fontSize: 10, lineHeight: 1.22, padding: 12 }}>
@@ -1569,13 +1631,14 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 10px" }}>
         <FieldPrint en="Carrier / contractor" pl="Zleceniobiorca" value={`${provider.name || "TBA"}\n${provider.address || ""}\nNIP ${provider.nip || "-"}`} />
         <FieldPrint en="Transport units" pl="Liczba pojazdow / jednostek" value={`${units.length || 1} unit(s) / pojazd(y)`} />
-        <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={locationTextFromFields(firstLeg.fromLocationId || shipment.originLocationId, firstLeg.fromCustom || shipment.originCustom)} />
-        <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={locationTextFromFields(lastLeg.toLocationId || shipment.destinationLocationId, lastLeg.toCustom || shipment.destinationCustom)} />
-        <FieldPrint en="Customs clearance" pl="Odprawa celna" value={shipment.customsClearance || (broker ? `${broker.name}\n${broker.address || ""}` : "TBA")} />
+        <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={loadingPlace} />
+        <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={unloadingPlace} />
+        <FieldPrint en="Customs clearance" pl="Odprawa celna" value={broker ? `${broker.name}\n${broker.address || ""}` : (shipment.customsClearance || "TBA")} />
         <FieldPrint en="Temperature" pl="Temperatura" value={tempText} />
-        <FieldPrint en="Loading date" pl="Data zaladunku" value={shipment.loadingDate || firstLeg.plannedPickupDate || "TBA"} />
-        <FieldPrint en="Expected delivery date" pl="Data rozladunku" value={shipment.expectedDeliveryDate || lastLeg.plannedDeliveryDate || "TBA"} />
-        <FieldPrint en="Goods" pl="Towar" value="Food goods - clean trailer / Towar spozywczy - czysta naczepa" />
+        {shipment.tempRecorderNo && <FieldPrint en="Temp recorder no." pl="Nr rejestratora temperatury" value={shipment.tempRecorderNo} />}
+        <FieldPrint en="Loading date & time" pl="Data i godzina zaladunku" value={loadingDateTime} />
+        <FieldPrint en="Unloading date & time" pl="Data i godzina rozladunku" value={unloadingDateTime} />
+        <FieldPrint en="Goods" pl="Towar" value="Food goods - clean trailer / container · Towar spozywczy - czysta naczepa / kontener" />
         <FieldPrint en={`Agreed price for this ${providerRole.toLowerCase()} order`} pl="Uzgodniony fracht dla tego zlecenia" value={agreedPriceText} />
       </div>
 
@@ -1588,27 +1651,26 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
           <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.packaging || "-"}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{g.pallets || "-"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "-"}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[g.poRef, g.soRef || soFallback, g.lotRef].filter(Boolean).join(" / ") || "-"}</td>
         </tr>)}</tbody>
       </table>
 
-      <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Truck / driver / container / BL / AWB units · Dane pojazdow / kierowcow / kontenerow</div>
+      <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>{allRoad ? "Truck / driver information · Dane pojazdow i kierowcow" : anyRoad ? "Transport units · Dane jednostek transportowych" : "Container / BL / AWB information · Dane kontenerow"}</div>
       <table style={{ marginTop: 3, borderCollapse: "collapse", width: "100%" }}>
-        <thead><tr>{["Leg", "Mode", "From → To", "Truck / Trailer", "Driver / Phone", "Container / Seal", "BL / AWB", "Kg"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
+        <thead><tr>{unitCols.map(c => <th key={c.h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left" }}>{c.h}</th>)}</tr></thead>
         <tbody>{units.map((u, i) => <tr key={i}>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{u.legNo}.{u.unitNo || i + 1}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{u.mode || u.legMode}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{u.from} → {u.to}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[u.truckPlate || u.vehiclePlate, u.trailerPlate].filter(Boolean).join(" / ") || "TBA"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[u.driverName, u.driverPhone].filter(Boolean).join(" / ") || "TBA"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[u.containerNumber, u.sealNumber].filter(Boolean).join(" / ") || "TBA"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[u.blNumber, u.awbNumber, u.bookingNumber].filter(Boolean).join(" / ") || "TBA"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{u.qtyKg ? fmtNum(u.qtyKg) : "-"}</td>
+          {unitCols.map(c => <td key={c.h} style={{ border: "1px solid #D1D5DB", padding: 3 }}>{c.render(u, i)}</td>)}
         </tr>)}</tbody>
       </table>
 
       <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Terms / Warunki</div>
-      <ol style={{ marginTop: 3, paddingLeft: 16, marginBottom: 0 }}>{terms.map((t, i) => <li key={i} style={{ marginBottom: 1.5 }}><span>{t[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>/ {t[1]}</span></li>)}</ol>
+      {allRoad ? (
+        <ol style={{ marginTop: 3, paddingLeft: 16, marginBottom: 0 }}>{ROAD_TERMS.map((t, i) => <li key={i} style={{ marginBottom: 1.5 }}><span>{t[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>/ {t[1]}</span></li>)}</ol>
+      ) : manualTermsLines.length > 0 ? (
+        <ol style={{ marginTop: 3, paddingLeft: 16, marginBottom: 0 }}>{manualTermsLines.map((t, i) => <li key={i} style={{ marginBottom: 1.5 }}>{t}</li>)}</ol>
+      ) : (
+        <div style={{ marginTop: 3, fontStyle: "italic", color: "#555" }}>Terms as per separate agreement / booking confirmation. · Warunki zgodnie z odrebna umowa / potwierdzeniem bookingu.</div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, marginTop: 14 }}>
         <div style={{ borderTop: "1px solid #111", paddingTop: 4, textAlign: "center" }}>Ordering party / Zleceniodawca<br/>Date, stamp and signature / Data, pieczatka i podpis</div>
@@ -1618,16 +1680,22 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds }: any)
   );
 }
 
-function TransportOrderPrintModal({ shipment, contacts, onClose, onMarkSent }: any) {
+function TransportOrderPrintModal({ shipment, contacts, orders = [], onSaveTerms = () => {}, onClose, onMarkSent }: any) {
   const providerIds = providerIdsForShipment(shipment);
   const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
   // Which legs go on this order. Default: the legs belonging to the chosen provider.
   const defaultLegIds = (sh: any, pid: any) => providerLegs(sh, pid).map((l: any) => String(l.id));
   const [legIds, setLegIds] = useState<string[]>(defaultLegIds(shipment, providerId));
+  // v6.4.0: editable terms for non-road orders (road orders use the standard
+  // CMR clauses). One terms text per shipment, persisted.
+  const [termsText, setTermsText] = useState(shipment.customOrderTerms || "");
+  const [termsSaved, setTermsSaved] = useState(false);
   // When the provider changes, reset the leg selection to that provider's legs.
   function changeProvider(pid: string) { setProviderId(pid); setLegIds(defaultLegIds(shipment, pid)); }
   function toggleLeg(id: string) { setLegIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]); }
   const allLegs = shipment.legs || [];
+  const selectedLegObjs = allLegs.filter((l: any) => legIds.includes(String(l.id)));
+  const orderIsRoadOnly = selectedLegObjs.length > 0 && selectedLegObjs.every((l: any) => l.mode === "Road");
   return <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
     <div style={{ width: 980, maxHeight: "94vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
       <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1638,25 +1706,35 @@ function TransportOrderPrintModal({ shipment, contacts, onClose, onMarkSent }: a
         <span style={{ fontSize: 11, fontWeight: 800, color: "#64748B" }}>LEGS ON THIS ORDER:</span>
         {allLegs.map((leg: any, i: number) => {
           const checked = legIds.includes(String(leg.id));
-          const from = locationTextFromFields(leg.fromLocationId || shipment.originLocationId, leg.fromCustom || shipment.originCustom);
-          const to = locationTextFromFields(leg.toLocationId || shipment.destinationLocationId, leg.toCustom || shipment.destinationCustom);
+          const from = locationTextFromFields(leg.fromLocationId, leg.fromCustom);
+          const to = locationTextFromFields(leg.toLocationId, leg.toCustom);
           return <label key={leg.id} style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, color: checked ? "#111" : "#94A3B8", cursor: "pointer", border: "1px solid", borderColor: checked ? "#2563EB" : "#E5E7EB", borderRadius: 7, padding: "5px 9px", background: checked ? "#EFF6FF" : "#fff" }}>
             <input type="checkbox" checked={checked} onChange={() => toggleLeg(String(leg.id))} />
-            <span><strong>{i + 1}. {leg.mode}</strong> · {from} → {to}</span>
+            <span><strong>Leg #{i + 1} · {leg.mode}</strong> · {from} → {to}</span>
           </label>;
         })}
         {!legIds.length && <span style={{ fontSize: 11, color: "#DC2626", fontWeight: 700 }}>Select at least one leg.</span>}
       </div>
+      {!orderIsRoadOnly && legIds.length > 0 && (
+        <div style={{ padding: "10px 18px", borderBottom: "1px solid #F1F5F9", background: "#FFFBEB" }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#92400E", marginBottom: 5 }}>TERMS FOR THIS SEA / AIR / RAIL ORDER <span style={{ fontWeight: 500 }}>(the standard clauses are road/CMR-specific — enter the agreed terms; one line per clause; saved on this shipment)</span></div>
+          <textarea value={termsText} onChange={e => { setTermsText(e.target.value); setTermsSaved(false); }} rows={3} placeholder={"e.g. Payment 30 days after invoice with BL copy.\nFreight all-in per booking confirmation ...\nDemurrage / detention as per line tariff."} style={{ width: "100%", border: "1px solid #FCD34D", borderRadius: 7, padding: "7px 10px", fontSize: 12, fontFamily: "inherit", resize: "vertical", background: "#fff" }} />
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6, gap: 8, alignItems: "center" }}>
+            {termsSaved && <span style={{ fontSize: 11, color: "#16A34A", fontWeight: 700 }}>✓ saved</span>}
+            <SmallButton kind="green" onClick={() => { onSaveTerms(termsText); setTermsSaved(true); }}>Save terms</SmallButton>
+          </div>
+        </div>
+      )}
       <div style={{ padding: 22, background: "#ECECEC" }}>
         <div id="transport-order-print" style={{ width: "190mm", margin: "0 auto", background: "#fff", boxShadow: "0 3px 16px rgba(0,0,0,0.18)" }}>
-          <TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} legIds={legIds} />
+          <TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} legIds={legIds} orders={orders} customTerms={termsText} />
         </div>
       </div>
     </div>
   </div>;
 }
 
-function TransportOrderEmailModal({ shipment, contacts, onClose, onMarkSent }: any) {
+function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, onMarkSent }: any) {
   const providerIds = providerIdsForShipment(shipment);
   const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
   const provider: any = providerById(providerId, contacts) || {};
@@ -1683,7 +1761,7 @@ function TransportOrderEmailModal({ shipment, contacts, onClose, onMarkSent }: a
         <div><Lbl>Provider</Lbl><Sel value={providerId} onChange={e => setProviderId(e.target.value)}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel></div><div><Lbl>TO</Lbl><Inp value={recipient || "(carrier / forwarder email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
         <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
         <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
-        <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} legIds={providerLegList.map((l: any) => String(l.id))} /></div></div>
+        <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} legIds={providerLegList.map((l: any) => String(l.id))} orders={orders} customTerms={shipment.customOrderTerms || ""} /></div></div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", borderTop: "1px solid #F3F4F6", paddingTop: 14 }}>
           <SmallButton onClick={onClose}>Cancel</SmallButton>
           <SmallButton onClick={() => printHtmlNode("transport-order-email-doc", shipment.number)} kind="blue">① Save PDF</SmallButton>
@@ -1694,24 +1772,19 @@ function TransportOrderEmailModal({ shipment, contacts, onClose, onMarkSent }: a
   </div>;
 }
 
-function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory }: any) {
+function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory }: any) {
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
   const missingDocs = (shipment.documents || []).filter(d => ["Required", "Missing"].includes(d.status));
   const containerDocs = (shipment.legs || []).filter(l => l.containerNumber || l.blNumber || l.bookingNumber || transportUnitsForLeg(l).some(u => u.containerNumber || u.blNumber || u.bookingNumber || u.awbNumber));
+  const soPills = shipmentSORefs(shipment, orders);
   return <div style={{ display: "grid", gap: 14 }}>
     <Card>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14 }}>
         <div>
+          {/* v6.4.0 header: number · mode · status · billing + document pills only.
+              Route, provider and dates live in the cards below — not repeated here. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ fontSize: 22, fontWeight: 850, letterSpacing: "-0.4px" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
-          <div style={{ fontSize: 12, color: "#666", marginTop: 5 }}>{PURPOSE_LABELS[shipment.purpose] || shipment.purpose} - {provider?.name || "Provider TBA"} - {(() => {
-            const legs = shipment.legs || [];
-            const fl = legs[0] || {};
-            const ll = legs[legs.length - 1] || fl;
-            const from = locationTextFromFields(fl.fromLocationId ?? shipment.originLocationId, fl.fromCustom || shipment.originCustom);
-            const to = locationTextFromFields(ll.toLocationId ?? shipment.destinationLocationId, ll.toCustom || shipment.destinationCustom);
-            return `${from} -> ${to}`;
-          })()}</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}>{r}</span>)}{(shipment.soRefs || []).map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}>{r}</span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}>{r}</span>)}{soPills.map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}>{r}</span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <SmallButton kind="blue" onClick={onEdit}>✎ Edit</SmallButton>
@@ -1756,6 +1829,7 @@ function ShipmentDetail({ shipment, contacts, onEdit, onPrint, onEmail, onQuickS
         <ChecklistLine ok={(shipment.confirmationStatus || "") === "Sent" || (shipment.confirmationStatus || "") === "Generated"} label="Transport confirmation generated" />
         <ChecklistLine ok={missingDocs.length === 0} label="Required documents received" warnText={missingDocs.length ? `${missingDocs.length} missing` : ""} />
         <ChecklistLine ok={shipment.billingStatus === "Cost allocated" || shipment.billingStatus === "Closed"} label="Costs allocated to lots" />
+        <ChecklistLine ok={!!shipment.tempRecorderNo} label={`Temp recorder registered${shipment.tempRecorderNo ? ` (${shipment.tempRecorderNo})` : ""}`} warnText={!shipment.tempRecorderNo ? "reported on invoice" : ""} />
         {(shipment.mode === "Sea" || shipment.mode === "Multimodal") && <>
           <ChecklistLine ok={containerDocs.some(l => l.containerNumber)} label="Container number registered" />
           <ChecklistLine ok={containerDocs.some(l => l.blNumber)} label="BL number registered" />
@@ -1894,6 +1968,12 @@ export default function Shipments({
     setPrintShipment(next || sh);
     setToast(`${sh.number} marked as sent to carrier/forwarder.`);
   }
+  // v6.4.0: sea/air/rail transport orders use manually entered terms (the
+  // standard 10 clauses are road/CMR-specific). Saved once per shipment.
+  function saveOrderTerms(sh, text) {
+    const next = updateShipment(sh.id, s => ({ ...s, customOrderTerms: text }));
+    if (next) setPrintShipment(next);
+  }
 
   function quickStatus(sh, status) {
     const today = todayISO();
@@ -2027,14 +2107,14 @@ export default function Shipments({
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
+          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
         </div>
       </div>
     </div>
 
     {showCreate && <CreateShipmentModal pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
     {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
-    {printShipment && <TransportOrderPrintModal shipment={printShipment} contacts={contacts} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} />}
-    {emailShipment && <TransportOrderEmailModal shipment={emailShipment} contacts={contacts} onClose={() => setEmailShipment(null)} onMarkSent={() => markConfirmationSent(emailShipment)} />}
+    {printShipment && <TransportOrderPrintModal shipment={printShipment} contacts={contacts} orders={orders} onSaveTerms={(text) => saveOrderTerms(printShipment, text)} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} />}
+    {emailShipment && <TransportOrderEmailModal shipment={emailShipment} contacts={contacts} orders={orders} onClose={() => setEmailShipment(null)} onMarkSent={() => markConfirmationSent(emailShipment)} />}
   </div>;
 }

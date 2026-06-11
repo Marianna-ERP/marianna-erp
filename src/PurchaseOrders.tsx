@@ -1950,10 +1950,33 @@ ${blockNote}`.trim(),
 
         <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>SUPPLIER</span>
-          <button onClick={() => setFilterSupplier("All")} style={chipStyle(filterSupplier === "All")}>All</button>
-          {suppliers.map(s => (
-            <button key={s.id} onClick={() => setFilterSupplier(s.name)} style={chipStyle(filterSupplier === s.name)}>{s.name}</button>
-          ))}
+          {(() => {
+            // v6.4.0: only suppliers that actually appear on POs (was: every supplier
+            // counterparty). Ordered by PO count; collapses to a dropdown when many.
+            const counts: Record<string, number> = {};
+            (orders || []).forEach((o: any) => { const n = o.supplier?.name; if (n) counts[n] = (counts[n] || 0) + 1; });
+            const activeSuppliers = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+            if (activeSuppliers.length === 0) {
+              return <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>no POs yet</span>;
+            }
+            if (activeSuppliers.length > 8) {
+              return (
+                <select value={filterSupplier} onChange={e => setFilterSupplier(e.target.value)}
+                  style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 10px", fontSize: 11.5, background: "#fff", fontFamily: "inherit" }}>
+                  <option value="All">All ({(orders || []).length})</option>
+                  {activeSuppliers.map(([name, n]) => <option key={name} value={name}>{name} ({n})</option>)}
+                </select>
+              );
+            }
+            return (
+              <>
+                <button onClick={() => setFilterSupplier("All")} style={chipStyle(filterSupplier === "All")}>All</button>
+                {activeSuppliers.map(([name, n]) => (
+                  <button key={name} onClick={() => setFilterSupplier(name)} style={chipStyle(filterSupplier === name)}>{name} · {n}</button>
+                ))}
+              </>
+            );
+          })()}
         </div>
 
         {/* Table */}
