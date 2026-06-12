@@ -124,3 +124,19 @@ See `CHANGELOG_v6.4.0.md` for details.
 ## Update V6.4.1 - System test & date-integrity hotfix
 
 40 engine scenario tests added and passing (margins, overhead, duplicates, checklists, inventory recompute). Fixes: dead delivery-vs-PO-arrival warning; PO overdue off-by-one; pre-carriage delivery date default; local-time "today" everywhere; Dashboard upcoming-deliveries includes today; header-vs-leg date drift warning; legacy datetime display; Settings reset copy; Goods table SO backfill. See CHANGELOG_v6.4.1.md.
+
+## Update V6.5.0 - Warehouse charges
+
+Warehouse tariffs on Contacts (kg/day + pallet/day, handling, sorting, free days, operated locations); per-lot expected charges card with sorting log and per-lot expected invoice in Inventory; Finance → Warehouse charges tab with monthly expected-vs-invoice reconciliation, variance, and Approve & allocate into lot landed costs (flows into SO P/L). New pure engine warehouseCharges.ts; test suite now 48 scenarios. See CHANGELOG_v6.5.0.md.
+
+## Update V6.6.0 - Consignment & settlement
+
+Consignment pricing mode on POs (no purchase price — settled on sales); seasonal commission rates on producers; per-lot/truck settlement in Inventory with auto gross sales, full expense deduction, bilingual printable statement, producer-invoice variance, and closing that writes producer invoice + commission credit into lot costs so SO P/L equals the commission; CN/HS codes on SO lines and the printed SO. New engine consignment.ts; suite now 56 scenarios. See CHANGELOG_v6.6.0.md.
+
+## Update V6.7.0 - Fakturownia cost bridge
+
+Invoice-number field on operational costs; Copy last month button; Import from Fakturownia (cost register XLS/CSV) with lenient PL/EN column detection, duplicate protection, category guessing, per-row allocation method, and automatic routing of warehouse suppliers into the Warehouse charges reconciliation. Fixed a Finance prop-annotation issue that would have broken the production build. Suite now 64 scenarios. See CHANGELOG_v6.7.0.md.
+
+## Update V6.7.1 - Build hotfix
+
+Fixed the TS2551 build failure in SalesOrders (expectedDeliveryDate vs the standalone stub's expectedDelivery). Releases are now verified with a full TypeScript type-check replicating the production build. Cumulative zip — supersedes v6.4.1 through v6.7.0.

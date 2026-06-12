@@ -36,6 +36,7 @@ export interface OperationalCost {
   category: OperationalCostCategory | string;
   description: string;
   supplierName?: string;
+  invoiceNo?: string;   // v6.7: number of the received cost invoice (Fakturownia/KSeF)
   amount: number;
   currency: "PLN" | "EUR" | "USD" | string;
   fxRate: number;

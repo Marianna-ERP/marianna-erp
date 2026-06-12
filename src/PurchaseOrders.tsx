@@ -655,9 +655,9 @@ function PODoc({ order }: any) {
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.pallets || "—"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.unit || "Kg"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.qty || 0).toLocaleString("pl-PL")}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.unitPrice || 0).toFixed(2)}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.currency}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{parseFloat(lt).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : parseFloat(item.unitPrice || 0).toFixed(2)}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : item.currency}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{(order.pricingMode || "firm") === "consignment" ? "Konsygnacja / Consignment" : parseFloat(lt).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
               </tr>
             );
           })}
@@ -672,9 +672,9 @@ function PODoc({ order }: any) {
             <td style={{ border: "1px solid #ccc", padding: "6px 8px", textAlign: "right", background: "#f9f9f9", verticalAlign: "top" }}>
               <BiLbl en="Net Total" pl="Suma netto" align="right" />
             </td>
-            <td style={{ border: "1px solid #ccc", padding: "6px 8px", textAlign: "right", fontWeight: 700, fontSize: 12, verticalAlign: "top" }}>
+            <td style={{ border: "1px solid #ccc", padding: "6px 8px", textAlign: "right", fontWeight: 700, fontSize: 12, verticalAlign: "top" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ fontSize: 10.5 }}>Konsygnacja — rozliczenie ze sprzedaży / Consignment — settled on sales</span> : <>
               {total.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {currency}
-            </td>
+            </>}</td>
           </tr>
         </tbody>
       </table>
@@ -1189,6 +1189,14 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 )}
               </div>
               <div>
+                <Lbl>Pricing</Lbl>
+                <Sel value={order.pricingMode || "firm"} onChange={e => sf("pricingMode", e.target.value)} disabled={isLocked}
+                  title="Consignment: the producer's price is settled from your sales later — the PO saves WITHOUT purchase prices.">
+                  <option value="firm">Firm price</option>
+                  <option value="consignment">Consignment — settled on sales</option>
+                </Sel>
+              </div>
+              <div>
                 <Lbl>Currency</Lbl>
                 <Sel value={order.currency} onChange={e => sf("currency", e.target.value)} disabled={isLocked}>
                   {CURRENCIES.map(c => <option key={c}>{c}</option>)}
@@ -1236,7 +1244,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 19500" /></div>
-                    <div><Lbl>Unit price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" /></div>
+                    <div><Lbl>Unit price</Lbl>{(order.pricingMode || "firm") === "consignment"
+                      ? <div style={{ padding: "8px 10px", border: "1px dashed #D8B4FE", borderRadius: 6, fontSize: 12, color: "#7C3AED", background: "#FAF5FF", fontWeight: 600 }} title="Consignment — the producer's price is settled from your sales">Consignment ⚖</div>
+                      : <Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" />}</div>
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
@@ -1350,7 +1360,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                           <td style={{ padding: "10px" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
-                          <td style={{ padding: "10px", textAlign: "right" }}>{parseFloat(it.unitPrice || 0).toFixed(2)} {it.currency}</td>
+                          <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {it.currency}</>}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{lt.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
                         </tr>
                       );
@@ -1499,7 +1509,7 @@ function poInventoryTransferErrors(order) {
     const unitPrice = parseFloat(it.unitPrice);
     if (!String(it.product || "").trim()) errors.push(`${line}: product is missing`);
     if (!isFinite(qty) || qty <= 0) errors.push(`${line}: quantity must be greater than zero`);
-    if (!isFinite(unitPrice) || unitPrice <= 0) errors.push(`${line}: purchase price must be greater than zero`);
+    if ((order.pricingMode || "firm") !== "consignment" && (!isFinite(unitPrice) || unitPrice <= 0)) errors.push(`${line}: purchase price must be greater than zero`);
   });
   if (!(order.items || []).length) errors.push("At least one PO line is required");
   return errors;
@@ -1593,8 +1603,9 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 
     const qty = parseFloat(it.qty) || 0;
     const unitPrice = parseFloat(it.unitPrice) || 0;
-    const purchaseAmount = Math.round(qty * unitPrice * 100) / 100;
-    const purchasePLN = Math.round(purchaseAmount * fx * 100) / 100;
+    const isConsignment = (order.pricingMode || "firm") === "consignment";
+    const purchaseAmount = isConsignment ? 0 : Math.round(qty * unitPrice * 100) / 100;
+    const purchasePLN = isConsignment ? 0 : Math.round(purchaseAmount * fx * 100) / 100;
     const lotNumber = `LOT-${year}-${nextLotSerial([...(existingLots || []), ...newLots], year, 1)}`;
     lotRefs.push(lotNumber);
     newLots.push({
@@ -1621,12 +1632,14 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
       status: isDirectFlow(order.flow) ? "Direct Expected" : "Expected",
       arrivalDate: order.expectedDeliveryDate || null,
       productionDate: null,
-      costs: [
+      consignment: isConsignment,
+      settlement: isConsignment ? { status: "None" } : undefined,
+      costs: isConsignment ? [] : [
         { type: "purchase", label: `Purchase expected (${order.number})`, source: order.number, amount: purchaseAmount, currency: order.currency || "PLN", pln: purchasePLN },
       ],
       movements: [],
       journey: buildJourneyFromFlow(order),
-      notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg at purchase price ${unitPrice} ${order.currency || "PLN"}/kg. Destination: ${destinationDisplay(order)}. ${directFlowLabel(order)}.`,
+      notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg ${isConsignment ? "ON CONSIGNMENT (price settled on sales)" : `at purchase price ${unitPrice} ${order.currency || "PLN"}/kg`}. Destination: ${destinationDisplay(order)}. ${directFlowLabel(order)}.`,
     });
   });
 
