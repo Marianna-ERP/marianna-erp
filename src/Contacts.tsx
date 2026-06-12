@@ -1,5 +1,4 @@
 import React, { useState, useMemo, useRef } from "react";
-import { locationsByLegacyType } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -481,18 +480,6 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
   const [form, setForm] = useState(counterparty ? { additionalTypes: [], services: [], paymentTermsOther: "", ...counterparty, finance: { ...defaultFinance, ...(counterparty.finance || {}) } } : { ...blank, id: null });
   const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const sff = (k, v) => setForm(f => ({ ...f, finance: { ...(f.finance || {}), [k]: v } }));
-  // v6.5: warehouse tariff field setter (numbers parsed leniently; empty allowed)
-  const sft = (k, v) => setForm(f => ({ ...f, warehouseTariff: { ...(f.warehouseTariff || {}), [k]: k === "currency" ? v : (v === "" ? "" : parseFloat(v)) } }));
-  const toggleTariffLocation = (id) => setForm(f => {
-    const cur = (f.warehouseTariff?.locationIds || []).map(String);
-    const next = cur.includes(String(id)) ? cur.filter(x => x !== String(id)) : [...cur, String(id)];
-    return { ...f, warehouseTariff: { ...(f.warehouseTariff || {}), locationIds: next } };
-  });
-  const warehouseLocations = locationsByLegacyType("OWN");
-  // v6.6: seasonal commission rates (consignment sales)
-  const setCommissionRate = (i, k, v) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).map((r, idx) => idx === i ? { ...r, [k]: k === "pct" ? (v === "" ? "" : parseFloat(v)) : v } : r) }));
-  const addCommissionRate = () => setForm(f => ({ ...f, commissionRates: [...(f.commissionRates || []), { id: Date.now(), season: "", validFrom: "", pct: "" }] }));
-  const removeCommissionRate = (i) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).filter((_, idx) => idx !== i) }));
   const toggleService = (s) => setForm(f => ({ ...f, services: (f.services || []).includes(s) ? f.services.filter(x => x !== s) : [...(f.services || []), s] }));
   const toggleAdditionalType = (t) => setForm(f => ({ ...f, additionalTypes: (f.additionalTypes || []).includes(t) ? f.additionalTypes.filter(x => x !== t) : [...(f.additionalTypes || []), t] }));
   // Services field is visible if PRIMARY type OR any additional type is logistics-related
@@ -590,52 +577,6 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
               <div><Lbl>SWIFT / BIC</Lbl><Inp value={form.finance?.swift || ""} onChange={e => sff("swift", e.target.value)} placeholder="BPKOPLPW" /></div>
             </div>
           </div>
-          {allTypes.includes("Warehouse") && (
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>WAREHOUSE TARIFF <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· used to predict and check this warehouse's invoices</span></div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
-                <div><Lbl>Storage / kg / day</Lbl><Inp type="number" step="0.001" value={form.warehouseTariff?.storagePerKgDay ?? ""} onChange={e => sft("storagePerKgDay", e.target.value)} placeholder="e.g. 0.01" /></div>
-                <div><Lbl>Storage / pallet / day</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.storagePerPalletDay ?? ""} onChange={e => sft("storagePerPalletDay", e.target.value)} placeholder="e.g. 2.00" /></div>
-                <div><Lbl>Free days from receipt</Lbl><Inp type="number" value={form.warehouseTariff?.freeDays ?? ""} onChange={e => sft("freeDays", e.target.value)} placeholder="0" /></div>
-                <div><Lbl>Handling in / kg</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.handlingInPerKg ?? ""} onChange={e => sft("handlingInPerKg", e.target.value)} /></div>
-                <div><Lbl>Handling out / kg</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.handlingOutPerKg ?? ""} onChange={e => sft("handlingOutPerKg", e.target.value)} /></div>
-                <div><Lbl>Sorting / kg</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.sortingPerKg ?? ""} onChange={e => sft("sortingPerKg", e.target.value)} /></div>
-                <div><Lbl>Currency</Lbl>
-                  <select value={form.warehouseTariff?.currency || "PLN"} onChange={e => sft("currency", e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}>
-                    {["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}
-                  </select>
-                </div>
-                <div><Lbl>FX → PLN</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.fxToPLN ?? ""} onChange={e => sft("fxToPLN", e.target.value)} placeholder={(form.warehouseTariff?.currency || "PLN") === "PLN" ? "1" : "4.25"} /></div>
-              </div>
-              <Lbl>Locations this warehouse operates <span style={{ color: "#AAA", fontWeight: 400 }}>(lots stored there are charged on this tariff)</span></Lbl>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                {warehouseLocations.map((l: any) => {
-                  const on = (form.warehouseTariff?.locationIds || []).map(String).includes(String(l.id));
-                  return (
-                    <button key={l.id} type="button" onClick={() => toggleTariffLocation(l.id)}
-                      style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 7, border: `1.5px solid ${on ? "#16A34A" : "#E5E7EB"}`, background: on ? "#F0FDF4" : "#fff", color: on ? "#15803D" : "#666", fontSize: 12, fontWeight: on ? 600 : 500, cursor: "pointer", fontFamily: "inherit" }}>
-                      {l.name}{on && <span style={{ fontSize: 10, opacity: 0.7 }}>✓</span>}
-                    </button>
-                  );
-                })}
-                {!warehouseLocations.length && <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>No warehouse locations yet — add them in Settings → Locations &amp; ports.</span>}
-              </div>
-            </div>
-          )}
-          {allTypes.includes("Supplier") && (
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>COMMISSION — CONSIGNMENT SALES <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· season rates; the rate valid on the settlement date is prefilled</span></div>
-              {(form.commissionRates || []).map((r: any, i: number) => (
-                <div key={r.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr 34px", gap: 8, marginBottom: 6, alignItems: "end" }}>
-                  <div><Lbl>Season</Lbl><Inp value={r.season || ""} onChange={e => setCommissionRate(i, "season", e.target.value)} placeholder="e.g. 2026/27" /></div>
-                  <div><Lbl>Valid from</Lbl><Inp type="date" value={r.validFrom || ""} onChange={e => setCommissionRate(i, "validFrom", e.target.value)} /></div>
-                  <div><Lbl>Commission %</Lbl><Inp type="number" step="0.1" value={r.pct ?? ""} onChange={e => setCommissionRate(i, "pct", e.target.value)} placeholder="e.g. 10" /></div>
-                  <button type="button" onClick={() => removeCommissionRate(i)} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
-                </div>
-              ))}
-              <button type="button" onClick={addCommissionRate} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add season rate</button>
-            </div>
-          )}
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>NOTES</div>
             <textarea value={form.notes} onChange={e => sf("notes", e.target.value)} rows={3}

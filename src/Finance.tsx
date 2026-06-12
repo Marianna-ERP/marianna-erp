@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO } from "./dates";
-import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
 import {
   aggregateNetMargins,
   groupAndAggregateNetMargins,
@@ -113,160 +112,9 @@ function newCostTemplate(): OperationalCost {
   };
 }
 
-
-// ─── v6.5: WAREHOUSE CHARGES — expected vs invoiced, per warehouse per month ─
-function WarehouseChargesView({ lots = [], setLots = null, contacts = [], warehouseInvoices = [], setWarehouseInvoices = null }: any) {
-  const warehouses = (contacts || []).filter((c: any) => tariffHasRates(c.warehouseTariff));
-  const [whId, setWhId] = useState<any>(warehouses[0]?.id ?? "");
-  const [period, setPeriod] = useState(localMonthISO());
-  const [inv, setInv] = useState<any>({ invoiceNo: "", amount: "", currency: "PLN", fxRate: 1, date: localTodayISO(), notes: "" });
-  const today = localTodayISO();
-  const result = whId ? warehouseMonthCharges(lots, contacts, whId, period, today) : { rows: [], total: 0, totalPLN: 0, currency: "PLN" };
-  const periodInvoices = (warehouseInvoices || []).filter((i: any) => String(i.warehouseId) === String(whId) && i.period === period);
-  const invoicedPLN = periodInvoices.reduce((s: number, i: any) => s + (parseFloat(i.amountPLN) || 0), 0);
-  const variancePLN = Math.round((invoicedPLN - result.totalPLN) * 100) / 100;
-  const wh = warehouses.find((w: any) => String(w.id) === String(whId));
-
-  function addInvoice() {
-    if (!setWarehouseInvoices || !whId) return;
-    const amount = parseFloat(inv.amount) || 0;
-    if (amount <= 0 || !inv.invoiceNo.trim()) return;
-    const fx = parseFloat(inv.fxRate) || 1;
-    const rec = { id: Date.now(), warehouseId: whId, warehouseName: wh?.name || "", period, invoiceNo: inv.invoiceNo.trim(), date: inv.date, amount, currency: inv.currency, fxRate: fx, amountPLN: Math.round(amount * fx * 100) / 100, status: "Received", notes: inv.notes };
-    setWarehouseInvoices((prev: any[]) => [...(prev || []), rec]);
-    setInv({ invoiceNo: "", amount: "", currency: inv.currency, fxRate: inv.fxRate, date: today, notes: "" });
-  }
-
-  function approveInvoice(invoice: any) {
-    if (!setWarehouseInvoices) return;
-    if (!result.rows.length) { window.alert("No expected charges computed for this warehouse/month — nothing to allocate against."); return; }
-    if (!window.confirm(`Approve invoice ${invoice.invoiceNo} (${invoice.amountPLN.toLocaleString("pl-PL")} PLN) and allocate it into the ${result.rows.length} lot(s) of ${period}?\n\nThe amount is split across lots proportionally to their expected charges and becomes part of each lot's landed cost (visible in SO P/L).`)) return;
-    const totalExpectedPLN = result.totalPLN || 1;
-    const allocations = result.rows.map((r: any) => ({ lotNumber: r.lotNumber, amountPLN: Math.round(invoice.amountPLN * (r.totalPLN / totalExpectedPLN) * 100) / 100 }));
-    if (setLots) {
-      const source = `WHINV-${invoice.id}`;
-      setLots((prev: any[]) => prev.map((lot: any) => {
-        const a = allocations.find(x => x.lotNumber === lot.number);
-        if (!a || a.amountPLN <= 0) return lot;
-        if ((lot.costs || []).some((c: any) => c.source === source)) return lot;
-        return { ...lot, costs: [...(lot.costs || []), { id: Date.now() + Math.random(), type: "Warehousing", label: `${invoice.warehouseName || "Warehouse"} ${period} · inv ${invoice.invoiceNo}`, pln: a.amountPLN, source }] };
-      }));
-    }
-    setWarehouseInvoices((prev: any[]) => prev.map((i: any) => i.id === invoice.id ? { ...i, status: "Approved", allocatedLots: allocations } : i));
-  }
-
-  function deleteInvoice(invoice: any) {
-    if (invoice.status === "Approved") { window.alert("This invoice is approved and already allocated into lot costs — it can't be deleted from here."); return; }
-    if (!window.confirm(`Delete invoice ${invoice.invoiceNo}?`)) return;
-    setWarehouseInvoices && setWarehouseInvoices((prev: any[]) => prev.filter((i: any) => i.id !== invoice.id));
-  }
-
-  const box: any = { background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 14 };
-  if (!warehouses.length) return (
-    <div style={box}>
-      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Warehouse charges</div>
-      <div style={{ fontSize: 12.5, color: "#666", lineHeight: 1.6 }}>
-        No warehouse tariffs configured yet. Open <strong>Contacts</strong>, edit your warehouse counterparty (type "Warehouse"),
-        fill the <strong>Warehouse tariff</strong> section (kg/day or pallet/day rate, handling, sorting, free days) and tick the
-        location(s) it operates. Expected charges then appear here and on every lot stored there.
-      </div>
-    </div>
-  );
-  return (
-    <>
-      <div style={{ ...box, display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Warehouse</div>
-          <select value={whId} onChange={e => setWhId(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}>
-            {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Month</div>
-          <input type="month" value={period} onChange={e => setPeriod(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13 }} />
-        </div>
-        <div style={{ marginLeft: "auto", textAlign: "right" }}>
-          <div style={{ fontSize: 11, color: "#888" }}>EXPECTED ({period})</div>
-          <div style={{ fontSize: 20, fontWeight: 800 }}>{result.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 11, color: "#888" }}>INVOICED</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: invoicedPLN ? "#111" : "#AAA" }}>{invoicedPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 11, color: "#888" }}>VARIANCE</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: !invoicedPLN ? "#AAA" : Math.abs(variancePLN) < 1 ? "#16A34A" : variancePLN > 0 ? "#DC2626" : "#D97706" }}>
-            {invoicedPLN ? `${variancePLN > 0 ? "+" : ""}${variancePLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN` : "—"}
-          </div>
-        </div>
-      </div>
-
-      <div style={box}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 10 }}>EXPECTED CHARGES PER LOT · {period} <span style={{ fontWeight: 500, letterSpacing: 0, textTransform: "none" }}>— the "per-lot expected invoice" for warehouses that bill at dispatch</span></div>
-        {!result.rows.length && <div style={{ fontSize: 12, color: "#AAA", fontStyle: "italic" }}>No chargeable lot activity at this warehouse in {period}.</div>}
-        {result.rows.map((r: any) => (
-          <div key={r.lotNumber} style={{ borderBottom: "1px solid #F3F4F6", padding: "8px 0" }}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{r.lotNumber}</span>
-              <span style={{ fontSize: 13, fontWeight: 800 }}>{r.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>
-            </div>
-            {r.lines.map((l: any, i: number) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "#666", padding: "2px 0 2px 14px" }}>
-                <span>{l.label}{l.date ? ` · ${l.date}` : ""}</span>
-                <span>{l.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>
-              </div>
-            ))}
-          </div>
-        ))}
-        {result.rows.length > 0 && (
-          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 10, fontSize: 13, fontWeight: 800 }}>
-            <span>Total expected — invoice we should receive</span>
-            <span>{result.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>
-          </div>
-        )}
-      </div>
-
-      <div style={box}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 10 }}>WAREHOUSE INVOICES · {period}</div>
-        {periodInvoices.map((i: any) => (
-          <div key={i.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, border: "1px solid #F3F4F6", borderRadius: 8, padding: "9px 12px", marginBottom: 8 }}>
-            <div>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>{i.invoiceNo}</span>
-              <span style={{ fontSize: 11.5, color: "#888", marginLeft: 8 }}>{i.date} · {i.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {i.currency}{i.currency !== "PLN" ? ` @ ${i.fxRate}` : ""} = {i.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>
-              {i.notes && <div style={{ fontSize: 11, color: "#999" }}>{i.notes}</div>}
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 6, background: i.status === "Approved" ? "#DCFCE7" : "#FEF3C7", color: i.status === "Approved" ? "#15803D" : "#92400E" }}>{i.status}</span>
-              {i.status !== "Approved" && <button onClick={() => approveInvoice(i)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Approve &amp; allocate to lots</button>}
-              {i.status !== "Approved" && <button onClick={() => deleteInvoice(i)} style={{ padding: "5px 9px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>✕</button>}
-            </div>
-          </div>
-        ))}
-        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.9fr 0.7fr 0.7fr 1fr 1.2fr auto", gap: 8, alignItems: "end", marginTop: 6 }}>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Invoice no.</div><input value={inv.invoiceNo} onChange={e => setInv({ ...inv, invoiceNo: e.target.value })} placeholder="FV/2026/06/123" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Amount</div><input type="number" value={inv.amount} onChange={e => setInv({ ...inv, amount: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Currency</div><select value={inv.currency} onChange={e => setInv({ ...inv, currency: e.target.value, fxRate: e.target.value === "PLN" ? 1 : inv.fxRate })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#fff" }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>FX→PLN</div><input type="number" step="0.01" value={inv.fxRate} onChange={e => setInv({ ...inv, fxRate: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Date</div><input type="date" value={inv.date} onChange={e => setInv({ ...inv, date: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Notes</div><input value={inv.notes} onChange={e => setInv({ ...inv, notes: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
-        </div>
-        <div style={{ fontSize: 10.5, color: "#888", marginTop: 8, lineHeight: 1.5 }}>
-          Approving an invoice splits its PLN amount across the month's lots proportionally to their expected charges and adds it to each lot's
-          <strong> landed cost</strong> — from there it flows into SO P/L automatically. Variance shows invoiced − expected: red = warehouse charged more than the tariff predicts.
-        </div>
-      </div>
-    </>
-  );
-}
-
 export default function Finance({
   orders = [],
   lots = [],
-  setLots = null,
-  contacts = [],
-  warehouseInvoices = [],
-  setWarehouseInvoices = null,
   pos = [],
   shipments = [],
   operationalCosts = [],
@@ -280,7 +128,7 @@ export default function Finance({
   setOperationalCosts?: any;
 }) {
   const [mode, setMode] = useState<MarginMode>("forecast");
-  const [tab, setTab] = useState<"pl" | "costs" | "warehouse">("pl");
+  const [tab, setTab] = useState<"pl" | "costs">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
 
   const committedFilter = (o: any) => o.status !== "Draft";
@@ -344,7 +192,7 @@ export default function Finance({
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
-              {(["pl", "costs", "warehouse"] as const).map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: tab === t ? "#fff" : "transparent", color: tab === t ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.05)" : "none" }}>{t === "pl" ? "Sales P/L" : t === "costs" ? "Operational Costs" : "Warehouse charges"}</button>)}
+              {(["pl", "costs"] as const).map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: tab === t ? "#fff" : "transparent", color: tab === t ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.05)" : "none" }}>{t === "pl" ? "Sales P/L" : "Operational Costs"}</button>)}
             </div>
             <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
               {(["forecast", "actual"] as MarginMode[]).map(m => <button key={m} onClick={() => setMode(m)} style={{ padding: "6px 14px", borderRadius: 5, border: "none", background: mode === m ? "#fff" : "transparent", color: mode === m ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: mode === m ? "0 1px 2px rgba(0,0,0,0.05)" : "none", textTransform: "capitalize" }}>{m}</button>)}
@@ -352,9 +200,7 @@ export default function Finance({
           </div>
         </div>
 
-        {tab === "warehouse" ? (
-          <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />
-        ) : tab === "pl" ? (
+        {tab === "pl" ? (
           <>
             <Card style={{ marginBottom: 16 }}>
               <SectionTitle>OVERALL · ALL ACTIVE SALES ORDERS</SectionTitle>

@@ -20,5 +20,4 @@ export const SHELL_SEED = {
   orders: [] as any[],
   shipments: [] as any[],
   operationalCosts: [] as any[],
-  warehouseInvoices: [] as any[],
 };

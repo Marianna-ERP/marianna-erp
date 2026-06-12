@@ -62,7 +62,7 @@ export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T
 // ─── Bulk helpers — used by the Settings module ─────────────────────────────
 
 export function exportAllData(): string {
-  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts", "customLocations", "warehouseInvoices"];
+  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts", "customLocations"];
   const data: any = {
     _meta: {
       app: "marianna-erp",
@@ -93,7 +93,7 @@ export function importAllData(jsonString: string): { ok: boolean; error?: string
     return { ok: false, error: `Export was made on schema v${parsed._meta.version}, but this app uses v${STORAGE_VERSION}. Migration not yet supported.` };
   }
   const loaded: string[] = [];
-  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts", "customLocations", "warehouseInvoices"];
+  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts", "customLocations"];
   for (const key of keys) {
     if (parsed[key] !== undefined && parsed[key] !== null) {
       writeToStorage(key, parsed[key]);
@@ -105,7 +105,7 @@ export function importAllData(jsonString: string): { ok: boolean; error?: string
 
 export function clearAllData(): void {
   if (typeof window === "undefined" || !window.localStorage) return;
-  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts", "customLocations", "warehouseInvoices"];
+  const keys = ["contacts", "pos", "lots", "orders", "shipments", "operationalCosts", "customLocations"];
   for (const key of keys) {
     try {
       window.localStorage.removeItem(storageKey(key));

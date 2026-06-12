@@ -1009,7 +1009,7 @@ function SODoc({ order }: any) {
             const lt = ((parseFloat(item.qty) || 0) * (parseFloat(item.unitPrice) || 0)).toFixed(2);
             return (
               <tr key={i}>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}{item.cnCode ? <div style={{ fontSize: 8.5, fontWeight: 400, color: "#666" }}>CN/HS: {item.cnCode}</div> : null}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.size}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>Kl. {item.quality}</td>
@@ -1872,7 +1872,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
-                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice" /></div>
                     <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" /></div>
                     <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>

@@ -51,20 +51,6 @@ export default function SOMarginCard({
     [order, lots, pos, shipments, operationalCosts, allOrders, mode]
   );
 
-  // v6.6: consignment awareness — sources from consignment lots mean P/L will
-  // equal our commission once the settlement closes; before that, COGS is absent.
-  const consignmentSources = React.useMemo(() => {
-    const hits: any[] = [];
-    (order.items || []).forEach((it: any) => {
-      const lot = (lots || []).find((l: any) =>
-        (it.sourceType === "STOCK" && String(it.sourceRef) === String(l.number)) ||
-        (it.sourceType === "PO" && l.poRef && String(it.sourceRef) === String(l.poRef) && String(it.product || "").trim().toLowerCase() === String(l.product || "").trim().toLowerCase()));
-      if (lot && lot.consignment && !hits.find(h => h.number === lot.number)) hits.push(lot);
-    });
-    return hits;
-  }, [order, lots]);
-  const openConsignment = consignmentSources.filter((l: any) => !(l.settlement && l.settlement.status === "Closed"));
-
   const isLoss = margin.netMarginPLN < 0;
   const isThinMargin = margin.netMarginPLN >= 0 && margin.netMarginPct < 5;
   const marginColor = isLoss ? "#DC2626" : isThinMargin ? "#D97706" : "#16A34A";
@@ -164,14 +150,6 @@ export default function SOMarginCard({
         </div>
       )}
 
-      {consignmentSources.length > 0 && (
-        <div style={{ padding: "8px 12px", background: "#FAF5FF", border: "1px solid #DDD6FE", borderRadius: 6, fontSize: 12, color: "#6D28D9", marginBottom: 12 }}>
-          ⚖ This SO sells <strong>consignment goods</strong> ({consignmentSources.map((l: any) => l.number).join(", ")}).
-          {openConsignment.length
-            ? " The producer's price is settled from sales — figures above EXCLUDE the producer cost until the settlement closes; the final P/L will equal your commission."
-            : " Settlement closed — the producer invoice and your commission are in the costs, so the P/L above is final (≈ your commission)."}
-        </div>
-      )}
       {/* Loss warning */}
       {isLoss && (
         <div style={{ padding: "8px 12px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 6, fontSize: 12, color: "#991B1B", marginBottom: 12 }}>
