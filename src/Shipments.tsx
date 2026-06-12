@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { localTodayISO, localMonthISO } from "./dates";
 
 // MARIANNA ERP - Shipments / Logistics module
 // Standalone-friendly: when no props are passed it uses INIT_SHIPMENTS plus small
@@ -359,7 +360,7 @@ export const INIT_SHIPMENTS = [
 ];
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return localTodayISO();
 }
 
 function fmtNum(n) {
@@ -747,7 +748,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
   let legs: any[] = [roadLeg];
   if (mode === "Multimodal") {
     legs = [
-      { ...roadLeg, id: 1, mode: "Road", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: null, toCustom: "", costAmount: 0, costPLN: 0, notes: `Pre-carriage for ${po.number}` },
+      { ...roadLeg, id: 1, mode: "Road", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: null, toCustom: "", plannedDeliveryDate: opts.loadingDate || po.loadingDate || todayISO(), costAmount: 0, costPLN: 0, notes: `Pre-carriage for ${po.number}` },
       { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: destinationLocationId, toCustom: destinationCustom, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${po.number}` },
     ];
   } else if (mode === "Sea" || mode === "Rail" || mode === "Air") {
@@ -1322,6 +1323,22 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
         </Card>
         <Card>
           <SectionTitle right={<SmallButton onClick={addLeg}>+ Activate extra leg</SmallButton>}>Legs - route, truck / driver / container / BL</SectionTitle>
+          {(() => {
+            // v6.4.1: the printed transport order takes dates from the LEGS, while the
+            // list/header show the shipment-level dates — warn when they disagree.
+            const legs = draft.legs || [];
+            const fl = legs[0] || {}, ll = legs[legs.length - 1] || fl;
+            const flPick = String(fl.plannedPickupDate || "").slice(0, 10);
+            const llDel = String(ll.plannedDeliveryDate || "").slice(0, 10);
+            const mismatches = [];
+            if (draft.loadingDate && flPick && draft.loadingDate !== flPick) mismatches.push(`header loading date ${draft.loadingDate} ≠ first leg pickup ${flPick}`);
+            if (draft.expectedDeliveryDate && llDel && draft.expectedDeliveryDate !== llDel) mismatches.push(`header expected delivery ${draft.expectedDeliveryDate} ≠ last leg delivery ${llDel}`);
+            return mismatches.length ? (
+              <div style={{ marginBottom: 10, padding: "7px 10px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 7, fontSize: 11.5, color: "#92400E" }}>
+                ⚠ Header and leg dates disagree ({mismatches.join("; ")}). The transport order prints the <strong>leg</strong> dates.
+              </div>
+            ) : null;
+          })()}
           {(draft.legs || []).map((leg, i) => <div key={leg.id || i} style={{ border: "1px solid #E5E7EB", borderRadius: 10, padding: 12, marginBottom: 10, background: "#FAFAFA" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1541,7 +1558,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
   const loadingPlace = locationTextFromFields(firstLeg.fromLocationId, firstLeg.fromCustom);
   const unloadingPlace = locationTextFromFields(lastLeg.toLocationId, lastLeg.toCustom);
   const withTime = (date: any, time: any) => {
-    const d = date || "TBA";
+    const d = String(date || "").slice(0, 10) || "TBA"; // tolerate legacy "YYYY-MM-DDTHH:mm" values
     return time ? `${d}, ${time}` : d;
   };
   const loadingDateTime = withTime(firstLeg.plannedPickupDate, firstLeg.plannedPickupTime);
@@ -1806,8 +1823,8 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
         {(shipment.legs || []).map((leg, i) => { const mc = MODE_CONFIG[leg.mode] || MODE_CONFIG.Road; return <div key={leg.id || i} style={{ display: "grid", gridTemplateColumns: "36px 70px 1fr 1fr 1.1fr", gap: 10, alignItems: "start", padding: "10px 0 10px 10px", borderLeft: `3px solid ${mc.color}`, borderBottom: i === (shipment.legs || []).length - 1 ? "none" : "1px solid #F1F5F9" }}>
           <div style={{ width: 26, height: 26, borderRadius: 999, background: mc.color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>{i + 1}</div>
           <div><ModeBadge mode={leg.mode} /><div style={{ marginTop: 4 }}><StatusBadge status={leg.status} /></div></div>
-          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>FROM</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{leg.plannedPickupDate || "-"}</div></div>
-          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>TO</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{leg.plannedDeliveryDate || "-"}</div></div>
+          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>FROM</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedPickupDate || "").slice(0, 10) || "-"}</div></div>
+          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>TO</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedDeliveryDate || "").slice(0, 10) || "-"}</div></div>
           <div style={{ fontSize: 11.5, color: "#555", lineHeight: 1.45 }}>
             {transportUnitsForLeg(leg).length > 0 ? transportUnitsForLeg(leg).map((u, ui) => (
               <div key={u.id || ui} style={{ padding: "4px 0", borderBottom: ui === transportUnitsForLeg(leg).length - 1 ? "none" : "1px dashed #E5E7EB" }}>
@@ -1839,7 +1856,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
 
     <Card>
       <SectionTitle>Goods</SectionTitle>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}><thead><tr style={{ color: "#888", textAlign: "left", borderBottom: "1px solid #E5E7EB" }}><th style={th}>Product</th><th style={th}>Origin</th><th style={th}>Quality / size</th><th style={th}>Packaging</th><th style={th}>PO / SO / Lot</th><th style={{ ...th, textAlign: "right" }}>Qty kg</th><th style={{ ...th, textAlign: "right" }}>Pallets</th></tr></thead><tbody>{(shipment.goods || []).map(g => <tr key={g.id} style={{ borderBottom: "1px solid #F1F5F9" }}><td style={td}><strong>{g.product}</strong><div style={{ color: "#888", fontSize: 11 }}>{g.description}</div></td><td style={td}>{g.origin || "-"}</td><td style={td}>{g.quality || "-"} / {g.size || "-"}</td><td style={td}>{g.packaging || "-"}</td><td style={td}><div>{g.poRef || "-"}</div><div>{g.soRef || "-"}</div><div>{g.lotRef || "-"}</div></td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.pallets)}</td></tr>)}</tbody></table>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}><thead><tr style={{ color: "#888", textAlign: "left", borderBottom: "1px solid #E5E7EB" }}><th style={th}>Product</th><th style={th}>Origin</th><th style={th}>Quality / size</th><th style={th}>Packaging</th><th style={th}>PO / SO / Lot</th><th style={{ ...th, textAlign: "right" }}>Qty kg</th><th style={{ ...th, textAlign: "right" }}>Pallets</th></tr></thead><tbody>{(shipment.goods || []).map(g => <tr key={g.id} style={{ borderBottom: "1px solid #F1F5F9" }}><td style={td}><strong>{g.product}</strong><div style={{ color: "#888", fontSize: 11 }}>{g.description}</div></td><td style={td}>{g.origin || "-"}</td><td style={td}>{g.quality || "-"} / {g.size || "-"}</td><td style={td}>{g.packaging || "-"}</td><td style={td}><div>{g.poRef || "-"}</div><div>{g.soRef || soPills.join(", ") || "-"}</div><div>{g.lotRef || "-"}</div></td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.pallets)}</td></tr>)}</tbody></table>
     </Card>
 
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>

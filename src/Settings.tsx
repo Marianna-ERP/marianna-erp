@@ -266,9 +266,9 @@ export default function Settings({
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>
           <SectionTitle>RESET</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Erase everything you've entered and reload the original demo data. Use this if you've made test data unusable and want to start fresh.
+            Erase everything you've entered and return the system to a completely empty state. Use this if you've made test data unusable and want to start fresh. Export a backup first if in doubt.
           </div>
-          <Button onClick={handleReset} variant="danger">⚠ Reset to demo data</Button>
+          <Button onClick={handleReset} variant="danger">⚠ Start fresh — erase ALL data</Button>
         </Card>
 
         <div style={{ marginTop: 24, padding: "14px 16px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>

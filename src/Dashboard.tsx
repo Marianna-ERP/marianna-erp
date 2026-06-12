@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { aggregateNetMargins } from "./operationalCosts";
+import { localTodayISO, localMonthISO } from "./dates";
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────────────
 // Phase 1 dashboard: reads live state from PO / SO / Inventory / Contacts and
@@ -98,7 +99,9 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
 
   const upcomingDeliveryCount = orders.filter(o => {
     if (!o.deliveryDate || !activeSOStatuses.has(o.status)) return false;
-    const days = Math.floor((new Date(o.deliveryDate).getTime() - Date.now()) / 86400000);
+    // v6.4.1 fix: midnight-normalized so an SO delivering TODAY counts as upcoming (day 0).
+    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+    const days = Math.round((new Date(o.deliveryDate).getTime() - startOfToday.getTime()) / 86400000);
     return days >= 0 && days <= 7;
   }).length;
 
@@ -149,7 +152,7 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
   const logisticsCostPLN = shipments.reduce((sum, s) => sum + (s.costs || []).reduce((cs, c) => cs + (parseFloat(c.amountPLN) || ((parseFloat(c.amount) || 0) * (parseFloat(c.fxRate) || 1))), 0), 0);
 
   // -- Finance / margin summary -------------------------------------------
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  const currentMonth = localMonthISO();
   const marginThisMonth = useMemo(() => aggregateNetMargins(
     orders,
     lots,

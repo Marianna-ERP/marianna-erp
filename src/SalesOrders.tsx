@@ -2,6 +2,7 @@ import React, { useState, useMemo } from "react";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { localTodayISO, localMonthISO } from "./dates";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -327,7 +328,7 @@ function parsePaymentTermsDays(terms) {
 // Mirrors the shape of invoice objects in Invoices.tsx (INIT_INVOICES seed there)
 // so when integration happens, the object slots directly into the invoices state.
 function buildInvoiceFromSO(order, invoiceNumber, today) {
-  const issueDate = today || new Date().toISOString().split("T")[0];
+  const issueDate = today || localTodayISO();
   const saleDate = order.deliveryDate || issueDate; // when goods physically shipped
   const days = parsePaymentTermsDays(order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms);
   let dueDate = "";
@@ -1008,7 +1009,7 @@ function SODoc({ order }: any) {
             const lt = ((parseFloat(item.qty) || 0) * (parseFloat(item.unitPrice) || 0)).toFixed(2);
             return (
               <tr key={i}>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}{item.cnCode ? <div style={{ fontSize: 8.5, fontWeight: 400, color: "#666" }}>CN/HS: {item.cnCode}</div> : null}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.size}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>Kl. {item.quality}</td>
@@ -1217,7 +1218,7 @@ function EmailModal({ order, onClose }: any) {
 // exported into the actual invoices state. For now this gives the user a clear
 // record of the invoice that needs to be created in Fakturownia / the Invoices module.
 function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfirm }: any) {
-  const today = new Date().toISOString().split("T")[0];
+  const today = localTodayISO();
   const initial = buildInvoiceFromSO(order, nextSINVNumber(existingInvoiceNumbers || []), today);
   const [invoice, setInvoice] = useState(initial);
 
@@ -1423,8 +1424,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   order.items.forEach((it, idx) => {
     if (it.sourceType === "PO" && it.sourceRef) {
       const po = PO_REFS.find(p => p.number === it.sourceRef);
-      if (po && order.deliveryDate && po.expectedDelivery && order.deliveryDate < po.expectedDelivery) {
-        deliveryWarnings.push({ idx, lineProduct: it.product, poRef: it.sourceRef, poETA: po.expectedDelivery });
+      // v6.4.1 fix: field is expectedDeliveryDate — the old name (expectedDelivery)
+      // never existed, so this warning could never fire.
+      const poETA = po && (po.expectedDeliveryDate || po.expectedDelivery);
+      if (po && order.deliveryDate && poETA && order.deliveryDate < poETA) {
+        deliveryWarnings.push({ idx, lineProduct: it.product, poRef: it.sourceRef, poETA });
       }
     }
   });
@@ -1868,6 +1872,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
+                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice" /></div>
                     <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" /></div>
                     <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
@@ -2245,7 +2250,7 @@ export default function SalesOrders({
       number: nextSONumber(orders),
       status: "Draft",
       createdBy: userName || userRole || "",
-      orderDate: new Date().toISOString().split("T")[0],
+      orderDate: localTodayISO(),
       deliveryDate: "",
       promisedDateMeans: "Delivery to client",
       actualDeliveryDate: null,
@@ -2269,7 +2274,7 @@ export default function SalesOrders({
     // Cancelling an SO already releases reservations automatically because Cancelled is not a reserving status.
     // This function additionally reverses any physical SHIP_OUT movement that was already posted for this SO.
     if (!extSetLots || !order) return;
-    const today = new Date().toISOString().split("T")[0];
+    const today = localTodayISO();
     extSetLots(prevLots => prevLots.map(lot => {
       const alreadyReversed = (lot.movements || []).some(m => m.type === "REVERSAL" && String(m.note || "").includes(order.number));
       if (alreadyReversed) return lot;
@@ -2409,7 +2414,7 @@ export default function SalesOrders({
   }
   function deleteOrder() {
     if (!window.confirm(`Cancel SO ${selected.number}? Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.`)) return;
-    const cancelled = { ...selected, status: "Cancelled", cancelledAt: new Date().toISOString().split("T")[0] };
+    const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     reverseCancelledSOInInventory(cancelled);
     setOrders(prev => prev.map(p => p.id === selected.id ? cancelled : p));
     setSelected(null);

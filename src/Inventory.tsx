@@ -1,5 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { localTodayISO, localMonthISO } from "./dates";
+import { computeLotWarehouseCharges } from "./warehouseCharges";
+import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
@@ -303,7 +306,7 @@ const MOVEMENT_TYPES: Record<string, any> = {
 };
 
 // ─── SEED DATA — lots covering all 7 flows ──────────────────────────────────
-const today = new Date().toISOString().split("T")[0];
+const today = localTodayISO();
 
 function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
 
@@ -1028,7 +1031,239 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
 }
 
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments }: any) {
+
+// ─── v6.6: print helper for the settlement statement (same pattern as Shipments) ─
+function printHtmlNodeInv(nodeId, title) {
+  const node = document.getElementById(nodeId);
+  if (!node) { alert("Print preview not ready"); return; }
+  const existing = document.getElementById(`${nodeId}-frame`);
+  if (existing) existing.remove();
+  const iframe = document.createElement("iframe");
+  iframe.id = `${nodeId}-frame`;
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(iframe);
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: Arial, Calibri, sans-serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  table { border-collapse: collapse; width: 100%; page-break-inside: avoid; }
+  tr { page-break-inside: avoid; }
+</style></head><body>${node.outerHTML}</body></html>`;
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) { iframe.remove(); return; }
+  doc.open(); doc.write(html); doc.close();
+  setTimeout(() => {
+    try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
+    setTimeout(() => iframe.remove(), 1000);
+  }, 150);
+}
+
+
+// ─── v6.6: CONSIGNMENT SETTLEMENT MODAL ─────────────────────────────────────
+// Per-lot/truck settlement: gross sales (auto from SOs) − expenses (auto from
+// lot costs + manual) = net sales value → producer invoice; commission % × net
+// → our invoice; payout = net − commission. Closing writes the two cost
+// components onto the lot so SO P/L lands at exactly the commission.
+function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, onSave }: any) {
+  const po = (pos || []).find((p: any) => p.number === lot.poRef);
+  const producer = po ? (contacts || []).find((c: any) => normName(c.name) === normName(po.supplier?.name)) : null;
+  const seasonPct = producer ? currentCommissionPct(producer, localTodayISO()) : null;
+  const st = lot.settlement || { status: "None" };
+  const [pct, setPct] = useState<any>(st.commissionPct ?? (seasonPct ?? ""));
+  const [extra, setExtra] = useState<any[]>(st.extraExpenses || []);
+  const [prodInvNo, setProdInvNo] = useState(st.producerInvoiceNo || "");
+  const [prodInvPLN, setProdInvPLN] = useState<any>(st.producerInvoiceAmountPLN ?? "");
+  const [commInvNo, setCommInvNo] = useState(st.commissionInvoiceNo || "");
+  const calc = computeLotSettlement(lot, orders, parseFloat(pct) || 0, extra);
+  const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
+  const status = st.status || "None";
+  const prodInvNum = parseFloat(prodInvPLN);
+  const invVariance = isFinite(prodInvNum) && prodInvNum > 0 ? Math.round((prodInvNum - calc.netPLN) * 100) / 100 : null;
+
+  function save(nextStatus: string) {
+    const settlement = {
+      ...st,
+      status: nextStatus,
+      commissionPct: parseFloat(pct) || 0,
+      extraExpenses: extra,
+      producerInvoiceNo: prodInvNo,
+      producerInvoiceAmountPLN: isFinite(prodInvNum) ? prodInvNum : null,
+      commissionInvoiceNo: commInvNo,
+      expectedNetPLN: calc.netPLN,
+      expectedCommissionPLN: calc.commissionPLN,
+      // commission is charged on the producer's ACTUAL invoiced net sales value
+      finalCommissionPLN: isFinite(prodInvNum) && prodInvNum > 0 ? Math.round(prodInvNum * (parseFloat(pct) || 0)) / 100 : calc.commissionPLN,
+      ...(nextStatus === "Sent" && !st.sentAt ? { sentAt: localTodayISO() } : {}),
+      ...(nextStatus === "Closed" ? { closedAt: localTodayISO() } : {}),
+    };
+    onSave(settlement, nextStatus === "Closed");
+  }
+
+  function canClose() {
+    return isFinite(prodInvNum) && prodInvNum > 0 && (parseFloat(pct) || 0) > 0;
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120, padding: 20 }}>
+      <div style={{ width: 860, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>Consignment settlement · {lot.number}</div>
+            <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{po ? `${po.number} · ${po.supplier?.name || "producer"}` : "No PO link"} · status: <strong>{status}</strong>{producer && seasonPct !== null && <> · season rate {seasonPct}%</>}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => printHtmlNodeInv("settlement-statement", `Settlement-${lot.number}`)} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Print / PDF statement</button>
+            <button onClick={onCancel} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Close</button>
+          </div>
+        </div>
+
+        <div style={{ padding: "14px 22px", display: "grid", gridTemplateColumns: "200px 1fr 1fr 1fr", gap: 10, alignItems: "end", borderBottom: "1px solid #F3F4F6", background: "#FAFAFA" }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Commission %</label>
+            <input type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} disabled={status === "Closed"} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Producer invoice no. (their FV to us)</label>
+            <input value={prodInvNo} onChange={e => setProdInvNo(e.target.value)} disabled={status === "Closed"} placeholder="FV/…" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Producer invoice amount (PLN)</label>
+            <input type="number" value={prodInvPLN} onChange={e => setProdInvPLN(e.target.value)} disabled={status === "Closed"} placeholder={`expected ${fmt(calc.netPLN)}`} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+            {invVariance !== null && Math.abs(invVariance) >= 1 && <div style={{ fontSize: 10.5, color: invVariance > 0 ? "#DC2626" : "#D97706", marginTop: 3, fontWeight: 600 }}>{invVariance > 0 ? "+" : ""}{fmt(invVariance)} vs expected net</div>}
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Our commission invoice no.</label>
+            <input value={commInvNo} onChange={e => setCommInvNo(e.target.value)} disabled={status === "Closed"} placeholder="FV/…" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+          </div>
+        </div>
+
+        {calc.warnings.length > 0 && (
+          <div style={{ margin: "12px 22px 0", padding: "8px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 7, fontSize: 11.5, color: "#92400E" }}>
+            {calc.warnings.map((w, i) => <div key={i}>· {w}</div>)}
+          </div>
+        )}
+
+        {/* The bilingual statement — also the print target */}
+        <div style={{ padding: 22 }}>
+          <div id="settlement-statement" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "18px 22px", fontSize: 11.5 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800 }}>CONSIGNMENT SETTLEMENT / ROZLICZENIE SPRZEDAŻY KOMISOWEJ</div>
+                <div style={{ color: "#555", marginTop: 2 }}>Lot / Partia: <strong>{lot.number}</strong> · {lot.product} · {po ? `PO ${po.number}` : ""} · Date / Data: {localTodayISO()}</div>
+              </div>
+              <div style={{ textAlign: "right", color: "#555" }}>
+                <div style={{ fontWeight: 700 }}>MARIANNA</div>
+                <div>for / dla: {po?.supplier?.name || "Producer"}</div>
+              </div>
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 11, marginTop: 6 }}>1. Sales / Sprzedaż</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 3 }}>
+              <thead><tr>{["SO", "Client / Klient", "Product / Produkt", "Kg", "Price / Cena", "Value / Wartość PLN"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left", fontSize: 10 }}>{h}</th>)}</tr></thead>
+              <tbody>{calc.salesLines.map((l, i) => <tr key={i}>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.soNumber}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.client}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.product}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.kg.toLocaleString("pl-PL")}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.unitPrice.toFixed(2)} {l.currency}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.pln.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
+              </tr>)}</tbody>
+            </table>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 2px", fontWeight: 700 }}>
+              <span>Gross sales value / Wartość sprzedaży brutto ({calc.soldKg.toLocaleString("pl-PL")} kg)</span><span>{fmt(calc.grossPLN)}</span>
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 11, marginTop: 6 }}>2. Deducted expenses / Potrącone koszty</div>
+            {calc.expenseLines.map((l, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "2px 2px", borderBottom: "1px dotted #E5E7EB" }}>
+                <span>{l.label}{l.manual ? " (manual / ręczny)" : ""}</span><span>−{l.pln.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span>
+              </div>
+            ))}
+            {!calc.expenseLines.length && <div style={{ color: "#888", fontStyle: "italic", padding: "2px 2px" }}>No expenses recorded / Brak kosztów</div>}
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 2px", fontWeight: 700 }}>
+              <span>Total expenses / Suma kosztów</span><span>−{fmt(calc.expensesPLN)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6, marginTop: 6, fontWeight: 800 }}>
+              <span>3. NET SALES VALUE / WARTOŚĆ SPRZEDAŻY NETTO — producer invoices us this amount / producent wystawia fakturę na tę kwotę</span><span>{fmt(calc.netPLN)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 8px", marginTop: 4 }}>
+              <span>4. Our commission / Nasza prowizja ({calc.commissionPct}% × net)</span><span>−{fmt(calc.commissionPLN)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, fontWeight: 800 }}>
+              <span>5. PRODUCER PAYOUT / DO WYPŁATY PRODUCENTOWI</span><span>{fmt(calc.payoutPLN)}</span>
+            </div>
+          </div>
+
+          {/* manual expense editor (not printed) */}
+          {status !== "Closed" && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em", marginBottom: 6 }}>MANUAL EXPENSE LINES</div>
+              {extra.map((e: any, i: number) => (
+                <div key={e.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 160px 34px", gap: 8, marginBottom: 6 }}>
+                  <input value={e.label} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, label: ev.target.value } : x))} placeholder="e.g. Phytosanitary certificate" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
+                  <input type="number" value={e.pln} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, pln: ev.target.value } : x))} placeholder="PLN" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
+                  <button onClick={() => setExtra(prev => prev.filter((_, idx) => idx !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                </div>
+              ))}
+              <button onClick={() => setExtra(prev => [...prev, { id: Date.now(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save draft</button>}
+          {(status === "None" || status === "Draft") && <button onClick={() => save("Sent")} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Mark statement sent</button>}
+          {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={() => { if (window.confirm(`Close settlement for ${lot.number}?\n\nProducer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`)) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function normName(v: any) { return String(v || "").trim().toLowerCase(); }
+
+// ─── v6.5: SORTING EVENT MODAL ──────────────────────────────────────────────
+// Logs a warehouse sorting service on the lot (kg sorted on a date). No stock
+// change — it feeds the expected warehouse charges (sorting rate × kg).
+function SortingModal({ lot, onCancel, onConfirm }: any) {
+  const [kg, setKg] = useState("");
+  const [date, setDate] = useState(localTodayISO());
+  const [note, setNote] = useState("");
+  const kgNum = parseNum(kg);
+  const maxKg = Math.max(lot.physicalKg || 0, parseNum(lot.expectedKg));
+  const invalid = !(kgNum > 0) || kgNum > maxKg;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120, padding: 20 }}>
+      <div style={{ width: 440, background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB" }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Record sorting · {lot.number}</div>
+          <div style={{ fontSize: 11.5, color: "#888", marginTop: 3 }}>Warehouse sorting service — charged per kg on the warehouse tariff. Does not change stock; record any rejected kg separately as a quality issue.</div>
+        </div>
+        <div style={{ padding: "16px 22px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Sorted quantity (kg)</label>
+              <input type="number" value={kg} onChange={e => setKg(e.target.value)} placeholder={`max ${maxKg.toLocaleString("pl-PL")}`} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Date</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+            </div>
+          </div>
+          <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Note (optional)</label>
+          <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. pre-dispatch sorting for SO-2026-014" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+          {invalid && kg && <div style={{ marginTop: 10, padding: "7px 10px", background: "#FEE2E2", borderRadius: 6, fontSize: 12, color: "#991B1B" }}>Quantity must be between 0 and {maxKg.toLocaleString("pl-PL")} kg.</div>}
+        </div>
+        <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={onCancel} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button disabled={invalid} onClick={() => onConfirm({ kg: kgNum, date, note })} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: invalid ? "#E5E7EB" : "#16A34A", color: invalid ? "#9CA3AF" : "#fff", fontSize: 13, fontWeight: 700, cursor: invalid ? "not-allowed" : "pointer", fontFamily: "inherit" }}>Record sorting</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── v6.5 anchor end ────────────────────────────────────────────────────────
+function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1103,7 +1338,62 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
             )}
           </Card>
 
-          {/* Reservations card — only shown when there are live reservations */}
+          {/* v6.6: consignment banner + settlement entry point */}
+          {lot.consignment && (
+            <Card style={{ marginBottom: 12, border: "1px solid #DDD6FE", background: "#FAF5FF" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: "#6D28D9" }}>⚖ CONSIGNMENT LOT — price settled on sales</div>
+                  <div style={{ fontSize: 11.5, color: "#7C3AED", marginTop: 3, lineHeight: 1.5 }}>
+                    Producer's goods in our custody. Sell at your prices; all expenses are deducted at settlement.
+                    Settlement status: <strong>{(lot.settlement && lot.settlement.status) || "None"}</strong>
+                    {lot.settlement?.closedAt ? ` · closed ${lot.settlement.closedAt}` : lot.settlement?.sentAt ? ` · statement sent ${lot.settlement.sentAt}` : ""}
+                  </div>
+                </div>
+                <button onClick={() => onOpenSettlement && onOpenSettlement(lot)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#7C3AED", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {(lot.settlement?.status === "Closed") ? "View settlement" : "Open settlement"}
+                </button>
+              </div>
+            </Card>
+          )}
+
+          {/* v6.5: expected warehouse charges — predicted from movements + tariff */}
+          {(() => {
+            const wh = computeLotWarehouseCharges(lot, contacts, localTodayISO());
+            if (!wh) return null;
+            return (
+              <Card style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div>
+                    <SectionTitle>WAREHOUSE CHARGES — EXPECTED · {wh.warehouseName.toUpperCase()}</SectionTitle>
+                    <div style={{ fontSize: 10.5, color: "#888", marginTop: -8 }}>
+                      {wh.basis === "pallet"
+                        ? `${wh.chargeablePalletDays.toLocaleString("pl-PL")} chargeable pallet-days`
+                        : `${wh.chargeableKgDays.toLocaleString("pl-PL")} chargeable kg-days`}
+                      {" "}accrued to date · predicted from this lot's movements — compare against the warehouse invoice
+                    </div>
+                  </div>
+                  <button onClick={() => onRecordSorting && onRecordSorting(lot)} style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>+ Record sorting</button>
+                </div>
+                {wh.lines.map((l, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #F9FAFB", fontSize: 12, color: "#444" }}>
+                    <span>{l.label}{l.date ? <span style={{ color: "#999", fontSize: 10.5 }}> · {l.date}</span> : null}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                    <span style={{ fontWeight: 600 }}>{l.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {wh.currency}</span>
+                  </div>
+                ))}
+                {!wh.lines.length && <div style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>No chargeable activity yet (free period or no stock days).</div>}
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, padding: "8px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#0C4A6E" }}>Expected invoice for this lot (to date)</span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: "#0C4A6E" }}>
+                    {wh.total.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {wh.currency}
+                    {wh.currency !== "PLN" && <span style={{ fontWeight: 500, color: "#0369A1", marginLeft: 8, fontSize: 11 }}>≈ {wh.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>}
+                  </span>
+                </div>
+                {wh.notes.map((n, i) => <div key={i} style={{ fontSize: 10.5, color: "#92400E", marginTop: 6 }}>ⓘ {n}</div>)}
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>Monthly totals per warehouse and invoice reconciliation: Finance → Warehouse charges.</div>
+              </Card>
+            );
+          })()}
           {res.reservations.length > 0 && (
             <Card style={{ marginBottom: 16, border: "1px solid #DDD6FE", background: "#FAF8FF" }}>
               <SectionTitle>RESERVATIONS · {res.reservations.length} SO{res.reservations.length !== 1 ? "s" : ""}</SectionTitle>
@@ -1362,7 +1652,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [] }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], pos: extPOs = [] }: any = {}) {
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState(INIT_LOTS);
   const lots = extLots ?? localLots;
@@ -1375,6 +1665,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [selectedId, setSelectedId] = useState(null);
   const selected = useMemo(() => lots.find(l => l.id === selectedId) ?? null, [lots, selectedId]);
   const [showMovement, setShowMovement] = useState(false);
+  const [sortingLot, setSortingLot] = useState(null); // v6.5: lot for the sorting-event modal
+  const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
   const [editingMovement, setEditingMovement] = useState(null);
   const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
   const [showInspection, setShowInspection] = useState(false);
@@ -1498,8 +1790,27 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     return (
       <>
         {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
-        {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
-        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
+
+        {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
+          setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: Date.now(), type: "SORTING", kg, date, note }] } : l));
+          setSortingLot(null);
+        }} />}        {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
+
+        {settlementLot && <SettlementModal lot={lots.find(l => l.id === settlementLot.id) || settlementLot} orders={liveSOs} contacts={extContacts} pos={extPOs}
+          onCancel={() => setSettlementLot(null)}
+          onSave={(settlement, close) => {
+            setLots(prev => prev.map(l => {
+              if (l.id !== settlementLot.id) return l;
+              let next = { ...l, settlement };
+              if (close) {
+                const comps = settlementCostComponents(l, settlement.producerInvoiceAmountPLN, settlement.finalCommissionPLN ?? settlement.expectedCommissionPLN, settlement.producerInvoiceNo, settlement.commissionInvoiceNo);
+                const have = new Set((l.costs || []).map(c => c.source));
+                next = { ...next, costs: [...(l.costs || []), ...comps.filter(c => !have.has(c.source))] };
+              }
+              return next;
+            }));
+            if (close) setSettlementLot(null);
+          }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
@@ -1511,6 +1822,9 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           onDelete={deleteLot}
           liveSOs={liveSOs}
           shipments={extShipments}
+          contacts={extContacts}
+          onRecordSorting={(l) => setSortingLot(l)}
+          onOpenSettlement={(l) => setSettlementLot(l)}
         />
       </>
     );
