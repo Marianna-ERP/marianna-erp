@@ -3,6 +3,8 @@ import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO } from "./dates";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
 import * as XLSX from "xlsx";
+import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
+import { buildLedger } from "./ledger";
 import {
   aggregateNetMargins,
   groupAndAggregateNetMargins,
@@ -211,6 +213,42 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
   function setRow(i: number, k: string, v: any) { setRows(prev => prev.map((r, idx) => idx === i ? { ...r, [k]: v } : r)); }
   const included = rows.filter(r => r.include);
 
+  // v6.8: live read-only fetch of cost invoices (income=0) straight from the API.
+  const fktCfg = readFakturowniaConfig();
+  const [livePeriod, setLivePeriod] = useState("this_month");
+  const [liveBusy, setLiveBusy] = useState(false);
+  async function fetchLive() {
+    if (!fktCfg) return;
+    setLiveBusy(true); setError("");
+    const r = await fetchInvoices(fktCfg, { income: 0, period: livePeriod });
+    setLiveBusy(false);
+    if (!r.ok) {
+      setError(r.corsLikely
+        ? "The browser couldn't reach Fakturownia directly (CORS). Use the file export below instead — live sync will run from the Phase-2 backend."
+        : (r.error || "Fetch failed."));
+      return;
+    }
+    const mapped = (r.data || []).map(mapInvoice);
+    const existingInvNos = new Set((operationalCosts || []).map((c: any) => String(c.invoiceNo || "").trim().toLowerCase()).filter(Boolean));
+    setFileName(`Fakturownia · ${livePeriod}`);
+    setRows(mapped.map((m: any, i: number) => {
+      const dup = m.number && existingInvNos.has(m.number.toLowerCase());
+      const whMatch = tariffWarehouses.find((w: any) => m.sellerName && (String(w.name || "").toLowerCase().includes(m.sellerName.toLowerCase().slice(0, 12)) || m.sellerName.toLowerCase().includes(String(w.name || "").toLowerCase().slice(0, 12))));
+      return {
+        id: i, include: !dup && (m.netTotal || m.grossTotal) > 0, dup,
+        invoiceNo: m.number, seller: m.sellerName, date: m.issueDate || m.sellDate,
+        amount: m.netTotal || m.grossTotal, currency: m.currency,
+        fxRate: m.currency === "PLN" ? 1 : m.currency === "EUR" ? 4.25 : 3.9,
+        description: m.description || `${m.sellerName} ${m.number}`.trim(),
+        route: whMatch ? "warehouse" : "cost",
+        warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
+        category: guessCostCategory(`${m.sellerName} ${m.description}`),
+        allocationMethod: "by_revenue",
+      };
+    }));
+    if (!mapped.length) setError(`No cost invoices found for "${livePeriod}".`);
+  }
+
   function doImport() {
     const costs: any[] = []; const whInvoices: any[] = [];
     included.forEach((r, i) => {
@@ -236,8 +274,20 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
           <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 22, color: "#888", cursor: "pointer" }}>×</button>
         </div>
         <div style={{ padding: "14px 22px" }}>
+          {fktCfg && (
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12, padding: "10px 12px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#15803D" }}>Live sync</span>
+              <select value={livePeriod} onChange={e => setLivePeriod(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 9px", fontSize: 12.5, background: "#fff" }}>
+                <option value="this_month">This month</option>
+                <option value="last_month">Last month</option>
+                <option value="this_year">This year</option>
+              </select>
+              <button onClick={fetchLive} disabled={liveBusy} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: liveBusy ? "#A7F3D0" : "#16A34A", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: liveBusy ? "wait" : "pointer", fontFamily: "inherit" }}>{liveBusy ? "Fetching…" : "Fetch cost invoices from Fakturownia"}</button>
+              <span style={{ fontSize: 11, color: "#16803D" }}>read-only · {fktCfg.subdomain}.fakturownia.pl</span>
+            </div>
+          )}
           <label style={{ display: "inline-block", padding: "8px 16px", borderRadius: 7, background: "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-            Choose Fakturownia export file…
+            {fktCfg ? "…or choose an exported file" : "Choose Fakturownia export file…"}
             <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFile} style={{ display: "none" }} />
           </label>
           {fileName && <span style={{ fontSize: 12, color: "#666", marginLeft: 10 }}>{fileName} · {rows.length} row(s)</span>}
@@ -291,6 +341,80 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
         </div>
       </div>
     </div>
+  );
+}
+
+
+// ─── v6.9: RECEIVABLES & PAYABLES VIEW ──────────────────────────────────────
+function LedgerView({ orders = [], lots = [], pos = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
+  const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
+  const [hidePaid, setHidePaid] = useState(true);
+  const today = localTodayISO();
+  const { items, totals } = buildLedger({ orders, lots, pos, warehouseInvoices, operationalCosts, settledRefs, todayISO: today });
+
+  function togglePaid(ref: string) {
+    if (!setSettledRefs) return;
+    setSettledRefs((prev: string[]) => (prev || []).includes(ref) ? prev.filter(r => r !== ref) : [...(prev || []), ref]);
+  }
+
+  const shown = items
+    .filter(i => dir === "all" || i.direction === dir)
+    .filter(i => !hidePaid || i.status !== "Paid")
+    .sort((a, b) => {
+      const rank = (x: any) => x.status === "Overdue" ? 0 : x.status === "Open" ? 1 : 2;
+      if (rank(a) !== rank(b)) return rank(a) - rank(b);
+      return String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999"));
+    });
+
+  const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
+  const card: any = { background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 16px" };
+  const statusColor = (s: string) => s === "Overdue" ? "#DC2626" : s === "Paid" ? "#16A34A" : "#D97706";
+
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#DC2626" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>NET POSITION</div><div style={{ fontSize: 19, fontWeight: 800, color: totals.netPositionPLN >= 0 ? "#16A34A" : "#DC2626" }}>{fmt(totals.netPositionPLN)}</div><div style={{ fontSize: 10.5, color: "#888" }}>receivable − payable</div></div>
+        <div style={{ ...card, display: "flex", flexDirection: "column", justifyContent: "center", gap: 6 }}>
+          <div style={{ display: "flex", gap: 4, background: "#F3F4F6", borderRadius: 7, padding: 3 }}>
+            {(["all", "receivable", "payable"] as const).map(d => (
+              <button key={d} onClick={() => setDir(d)} style={{ flex: 1, padding: "4px 6px", borderRadius: 5, border: "none", background: dir === d ? "#fff" : "transparent", color: dir === d ? "#111" : "#888", fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>{d}</button>
+            ))}
+          </div>
+          <label style={{ fontSize: 11, color: "#666", display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}><input type="checkbox" checked={hidePaid} onChange={e => setHidePaid(e.target.checked)} /> Hide paid</label>
+        </div>
+      </div>
+
+      <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead><tr style={{ background: "#FAFAFA", textAlign: "left", color: "#888" }}>
+            {["", "Type", "Counterparty", "Document", "Date", "Due", "Amount", "Status", ""].map((h, i) => <th key={i} style={{ padding: "9px 10px", fontWeight: 700, fontSize: 10.5, borderBottom: "1px solid #EEE" }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {shown.map(i => (
+              <tr key={i.ref} style={{ borderBottom: "1px solid #F5F5F5" }}>
+                <td style={{ padding: "8px 10px" }}><span title={i.direction} style={{ fontSize: 14 }}>{i.direction === "receivable" ? "↓" : "↑"}</span></td>
+                <td style={{ padding: "8px 10px" }}>{i.kind}<div style={{ fontSize: 10, color: "#AAA" }}>{i.note || ""}</div></td>
+                <td style={{ padding: "8px 10px", fontWeight: 600 }}>{i.counterparty}</td>
+                <td style={{ padding: "8px 10px", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.documentNo}</td>
+                <td style={{ padding: "8px 10px", color: "#888" }}>{i.date || "—"}</td>
+                <td style={{ padding: "8px 10px", color: i.status === "Overdue" ? "#DC2626" : "#888", fontWeight: i.status === "Overdue" ? 700 : 400 }}>{i.dueDate || "—"}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{i.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}{i.currency !== "PLN" ? <span style={{ fontSize: 9.5, color: "#AAA" }}> PLN</span> : <span style={{ fontSize: 9.5, color: "#AAA" }}> PLN</span>}</td>
+                <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10.5, fontWeight: 800, color: statusColor(i.status) }}>{i.status}</span></td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>
+                  <button onClick={() => togglePaid(i.ref)} title={i.status === "Paid" ? "Mark unpaid" : "Mark paid"} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: i.status === "Paid" ? "#E5E7EB" : "#BBF7D0", background: i.status === "Paid" ? "#fff" : "#F0FDF4", color: i.status === "Paid" ? "#888" : "#15803D", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{i.status === "Paid" ? "Undo" : "Mark paid"}</button>
+                </td>
+              </tr>
+            ))}
+            {!shown.length && <tr><td colSpan={9} style={{ padding: 18, textAlign: "center", color: "#AAA", fontStyle: "italic" }}>Nothing to show. {hidePaid ? "Untick \"Hide paid\" to see settled items." : ""}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 8, lineHeight: 1.5 }}>
+        Receivables come from sales invoices issued on SOs; payables from producer payouts (closed consignment settlements), warehouse invoices, invoice-backed operational costs, and firm-price PO purchases. Payroll and taxes (no invoice number) are excluded. "Mark paid" is a manual flag now; once Fakturownia sales-invoice matching is connected, paid status syncs from there.
+      </div>
+    </>
   );
 }
 
@@ -447,6 +571,8 @@ export default function Finance({
   contacts = [],
   warehouseInvoices = [],
   setWarehouseInvoices = null,
+  settledRefs = [],
+  setSettledRefs = null,
   pos = [],
   shipments = [],
   operationalCosts = [],
@@ -458,13 +584,15 @@ export default function Finance({
   contacts?: any[];
   warehouseInvoices?: any[];
   setWarehouseInvoices?: any;
+  settledRefs?: string[];
+  setSettledRefs?: any;
   pos?: any[];
   shipments?: any[];
   operationalCosts?: OperationalCost[];
   setOperationalCosts?: any;
 }) {
   const [mode, setMode] = useState<MarginMode>("forecast");
-  const [tab, setTab] = useState<"pl" | "costs" | "warehouse">("pl");
+  const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
 
   const committedFilter = (o: any) => o.status !== "Draft";
@@ -549,7 +677,7 @@ export default function Finance({
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
-              {(["pl", "costs", "warehouse"] as const).map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: tab === t ? "#fff" : "transparent", color: tab === t ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.05)" : "none" }}>{t === "pl" ? "Sales P/L" : t === "costs" ? "Operational Costs" : "Warehouse charges"}</button>)}
+              {(["pl", "costs", "warehouse", "ledger"] as const).map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: tab === t ? "#fff" : "transparent", color: tab === t ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.05)" : "none" }}>{t === "pl" ? "Sales P/L" : t === "costs" ? "Operational Costs" : t === "warehouse" ? "Warehouse charges" : "Receivables & Payables"}</button>)}
             </div>
             <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
               {(["forecast", "actual"] as MarginMode[]).map(m => <button key={m} onClick={() => setMode(m)} style={{ padding: "6px 14px", borderRadius: 5, border: "none", background: mode === m ? "#fff" : "transparent", color: mode === m ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: mode === m ? "0 1px 2px rgba(0,0,0,0.05)" : "none", textTransform: "capitalize" }}>{m}</button>)}
@@ -557,7 +685,9 @@ export default function Finance({
           </div>
         </div>
 
-        {tab === "warehouse" ? (
+        {tab === "ledger" ? (
+          <LedgerView orders={orders} lots={lots} pos={pos} warehouseInvoices={warehouseInvoices} operationalCosts={operationalCosts} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
+        ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />
         ) : tab === "pl" ? (
           <>

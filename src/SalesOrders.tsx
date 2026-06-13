@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
+import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
 import { localTodayISO, localMonthISO } from "./dates";
 
@@ -1912,7 +1913,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // P/L visibility rule:
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
@@ -2133,9 +2134,21 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                       </div>
                     </div>
                   ))}
-                  <div style={{ fontSize: 10, color: "#16A34A", marginTop: 8, lineHeight: 1.4, fontStyle: "italic" }}>
-                    Enter this invoice in Fakturownia and link the PDF. Once the Invoices module is integrated, the SINV will appear there directly.
-                  </div>
+                  {order.pendingInvoices.some(inv => inv.fktMatched) ? (
+                    <div style={{ fontSize: 10.5, color: "#0C4A6E", marginTop: 8, lineHeight: 1.5, padding: "7px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6 }}>
+                      {order.pendingInvoices.filter(inv => inv.fktMatched).map((inv, i) => (
+                        <div key={i}>✓ Matched in Fakturownia{inv.ksef ? <> · KSeF <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.ksef}</span></> : null} · <strong>{inv.fktPaid ? "PAID" : "unpaid"}</strong></div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 10, color: "#16A34A", marginTop: 8, lineHeight: 1.4, fontStyle: "italic" }}>
+                      Enter this invoice in Fakturownia, then use "Match from Fakturownia" to pull its KSeF number and paid status.
+                    </div>
+                  )}
+                  {fktConfigured && (
+                    <button onClick={() => onMatchInvoices(order)} disabled={fktMatching} style={{ marginTop: 8, padding: "6px 12px", borderRadius: 7, border: "none", background: fktMatching ? "#A7F3D0" : "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: fktMatching ? "wait" : "pointer", fontFamily: "inherit" }}>{fktMatching ? "Matching…" : "↻ Match from Fakturownia (read-only)"}</button>
+                  )}
+                  {fktMatchMsg && <div style={{ fontSize: 10.5, color: fktMatchMsg.kind === "error" ? "#DC2626" : "#15803D", marginTop: 6 }}>{fktMatchMsg.text}</div>}
                 </Card>
               )}
 
@@ -2182,6 +2195,40 @@ export default function SalesOrders({
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
   const orders = extOrders ?? localOrders;
   const setOrders = extSetOrders ?? setLocalOrders;
+
+  // v6.9: read-only Fakturownia sales-invoice matching
+  const fktCfg = readFakturowniaConfig();
+  const fktConfigured = !!fktCfg;
+  const [fktMatching, setFktMatching] = useState(false);
+  const [fktMatchMsg, setFktMatchMsg] = useState(null);
+  async function matchInvoicesFromFakturownia(order) {
+    if (!fktCfg) return;
+    setFktMatching(true); setFktMatchMsg(null);
+    const r = await fetchInvoices(fktCfg, { income: 1, period: "this_year" });
+    setFktMatching(false);
+    if (!r.ok) { setFktMatchMsg({ kind: "error", text: r.corsLikely ? "Browser can't reach Fakturownia (CORS) — matching will run from the Phase-2 backend." : (r.error || "Fetch failed.") }); return; }
+    const invoices = (r.data || []).map(mapInvoice);
+    let matched = 0;
+    setOrders(prev => prev.map(o => {
+      if (o.id !== order.id) return o;
+      const next = { ...o, pendingInvoices: (o.pendingInvoices || []).map(pi => {
+        // match by exact invoice number, else by client tax id + gross amount + close date
+        let hit = invoices.find(iv => String(iv.number).trim() === String(pi.number).trim());
+        if (!hit) {
+          hit = invoices.find(iv => {
+            const amtClose = Math.abs((iv.grossTotal || 0) - (pi.grossAmount || 0)) < 1;
+            const taxMatch = o.client?.nip && iv.buyerTaxNo && String(iv.buyerTaxNo).replace(/\D/g, "").includes(String(o.client.nip).replace(/\D/g, ""));
+            return amtClose && taxMatch;
+          });
+        }
+        if (!hit) return pi;
+        matched++;
+        return { ...pi, fktMatched: true, fktNumber: hit.number, ksef: hit.ksefNo || "", fktPaid: !!hit.paid, fktStatus: hit.status };
+      }) };
+      return next;
+    }));
+    setFktMatchMsg({ kind: matched ? "success" : "error", text: matched ? `Matched ${matched} invoice(s) from Fakturownia.` : "No matching invoice found in Fakturownia for this SO yet." });
+  }
 
   // Sync the module-scope LOTS and PO_REFS with shell-provided live data BEFORE any helpers run.
   // This works because (a) React renders synchronously, (b) every reader of LOTS/PO_REFS is invoked
@@ -2484,6 +2531,10 @@ export default function SalesOrders({
         <OrderDetail
           order={selected}
           allOrders={orders}
+          fktConfigured={fktConfigured}
+          fktMatching={fktMatching}
+          fktMatchMsg={fktMatchMsg}
+          onMatchInvoices={matchInvoicesFromFakturownia}
           lots={extInvLots || []}
           pos={extPOs || []}
           shipments={extShipments || []}

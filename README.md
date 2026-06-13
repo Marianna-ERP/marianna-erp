@@ -140,3 +140,11 @@ Invoice-number field on operational costs; Copy last month button; Import from F
 ## Update V6.7.1 - Build hotfix
 
 Fixed the TS2551 build failure in SalesOrders (expectedDeliveryDate vs the standalone stub's expectedDelivery). Releases are now verified with a full TypeScript type-check replicating the production build. Cumulative zip — supersedes v6.4.1 through v6.7.0.
+
+## Update V6.8.0 - Fakturownia live bridge (read-only)
+
+Settings → Fakturownia connection (account + API token, kept browser-local and excluded from exports, with Test connection). Finance → Operational Costs gains live "Fetch cost invoices from Fakturownia" (read-only) feeding the same review screen as the file import, with duplicate protection, category guessing and warehouse routing. Graceful CORS fallback to file import. See CHANGELOG_v6.8.0.md.
+
+## Update V6.9.0 - Financial loop closed
+
+Finance gains a Receivables & Payables ledger (sales invoices in; producer payouts, warehouse/cost invoices and firm POs out; overdue flagged; mark-paid; net position). SO detail gains read-only Fakturownia sales-invoice matching (KSeF number + paid status, flowing into Receivables). TEST_SCENARIOS.md rewritten for v6.9. New engine ledger.ts; suite now 72 scenarios. See CHANGELOG_v6.9.0.md.

@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { exportAllData, importAllData, clearAllData, STORAGE_VERSION } from "./useLocalStoredState";
 import { readCustomLocations, addCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS } from "./locations";
+import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -75,6 +76,35 @@ export default function Settings({
     setCustomLocations(readCustomLocations());
     setMessage({ kind: "info", text: `Location "${name}" removed. Reloading...` });
     setTimeout(() => window.location.reload(), 900);
+  }
+
+  // v6.8: Fakturownia read-only connection (token kept browser-local, never exported)
+  const existingFkt = readFakturowniaConfig();
+  const [fktSub, setFktSub] = useState(existingFkt?.subdomain || "");
+  const [fktToken, setFktToken] = useState(existingFkt?.apiToken || "");
+  const [fktBusy, setFktBusy] = useState(false);
+  const [fktMsg, setFktMsg] = useState<{ kind: "success" | "error" | "info"; text: string } | null>(null);
+
+  async function handleFktTest() {
+    setFktBusy(true); setFktMsg(null);
+    const cfg: FakturowniaConfig = { subdomain: fktSub.trim(), apiToken: fktToken.trim() };
+    const r = await testConnection(cfg);
+    setFktBusy(false);
+    if (r.ok) setFktMsg({ kind: "success", text: "Connection works — Fakturownia responded. You can now sync cost invoices from Finance → Operational Costs." });
+    else if (r.corsLikely) setFktMsg({ kind: "error", text: "The browser couldn't reach Fakturownia (likely a CORS restriction on direct browser access). The file import still works; live sync will run from the Phase-2 backend." });
+    else setFktMsg({ kind: "error", text: r.error || "Connection failed." });
+  }
+
+  function handleFktSave() {
+    if (!fktSub.trim() || !fktToken.trim()) { setFktMsg({ kind: "error", text: "Enter both the account name and the API token." }); return; }
+    writeFakturowniaConfig({ subdomain: fktSub.trim(), apiToken: fktToken.trim() });
+    setFktMsg({ kind: "success", text: "Saved in this browser only. The token is never included in the data export." });
+  }
+
+  function handleFktDisconnect() {
+    writeFakturowniaConfig(null);
+    setFktSub(""); setFktToken("");
+    setFktMsg({ kind: "info", text: "Disconnected — the token has been removed from this browser." });
   }
 
   function handleExport() {
@@ -243,6 +273,42 @@ export default function Settings({
           </div>
           <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 6, padding: "7px 10px", marginTop: 12 }}>
             After adding or removing a location the page reloads so all modules pick it up.
+          </div>
+        </Card>
+
+        <Card style={{ marginBottom: 16 }}>
+          <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· read-only invoice sync</span></SectionTitle>
+          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+            Connect your Fakturownia account to pull cost invoices (issued to you via KSeF) straight into Operational Costs — no file export needed.
+            This is <strong>read-only</strong>: the ERP only reads invoices, never creates or changes them. Your API token is stored
+            <strong> only in this browser</strong> and is deliberately <strong>excluded from the data export</strong>, so it never travels in a shared file.
+          </div>
+          <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400E", marginBottom: 14 }}>
+            Get the token in Fakturownia → Settings → API. Treat it like a password — if it has ever been shared, rotate it there first.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Account name</label>
+              <input value={fktSub} onChange={e => setFktSub(e.target.value)} placeholder="e.g. marianna2" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+              <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 3 }}>the part before .fakturownia.pl</div>
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>API token</label>
+              <input type="password" value={fktToken} onChange={e => setFktToken(e.target.value)} placeholder="paste API token" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "ui-monospace, Menlo, monospace" }} />
+            </div>
+          </div>
+          {fktMsg && (
+            <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 7, fontSize: 12.5,
+              background: fktMsg.kind === "success" ? "#ECFDF5" : fktMsg.kind === "error" ? "#FEE2E2" : "#EFF6FF",
+              border: `1px solid ${fktMsg.kind === "success" ? "#A7F3D0" : fktMsg.kind === "error" ? "#FCA5A5" : "#BFDBFE"}`,
+              color: fktMsg.kind === "success" ? "#065F46" : fktMsg.kind === "error" ? "#991B1B" : "#1E40AF" }}>
+              {fktMsg.text}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10 }}>
+            <Button onClick={handleFktSave} variant="primary">Save connection</Button>
+            <Button onClick={handleFktTest} disabled={fktBusy || !fktSub.trim() || !fktToken.trim()}>{fktBusy ? "Testing…" : "Test connection"}</Button>
+            {existingFkt && <Button onClick={handleFktDisconnect} variant="danger">Disconnect</Button>}
           </div>
         </Card>
 
