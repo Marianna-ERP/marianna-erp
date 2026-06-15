@@ -1362,6 +1362,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
     if (mode === "client") setOrder(o => ({ ...o, destinationMode: "client", destinationLocationId: null, destinationText: o.client?.address || "" }));
     else setOrder(o => ({ ...o, destinationMode: "other" }));
   };
+  // v6.11 (#7): destination guidance must match the chosen Incoterm.
+  const incotermDestinationHint = (() => {
+    const ic = String(order.sellIncoterm || "").toUpperCase();
+    if (ic === "EXW") return "EXW — we don't deliver: the client collects from the supplier or our warehouse, so no destination is required.";
+    if (ic === "FCA" || ic === "FOB") return `${ic} — destination is the relay point or the port of departure where we hand the goods over.`;
+    if (ic === "CIF" || ic === "CFR") return `${ic} — destination is the port of arrival.`;
+    if (ic === "DAP" || ic === "DDP") return `${ic} — destination is the client's address, or another address the client indicates.`;
+    return "Select the Sell Incoterm above for destination guidance.";
+  })();
 
   // v6.3.0: live duplicate check for import-document numbers. Import permits and
   // ACID numbers are single-use — flag immediately if another SO already carries them.
@@ -1369,7 +1378,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
     const result: any = {};
     (["importPermitNo", "acidNo"] as const).forEach(field => {
       const v = String(order[field] || "").trim().toLowerCase();
-      if (!v) return;
+      if (!v || v === "n/a") return;
       const clash = (allOrders || []).find(p => p.id !== order.id && String(p[field] || "").trim().toLowerCase() === v);
       if (clash) result[field] = clash.number;
     });
@@ -1599,8 +1608,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               </div>
               <div>
                 <Lbl>Actual delivery {order.actualDeliveryDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" title="When the goods actually reached the client. Leave blank until it happens." />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once delivered</div>
+                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" disabled={order.status !== "Delivered"} title={order.status !== "Delivered" ? "Available once the status is set to Delivered." : "When the goods actually reached the client."} />
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
               <div><Lbl>Status</Lbl>
                 <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
@@ -1653,14 +1662,20 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               </div>
               <div style={{ gridColumn: "span 2" }}>
                 <Lbl>Import permit no. <span style={{ color: "#AAA", fontWeight: 400 }}>· client-country import licence</span></Lbl>
-                <Inp value={order.importPermitNo || ""} onChange={e => sf("importPermitNo", e.target.value)} placeholder="e.g. IP-2026-00871" />
+                <Inp value={order.importPermitNo === "N/A" ? "" : (order.importPermitNo || "")} onChange={e => sf("importPermitNo", e.target.value)} placeholder={order.importPermitNo === "N/A" ? "Not applicable" : "e.g. IP-2026-00871"} disabled={order.importPermitNo === "N/A"} />
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#666", marginTop: 4, cursor: "pointer" }}>
+                  <input type="checkbox" checked={order.importPermitNo === "N/A"} onChange={e => sf("importPermitNo", e.target.checked ? "N/A" : "")} /> Not applicable
+                </label>
                 {permitDupes.importPermitNo && (
                   <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.importPermitNo}</div>
                 )}
               </div>
               <div style={{ gridColumn: "span 2" }}>
                 <Lbl>ACID no. <span style={{ color: "#AAA", fontWeight: 400 }}>· Egypt Advance Cargo Information Declaration</span></Lbl>
-                <Inp value={order.acidNo || ""} onChange={e => sf("acidNo", e.target.value)} placeholder="19-digit ACID" />
+                <Inp value={order.acidNo === "N/A" ? "" : (order.acidNo || "")} onChange={e => sf("acidNo", e.target.value)} placeholder={order.acidNo === "N/A" ? "Not applicable" : "19-digit ACID"} disabled={order.acidNo === "N/A"} />
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#666", marginTop: 4, cursor: "pointer" }}>
+                  <input type="checkbox" checked={order.acidNo === "N/A"} onChange={e => sf("acidNo", e.target.checked ? "N/A" : "")} /> Not applicable
+                </label>
                 {permitDupes.acidNo && (
                   <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.acidNo}</div>
                 )}
@@ -1686,6 +1701,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               </div>
               <div>
                 <Lbl>Destination</Lbl>
+                <div style={{ fontSize: 10.5, color: order.sellIncoterm ? "#2563EB" : "#888", margin: "2px 0 6px", lineHeight: 1.4 }}>{incotermDestinationHint}</div>
                 <Sel value={destMode} onChange={e => setDestMode(e.target.value)}>
                   <option value="client">Client's registered address</option>
                   <option value="other">Other address (specify below)</option>
@@ -1721,7 +1737,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       style={{ marginTop: 6 }}
                     />
                     <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                      Pick a known place, or type the exact address the client asked us to deliver to. Free text takes precedence on the printed SO.
+                      Pick a known place, or type the exact address (relay, port, or client site as the Incoterm requires). Free text takes precedence on the printed SO.
                     </div>
                   </>
                 )}
@@ -1893,7 +1909,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       )}
                     </div>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.9fr 1fr 1.3fr 1.2fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.9fr 0.8fr 0.9fr 1.1fr 1fr 1fr 1.3fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
                       <Lbl>Product <span style={{ color: "#BBB", fontWeight: 400 }}>· autocomplete</span></Lbl>
                       <input
@@ -1911,7 +1927,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice" /></div>
                     <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" /></div>
                     <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
-                    <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
+                    <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
                   <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
@@ -2406,7 +2422,7 @@ export default function SalesOrders({
       const conflicts: any[] = [];
       (["importPermitNo", "acidNo"] as const).forEach(field => {
         const v = String(o[field] || "").trim();
-        if (!v) return;
+        if (!v || v.toLowerCase() === "n/a") return;
         orders.forEach(p => {
           if (p.id === o.id) return;
           if (String(p[field] || "").trim().toLowerCase() !== v.toLowerCase()) return;

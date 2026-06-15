@@ -140,6 +140,7 @@ export default function App() {
   const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
   const [warehouseInvoices, setWarehouseInvoices] = useLocalStoredState("warehouseInvoices", SHELL_SEED.warehouseInvoices || []);
   const [settledRefs, setSettledRefs] = useLocalStoredState("settledRefs", []);
+  const [creditNotes, setCreditNotes] = useLocalStoredState("creditNotes", []);
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
   const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
   const [userName, setUserName] = useLocalStoredState("userName", "");
@@ -168,7 +169,7 @@ export default function App() {
       case "dashboard":
         return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} creditNotes={creditNotes} setCreditNotes={setCreditNotes} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} />;
       case "pos":

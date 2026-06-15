@@ -1172,8 +1172,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         <Card>
           <SectionTitle>Dates and temperature</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div><Lbl>Loading date <span style={{ color: "#AAA", fontWeight: 400 }}>· loaded at supplier</span></Lbl><Inp type="date" value={form.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the shipment — the date the goods are loaded at the supplier (per the purchase agreement)" /></div>
-            <div><Lbl>Expected delivery <span style={{ color: "#AAA", fontWeight: 400 }}>· delivered to client</span></Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="The date the cargo reaches the client (per the sales agreement)" /></div>
+            <div><Lbl>Loading date</Lbl><Inp type="date" value={form.loadingDate} onChange={e => sf("loadingDate", e.target.value)} /></div>
+            <div><Lbl>Expected delivery</Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
             <div><Lbl>Temp min C</Lbl><Inp type="number" value={form.temperatureMinC} onChange={e => sf("temperatureMinC", e.target.value)} /></div>
             <div><Lbl>Temp max C</Lbl><Inp type="number" value={form.temperatureMaxC} onChange={e => sf("temperatureMaxC", e.target.value)} /></div>
           </div>
@@ -1342,8 +1342,8 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
-            <div><Lbl>Loading date <span style={{ color: "#AAA", fontWeight: 400 }}>· loaded at supplier</span></Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the shipment — the date the goods are loaded at the supplier (per the purchase agreement)" /></div>
-            <div><Lbl>Expected delivery <span style={{ color: "#AAA", fontWeight: 400 }}>· delivered to client</span></Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="The date the cargo reaches the client (per the sales agreement)" /></div>
+            <div><Lbl>Loading date</Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} /></div>
+            <div><Lbl>Expected delivery</Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 110px", gap: 10, marginTop: 10 }}>
             <div><Lbl>Carrier</Lbl><Sel value={draft.carrierId || ""} onChange={e => sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">None</option>{roadProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
@@ -1473,6 +1473,19 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
             <div><Lbl>Billing status</Lbl><Sel value={draft.billingStatus} onChange={e => sf("billingStatus", e.target.value)}>{BILLING_STATUSES.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div style={{ fontSize: 10.5, color: "#888", lineHeight: 1.45, paddingBottom: 7 }}>Tracks where this shipment is in the cost cycle — from waiting for the supplier's freight invoice to costs allocated into lots.</div>
           </div>
+          {/* v6.11 (#10): DAP/DDP purchases — the supplier arranges and pays the
+              carrier, so there is no freight cost on our side. The toggle records
+              that and unlocks the otherwise-protected freight line so it can be
+              removed. */}
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#334155", marginBottom: draft.supplierManagedTransport ? 6 : 12, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!draft.supplierManagedTransport} onChange={e => sf("supplierManagedTransport", e.target.checked)} />
+            Bought DAP/DDP — the supplier arranges &amp; pays transport (no freight cost on our side)
+          </label>
+          {draft.supplierManagedTransport && (
+            <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "8px 10px", marginBottom: 12, lineHeight: 1.45 }}>
+              We don't manage or pay for this transport, so no freight cost belongs to us here. Remove any freight line below (now unlocked). Use the legs' transport units only to track the incoming truck/driver.
+            </div>
+          )}
           {(draft.costs || []).map((c, i) => <div key={c.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.7fr 0.6fr 0.8fr 1fr 1fr 0.5fr", gap: 8, marginBottom: 8 }}>
             <div><Lbl>Type</Lbl><Sel value={c.type} onChange={e => updateCost(i, "type", e.target.value)}>{COST_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
             <div><Lbl>Supplier</Lbl><Sel value={c.supplierId || ""} onChange={e => updateCost(i, "supplierId", e.target.value ? parseNum(e.target.value) : null)}>{logisticsProviders(contacts).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
@@ -1481,7 +1494,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
             <div><Lbl>FX</Lbl><Inp type="number" value={c.fxRate} onChange={e => updateCost(i, "fxRate", e.target.value)} /></div>
             <div><Lbl>Status</Lbl><Sel value={c.invoiceStatus} onChange={e => updateCost(i, "invoiceStatus", e.target.value)}><option>Expected</option><option>Received</option><option>Approved</option><option>Posted</option><option>Paid</option></Sel></div>
             <div><Lbl>Invoice ref</Lbl><Inp value={c.invoiceRef} onChange={e => updateCost(i, "invoiceRef", e.target.value)} /></div>
-            <div><Lbl>&nbsp;</Lbl>{isFreightCostType(c.type)
+            <div><Lbl>&nbsp;</Lbl>{(isFreightCostType(c.type) && !draft.supplierManagedTransport)
               ? <span title="Freight lines can't be deleted" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", height: 34, width: "100%", color: "#9CA3AF", fontSize: 14 }}>🔒</span>
               : <button onClick={() => removeCost(i)} title="Delete this cost line" style={{ height: 34, width: "100%", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>✕</button>}</div>
           </div>)}

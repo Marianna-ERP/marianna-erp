@@ -210,3 +210,46 @@ firm-price PO purchases — with Open / Overdue / Paid status and a net position
 | 15 | Sales Orders | Destination = client address, or “Other” free text |
 
 *Manual generated for MARIANNA ERP v6.10.0.*
+
+---
+
+## 10. New in v6.11.0
+
+### Finance → Credit Notes (new tab)
+Record any credit note tied to transport, a shipment, a client, a supplier or a
+warehouse. Pick the **direction** — *Incoming* (a supplier/carrier/warehouse
+credits us) or *Outgoing* (we credit a client) — then fill counterparty, category,
+the related **ref** (shipment / PO / SO / invoice), amount, currency, FX, status
+and reason. The tab totals **incoming**, **outgoing** and **net** in PLN. Notes
+persist locally and are included in the JSON backup. (Automatic netting into
+Receivables & Payables isn't wired yet — reconcile via the related ref.)
+
+### Inventory → Movement vs Record quality issue
+The lot action window now has two tabs. **Movement** covers Receipt (IN),
+Transfer and Ship Out. **Record quality issue** covers Damage (write-off) and
+Reclassify (grade change), for post-sorting results on a lot.
+
+### EXW dispatches
+Recording a **Ship Out** for an EXW sale now works even when the lot is fully
+reserved/sold — it's capped by the physical (or expected) quantity, not the
+reserved-net availability. Set From = supplier/our warehouse, To = the client.
+
+### Sales Orders
+- **Actual delivery** date is enabled only once the status is **Delivered**.
+- **Import permit / ACID** each have a **Not applicable** toggle.
+- **Destination guidance** now matches the Incoterm (EXW none; FCA/FOB relay or
+  port of departure; CIF/CFR port of arrival; DAP/DDP client/other address).
+- Big PLN profitability figures now fit the P&L card; line totals stay in frame.
+
+### Purchase Orders
+- Changing the order **currency** updates every line and the printout, so a EUR PO
+  no longer prints a PLN first line.
+- Deleting a PO line now also removes its still-expected lot from Inventory.
+
+### Shipments
+- The Loading / Expected-delivery date helper captions were removed.
+- Costs & billing has a **“Bought DAP/DDP — supplier arranges & pays transport”**
+  toggle that records there's no freight cost on our side and unlocks the freight
+  line for removal.
+
+*Manual updated for MARIANNA ERP v6.11.0.*

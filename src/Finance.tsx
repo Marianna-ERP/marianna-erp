@@ -65,6 +65,9 @@ function Inp(props: any) {
 function Sel(props: any) {
   return <select {...props} style={{ width: "100%", padding: "8px 9px", border: "1px solid #E5E7EB", borderRadius: 7, fontSize: 12, fontFamily: "inherit", background: "#fff", ...(props.style || {}) }}>{props.children}</select>;
 }
+function Lbl({ children }: any) {
+  return <div style={{ fontSize: 10, color: "#888", fontWeight: 600, marginBottom: 4, letterSpacing: "0.02em" }}>{children}</div>;
+}
 function StatBlock({ label, value, valueColor, sub }: any) {
   return (
     <div>
@@ -567,6 +570,108 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
   );
 }
 
+// ─── CREDIT NOTES (v6.11 · #12) ──────────────────────────────────────────────
+// A credit note adjusts a balance with a counterparty: an INCOMING note (in our
+// favour) is one a supplier / carrier / warehouse issues to us (e.g. for damaged
+// goods or a transport claim); an OUTGOING note is one we issue to a client. They
+// are recorded here and can be reconciled against Receivables & Payables.
+const CN_CATEGORIES = ["Transport / freight", "Goods / quality", "Shipment claim", "Warehouse", "Price adjustment", "Other"];
+const CN_STATUSES = ["Draft", "Issued", "Applied", "Cancelled"];
+function blankCreditNote() {
+  return { id: Date.now(), date: localTodayISO(), direction: "incoming", partyName: "", category: CN_CATEGORIES[0], relatedRef: "", amount: "", currency: "PLN", fxRate: "1", status: "Draft", reason: "" };
+}
+function CreditNotesView({ creditNotes = [], setCreditNotes, contacts = [], pos = [], orders = [], shipments = [] }: any) {
+  const [form, setForm] = useState<any>(() => blankCreditNote());
+  const [editingId, setEditingId] = useState<any>(null);
+  const sf = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
+  const partyOptions = Array.from(new Set((contacts || []).map((c: any) => c.name).filter(Boolean))).sort();
+  const refOptions = [
+    ...(shipments || []).map((s: any) => s.number),
+    ...(pos || []).map((p: any) => p.number),
+    ...(orders || []).map((o: any) => o.number),
+  ].filter(Boolean);
+
+  const fmtPLN = (n: number) => `${(Number(n) || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN`;
+  const toPLN = (cn: any) => (parseFloat(cn.amount) || 0) * (parseFloat(cn.fxRate) || 1);
+
+  const reset = () => { setForm(blankCreditNote()); setEditingId(null); };
+  const save = () => {
+    if (!(parseFloat(form.amount) > 0)) { window.alert("Enter an amount greater than zero."); return; }
+    if (!String(form.partyName || "").trim()) { window.alert("Enter the counterparty (who issued or received the credit note)."); return; }
+    const rec = { ...form, amount: parseFloat(form.amount) || 0, fxRate: parseFloat(form.fxRate) || 1, amountPLN: Math.round(toPLN(form) * 100) / 100 };
+    setCreditNotes((prev: any[]) => {
+      const exists = (prev || []).some(c => c.id === rec.id);
+      return exists ? (prev || []).map(c => c.id === rec.id ? rec : c) : [...(prev || []), rec];
+    });
+    reset();
+  };
+  const edit = (cn: any) => { setForm({ ...cn, amount: String(cn.amount ?? ""), fxRate: String(cn.fxRate ?? "1") }); setEditingId(cn.id); };
+  const del = (id: any) => { if (window.confirm("Delete this credit note?")) { setCreditNotes((prev: any[]) => (prev || []).filter(c => c.id !== id)); if (editingId === id) reset(); } };
+
+  const sorted = [...(creditNotes || [])].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const incomingPLN = sorted.filter(c => c.direction === "incoming" && c.status !== "Cancelled").reduce((s, c) => s + (c.amountPLN ?? toPLN(c)), 0);
+  const outgoingPLN = sorted.filter(c => c.direction === "outgoing" && c.status !== "Cancelled").reduce((s, c) => s + (c.amountPLN ?? toPLN(c)), 0);
+
+  const card = { background: "#fff", border: "1px solid #EDEDED", borderRadius: 10, padding: "12px 14px" };
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>IN OUR FAVOUR · incoming</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmtPLN(incomingPLN)}</div><div style={{ fontSize: 10.5, color: "#888" }}>from suppliers / carriers / warehouses</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>ISSUED BY US · outgoing</div><div style={{ fontSize: 19, fontWeight: 800, color: "#DC2626" }}>{fmtPLN(outgoingPLN)}</div><div style={{ fontSize: 10.5, color: "#888" }}>credits granted to clients</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>NET</div><div style={{ fontSize: 19, fontWeight: 800, color: incomingPLN - outgoingPLN >= 0 ? "#16A34A" : "#DC2626" }}>{fmtPLN(incomingPLN - outgoingPLN)}</div><div style={{ fontSize: 10.5, color: "#888" }}>incoming − outgoing</div></div>
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #EDEDED", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>{editingId ? "Edit credit note" : "New credit note"}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+          <div><Lbl>Date</Lbl><Inp type="date" value={form.date} onChange={(e: any) => sf("date", e.target.value)} /></div>
+          <div><Lbl>Direction</Lbl><Sel value={form.direction} onChange={(e: any) => sf("direction", e.target.value)}><option value="incoming">Incoming — received by us</option><option value="outgoing">Outgoing — issued by us</option></Sel></div>
+          <div><Lbl>Category</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{CN_CATEGORIES.map(c => <option key={c}>{c}</option>)}</Sel></div>
+          <div><Lbl>Status</Lbl><Sel value={form.status} onChange={(e: any) => sf("status", e.target.value)}>{CN_STATUSES.map(s => <option key={s}>{s}</option>)}</Sel></div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 0.8fr 0.8fr", gap: 10, marginBottom: 10 }}>
+          <div><Lbl>Counterparty</Lbl><Inp list="cn-party-options" value={form.partyName} onChange={(e: any) => sf("partyName", e.target.value)} placeholder="supplier / carrier / client / warehouse" /><datalist id="cn-party-options">{partyOptions.map((p: any) => <option key={p} value={p} />)}</datalist></div>
+          <div><Lbl>Related ref</Lbl><Inp list="cn-ref-options" value={form.relatedRef} onChange={(e: any) => sf("relatedRef", e.target.value)} placeholder="shipment / PO / SO / invoice" /><datalist id="cn-ref-options">{refOptions.map((r: any) => <option key={r} value={r} />)}</datalist></div>
+          <div><Lbl>Amount</Lbl><Inp type="number" value={form.amount} onChange={(e: any) => sf("amount", e.target.value)} placeholder="0.00" /></div>
+          <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={(e: any) => sf("currency", e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
+          <div><Lbl>FX → PLN</Lbl><Inp type="number" value={form.fxRate} onChange={(e: any) => sf("fxRate", e.target.value)} /></div>
+        </div>
+        <div style={{ marginBottom: 12 }}><Lbl>Reason / notes</Lbl><Inp value={form.reason} onChange={(e: any) => sf("reason", e.target.value)} placeholder="e.g. transport damage claim on SHP-2026-0045, 3 pallets" /></div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button onClick={save} style={{ padding: "9px 18px", border: "none", borderRadius: 8, background: "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{editingId ? "Save changes" : "Add credit note"}</button>
+          {editingId && <button onClick={reset} style={{ padding: "9px 14px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>}
+          <span style={{ fontSize: 11, color: "#888" }}>= {fmtPLN(toPLN(form))}</span>
+        </div>
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #EDEDED", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "90px 90px 1.3fr 1fr 1.4fr 1fr 90px 70px", padding: "10px 14px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.05em" }}>
+          <div>DATE</div><div>DIR.</div><div>COUNTERPARTY</div><div>CATEGORY</div><div>REASON · REF</div><div style={{ textAlign: "right" }}>AMOUNT</div><div>STATUS</div><div></div>
+        </div>
+        {sorted.length === 0 && <div style={{ padding: 18, fontSize: 12.5, color: "#888" }}>No credit notes yet. Record one above — e.g. a carrier's credit for transport damage, or a credit you issue a client for a shortfall.</div>}
+        {sorted.map((cn: any) => (
+          <div key={cn.id} style={{ display: "grid", gridTemplateColumns: "90px 90px 1.3fr 1fr 1.4fr 1fr 90px 70px", padding: "10px 14px", borderBottom: "1px solid #F7F7F7", fontSize: 12, alignItems: "center", opacity: cn.status === "Cancelled" ? 0.5 : 1 }}>
+            <div>{cn.date}</div>
+            <div><span title={cn.direction} style={{ color: cn.direction === "incoming" ? "#16A34A" : "#DC2626", fontWeight: 700 }}>{cn.direction === "incoming" ? "↓ in" : "↑ out"}</span></div>
+            <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={cn.partyName}>{cn.partyName}</div>
+            <div style={{ color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={cn.category}>{cn.category}</div>
+            <div style={{ color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={`${cn.reason || ""}${cn.relatedRef ? ` · ${cn.relatedRef}` : ""}`}>{cn.reason || "—"}{cn.relatedRef ? <span style={{ color: "#999" }}> · {cn.relatedRef}</span> : null}</div>
+            <div style={{ textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{(parseFloat(cn.amount) || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {cn.currency}</div>
+            <div style={{ fontSize: 11, color: "#555" }}>{cn.status}</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => edit(cn)} title="Edit" style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, padding: "3px 6px" }}>✎</button>
+              <button onClick={() => del(cn.id)} title="Delete" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 12, padding: "3px 6px" }}>✕</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 10.5, color: "#888", marginTop: 8, lineHeight: 1.5 }}>
+        Credit notes are recorded and totalled here. Incoming notes reduce what we owe (or are due back from) a supplier, carrier or warehouse; outgoing notes reduce what a client owes us. Link each to the related shipment, PO, SO or invoice via the “Related ref” field.
+      </div>
+    </>
+  );
+}
+
 export default function Finance({
   orders = [],
   lots = [],
@@ -580,6 +685,8 @@ export default function Finance({
   shipments = [],
   operationalCosts = [],
   setOperationalCosts,
+  creditNotes = [],
+  setCreditNotes,
 }: {
   orders?: any[];
   lots?: any[];
@@ -593,9 +700,11 @@ export default function Finance({
   shipments?: any[];
   operationalCosts?: OperationalCost[];
   setOperationalCosts?: any;
+  creditNotes?: any[];
+  setCreditNotes?: any;
 }) {
   const [mode, setMode] = useState<MarginMode>("forecast");
-  const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
+  const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger" | "creditNotes">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
   // v6.10: filters + hover-preview for the Operational Cost Entries register.
   const [costPeriodFilter, setCostPeriodFilter] = useState<string>("all");
@@ -707,7 +816,7 @@ export default function Finance({
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
-              {(["pl", "costs", "warehouse", "ledger"] as const).map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: tab === t ? "#fff" : "transparent", color: tab === t ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.05)" : "none" }}>{t === "pl" ? "Sales P/L" : t === "costs" ? "Operational Costs" : t === "warehouse" ? "Warehouse charges" : "Receivables & Payables"}</button>)}
+              {(["pl", "costs", "warehouse", "ledger", "creditNotes"] as const).map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: tab === t ? "#fff" : "transparent", color: tab === t ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.05)" : "none" }}>{t === "pl" ? "Sales P/L" : t === "costs" ? "Operational Costs" : t === "warehouse" ? "Warehouse charges" : t === "ledger" ? "Receivables & Payables" : "Credit Notes"}</button>)}
             </div>
             <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
               {(["forecast", "actual"] as MarginMode[]).map(m => <button key={m} onClick={() => setMode(m)} style={{ padding: "6px 14px", borderRadius: 5, border: "none", background: mode === m ? "#fff" : "transparent", color: mode === m ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: mode === m ? "0 1px 2px rgba(0,0,0,0.05)" : "none", textTransform: "capitalize" }}>{m}</button>)}
@@ -715,7 +824,9 @@ export default function Finance({
           </div>
         </div>
 
-        {tab === "ledger" ? (
+        {tab === "creditNotes" ? (
+          <CreditNotesView creditNotes={creditNotes} setCreditNotes={setCreditNotes} contacts={contacts} pos={pos} orders={orders} shipments={shipments} />
+        ) : tab === "ledger" ? (
           <LedgerView orders={orders} lots={lots} pos={pos} warehouseInvoices={warehouseInvoices} operationalCosts={operationalCosts} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
         ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />

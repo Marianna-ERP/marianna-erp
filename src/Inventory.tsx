@@ -792,7 +792,18 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
   // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
   // was 0 kg, making every quantity error out). In edit mode, prefill.
   const isExpectedLike = lot.status === "Expected" || lot.status === "Direct Expected";
+  // v6.11 (#11): two modes — "movement" (IN / Transfer / Ship Out) and "quality"
+  // (Damage / Reclassify, for post-sorting results on a lot). Damage/Reclass were
+  // previously mixed into the movement dropdown.
+  const QUALITY_TYPES = ["DAMAGE", "RECLASS"];
+  const MOVEMENT_MODE_TYPES = ["IN", "TRANSFER", "SHIP_OUT"];
+  const [mode, setMode] = useState<"movement" | "quality">(editing && QUALITY_TYPES.includes(editing.type) ? "quality" : "movement");
   const [type, setType] = useState(editing?.type || (isExpectedLike ? "IN" : "TRANSFER"));
+  const switchMode = (m: "movement" | "quality") => {
+    setMode(m);
+    if (m === "quality" && !QUALITY_TYPES.includes(type)) setType("DAMAGE");
+    if (m === "movement" && !MOVEMENT_MODE_TYPES.includes(type)) setType(isExpectedLike ? "IN" : "TRANSFER");
+  };
   const [qty, setQty] = useState(editing ? String(editing.qtyKg ?? "") : "");
   const [fromId, setFromId] = useState(editing?.fromId ?? lot.locationId);
   const [toId, setToId] = useState(editing?.toId ?? lot.locationId);
@@ -813,7 +824,10 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
   const maxByType = {
     IN:       Infinity,
     TRANSFER: physicalBasis + selfQty,
-    SHIP_OUT: (liveAvailableKg || 0) + selfQty,
+    // v6.11 (#8): a Ship Out is the *physical* dispatch — for an EXW sale the lot is
+    // already reserved/sold (liveAvailable = 0), which used to block it. Cap by the
+    // physical (or expected, for direct flows) quantity instead of the reserved-net.
+    SHIP_OUT: physicalBasis + selfQty,
     DAMAGE:   physicalBasis + selfQty,
     RECLASS:  physicalBasis + selfQty,
   };
@@ -827,17 +841,33 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
       <div style={{ background: "#fff", borderRadius: 14, width: 540, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px", borderBottom: "1px solid #EBEBEB" }}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? "Edit movement" : "Record movement"}</div>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? (mode === "quality" ? "Edit quality issue" : "Edit movement") : (mode === "quality" ? "Record quality issue" : "Record movement")}</div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
+          {/* v6.11 (#11): movement vs quality issue */}
+          <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 8, marginTop: 12 }}>
+            {([["movement", "Movement (in / transfer / out)"], ["quality", "Record quality issue"]] as const).map(([m, label]) => (
+              <button key={m} onClick={() => switchMode(m)} disabled={!!editing}
+                style={{ flex: 1, padding: "7px 10px", border: "none", borderRadius: 6, fontSize: 11.5, fontWeight: 600, cursor: editing ? "not-allowed" : "pointer",
+                  background: mode === m ? "#fff" : "transparent", color: mode === m ? "#111" : "#6B7280", boxShadow: mode === m ? "0 1px 2px rgba(0,0,0,0.08)" : "none" }}>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <div style={{ padding: 24 }}>
-          <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
-            <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
-          </div>
+          {mode === "movement" ? (
+            <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
+              <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
+            </div>
+          ) : (
+            <div style={{ padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11.5, color: "#991B1B", lineHeight: 1.5, marginBottom: 16 }}>
+              <strong>Quality issue.</strong> Record the result of inspecting / sorting this lot: <strong>Damage</strong> writes off rejected kg (reduces stock on hand), and <strong>Reclassify</strong> changes the quality grade (e.g. Kl. I → Kl. II) with no quantity change. Use this for post-sorting outcomes — not for normal receipts, transfers or dispatches.
+            </div>
+          )}
 
-          <div style={{ marginBottom: 4 }}><Lbl>Movement type</Lbl>
+          <div style={{ marginBottom: 4 }}><Lbl>{mode === "quality" ? "Quality issue type" : "Movement type"}</Lbl>
             <Sel value={type} onChange={e => setType(e.target.value)}>
-              {Object.entries(MOVEMENT_TYPES).filter(([k]) => k !== "REVERSAL").map(([k, v]: any) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+              {Object.entries(MOVEMENT_TYPES).filter(([k]) => k !== "REVERSAL" && (mode === "quality" ? QUALITY_TYPES.includes(k) : MOVEMENT_MODE_TYPES.includes(k))).map(([k, v]: any) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
             </Sel>
           </div>
           {/* Live plain-language description of the selected type */}

@@ -656,7 +656,7 @@ function PODoc({ order }: any) {
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.unit || "Kg"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.qty || 0).toLocaleString("pl-PL")}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : parseFloat(item.unitPrice || 0).toFixed(2)}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : item.currency}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : order.currency}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{(order.pricingMode || "firm") === "consignment" ? "Konsygnacja / Consignment" : parseFloat(lt).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
               </tr>
             );
@@ -1208,7 +1208,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Currency</Lbl>
-                <Sel value={order.currency} onChange={e => sf("currency", e.target.value)} disabled={isLocked}>
+                <Sel value={order.currency} onChange={e => setOrder(o => ({ ...o, currency: e.target.value, items: (o.items || []).map(it => ({ ...it, currency: e.target.value })) }))} disabled={isLocked}>
                   {CURRENCIES.map(c => <option key={c}>{c}</option>)}
                 </Sel>
               </div>
@@ -1372,7 +1372,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                           <td style={{ padding: "10px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
                           <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{it.boxes ? fmtNum(it.boxes) : "—"}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
-                          <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {it.currency}</>}</td>
+                          <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {order.currency}</>}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{lt.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
                         </tr>
                       );
@@ -1788,12 +1788,28 @@ ${blockNote}`.trim(),
       inventoryPlan = buildExpectedLotsFromPO(o, lots);
     }
 
+    // v6.11 (#2): when a PO line is removed, its still-expected lot must leave
+    // Inventory too. We only prune lots that belong to this PO, are tied to a now
+    // missing line id, and have NOT received any goods or movements — so real
+    // stock is never destroyed.
+    const currentLineIds = new Set((o.items || []).map((it, idx) => String(it.id ?? idx + 1)));
+    const orphanLotNumbers = new Set(
+      (lots || [])
+        .filter(l => l.poRef === o.number
+          && l.poLineId != null && String(l.poLineId) !== ""
+          && !currentLineIds.has(String(l.poLineId))
+          && (l.status === "Expected" || l.status === "Direct Expected")
+          && !(parseFloat(l.receivedKg) > 0) && !(parseFloat(l.physicalKg) > 0)
+          && !((l.movements || []).length))
+        .map(l => l.number)
+    );
+
     const savedId = o.id ?? Date.now();
     const updated = {
       ...o,
       id: savedId,
       linkedShipments: o.linkedShipments || [],
-      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]),
+      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]).filter(n => !orphanLotNumbers.has(n)),
       linkedInvoices: o.linkedInvoices || [],
     };
 
@@ -1801,11 +1817,12 @@ ${blockNote}`.trim(),
       updated.fxLockedAt = localTodayISO();
     }
 
-    if (extSetLots && inventoryPlan.newLots?.length) {
+    if (extSetLots && (inventoryPlan.newLots?.length || orphanLotNumbers.size)) {
       extSetLots(prev => {
         const existingNumbers = new Set((prev || []).map(l => l.number));
-        const additions = inventoryPlan.newLots.filter(l => !existingNumbers.has(l.number));
-        return [...(prev || []), ...additions];
+        const additions = (inventoryPlan.newLots || []).filter(l => !existingNumbers.has(l.number));
+        const kept = (prev || []).filter(l => !orphanLotNumbers.has(l.number));
+        return [...kept, ...additions];
       });
     }
 
