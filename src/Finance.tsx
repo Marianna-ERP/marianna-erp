@@ -95,6 +95,9 @@ function BarRow({ label, value, maxValue, marginPct, sub }: any) {
   );
 }
 
+const catLabel = (k: any) => OPERATIONAL_COST_CATEGORIES.find(c => c.key === k)?.label || String(k || "").replace(/_/g, " ");
+const methodLabel = (k: any) => ALLOCATION_METHODS.find(m => m.key === k)?.label || String(k || "").replace(/_/g, " ");
+
 function newCostTemplate(): OperationalCost {
   const now = new Date();
   const period = localMonthISO();
@@ -165,9 +168,9 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
         const aoa: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
         if (!aoa.length) { setError("File appears empty."); return; }
         const headers = (aoa[0] || []).map((x: any) => String(x || ""));
-        const cNo = findCol(headers, "numer", "number", "nr ");
+        const cNo = findCol(headers, "numer faktury", "numer", "nr faktury", "invoice number", "invoice no", "number", "nr ", "faktura");
         const cSeller = findCol(headers, "sprzedawca", "kontrahent", "seller", "dostawca", "supplier", "nazwa");
-        const cDate = findCol(headers, "data wystaw", "issue date", "data sprzeda", "data");
+        const cDate = findCol(headers, "data wystaw", "issue date", "issue_date", "data sprzeda", "sell date", "data faktury", "data");
         const cNet = findCol(headers, "netto", "net");
         const cGross = findCol(headers, "brutto", "gross");
         const cCur = findCol(headers, "walut", "currency");
@@ -594,6 +597,10 @@ export default function Finance({
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
+  // v6.10: filters + hover-preview for the Operational Cost Entries register.
+  const [costPeriodFilter, setCostPeriodFilter] = useState<string>("all");
+  const [costSupplierFilter, setCostSupplierFilter] = useState<string>("all");
+  const [hoverCost, setHoverCost] = useState<OperationalCost | null>(null);
 
   const committedFilter = (o: any) => o.status !== "Draft";
   const totalAgg = useMemo(() => aggregateNetMargins(orders, lots, pos, shipments, mode, committedFilter, operationalCosts, orders), [orders, lots, pos, shipments, mode, operationalCosts]);
@@ -617,6 +624,29 @@ export default function Finance({
     });
     return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
   }, [operationalCosts]);
+
+  // v6.10: distinct periods & suppliers for the entry-register filters, and the
+  // filtered list itself (sorted by date desc, falling back to period).
+  const costPeriods = useMemo(
+    () => Array.from(new Set((operationalCosts || []).map((c: OperationalCost) => c.period).filter(Boolean))).sort((a, b) => String(b).localeCompare(String(a))),
+    [operationalCosts]
+  );
+  const costSuppliers = useMemo(
+    () => Array.from(new Set((operationalCosts || []).map((c: OperationalCost) => (c.supplierName || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [operationalCosts]
+  );
+  const filteredCosts = useMemo(
+    () => (operationalCosts || [])
+      .filter((c: OperationalCost) => costPeriodFilter === "all" || c.period === costPeriodFilter)
+      .filter((c: OperationalCost) => costSupplierFilter === "all" || (c.supplierName || "").trim() === costSupplierFilter)
+      .slice()
+      .sort((a, b) => String(b.date || b.period || "").localeCompare(String(a.date || a.period || ""))),
+    [operationalCosts, costPeriodFilter, costSupplierFilter]
+  );
+  const filteredCostTotalPLN = useMemo(
+    () => filteredCosts.reduce((s: number, c: OperationalCost) => s + (safe(c.amountPLN) || safe(c.amount) * (safe(c.fxRate) || 1)), 0),
+    [filteredCosts]
+  );
 
   function saveCost() {
     if (!setOperationalCosts) return;
@@ -791,15 +821,62 @@ export default function Finance({
                       <button onClick={() => setShowFktImport(true)} title="Import the cost-invoice register exported from Fakturownia (XLS/CSV)" style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>📥 Import from Fakturownia</button>
                     </div>
                   </div>
-                  {(operationalCosts || []).length === 0 ? <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No operational costs yet.</div> : (
+                  {/* v6.10: filter by period and by supplier */}
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", margin: "8px 0 10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#888" }}>PERIOD</span>
+                      <select value={costPeriodFilter} onChange={e => setCostPeriodFilter(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: "inherit", background: "#fff" }}>
+                        <option value="all">All periods</option>
+                        {costPeriods.map(p => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#888" }}>SUPPLIER</span>
+                      <select value={costSupplierFilter} onChange={e => setCostSupplierFilter(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: "inherit", background: "#fff", maxWidth: 220 }}>
+                        <option value="all">All suppliers</option>
+                        {costSuppliers.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    {(costPeriodFilter !== "all" || costSupplierFilter !== "all") && (
+                      <button onClick={() => { setCostPeriodFilter("all"); setCostSupplierFilter("all"); }} style={{ border: "none", background: "transparent", color: "#2563EB", cursor: "pointer", fontSize: 11.5, fontFamily: "inherit" }}>clear filters</button>
+                    )}
+                    <div style={{ marginLeft: "auto", fontSize: 11, color: "#888" }}>{filteredCosts.length} entr{filteredCosts.length === 1 ? "y" : "ies"} · <strong>{fmtPLN(filteredCostTotalPLN)}</strong></div>
+                  </div>
+
+                  {/* v6.10: hover-preview panel — move over a row to see full detail */}
+                  <div style={{ minHeight: 64, marginBottom: 10, padding: "9px 12px", borderRadius: 8, border: "1px dashed #E5E7EB", background: "#FCFCFD", fontSize: 11.5, color: "#555" }}>
+                    {hoverCost ? (
+                      <div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", marginBottom: 4 }}>
+                          <span><span style={{ color: "#AAA" }}>Period</span> <strong>{hoverCost.period || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Date</span> <strong>{hoverCost.date || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Supplier</span> <strong>{hoverCost.supplierName || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Invoice no.</span> <strong style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{(hoverCost as any).invoiceNo || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Category</span> <strong>{catLabel(hoverCost.category)}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Cost center</span> <strong>{hoverCost.costCenter || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Allocation</span> <strong>{methodLabel(hoverCost.allocationMethod)}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Amount</span> <strong>{safe(hoverCost.amount).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {hoverCost.currency}</strong>{hoverCost.currency !== "PLN" ? <span style={{ color: "#AAA" }}> · {fmtPLN(safe(hoverCost.amountPLN) || safe(hoverCost.amount) * (safe(hoverCost.fxRate) || 1))} @ {hoverCost.fxRate}</span> : null}</span>
+                        </div>
+                        <div style={{ color: "#333" }}>{hoverCost.description || "—"}</div>
+                        {hoverCost.notes ? <div style={{ color: "#999", marginTop: 2, fontStyle: "italic" }}>{hoverCost.notes}</div> : null}
+                      </div>
+                    ) : (
+                      <span style={{ color: "#AAA" }}>Hover a row to preview its full detail (period, date, cost center, invoice no., allocation, notes). Use Edit to correct or Delete to remove.</span>
+                    )}
+                  </div>
+
+                  {(operationalCosts || []).length === 0 ? (
+                    <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No operational costs yet.</div>
+                  ) : filteredCosts.length === 0 ? (
+                    <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No entries match the current filter.</div>
+                  ) : (
                     <div style={{ overflowX: "auto" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead><tr style={{ textAlign: "left", color: "#888", borderBottom: "1px solid #EEE" }}><th style={{ padding: 7 }}>Period</th><th>Description</th><th>Category</th><th>Method</th><th>Status</th><th style={{ textAlign: "right" }}>Amount</th><th></th></tr></thead>
-                        <tbody>{(operationalCosts || []).slice().sort((a, b) => String(b.period).localeCompare(String(a.period))).map((c: OperationalCost) => <tr key={c.id} style={{ borderBottom: "1px solid #F5F5F5" }}>
-                          <td style={{ padding: 7, color: "#666" }}>{c.period}</td>
-                          <td><div style={{ fontWeight: 600, color: "#333" }}>{c.description}</div><div style={{ fontSize: 10.5, color: "#AAA" }}>{c.supplierName || "—"}{(c as any).invoiceNo ? <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}> · {(c as any).invoiceNo}</span> : null}</div></td>
-                          <td>{String(c.category).replace(/_/g, " ")}</td>
-                          <td>{String(c.allocationMethod).replace(/_/g, " ")}</td>
+                        <thead><tr style={{ textAlign: "left", color: "#888", borderBottom: "1px solid #EEE" }}><th style={{ padding: 7 }}>Date</th><th>Supplier</th><th>Category</th><th>Status</th><th style={{ textAlign: "right" }}>Amount</th><th></th></tr></thead>
+                        <tbody>{filteredCosts.map((c: OperationalCost) => <tr key={c.id} onMouseEnter={() => setHoverCost(c)} onMouseLeave={() => setHoverCost(prev => (prev && prev.id === c.id ? null : prev))} style={{ borderBottom: "1px solid #F5F5F5", background: hoverCost && hoverCost.id === c.id ? "#F9FAFB" : "transparent", cursor: "default" }}>
+                          <td style={{ padding: 7, color: "#666", whiteSpace: "nowrap" }}>{c.date || c.period || "—"}</td>
+                          <td><div style={{ fontWeight: 600, color: "#333" }}>{c.supplierName || "—"}</div>{(c as any).invoiceNo ? <div style={{ fontSize: 10.5, color: "#AAA", fontFamily: "ui-monospace, Menlo, monospace" }}>{(c as any).invoiceNo}</div> : null}</td>
+                          <td>{catLabel(c.category)}</td>
                           <td><span style={{ padding: "2px 6px", borderRadius: 999, background: c.status === "Budget" ? "#EFF6FF" : c.status === "Expected" ? "#FEF3C7" : "#ECFDF5", color: c.status === "Budget" ? "#1D4ED8" : c.status === "Expected" ? "#92400E" : "#065F46", fontSize: 10.5 }}>{c.status}</span></td>
                           <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtPLN(safe(c.amountPLN) || safe(c.amount) * (safe(c.fxRate) || 1))}</td>
                           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><button onClick={() => editCost(c)} style={{ border: "none", background: "transparent", color: "#2563EB", cursor: "pointer", fontSize: 11 }}>Edit</button><button onClick={() => deleteCost(c.id)} style={{ border: "none", background: "transparent", color: "#DC2626", cursor: "pointer", fontSize: 11 }}>Delete</button></td>

@@ -985,7 +985,17 @@ function LifecycleTimeline({ status }: any) {
 function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
+  // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at
+  // origin. Block the forward transition while the loading date is still ahead.
+  const SHIP_OR_LATER = ["Shipped", "Arrived", "Closed"];
+  const setStatus = (newStatus) => {
+    if (SHIP_OR_LATER.includes(newStatus) && order.loadingDate && String(order.loadingDate) > localTodayISO()) {
+      alert(`This PO can't be set to "${newStatus}" yet — the loading date (${order.loadingDate}) hasn't been reached.\n\nGoods can't leave origin before they are loaded. Update the loading date if it has actually changed, or wait until the loading date.`);
+      return;
+    }
+    sf("status", newStatus);
+  };
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
   const showOtherTerms = order.paymentTerms === "Other";
@@ -1072,7 +1082,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once it arrives</div>
               </div>
               <div><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
+                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)}>
                   {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
                 </Sel>
               </div>
@@ -1250,9 +1260,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr", gap: 8, marginTop: 8 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr 0.7fr", gap: 8, marginTop: 8 }}>
                     <div><Lbl>Coloration / Variety</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" /></div>
+                    <div><Lbl>Boxes</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
                     <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
                   </div>
                 </div>
@@ -1341,7 +1352,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ background: "#F9FAFB" }}>
-                      {["Product", "Origin", "Size", "Kl.", "Packaging", "Qty kg", "Unit price", "Total"].map((h, i) => (
+                      {["Product", "Origin", "Size", "Kl.", "Packaging", "Boxes", "Qty kg", "Unit price", "Total"].map((h, i) => (
                         <th key={i} style={{ padding: "8px 10px", textAlign: i >= 5 ? "right" : "left", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.06em" }}>{h}</th>
                       ))}
                     </tr>
@@ -1359,6 +1370,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                           <td style={{ padding: "10px", color: "#555" }}>{it.size || "—"}</td>
                           <td style={{ padding: "10px" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
+                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{it.boxes ? fmtNum(it.boxes) : "—"}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
                           <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {it.currency}</>}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{lt.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
@@ -1367,6 +1379,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                     })}
                     <tr style={{ background: "#F9FAFB" }}>
                       <td colSpan={5} style={{ padding: "10px", fontWeight: 700, color: "#111" }}>Total</td>
+                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s, it) => s + (parseFloat(it.boxes) || 0), 0)) || "—"}</td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(totalKg)} kg</td>
                       <td></td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>

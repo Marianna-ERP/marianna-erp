@@ -215,3 +215,81 @@ export function locationsByLegacyType(legacyType: string): Location[] {
 export function allLocations(): Location[] {
   return LOCATIONS.filter(l => !l.aliasOf);
 }
+
+// ─── v6.10: WAREHOUSE COUNTERPARTIES AS LOCATIONS ───────────────────────────
+// Warehouses are counterparties (we receive invoices from them) and one
+// warehouse company can have several delivery addresses. These helpers turn the
+// "Warehouse" counterparties (and each of their addresses) into selectable
+// Location entries so that (a) the tariff's "operates" picker can reference them
+// and (b) destination dropdowns can send cargo to them. Synthetic ids are
+// derived from the counterparty id + address index and never clash with the
+// built-in/custom ranges. locations.ts cannot import Contacts, so callers pass
+// the contacts list in.
+
+export const WAREHOUSE_CP_LOC_BASE = 900000;
+
+export function isWarehouseContact(c: any): boolean {
+  return !!c && (c.type === "Warehouse" || (c.additionalTypes || []).includes("Warehouse"));
+}
+
+// Every address a counterparty has: its primary address (index 0) plus any
+// extraAddresses[] (index 1..n). Always returns at least one entry.
+export function contactAddresses(c: any): { address: string; index: number }[] {
+  const list: { address: string; index: number }[] = [];
+  if (c?.address) list.push({ address: String(c.address), index: 0 });
+  (c?.extraAddresses || []).forEach((a: any, i: number) => {
+    const addr = typeof a === "string" ? a : (a?.address || "");
+    if (String(addr).trim()) list.push({ address: String(addr), index: i + 1 });
+  });
+  if (!list.length) list.push({ address: "", index: 0 });
+  return list;
+}
+
+export function warehouseCpLocId(contactId: any, addressIndex: number): number {
+  return WAREHOUSE_CP_LOC_BASE + Number(contactId) * 100 + Number(addressIndex || 0);
+}
+
+// Build (and register) Location entries for warehouse counterparties' addresses.
+// Registration is idempotent and additive so locById/locText resolve them in
+// every module without each module having to know about contacts.
+export function warehouseAddressLocations(contacts: any[]): Location[] {
+  const out: Location[] = [];
+  (contacts || []).filter(isWarehouseContact).forEach((c: any) => {
+    contactAddresses(c).forEach(({ address, index }) => {
+      const id = warehouseCpLocId(c.id, index);
+      const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
+      out.push({ id, type: "RentedWarehouse", legacyType: "OWN", name, country: c.country || "", address: address || undefined });
+    });
+  });
+  out.forEach(loc => {
+    const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
+    if (!existing) LOCATIONS.push(loc);
+    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; }
+  });
+  return out;
+}
+
+// Candidate "operated" locations for a warehouse tariff: the built-in/custom
+// warehouse-type locations PLUS the warehouse counterparties' own addresses.
+export function warehouseLocationOptions(contacts: any[]): Location[] {
+  const builtins = LOCATIONS.filter(l =>
+    !l.aliasOf &&
+    Number(l.id) < WAREHOUSE_CP_LOC_BASE &&
+    (l.type === "RentedWarehouse" || l.type === "OwnWarehouse" || l.type === "PortWarehouse" || l.type === "BondedWarehouse")
+  );
+  const cp = warehouseAddressLocations(contacts);
+  const seen = new Set<string>();
+  return [...builtins, ...cp].filter(l => { const k = String(l.id); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// Flat list of warehouse destinations (counterparty × address) for destination
+// dropdowns. Each option stores a stable location id and shows company + address.
+export function warehouseDestinationOptions(contacts: any[]): { id: number; contactId: any; name: string; address: string }[] {
+  const out: { id: number; contactId: any; name: string; address: string }[] = [];
+  (contacts || []).filter(isWarehouseContact).forEach((c: any) => {
+    contactAddresses(c).forEach(({ address, index }) => {
+      out.push({ id: warehouseCpLocId(c.id, index), contactId: c.id, name: c.name, address });
+    });
+  });
+  return out;
+}

@@ -431,7 +431,7 @@ function LegLocationSelect({ label, locationId, custom, mode, onChange }: any) {
   const ordered = portsFirst
     ? [LEG_LOC_GROUPS[2], LEG_LOC_GROUPS[1], LEG_LOC_GROUPS[0], LEG_LOC_GROUPS[3], LEG_LOC_GROUPS[4]]
     : LEG_LOC_GROUPS;
-  const selValue = customMode ? "custom" : (locationId ? String(locationId) : "");
+  const selValue = customMode ? "custom" : (locationId ? String(locationId) : (custom ? "custom" : ""));
   return (
     <div>
       <Lbl>{label}</Lbl>
@@ -453,10 +453,11 @@ function LegLocationSelect({ label, locationId, custom, mode, onChange }: any) {
         })}
         <option value="custom">✏ Custom…</option>
       </Sel>
-      {customMode && (
-        <Inp value={custom || ""} onChange={e => onChange({ locationId: null, custom: e.target.value })}
-          placeholder="type place / address" style={{ marginTop: 4 }} />
-      )}
+      {/* v6.10 (#12): the free-text box is always available below the dropdown so
+          a place/address can be typed manually (e.g. for DDP legs the supplier
+          arranges). Typing here overrides the dropdown selection for this side. */}
+      <Inp value={custom || ""} onChange={e => { setCustomMode(!!e.target.value); onChange({ locationId: null, custom: e.target.value }); }}
+        placeholder="or type place / address (free text)" style={{ marginTop: 4, fontSize: 11.5, padding: "6px 8px" }} />
     </div>
   );
 }
@@ -1043,9 +1044,17 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     poRef: "",
     soRef: "",
     notes: "",
+    // v6.10 (#11): under a DDP purchase the supplier arranges/pays the carrier;
+    // we don't order it, but we track the incoming truck + driver to follow the
+    // delivery. These seed the first leg's transport unit.
+    ddpTruckPlate: "",
+    ddpTrailerPlate: "",
+    ddpDriverName: "",
+    ddpDriverPhone: "",
   });
   function sf(k, v) { setForm(prev => ({ ...prev, [k]: v })); }
   const selectedPO = (pos || []).find(p => p.number === ref);
+  const isDDPPurchase = sourceType === "PO" && !!selectedPO && String(selectedPO.buyIncoterm || "").toUpperCase() === "DDP";
   const selectedSO = (orders || []).find(o => o.number === ref);
   const selectedLot = (lots || []).find(l => l.number === form.lotRef);
   const providers = form.mode === "Road" || form.mode === "Rail" ? roadProviders : form.mode === "Air" ? logisticsProviders(contacts, "Air") : seaProviders;
@@ -1060,6 +1069,30 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     }
     else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, form, shipments, lots);
     else sh = buildManualShipment(form, shipments);
+    // v6.10 (#11/#14): for a DDP purchase we don't order the carrier and carry no
+    // freight cost on the supplier→warehouse leg. Seed the first road leg's unit
+    // with the tracked incoming truck/driver, drop the carrier, zero the cost.
+    if (isDDPPurchase && sh && Array.isArray(sh.legs) && sh.legs.length) {
+      const firstRoad = sh.legs.find((l: any) => l.mode === "Road") || sh.legs[0];
+      if (firstRoad) {
+        firstRoad.carrierId = null;
+        firstRoad.costAmount = 0;
+        firstRoad.costPLN = 0;
+        firstRoad.costResponsibility = "Supplier";
+        if (form.ddpTruckPlate || form.ddpTrailerPlate || form.ddpDriverName || form.ddpDriverPhone) {
+          firstRoad.vehicles = [{
+            id: Date.now() + 1, mode: "Road", qtyKg: parseNum(form.qtyKg), pallets: parseNum(form.pallets),
+            truckPlate: form.ddpTruckPlate || "", trailerPlate: form.ddpTrailerPlate || "",
+            driverName: form.ddpDriverName || "", driverPhone: form.ddpDriverPhone || "",
+            notes: "Supplier-arranged carrier (DDP)",
+          }];
+          firstRoad.vehiclePlate = form.ddpTruckPlate || "";
+          firstRoad.trailerPlate = form.ddpTrailerPlate || "";
+          firstRoad.driverName = form.ddpDriverName || "";
+          firstRoad.driverPhone = form.ddpDriverPhone || "";
+        }
+      }
+    }
     onCreate(sh);
   }
   return <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
@@ -1114,6 +1147,18 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
                   <div><Lbl>Sea forwarder / line</Lbl><Sel value={form.forwarderId || ""} onChange={e => sf("forwarderId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— none —</option>{seaProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
                 </div>
                 <div style={{ fontSize: 12, color: "#666", background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: 10 }}>Costs are entered per leg later, in the shipment's Cost &amp; Billing section — there's no single freight figure for a multi-provider shipment, so it's omitted here to avoid duplication.</div>
+              </>
+            ) : isDDPPurchase ? (
+              <>
+                <div style={{ fontSize: 12, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: 10, lineHeight: 1.5 }}>
+                  <strong>DDP purchase.</strong> The supplier arranges and pays transport to our warehouse — we don't order or pay the carrier, so there's no freight cost on this leg. Record the incoming truck and driver below so the delivery can be tracked to the right place, on time.
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div><Lbl>Truck plate</Lbl><Inp value={form.ddpTruckPlate} onChange={e => sf("ddpTruckPlate", e.target.value)} placeholder="incoming truck" /></div>
+                  <div><Lbl>Trailer plate</Lbl><Inp value={form.ddpTrailerPlate} onChange={e => sf("ddpTrailerPlate", e.target.value)} /></div>
+                  <div><Lbl>Driver name</Lbl><Inp value={form.ddpDriverName} onChange={e => sf("ddpDriverName", e.target.value)} /></div>
+                  <div><Lbl>Driver phone</Lbl><Inp value={form.ddpDriverPhone} onChange={e => sf("ddpDriverPhone", e.target.value)} placeholder="+ ..." /></div>
+                </div>
               </>
             ) : (
               <>
@@ -1359,12 +1404,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
               <div><Lbl>Delivery</Lbl><Inp type="date" value={String(leg.plannedDeliveryDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedDeliveryDate", e.target.value)} />
                 <Inp value={leg.plannedDeliveryTime || ""} onChange={e => updateLeg(i, "plannedDeliveryTime", e.target.value)} placeholder="time, e.g. by 12:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Unloading time or time window — printed on the transport order" /></div>
             </div>
-            {leg.mode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 9, marginTop: 9 }}>
-              <div><Lbl>Truck plate</Lbl><Inp value={leg.vehiclePlate} onChange={e => updateLeg(i, "vehiclePlate", e.target.value)} /></div>
-              <div><Lbl>Trailer plate</Lbl><Inp value={leg.trailerPlate} onChange={e => updateLeg(i, "trailerPlate", e.target.value)} /></div>
-              <div><Lbl>Driver name</Lbl><Inp value={leg.driverName} onChange={e => updateLeg(i, "driverName", e.target.value)} /></div>
-              <div><Lbl>Driver phone</Lbl><Inp value={leg.driverPhone} onChange={e => updateLeg(i, "driverPhone", e.target.value)} /></div>
-            </div>}
+            {leg.mode === "Road" && <div style={{ marginTop: 8, fontSize: 11, color: "#64748B", fontStyle: "italic" }}>Truck, trailer, driver name and phone are entered per unit below — they describe the vehicle performing the leg and feed the transport order.</div>}
             {(leg.mode === "Sea" || leg.mode === "Rail") && <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1.3fr 1fr", gap: 9, marginTop: 9 }}>
               <div><Lbl>Container</Lbl><Inp value={leg.containerNumber} onChange={e => updateLeg(i, "containerNumber", e.target.value)} placeholder="e.g. MSCU1234567" /></div>
               <div><Lbl>Seal</Lbl><Inp value={leg.sealNumber} onChange={e => updateLeg(i, "sealNumber", e.target.value)} /></div>

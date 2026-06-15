@@ -1343,7 +1343,24 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   const removeItem = (i) => setOrder(o => ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
-    sf("client", c || null);
+    setOrder(o => {
+      const next: any = { ...o, client: c || null };
+      // v6.10 (#15): the delivery destination defaults to the client's own
+      // registered address, unless the user has switched to an "Other" address.
+      if ((o.destinationMode || ((o.destinationLocationId || o.destinationText) ? "other" : "client")) === "client") {
+        next.destinationMode = "client";
+        next.destinationLocationId = null;
+        next.destinationText = c?.address || "";
+      }
+      return next;
+    });
+  };
+  // v6.10 (#15): "client" = deliver to the client's registered address;
+  // "other" = a different place (dropdown or free text).
+  const destMode = order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client");
+  const setDestMode = (mode) => {
+    if (mode === "client") setOrder(o => ({ ...o, destinationMode: "client", destinationLocationId: null, destinationText: o.client?.address || "" }));
+    else setOrder(o => ({ ...o, destinationMode: "other" }));
   };
 
   // v6.3.0: live duplicate check for import-document numbers. Import permits and
@@ -1669,27 +1686,45 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               </div>
               <div>
                 <Lbl>Destination</Lbl>
-                <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
-                  <option value="">— select —</option>
-                  <optgroup label="🎯 Client Site / DC">
-                    {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </optgroup>
-                  <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
-                    {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </optgroup>
-                  <optgroup label="🏢 Our Warehouse (EXW pickup)">
-                    {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </optgroup>
+                <Sel value={destMode} onChange={e => setDestMode(e.target.value)}>
+                  <option value="client">Client's registered address</option>
+                  <option value="other">Other address (specify below)</option>
                 </Sel>
-                <Inp
-                  value={order.destinationText || ""}
-                  onChange={e => sf("destinationText", e.target.value)}
-                  placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
-                  style={{ marginTop: 6 }}
-                />
-                <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                  For CIF/CFR sales, destination is normally the destination port. For DAP/DDP sales, use the client site. Use free text when the exact port is missing.
-                </div>
+                {destMode === "client" ? (
+                  <div style={{ marginTop: 8, padding: "9px 11px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#FAFAFA", fontSize: 12, color: "#444", lineHeight: 1.45 }}>
+                    {order.client ? (
+                      order.client.address
+                        ? <><strong>{order.client.name}</strong><div style={{ color: "#666", marginTop: 2 }}>{order.client.address}{order.client.country ? `, ${order.client.country}` : ""}</div></>
+                        : <span style={{ color: "#B45309" }}>This client has no address on file — add one in Counterparties, or choose “Other address”.</span>
+                    ) : (
+                      <span style={{ color: "#888" }}>Select the client above — the delivery destination defaults to their registered address.</span>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
+                      <option value="">— select a known place —</option>
+                      <optgroup label="🎯 Client Site / DC">
+                        {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      </optgroup>
+                      <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
+                        {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      </optgroup>
+                      <optgroup label="🏢 Our Warehouse (EXW pickup)">
+                        {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      </optgroup>
+                    </Sel>
+                    <Inp
+                      value={order.destinationText || ""}
+                      onChange={e => sf("destinationText", e.target.value)}
+                      placeholder="…or type the exact delivery address (free text)"
+                      style={{ marginTop: 6 }}
+                    />
+                    <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                      Pick a known place, or type the exact address the client asked us to deliver to. Free text takes precedence on the printed SO.
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </Card>

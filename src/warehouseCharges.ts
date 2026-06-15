@@ -49,7 +49,7 @@ export interface LotWarehouseCharges {
   notes: string[];
 }
 
-function safeN(v: any): number { const n = parseFloat(v); return isFinite(n) ? n : 0; }
+function safeN(v: any): number { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; }
 function r2(n: number): number { return Math.round(n * 100) / 100; }
 function dayMs(d: string): number {
   // date-only midnight (local) — tolerate "YYYY-MM-DDTHH:mm" legacy values

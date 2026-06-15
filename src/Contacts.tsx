@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from "react";
-import { locationsByLegacyType } from "./locations";
+import { locationsByLegacyType, warehouseLocationOptions } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -387,9 +387,9 @@ export const INIT_COUNTERPARTIES = [
 ];
 
 // ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────
-function Inp({ value, onChange, type, placeholder, style }: any) {
+function Inp({ value, onChange, type, placeholder, style, inputMode }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
-  return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} style={{ ...base, ...style }} />;
+  return <input value={value || ""} onChange={onChange} type={type || "text"} inputMode={inputMode} placeholder={placeholder} style={{ ...base, ...style }} />;
 }
 function Sel({ value, onChange, children, style }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
@@ -475,22 +475,30 @@ export function getLogisticsProvidersByService(counterparties, service) {
 }
 
 // ─── COUNTERPARTY MODAL — company-level details ─────────────────────────────
-function CounterpartyModal({ counterparty, onSave, onClose }: any) {
+function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any) {
   const defaultFinance = { bankName: "", accountNumber: "", swift: "" };
   const blank = { type: "Client", additionalTypes: [], name: "", country: "", address: "", nip: "", vatEuId: "", defaultCurrency: "PLN", paymentTerms: "30 days from invoice date", paymentTermsOther: "", services: [], finance: defaultFinance, notes: "" };
   const [form, setForm] = useState(counterparty ? { additionalTypes: [], services: [], paymentTermsOther: "", ...counterparty, finance: { ...defaultFinance, ...(counterparty.finance || {}) } } : { ...blank, id: null });
   const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const sff = (k, v) => setForm(f => ({ ...f, finance: { ...(f.finance || {}), [k]: v } }));
-  // v6.5: warehouse tariff field setter (numbers parsed leniently; empty allowed)
-  const sft = (k, v) => setForm(f => ({ ...f, warehouseTariff: { ...(f.warehouseTariff || {}), [k]: k === "currency" ? v : (v === "" ? "" : parseFloat(v)) } }));
+  // v6.10 (#6): keep the RAW typed text in the tariff fields while editing so
+  // intermediate states like "0," / "0." and comma decimals ("0,30") survive.
+  // Coercion to a number happens once, on save (see numC / handleSave).
+  const sft = (k, v) => setForm(f => ({ ...f, warehouseTariff: { ...(f.warehouseTariff || {}), [k]: v } }));
   const toggleTariffLocation = (id) => setForm(f => {
     const cur = (f.warehouseTariff?.locationIds || []).map(String);
     const next = cur.includes(String(id)) ? cur.filter(x => x !== String(id)) : [...cur, String(id)];
     return { ...f, warehouseTariff: { ...(f.warehouseTariff || {}), locationIds: next } };
   });
-  const warehouseLocations = locationsByLegacyType("OWN");
+  // v6.10 (#7/#8): operated-location candidates = built-in warehouse locations +
+  // every warehouse counterparty's address(es), not just the two seed warehouses.
+  const warehouseLocations = warehouseLocationOptions(contacts || []);
+  // v6.10 (#8): a warehouse company can have more than one delivery address.
+  const addExtraAddress = () => setForm(f => ({ ...f, extraAddresses: [...(f.extraAddresses || []), ""] }));
+  const setExtraAddress = (i, v) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).map((a, idx) => idx === i ? v : a) }));
+  const removeExtraAddress = (i) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).filter((_, idx) => idx !== i) }));
   // v6.6: seasonal commission rates (consignment sales)
-  const setCommissionRate = (i, k, v) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).map((r, idx) => idx === i ? { ...r, [k]: k === "pct" ? (v === "" ? "" : parseFloat(v)) : v } : r) }));
+  const setCommissionRate = (i, k, v) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).map((r, idx) => idx === i ? { ...r, [k]: v } : r) }));
   const addCommissionRate = () => setForm(f => ({ ...f, commissionRates: [...(f.commissionRates || []), { id: Date.now(), season: "", validFrom: "", pct: "" }] }));
   const removeCommissionRate = (i) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).filter((_, idx) => idx !== i) }));
   const toggleService = (s) => setForm(f => ({ ...f, services: (f.services || []).includes(s) ? f.services.filter(x => x !== s) : [...(f.services || []), s] }));
@@ -499,6 +507,38 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
   const allTypes = [form.type, ...(form.additionalTypes || [])];
   const showServices = allTypes.some(t => TYPES_WITH_SERVICES.has(t));
   const showOtherTerms = form.paymentTerms === "Other";
+
+  // v6.10 (#6): comma-tolerant numeric coercion applied once, on save. Empty
+  // stays empty; "0,30" / "0.30" both become 0.3; garbage becomes empty.
+  const numC = (v: any) => {
+    if (v === "" || v === null || v === undefined) return "";
+    const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
+    return isFinite(n) ? n : "";
+  };
+  function handleSave() {
+    if (!form.name) return;
+    const t = form.warehouseTariff;
+    const normTariff = t ? {
+      ...t,
+      storagePerKgDay: numC(t.storagePerKgDay),
+      storagePerPalletDay: numC(t.storagePerPalletDay),
+      freeDays: numC(t.freeDays),
+      handlingInPerKg: numC(t.handlingInPerKg),
+      handlingOutPerKg: numC(t.handlingOutPerKg),
+      sortingPerKg: numC(t.sortingPerKg),
+      fxToPLN: numC(t.fxToPLN),
+    } : t;
+    const normCommissions = form.commissionRates
+      ? form.commissionRates.map((r: any) => ({ ...r, pct: numC(r.pct) }))
+      : form.commissionRates;
+    const cleanExtra = (form.extraAddresses || []).map((a: any) => (typeof a === "string" ? a : a?.address || "")).filter((a: string) => String(a).trim());
+    onSave({
+      ...form,
+      ...(t ? { warehouseTariff: normTariff } : {}),
+      ...(form.commissionRates ? { commissionRates: normCommissions } : {}),
+      extraAddresses: cleanExtra,
+    });
+  }
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -594,18 +634,18 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>WAREHOUSE TARIFF <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· used to predict and check this warehouse's invoices</span></div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
-                <div><Lbl>Storage / kg / day</Lbl><Inp type="number" step="0.001" value={form.warehouseTariff?.storagePerKgDay ?? ""} onChange={e => sft("storagePerKgDay", e.target.value)} placeholder="e.g. 0.01" /></div>
-                <div><Lbl>Storage / pallet / day</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.storagePerPalletDay ?? ""} onChange={e => sft("storagePerPalletDay", e.target.value)} placeholder="e.g. 2.00" /></div>
-                <div><Lbl>Free days from receipt</Lbl><Inp type="number" value={form.warehouseTariff?.freeDays ?? ""} onChange={e => sft("freeDays", e.target.value)} placeholder="0" /></div>
-                <div><Lbl>Handling in / kg</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.handlingInPerKg ?? ""} onChange={e => sft("handlingInPerKg", e.target.value)} /></div>
-                <div><Lbl>Handling out / kg</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.handlingOutPerKg ?? ""} onChange={e => sft("handlingOutPerKg", e.target.value)} /></div>
-                <div><Lbl>Sorting / kg</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.sortingPerKg ?? ""} onChange={e => sft("sortingPerKg", e.target.value)} /></div>
+                <div><Lbl>Storage / kg / day</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.storagePerKgDay ?? ""} onChange={e => sft("storagePerKgDay", e.target.value)} placeholder="e.g. 0,01" /></div>
+                <div><Lbl>Storage / pallet / day</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.storagePerPalletDay ?? ""} onChange={e => sft("storagePerPalletDay", e.target.value)} placeholder="e.g. 2,00" /></div>
+                <div><Lbl>Free days from receipt</Lbl><Inp type="text" inputMode="numeric" value={form.warehouseTariff?.freeDays ?? ""} onChange={e => sft("freeDays", e.target.value)} placeholder="0" /></div>
+                <div><Lbl>Handling in / kg</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.handlingInPerKg ?? ""} onChange={e => sft("handlingInPerKg", e.target.value)} placeholder="e.g. 0,30" /></div>
+                <div><Lbl>Handling out / kg</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.handlingOutPerKg ?? ""} onChange={e => sft("handlingOutPerKg", e.target.value)} placeholder="e.g. 0,30" /></div>
+                <div><Lbl>Sorting / kg</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.sortingPerKg ?? ""} onChange={e => sft("sortingPerKg", e.target.value)} placeholder="e.g. 0,15" /></div>
                 <div><Lbl>Currency</Lbl>
                   <select value={form.warehouseTariff?.currency || "PLN"} onChange={e => sft("currency", e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}>
                     {["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}
                   </select>
                 </div>
-                <div><Lbl>FX → PLN</Lbl><Inp type="number" step="0.01" value={form.warehouseTariff?.fxToPLN ?? ""} onChange={e => sft("fxToPLN", e.target.value)} placeholder={(form.warehouseTariff?.currency || "PLN") === "PLN" ? "1" : "4.25"} /></div>
+                <div><Lbl>FX → PLN</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.fxToPLN ?? ""} onChange={e => sft("fxToPLN", e.target.value)} placeholder={(form.warehouseTariff?.currency || "PLN") === "PLN" ? "1" : "4,25"} /></div>
               </div>
               <Lbl>Locations this warehouse operates <span style={{ color: "#AAA", fontWeight: 400 }}>(lots stored there are charged on this tariff)</span></Lbl>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
@@ -620,6 +660,16 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
                 })}
                 {!warehouseLocations.length && <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>No warehouse locations yet — add them in Settings → Locations &amp; ports.</span>}
               </div>
+              <div style={{ marginTop: 12 }}>
+                <Lbl>Additional delivery addresses <span style={{ color: "#AAA", fontWeight: 400 }}>(if this warehouse has more than one site we can send cargo to)</span></Lbl>
+                {(form.extraAddresses || []).map((a: any, i: number) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 34px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+                    <Inp value={typeof a === "string" ? a : (a?.address || "")} onChange={e => setExtraAddress(i, e.target.value)} placeholder="Street, City, Postcode" />
+                    <button type="button" onClick={() => removeExtraAddress(i)} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                  </div>
+                ))}
+                <button type="button" onClick={addExtraAddress} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add another address</button>
+              </div>
             </div>
           )}
           {allTypes.includes("Supplier") && (
@@ -629,7 +679,7 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
                 <div key={r.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr 34px", gap: 8, marginBottom: 6, alignItems: "end" }}>
                   <div><Lbl>Season</Lbl><Inp value={r.season || ""} onChange={e => setCommissionRate(i, "season", e.target.value)} placeholder="e.g. 2026/27" /></div>
                   <div><Lbl>Valid from</Lbl><Inp type="date" value={r.validFrom || ""} onChange={e => setCommissionRate(i, "validFrom", e.target.value)} /></div>
-                  <div><Lbl>Commission %</Lbl><Inp type="number" step="0.1" value={r.pct ?? ""} onChange={e => setCommissionRate(i, "pct", e.target.value)} placeholder="e.g. 10" /></div>
+                  <div><Lbl>Commission %</Lbl><Inp type="text" inputMode="decimal" value={r.pct ?? ""} onChange={e => setCommissionRate(i, "pct", e.target.value)} placeholder="e.g. 10" /></div>
                   <button type="button" onClick={() => removeCommissionRate(i)} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
                 </div>
               ))}
@@ -645,7 +695,7 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
         </div>
         <div style={{ padding: "14px 24px", borderTop: "1px solid #F3F4F6", display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <button onClick={onClose} style={{ padding: "8px 20px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-          <button onClick={() => { if (!form.name) return; onSave(form); }}
+          <button onClick={handleSave}
             style={{ padding: "8px 22px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: form.name ? "pointer" : "not-allowed", opacity: form.name ? 1 : 0.5 }}>
             {counterparty ? "Save Changes" : "Add Counterparty"}
           </button>
@@ -1360,16 +1410,19 @@ function mergeValueDisplay(v) {
 
 function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
   // Per-field choice: "keep" | "incoming". Default: keep, unless keep's value is empty.
+  // v6.10: for the tax-id row, compare the combined identity (nip OR vatEuId) so
+  // a record whose only tax value sits in vatEuId still surfaces as a choice.
+  const mergeFieldValue = (rec: any, key: string) => key === "nip" ? (rec?.nip || rec?.vatEuId || "") : rec?.[key];
   const [choices, setChoices] = useState(() => {
     const init: any = {};
     MERGE_FIELDS.forEach(f => {
-      const kv = keep[f.key], iv = incoming[f.key];
+      const kv = mergeFieldValue(keep, f.key), iv = mergeFieldValue(incoming, f.key);
       init[f.key] = (!kv && iv) ? "incoming" : "keep";
     });
     return init;
   });
   const differing = MERGE_FIELDS.filter(f => {
-    const kv = keep[f.key] ?? "", iv = incoming[f.key] ?? "";
+    const kv = mergeFieldValue(keep, f.key) ?? "", iv = mergeFieldValue(incoming, f.key) ?? "";
     return String(kv) !== String(iv) && (kv !== "" || iv !== "");
   });
   function buildMerged() {
@@ -1377,6 +1430,13 @@ function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
     MERGE_FIELDS.forEach(f => {
       merged[f.key] = choices[f.key] === "incoming" ? (incoming[f.key] ?? "") : (keep[f.key] ?? "");
     });
+    // v6.10: tax identity (nip + vatEuId) is a single paired choice. The chosen
+    // side's tax id wins COMPLETELY — both nip and vatEuId are taken from it — so
+    // a stale EU-VAT carried over from the kept record can never resurface. This
+    // was the cause of "the VAT number in certain cases cannot be deleted".
+    const taxSide = choices["nip"] === "incoming" ? incoming : keep;
+    merged.nip = taxSide.nip ?? "";
+    merged.vatEuId = taxSide.vatEuId ?? "";
     // Union of secondary types and services
     merged.additionalTypes = Array.from(new Set([...(keep.additionalTypes || []), ...(incoming.additionalTypes || []), ...(incoming.type && incoming.type !== merged.type ? [incoming.type] : [])])).filter(t => t !== merged.type);
     merged.services = Array.from(new Set([...(keep.services || []), ...(incoming.services || [])]));
@@ -1423,7 +1483,7 @@ function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
                       <input type="radio" checked={active} onChange={() => setChoices(prev => ({ ...prev, [f.key]: side }))} style={{ marginTop: 2 }} />
                       <span>
                         <span style={{ fontSize: 9.5, fontWeight: 700, color: side === "keep" ? "#16A34A" : "#D97706", display: "block" }}>{side === "keep" ? "KEPT RECORD" : (incoming.id != null ? "DUPLICATE RECORD" : "NEW ENTRY")}</span>
-                        <span style={{ fontSize: 12.5, color: "#111" }}>{mergeValueDisplay(rec[f.key])}</span>
+                        <span style={{ fontSize: 12.5, color: "#111" }}>{mergeValueDisplay(mergeFieldValue(rec, f.key))}</span>
                       </span>
                     </label>
                   );
@@ -1719,6 +1779,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
       {modal && (
         <CounterpartyModal
           counterparty={modal === "new" ? null : modal}
+          contacts={counterparties}
           onSave={saveCounterparty}
           onClose={() => setModal(null)}
         />
