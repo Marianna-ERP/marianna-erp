@@ -224,6 +224,9 @@ export default function Settings({
 
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>LOCATIONS &amp; PORTS</SectionTitle>
+          <div style={{ fontSize: 12.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 12px", marginBottom: 14, lineHeight: 1.5 }}>
+            <strong>Moved.</strong> Ports, relay points and forwarder cross-dock warehouses are now managed in <strong>Counterparties → Logistics points</strong>. Supplier, client and warehouse addresses come from their counterparty record, so there's nothing to re-enter. Any entries you added here still work and are listed below; please add new ones in the Logistics points tab.
+          </div>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
             Add ports, airports, warehouses, client sites or customs points that are missing from the built-in list.
             They appear in every destination and leg From/To dropdown across PO, SO, Inventory and Shipments.

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from "react";
-import { locationsByLegacyType, warehouseLocationOptions } from "./locations";
+import { locationsByLegacyType, warehouseLocationOptions, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -1568,7 +1568,7 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
   );
 }
 
-export default function Contacts({ contacts: extContacts, setContacts: extSetContacts }: any = {}) {
+export default function Contacts({ contacts: extContacts, setContacts: extSetContacts, logisticsPoints: extLogisticsPoints, setLogisticsPoints: extSetLogisticsPoints }: any = {}) {
   // Integration mode: if parent passes state in, use it (shell owns state).
   // Standalone mode: use local state with the baked-in seed.
   const [localContacts, setLocalContacts] = useState(INIT_COUNTERPARTIES);
@@ -1576,7 +1576,10 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   const setCounterparties = extSetContacts ?? setLocalContacts;
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("All");
-  const [viewMode, setViewMode] = useState("companies"); // companies | people
+  const [viewMode, setViewMode] = useState("companies"); // companies | people | logistics
+  const [localLogisticsPoints, setLocalLogisticsPoints] = useState(() => readLogisticsPoints());
+  const logisticsPoints = extLogisticsPoints ?? localLogisticsPoints;
+  const setLogisticsPoints = extSetLogisticsPoints ?? setLocalLogisticsPoints;
   const [selectedId, setSelectedId] = useState(null);
   const [modal, setModal] = useState(null); // null | "new" | counterparty-to-edit
   const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
@@ -1825,6 +1828,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           {[
             { key: "companies", label: "Companies", icon: "🏢" },
             { key: "people", label: "People", icon: "👤" },
+            { key: "logistics", label: "Logistics points", icon: "⚓" },
           ].map(o => (
             <button key={o.key} onClick={() => setViewMode(o.key)}
               style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: viewMode === o.key ? "#fff" : "transparent", color: viewMode === o.key ? "#111" : "#888", fontSize: 12, fontWeight: 600, cursor: "pointer", boxShadow: viewMode === o.key ? "0 1px 2px rgba(0,0,0,0.06)" : "none", display: "flex", alignItems: "center", gap: 5 }}>
@@ -1843,6 +1847,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
         {/* Main area */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {/* Filter chips */}
+          {viewMode !== "logistics" && (<>
           <div style={{ padding: "14px 28px 0", display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
             {[{ label: "All", count: counts.All }, ...COUNTERPARTY_TYPES.map(t => ({ label: t, count: counts[t] || 0 }))].map(({ label, count }) => (
               <button key={label} onClick={() => setFilterType(label)}
@@ -1858,9 +1863,13 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder={viewMode === "companies" ? "Search companies, NIP, contacts…" : "Search people, role, email, company…"}
               style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
           </div>
+          </>)}
 
           {/* Table */}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
+            {viewMode === "logistics" ? (
+              <LogisticsPointsView points={logisticsPoints} setPoints={setLogisticsPoints} />
+            ) : (<>
             <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
               {viewMode === "companies" ? (
                 <CompaniesTable
@@ -1886,6 +1895,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
               Showing {viewMode === "companies" ? filteredCompanies.length : filteredPeople.length}
               {viewMode === "companies" ? ` of ${counterparties.length} companies` : ` of ${counterparties.reduce((s, c) => s + c.contacts.length, 0)} people`}
             </div>
+            </>)}
           </div>
         </div>
 
@@ -1907,9 +1917,80 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   );
 }
 
-// ─── COMPANIES TABLE ────────────────────────────────────────────────────────
-function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail }: any) {
+// ─── LOGISTICS POINTS (v6.12) ───────────────────────────────────────────────
+// Ports of loading / discharge, relay points and forwarder cross-dock warehouses
+// — the only places that are NOT a counterparty's own premises. Managed here so
+// every From / To / Destination picker (and the transport confirmation) draws
+// from one source. Saving reloads the app so the location registry re-bootstraps.
+function blankLogisticsPoint() {
+  return { id: null, name: "", kind: LOGISTICS_POINT_KINDS[0].key, country: "", address: "", notes: "" };
+}
+function LogisticsPointsView({ points = [], setPoints }: any) {
+  const [form, setForm] = useState<any>(() => blankLogisticsPoint());
+  const sf = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
+  const kindLabel = (key: string) => (LOGISTICS_POINT_KINDS.find(k => k.key === key) || {}).label || key;
+
+  const persistAndReload = (next: any[]) => {
+    writeLogisticsPoints(next);   // synchronous, so the reload re-bootstraps with it
+    setPoints(next);
+    if (typeof window !== "undefined") setTimeout(() => window.location.reload(), 30);
+  };
+  const save = () => {
+    if (!String(form.name || "").trim()) { window.alert("Enter a name for the location."); return; }
+    const list = [...(points || [])];
+    if (form.id == null) {
+      const nextId = Math.max(0, ...list.map((p: any) => Number(p.id) || 0)) + 1;
+      list.push({ ...form, id: nextId, name: form.name.trim() });
+    } else {
+      const i = list.findIndex((p: any) => p.id === form.id);
+      if (i >= 0) list[i] = { ...form, name: form.name.trim() };
+    }
+    persistAndReload(list);
+  };
+  const edit = (p: any) => setForm({ ...p });
+  const del = (p: any) => { if (window.confirm(`Delete "${p.name}"? Documents already using it keep their saved address.`)) persistAndReload((points || []).filter((x: any) => x.id !== p.id)); };
+
   return (
+    <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 16 }}>
+      <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{form.id == null ? "New logistics point" : "Edit logistics point"}</div>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 12, lineHeight: 1.45 }}>Ports, relay points and forwarder cross-dock warehouses. Supplier / client / warehouse addresses come from their counterparty record — don't re-enter them here.</div>
+        <div style={{ marginBottom: 10 }}><Lbl>Kind</Lbl><Sel value={form.kind} onChange={e => sf("kind", e.target.value)}>{LOGISTICS_POINT_KINDS.map(k => <option key={k.key} value={k.key}>{k.label}</option>)}</Sel></div>
+        <div style={{ marginBottom: 10 }}><Lbl>Name</Lbl><Inp value={form.name} onChange={e => sf("name", e.target.value)} placeholder="e.g. Gdańsk DCT, Mersin cross-dock" /></div>
+        <div style={{ marginBottom: 10 }}><Lbl>Country</Lbl><Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="Poland / Türkiye / …" /></div>
+        <div style={{ marginBottom: 10 }}><Lbl>Address</Lbl><Inp value={form.address} onChange={e => sf("address", e.target.value)} placeholder="full address used on the transport order" /></div>
+        <div style={{ marginBottom: 14 }}><Lbl>Notes</Lbl><Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="optional" /></div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={save} style={{ flex: 1, padding: "9px", border: "none", borderRadius: 8, background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{form.id == null ? "Add point" : "Save changes"}</button>
+          {form.id != null && <button onClick={() => setForm(blankLogisticsPoint())} style={{ padding: "9px 14px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>}
+        </div>
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "160px 1.2fr 1fr 120px 90px", padding: "10px 16px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.05em" }}>
+          <div>KIND</div><div>NAME</div><div>ADDRESS</div><div>COUNTRY</div><div></div>
+        </div>
+        {(points || []).length === 0 && <div style={{ padding: 18, fontSize: 12.5, color: "#888" }}>No logistics points yet. Add the ports, relay points and forwarder cross-dock warehouses you use — they'll appear in every From / To / Destination picker.</div>}
+        {(points || []).map((p: any) => (
+          <div key={p.id} style={{ display: "grid", gridTemplateColumns: "160px 1.2fr 1fr 120px 90px", padding: "11px 16px", borderBottom: "1px solid #F7F7F7", fontSize: 12, alignItems: "center" }}>
+            <div style={{ color: "#555" }}>{kindLabel(p.kind)}</div>
+            <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.name}>{p.name}</div>
+            <div style={{ color: "#666", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.address}>{p.address || "—"}</div>
+            <div style={{ color: "#666" }}>{p.country || "—"}</div>
+            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+              <button onClick={() => edit(p)} title="Edit" style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, padding: "3px 7px" }}>✎</button>
+              <button onClick={() => del(p)} title="Delete" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 12, padding: "3px 7px" }}>✕</button>
+            </div>
+          </div>
+        ))}
+        <div style={{ padding: "10px 16px", fontSize: 10.5, color: "#AAA", lineHeight: 1.5 }}>Saving reloads the app so these points appear in every picker and on the transport confirmation.</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── COMPANIES TABLE ────────────────────────────────────────────────────────
+function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail }: any) {  return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 110px 80px 130px", padding: "10px 20px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
         {["TYPE", "COMPANY", "PRIMARY CONTACT", "COUNTRY", "PEOPLE", "ACTIONS"].map((h, i) => (

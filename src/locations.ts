@@ -187,6 +187,79 @@ readCustomLocations().forEach(cl => {
   if (!LOCATIONS.find(l => String(l.id) === String(cl.id))) LOCATIONS.push(cl);
 });
 
+// ─── LOGISTICS POINTS (v6.12) ───────────────────────────────────────────────
+// The places that are NOT a counterparty's own premises: ports of loading and
+// discharge, relay points, and cross-dock warehouses named by a forwarder
+// (which are third-party sites, NOT the forwarder's address). They are managed
+// in Counterparties → Logistics points and stored in localStorage. We register
+// them into LOCATIONS at module load — before any module snapshots LOCATIONS —
+// so every From/To/Destination picker and the (frozen) transport confirmation
+// resolve them by id with no further wiring. Adding one reloads the app so this
+// bootstrap re-runs, exactly like the legacy custom-locations did.
+
+export const LOGISTICS_POINT_BASE = 800000;
+const LOGISTICS_POINTS_KEY = "marianna-erp:v1:logisticsPoints";
+
+export const LOGISTICS_POINT_KINDS: { key: string; label: string; type: LocationType; legacyType: string }[] = [
+  { key: "PortLoading",   label: "Port of loading",       type: "Port",       legacyType: "PORT" },
+  { key: "PortDischarge", label: "Port of discharge",     type: "Port",       legacyType: "PORT" },
+  { key: "Relay",         label: "Relay point",           type: "RelayPoint", legacyType: "PORT" },
+  { key: "CrossDock",     label: "Cross-dock warehouse",  type: "RelayPoint", legacyType: "PORT" },
+];
+
+export function logisticsPointLocId(id: any): number {
+  return LOGISTICS_POINT_BASE + Number(id || 0);
+}
+
+export function readLogisticsPoints(): any[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(LOGISTICS_POINTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn("[locations] Could not read logistics points:", err);
+    return [];
+  }
+}
+
+// Synchronous write so a follow-up page reload re-bootstraps with the new data
+// (mirrors how custom locations persisted before a reload).
+export function writeLogisticsPoints(list: any[]): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(LOGISTICS_POINTS_KEY, JSON.stringify(list || []));
+  } catch (err) {
+    console.warn("[locations] Could not write logistics points:", err);
+  }
+}
+
+// Register (idempotently) logistics points as Location entries so locById/locText
+// resolve them everywhere — including the transport confirmation snapshot.
+export function registerLogisticsPoints(points: any[]): void {
+  (points || []).forEach((p: any) => {
+    if (!p || !p.name) return;
+    const kind = LOGISTICS_POINT_KINDS.find(k => k.key === p.kind) || LOGISTICS_POINT_KINDS[0];
+    const id = logisticsPointLocId(p.id);
+    const loc: Location = {
+      id,
+      type: kind.type,
+      legacyType: kind.legacyType,
+      name: String(p.name),
+      country: String(p.country || ""),
+      address: (p.address || "").trim() || undefined,
+    };
+    const existing = LOCATIONS.find(l => String(l.id) === String(id));
+    if (!existing) LOCATIONS.push(loc);
+    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; }
+  });
+}
+
+// Bootstrap at module load (mirrors the custom-locations merge above) so every
+// consumer that snapshots LOCATIONS at import sees logistics points too.
+registerLogisticsPoints(readLogisticsPoints());
+
 // ─── Lookups ────────────────────────────────────────────────────────────────
 
 export function locById(id: any): Location | null {

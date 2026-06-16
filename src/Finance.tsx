@@ -709,7 +709,7 @@ export default function Finance({
   // v6.10: filters + hover-preview for the Operational Cost Entries register.
   const [costPeriodFilter, setCostPeriodFilter] = useState<string>("all");
   const [costSupplierFilter, setCostSupplierFilter] = useState<string>("all");
-  const [hoverCost, setHoverCost] = useState<OperationalCost | null>(null);
+  const [openCost, setOpenCost] = useState<OperationalCost | null>(null);
 
   const committedFilter = (o: any) => o.status !== "Draft";
   const totalAgg = useMemo(() => aggregateNetMargins(orders, lots, pos, shipments, mode, committedFilter, operationalCosts, orders), [orders, lots, pos, shipments, mode, operationalCosts]);
@@ -954,25 +954,29 @@ export default function Finance({
                     <div style={{ marginLeft: "auto", fontSize: 11, color: "#888" }}>{filteredCosts.length} entr{filteredCosts.length === 1 ? "y" : "ies"} · <strong>{fmtPLN(filteredCostTotalPLN)}</strong></div>
                   </div>
 
-                  {/* v6.10: hover-preview panel — move over a row to see full detail */}
+                  {/* v6.11.1 (#): click a row to open/close its full detail */}
                   <div style={{ minHeight: 64, marginBottom: 10, padding: "9px 12px", borderRadius: 8, border: "1px dashed #E5E7EB", background: "#FCFCFD", fontSize: 11.5, color: "#555" }}>
-                    {hoverCost ? (
+                    {openCost ? (
                       <div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", marginBottom: 4 }}>
-                          <span><span style={{ color: "#AAA" }}>Period</span> <strong>{hoverCost.period || "—"}</strong></span>
-                          <span><span style={{ color: "#AAA" }}>Date</span> <strong>{hoverCost.date || "—"}</strong></span>
-                          <span><span style={{ color: "#AAA" }}>Supplier</span> <strong>{hoverCost.supplierName || "—"}</strong></span>
-                          <span><span style={{ color: "#AAA" }}>Invoice no.</span> <strong style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{(hoverCost as any).invoiceNo || "—"}</strong></span>
-                          <span><span style={{ color: "#AAA" }}>Category</span> <strong>{catLabel(hoverCost.category)}</strong></span>
-                          <span><span style={{ color: "#AAA" }}>Cost center</span> <strong>{hoverCost.costCenter || "—"}</strong></span>
-                          <span><span style={{ color: "#AAA" }}>Allocation</span> <strong>{methodLabel(hoverCost.allocationMethod)}</strong></span>
-                          <span><span style={{ color: "#AAA" }}>Amount</span> <strong>{safe(hoverCost.amount).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {hoverCost.currency}</strong>{hoverCost.currency !== "PLN" ? <span style={{ color: "#AAA" }}> · {fmtPLN(safe(hoverCost.amountPLN) || safe(hoverCost.amount) * (safe(hoverCost.fxRate) || 1))} @ {hoverCost.fxRate}</span> : null}</span>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <div style={{ fontWeight: 700, color: "#333" }}>Entry detail</div>
+                          <button onClick={() => setOpenCost(null)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 11, padding: "2px 8px", color: "#666" }}>Close ✕</button>
                         </div>
-                        <div style={{ color: "#333" }}>{hoverCost.description || "—"}</div>
-                        {hoverCost.notes ? <div style={{ color: "#999", marginTop: 2, fontStyle: "italic" }}>{hoverCost.notes}</div> : null}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px", marginBottom: 4 }}>
+                          <span><span style={{ color: "#AAA" }}>Period</span> <strong>{openCost.period || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Date</span> <strong>{openCost.date || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Supplier</span> <strong>{openCost.supplierName || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Invoice no.</span> <strong style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{(openCost as any).invoiceNo || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Category</span> <strong>{catLabel(openCost.category)}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Cost center</span> <strong>{openCost.costCenter || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Allocation</span> <strong>{methodLabel(openCost.allocationMethod)}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Amount</span> <strong>{safe(openCost.amount).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {openCost.currency}</strong>{openCost.currency !== "PLN" ? <span style={{ color: "#AAA" }}> · {fmtPLN(safe(openCost.amountPLN) || safe(openCost.amount) * (safe(openCost.fxRate) || 1))} @ {openCost.fxRate}</span> : null}</span>
+                        </div>
+                        <div style={{ color: "#333" }}>{openCost.description || "—"}</div>
+                        {openCost.notes ? <div style={{ color: "#999", marginTop: 2, fontStyle: "italic" }}>{openCost.notes}</div> : null}
                       </div>
                     ) : (
-                      <span style={{ color: "#AAA" }}>Hover a row to preview its full detail (period, date, cost center, invoice no., allocation, notes). Use Edit to correct or Delete to remove.</span>
+                      <span style={{ color: "#AAA" }}>Click a row to open its full detail (period, date, cost center, invoice no., allocation, notes). Use Edit to correct or Delete to remove.</span>
                     )}
                   </div>
 
@@ -984,13 +988,13 @@ export default function Finance({
                     <div style={{ overflowX: "auto" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                         <thead><tr style={{ textAlign: "left", color: "#888", borderBottom: "1px solid #EEE" }}><th style={{ padding: 7 }}>Date</th><th>Supplier</th><th>Category</th><th>Status</th><th style={{ textAlign: "right" }}>Amount</th><th></th></tr></thead>
-                        <tbody>{filteredCosts.map((c: OperationalCost) => <tr key={c.id} onMouseEnter={() => setHoverCost(c)} onMouseLeave={() => setHoverCost(prev => (prev && prev.id === c.id ? null : prev))} style={{ borderBottom: "1px solid #F5F5F5", background: hoverCost && hoverCost.id === c.id ? "#F9FAFB" : "transparent", cursor: "default" }}>
+                        <tbody>{filteredCosts.map((c: OperationalCost) => <tr key={c.id} onClick={() => setOpenCost(prev => (prev && prev.id === c.id ? null : c))} style={{ borderBottom: "1px solid #F5F5F5", background: openCost && openCost.id === c.id ? "#F1F5F9" : "transparent", cursor: "pointer" }}>
                           <td style={{ padding: 7, color: "#666", whiteSpace: "nowrap" }}>{c.date || c.period || "—"}</td>
                           <td><div style={{ fontWeight: 600, color: "#333" }}>{c.supplierName || "—"}</div>{(c as any).invoiceNo ? <div style={{ fontSize: 10.5, color: "#AAA", fontFamily: "ui-monospace, Menlo, monospace" }}>{(c as any).invoiceNo}</div> : null}</td>
                           <td>{catLabel(c.category)}</td>
                           <td><span style={{ padding: "2px 6px", borderRadius: 999, background: c.status === "Budget" ? "#EFF6FF" : c.status === "Expected" ? "#FEF3C7" : "#ECFDF5", color: c.status === "Budget" ? "#1D4ED8" : c.status === "Expected" ? "#92400E" : "#065F46", fontSize: 10.5 }}>{c.status}</span></td>
                           <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtPLN(safe(c.amountPLN) || safe(c.amount) * (safe(c.fxRate) || 1))}</td>
-                          <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><button onClick={() => editCost(c)} style={{ border: "none", background: "transparent", color: "#2563EB", cursor: "pointer", fontSize: 11 }}>Edit</button><button onClick={() => deleteCost(c.id)} style={{ border: "none", background: "transparent", color: "#DC2626", cursor: "pointer", fontSize: 11 }}>Delete</button></td>
+                          <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><button onClick={(e) => { e.stopPropagation(); editCost(c); }} style={{ border: "none", background: "transparent", color: "#2563EB", cursor: "pointer", fontSize: 11 }}>Edit</button><button onClick={(e) => { e.stopPropagation(); deleteCost(c.id); }} style={{ border: "none", background: "transparent", color: "#DC2626", cursor: "pointer", fontSize: 11 }}>Delete</button></td>
                         </tr>)}</tbody>
                       </table>
                     </div>
