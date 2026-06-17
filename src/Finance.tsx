@@ -578,13 +578,23 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
 const CN_CATEGORIES = ["Transport / freight", "Goods / quality", "Shipment claim", "Warehouse", "Price adjustment", "Other"];
 const CN_STATUSES = ["Draft", "Issued", "Applied", "Cancelled"];
 function blankCreditNote() {
-  return { id: Date.now(), date: localTodayISO(), direction: "incoming", partyName: "", category: CN_CATEGORIES[0], relatedRef: "", amount: "", currency: "PLN", fxRate: "1", status: "Draft", reason: "" };
+  return { id: Date.now(), date: localTodayISO(), direction: "outgoing", partyName: "", category: CN_CATEGORIES[0], relatedRef: "", amount: "", currency: "PLN", fxRate: "1", status: "Draft", reason: "" };
 }
 function CreditNotesView({ creditNotes = [], setCreditNotes, contacts = [], pos = [], orders = [], shipments = [] }: any) {
   const [form, setForm] = useState<any>(() => blankCreditNote());
   const [editingId, setEditingId] = useState<any>(null);
   const sf = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
-  const partyOptions = Array.from(new Set((contacts || []).map((c: any) => c.name).filter(Boolean))).sort();
+  const partyOptions = (() => {
+    // v6.13 (#16): outgoing credit notes go to our CLIENTS; incoming ones are
+    // requested from the SUPPLIER or TRANSPORTER (carrier/forwarder) at fault.
+    const wanted = form.direction === "outgoing"
+      ? ["Client"]
+      : ["Supplier", "Carrier", "Forwarder", "Broker"];
+    const names = (contacts || [])
+      .filter((c: any) => { const ts = [c.type, ...(c.additionalTypes || [])]; return ts.some((t: string) => wanted.includes(t)); })
+      .map((c: any) => c.name).filter(Boolean);
+    return Array.from(new Set(names)).sort();
+  })();
   const refOptions = [
     ...(shipments || []).map((s: any) => s.number),
     ...(pos || []).map((p: any) => p.number),
@@ -625,12 +635,12 @@ function CreditNotesView({ creditNotes = [], setCreditNotes, contacts = [], pos 
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>{editingId ? "Edit credit note" : "New credit note"}</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
           <div><Lbl>Date</Lbl><Inp type="date" value={form.date} onChange={(e: any) => sf("date", e.target.value)} /></div>
-          <div><Lbl>Direction</Lbl><Sel value={form.direction} onChange={(e: any) => sf("direction", e.target.value)}><option value="incoming">Incoming — received by us</option><option value="outgoing">Outgoing — issued by us</option></Sel></div>
+          <div><Lbl>Direction</Lbl><Sel value={form.direction} onChange={(e: any) => sf("direction", e.target.value)}><option value="outgoing">Outgoing — we issue to a client</option><option value="incoming">Incoming — supplier / transporter issues to us</option></Sel></div>
           <div><Lbl>Category</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{CN_CATEGORIES.map(c => <option key={c}>{c}</option>)}</Sel></div>
           <div><Lbl>Status</Lbl><Sel value={form.status} onChange={(e: any) => sf("status", e.target.value)}>{CN_STATUSES.map(s => <option key={s}>{s}</option>)}</Sel></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 0.8fr 0.8fr", gap: 10, marginBottom: 10 }}>
-          <div><Lbl>Counterparty</Lbl><Inp list="cn-party-options" value={form.partyName} onChange={(e: any) => sf("partyName", e.target.value)} placeholder="supplier / carrier / client / warehouse" /><datalist id="cn-party-options">{partyOptions.map((p: any) => <option key={p} value={p} />)}</datalist></div>
+          <div><Lbl>{form.direction === "outgoing" ? "Client" : "Supplier / transporter at fault"}</Lbl><Inp list="cn-party-options" value={form.partyName} onChange={(e: any) => sf("partyName", e.target.value)} placeholder={form.direction === "outgoing" ? "client to credit" : "supplier / carrier / forwarder"} /><datalist id="cn-party-options">{partyOptions.map((p: any) => <option key={p} value={p} />)}</datalist></div>
           <div><Lbl>Related ref</Lbl><Inp list="cn-ref-options" value={form.relatedRef} onChange={(e: any) => sf("relatedRef", e.target.value)} placeholder="shipment / PO / SO / invoice" /><datalist id="cn-ref-options">{refOptions.map((r: any) => <option key={r} value={r} />)}</datalist></div>
           <div><Lbl>Amount</Lbl><Inp type="number" value={form.amount} onChange={(e: any) => sf("amount", e.target.value)} placeholder="0.00" /></div>
           <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={(e: any) => sf("currency", e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>

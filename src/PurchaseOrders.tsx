@@ -941,42 +941,31 @@ function EmailModal({ order, onClose }: any) {
 
 // ─── LIFECYCLE TIMELINE ─────────────────────────────────────────────────────
 function LifecycleTimeline({ status }: any) {
-  if (status === "Cancelled") {
-    return (
-      <div style={{ padding: "10px 14px", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 12, color: "#9A1B1B", fontWeight: 600 }}>
-        ⊘ Cancelled — no further actions
-      </div>
-    );
-  }
-  const currentIdx = STATUS_LIFECYCLE.indexOf(status);
+  // v6.13 (#1): standardised to match the Sales Order lifecycle bar (pill chips
+  // with check-marks for completed stages) so PO and SO read the same way.
+  const stages = STATUS_LIFECYCLE;
+  const currentIdx = stages.indexOf(status);
+  const isCancelled = status === "Cancelled";
   return (
-    <div style={{ display: "flex", alignItems: "center", padding: "0 4px" }}>
-      {STATUS_LIFECYCLE.map((s, i) => {
-        const reached = i <= currentIdx;
-        const isCurrent = i === currentIdx;
-        const palette = PO_STATUSES[s];
+    <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+      {stages.map((s, i) => {
+        const past = !isCancelled && i < currentIdx;
+        const current = !isCancelled && i === currentIdx;
+        const palette = PO_STATUSES[s] || { bg: "#F3F4F6", color: "#6B7280" };
         return (
-          <div key={s} style={{ flex: i < STATUS_LIFECYCLE.length - 1 ? 1 : 0, display: "flex", alignItems: "center" }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-              <div style={{
-                width: isCurrent ? 28 : 22, height: isCurrent ? 28 : 22, borderRadius: "50%",
-                background: reached ? palette.color : "#fff",
-                border: `2px solid ${reached ? palette.color : "#E5E7EB"}`,
-                color: reached ? "#fff" : "#CCC",
-                fontSize: isCurrent ? 13 : 11, fontWeight: 700,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                transition: "all 0.15s",
-              }}>
-                {reached ? "✓" : i + 1}
-              </div>
-              <div style={{ marginTop: 6, fontSize: 10, fontWeight: isCurrent ? 700 : 500, color: reached ? palette.color : "#AAA", whiteSpace: "nowrap" }}>{s}</div>
-            </div>
-            {i < STATUS_LIFECYCLE.length - 1 && (
-              <div style={{ flex: 1, height: 2, background: i < currentIdx ? palette.color : "#E5E7EB", margin: "0 6px", transition: "background 0.15s" }} />
-            )}
-          </div>
+          <React.Fragment key={s}>
+            <div style={{
+              padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600,
+              background: current ? palette.bg : (past ? "#F3F4F6" : "#FAFAFA"),
+              color: current ? palette.color : (past ? "#374151" : "#CCC"),
+              border: current ? `1px solid ${palette.color}` : "1px solid transparent",
+              whiteSpace: "nowrap",
+            }}>{past && "✓ "}{s}</div>
+            {i < stages.length - 1 && <div style={{ width: 8, height: 1, background: past ? "#9CA3AF" : "#E5E7EB" }} />}
+          </React.Fragment>
         );
       })}
+      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Cancelled</span>}
     </div>
   );
 }

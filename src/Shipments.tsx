@@ -618,7 +618,18 @@ function logisticsProviders(contacts = [], service = "") {
       const isLogistics = types.some(t => ["Carrier", "Forwarder", "Broker", "Warehouse"].includes(t));
       if (!isLogistics) return false;
       if (!service) return true;
-      return (c.services || []).includes(service) || (service === "Customs" && types.includes("Broker"));
+      const svc = c.services || [];
+      if (svc.includes(service)) return true;
+      // v6.13 (#2/#3): a counterparty entered as Carrier/Forwarder/Broker but with
+      // no declared "services" list must still appear in the matching dropdown.
+      // Fall back to the counterparty TYPE so real contacts are never excluded.
+      if (svc.length === 0) {
+        if (service === "Road") return types.includes("Carrier") || types.includes("Forwarder");
+        if (service === "Sea" || service === "Air") return types.includes("Forwarder") || types.includes("Carrier");
+        if (service === "Customs") return types.includes("Broker") || types.includes("Forwarder");
+        if (service === "Warehousing") return types.includes("Warehouse");
+      }
+      return (service === "Customs" && types.includes("Broker"));
     })
     .map(providerFromContact);
   const combined = [...fromContacts, ...FALLBACK_PROVIDERS.filter(p => !service || (p.services || []).includes(service) || (service === "Customs" && p.type === "Broker"))];
@@ -1427,7 +1438,7 @@ function EditShipmentModal({ shipment, contacts, onSave, onCancel }: any) {
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Unit #{ui + 1}</div>
                   <SmallButton onClick={() => removeVehicle(i, ui)}>Remove</SmallButton>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: uMode === "Road" ? "110px 1fr 1fr 1fr" : "110px 1fr", gap: 9, marginBottom: 9 }}>
+                <div style={{ display: "grid", gridTemplateColumns: uMode === "Road" ? "110px 1fr 1fr 1fr" : "110px 160px 1fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Mode</Lbl><Sel value={uMode} onChange={e => updateVehicle(i, ui, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
                   <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}

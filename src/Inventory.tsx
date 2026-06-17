@@ -787,23 +787,22 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
 }
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
-function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm }: any) {
+function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", onCancel, onConfirm }: any) {
   // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
   // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
   // was 0 kg, making every quantity error out). In edit mode, prefill.
   const isExpectedLike = lot.status === "Expected" || lot.status === "Direct Expected";
-  // v6.11 (#11): two modes — "movement" (IN / Transfer / Ship Out) and "quality"
-  // (Damage / Reclassify, for post-sorting results on a lot). Damage/Reclass were
-  // previously mixed into the movement dropdown.
+  // v6.11 (#11) / v6.13 (#14): two modes — "movement" (IN / Transfer / Ship Out)
+  // and "quality" (Damage / Reclassify). The mode is fixed by which button opened
+  // the modal (Record movement vs the red Record quality issue), so there is no
+  // in-modal tab toggle anymore.
   const QUALITY_TYPES = ["DAMAGE", "RECLASS"];
   const MOVEMENT_MODE_TYPES = ["IN", "TRANSFER", "SHIP_OUT"];
-  const [mode, setMode] = useState<"movement" | "quality">(editing && QUALITY_TYPES.includes(editing.type) ? "quality" : "movement");
-  const [type, setType] = useState(editing?.type || (isExpectedLike ? "IN" : "TRANSFER"));
-  const switchMode = (m: "movement" | "quality") => {
-    setMode(m);
-    if (m === "quality" && !QUALITY_TYPES.includes(type)) setType("DAMAGE");
-    if (m === "movement" && !MOVEMENT_MODE_TYPES.includes(type)) setType(isExpectedLike ? "IN" : "TRANSFER");
-  };
+  const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
+  const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : (isExpectedLike ? "IN" : "TRANSFER")));
+  // v6.13 (#15): where the quality problem was detected along the journey.
+  const QUALITY_DETECTED_AT = ["At port of discharge", "At the client (export delivery)", "At our warehouse (on arrival)", "At the client's warehouse (direct delivery)", "At supplier / origin", "Other"];
+  const [detectedAt, setDetectedAt] = useState(editing?.detectedAt || QUALITY_DETECTED_AT[0]);
   const [qty, setQty] = useState(editing ? String(editing.qtyKg ?? "") : "");
   const [fromId, setFromId] = useState(editing?.fromId ?? lot.locationId);
   const [toId, setToId] = useState(editing?.toId ?? lot.locationId);
@@ -843,16 +842,6 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
         <div style={{ padding: "20px 24px", borderBottom: "1px solid #EBEBEB" }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? (mode === "quality" ? "Edit quality issue" : "Edit movement") : (mode === "quality" ? "Record quality issue" : "Record movement")}</div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
-          {/* v6.11 (#11): movement vs quality issue */}
-          <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 8, marginTop: 12 }}>
-            {([["movement", "Movement (in / transfer / out)"], ["quality", "Record quality issue"]] as const).map(([m, label]) => (
-              <button key={m} onClick={() => switchMode(m)} disabled={!!editing}
-                style={{ flex: 1, padding: "7px 10px", border: "none", borderRadius: 6, fontSize: 11.5, fontWeight: 600, cursor: editing ? "not-allowed" : "pointer",
-                  background: mode === m ? "#fff" : "transparent", color: mode === m ? "#111" : "#6B7280", boxShadow: mode === m ? "0 1px 2px rgba(0,0,0,0.08)" : "none" }}>
-                {label}
-              </button>
-            ))}
-          </div>
         </div>
         <div style={{ padding: 24 }}>
           {mode === "movement" ? (
@@ -905,9 +894,19 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
             </div>
           )}
 
+          {mode === "quality" && (
+            <div style={{ marginBottom: 14 }}>
+              <Lbl>Where was it detected?</Lbl>
+              <Sel value={detectedAt} onChange={e => setDetectedAt(e.target.value)}>
+                {QUALITY_DETECTED_AT.map(d => <option key={d}>{d}</option>)}
+              </Sel>
+              <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 4, lineHeight: 1.4 }}>The problem is recorded against this lot, but it's usually found later in the journey — at the port of discharge, on arrival at our warehouse, or at the client.</div>
+            </div>
+          )}
+
           <div style={{ marginBottom: 18 }}>
             <Lbl>Note</Lbl>
-            <Inp value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Reserved for SO-2026-0094 (Biedronka)" />
+            <Inp value={note} onChange={e => setNote(e.target.value)} placeholder={mode === "quality" ? "e.g. 2 pallets soft/over-ripe found on arrival at Gdańsk" : "e.g. Reserved for SO-2026-0094 (Biedronka)"} />
           </div>
           {isInvalid && qty && (
             <div style={{ padding: "8px 12px", background: "#FEE2E2", color: "#9A1B1B", fontSize: 12, borderRadius: 6, marginBottom: 12 }}>
@@ -923,9 +922,9 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
           )}
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date })} disabled={isInvalid}
+            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date, ...(mode === "quality" ? { detectedAt } : {}) })} disabled={isInvalid}
               style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: isInvalid ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: isInvalid ? "not-allowed" : "pointer" }}>
-              {editing ? "Save changes" : "Record movement"}
+              {editing ? "Save changes" : (mode === "quality" ? "Record quality issue" : "Record movement")}
             </button>
           </div>
         </div>
@@ -1293,7 +1292,7 @@ function SortingModal({ lot, onCancel, onConfirm }: any) {
 }
 
 // ─── v6.5 anchor end ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1316,6 +1315,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Inventory</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
           <button onClick={onMove} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Record movement</button>
+          <button onClick={onQualityIssue} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -1695,6 +1695,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [selectedId, setSelectedId] = useState(null);
   const selected = useMemo(() => lots.find(l => l.id === selectedId) ?? null, [lots, selectedId]);
   const [showMovement, setShowMovement] = useState(false);
+  const [movementMode, setMovementMode] = useState<"movement" | "quality">("movement");
   const [sortingLot, setSortingLot] = useState(null); // v6.5: lot for the sorting-event modal
   const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
   const [editingMovement, setEditingMovement] = useState(null);
@@ -1819,7 +1820,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     const brokers = (extContacts || []).filter((c: any) => c.type === "Broker" || c.type === "Forwarder" || (c.services || []).includes("Customs"));
     return (
       <>
-        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
+        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
 
         {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
           setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: Date.now(), type: "SORTING", kg, date, note }] } : l));
@@ -1844,8 +1845,9 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         <LotDetail
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
-          onMove={() => { setEditingMovement(null); setShowMovement(true); }}
-          onEditMovement={(m: any) => { setEditingMovement(m); setShowMovement(true); }}
+          onMove={() => { setEditingMovement(null); setMovementMode("movement"); setShowMovement(true); }}
+          onQualityIssue={() => { setEditingMovement(null); setMovementMode("quality"); setShowMovement(true); }}
+          onEditMovement={(m: any) => { setEditingMovement(m); setMovementMode(["DAMAGE", "RECLASS"].includes(m.type) ? "quality" : "movement"); setShowMovement(true); }}
           onDeleteMovement={deleteMovement}
           onCustoms={(k: any) => setShowCustoms(k)}
           onInspect={() => setShowInspection(true)}
