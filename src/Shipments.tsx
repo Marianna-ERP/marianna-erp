@@ -1011,10 +1011,9 @@ function EmptyState({ title, sub }: any) {
 }
 
 function Kpi({ label, value, sub, onClick }: any) {
-  return <div onClick={onClick} style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 16px", cursor: onClick ? "pointer" : "default" }}>
-    <div style={{ fontSize: 10.5, color: "#888", fontWeight: 800, letterSpacing: "0.05em", marginBottom: 7 }}>{label}</div>
-    <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.5px" }}>{value}</div>
-    <div style={{ fontSize: 11.5, color: "#888", marginTop: 3 }}>{sub}</div>
+  return <div onClick={onClick} title={sub || ""} style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "9px 12px", cursor: onClick ? "pointer" : "default" }}>
+    <div style={{ fontSize: 10, color: "#888", fontWeight: 800, letterSpacing: "0.04em", marginBottom: 2 }}>{label}</div>
+    <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "-0.3px" }}>{value}</div>
   </div>;
 }
 
@@ -1822,7 +1821,7 @@ function TransportOrderPrintModal({ shipment, contacts, orders = [], onSaveTerms
     <div style={{ width: 980, maxHeight: "94vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
       <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><strong>Transport order confirmation</strong><span style={{ color: "#888", marginLeft: 8, fontSize: 12 }}>One clean order per provider — pick the provider and the legs it covers.</span></div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Sel value={providerId} onChange={e => changeProvider(e.target.value)}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel><SmallButton onClick={onMarkSent} kind="green">Mark sent</SmallButton><SmallButton onClick={() => printHtmlNode("transport-order-print", `${shipment.number}-${providerId}`)} kind="dark" disabled={!legIds.length}>Print / PDF</SmallButton>{onEmail && <SmallButton onClick={() => onEmail(providerId)} kind="blue">✉ Email</SmallButton>}<SmallButton onClick={onClose}>Close</SmallButton></div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Sel value={providerId} onChange={e => changeProvider(e.target.value)} style={{ minWidth: 300, maxWidth: 460 }}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel><SmallButton onClick={onMarkSent} kind="green">Mark sent</SmallButton><SmallButton onClick={() => printHtmlNode("transport-order-print", `${shipment.number}-${providerId}`)} kind="dark" disabled={!legIds.length}>Print / PDF</SmallButton>{onEmail && <SmallButton onClick={() => onEmail(providerId)} kind="blue">✉ Email</SmallButton>}<SmallButton onClick={onClose}>Close</SmallButton></div>
       </div>
       <div style={{ padding: "10px 18px", borderBottom: "1px solid #F1F5F9", background: "#FAFAFA", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: "#64748B" }}>LEGS ON THIS ORDER:</span>
@@ -1911,7 +1910,6 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <SmallButton kind="blue" onClick={onEdit}>✎ Edit</SmallButton>
           <SmallButton onClick={onPrint} kind="dark">Transport order</SmallButton>
-          <SmallButton onClick={onEmail} kind="blue">Email order</SmallButton>
           <SmallButton onClick={() => onQuickStatus("Confirmed")}>Confirm</SmallButton>
           <SmallButton onClick={() => onQuickStatus("Loaded")} kind="amber">Loaded</SmallButton>
           <SmallButton onClick={() => onQuickStatus("Arrived")} kind="amber">Arrived</SmallButton>

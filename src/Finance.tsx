@@ -825,8 +825,20 @@ export default function Finance({
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
-              {(["pl", "costs", "warehouse", "ledger", "creditNotes"] as const).map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: tab === t ? "#fff" : "transparent", color: tab === t ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.05)" : "none" }}>{t === "pl" ? "Sales P/L" : t === "costs" ? "Operational Costs" : t === "warehouse" ? "Warehouse charges" : t === "ledger" ? "Receivables & Payables" : "Credit Notes"}</button>)}
+            <div style={{ display: "flex", gap: 6, background: "#F3F4F6", padding: 3, borderRadius: 8 }}>
+              {(["pl", "costs", "warehouse", "ledger", "creditNotes"] as const).map(t => {
+                const active = tab === t;
+                const isCN = t === "creditNotes";
+                const accent = "#7C3AED";
+                const label = t === "pl" ? "Sales P/L" : t === "costs" ? "Operational Costs" : t === "warehouse" ? "Warehouse charges" : t === "ledger" ? "Receivables & Payables" : "Credit Notes";
+                return <button key={t} onClick={() => setTab(t)} style={{
+                  padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                  border: `1px solid ${isCN ? accent : (active ? "#CBD5E1" : "#E5E7EB")}`,
+                  background: isCN ? (active ? accent : "#F5F3FF") : (active ? "#fff" : "#fff"),
+                  color: isCN ? (active ? "#fff" : accent) : (active ? "#111" : "#666"),
+                  boxShadow: active && !isCN ? "0 1px 2px rgba(0,0,0,0.06)" : "none",
+                }}>{label}</button>;
+              })}
             </div>
             <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
               {(["forecast", "actual"] as MarginMode[]).map(m => <button key={m} onClick={() => setMode(m)} style={{ padding: "6px 14px", borderRadius: 5, border: "none", background: mode === m ? "#fff" : "transparent", color: mode === m ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: mode === m ? "0 1px 2px rgba(0,0,0,0.05)" : "none", textTransform: "capitalize" }}>{m}</button>)}

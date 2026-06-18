@@ -366,3 +366,54 @@ export function warehouseDestinationOptions(contacts: any[]): { id: number; cont
   });
   return out;
 }
+
+// ─── COUNTERPARTY ADDRESSES AS LOCATIONS (v6.15, #6) ────────────────────────
+// From / To / Destination must offer the supplier, client and warehouse
+// addresses entered in the Counterparties module — not a separate list. We
+// register every such address into LOCATIONS with a stable id (the same
+// 900000 + contactId*100 + addressIndex scheme the warehouse helper already
+// uses) and the right legacyType, so the pickers (which filter LOCATIONS by
+// legacyType) and the transport confirmation (which resolves by id) both see
+// them. Bootstrapped at module load from localStorage BEFORE any module
+// snapshots LOCATIONS — mirroring the logistics-points bootstrap. A reload is
+// what propagates newly added counterparties (same pattern used elsewhere).
+
+function counterpartyLocationRole(c: any): { legacyType: string; type: LocationType } | null {
+  if (isWarehouseContact(c)) return { legacyType: "OWN", type: "RentedWarehouse" };
+  const types = [c?.type, ...((c?.additionalTypes) || [])];
+  if (types.includes("Supplier")) return { legacyType: "SUPPLIER", type: "SupplierFacility" };
+  if (types.includes("Client")) return { legacyType: "CLIENT", type: "ClientFacility" };
+  return null; // carriers / forwarders / brokers are providers, not delivery places
+}
+
+// Register (idempotently) supplier / client / warehouse counterparty addresses.
+export function registerCounterpartyLocations(contacts: any[]): void {
+  (contacts || []).forEach((c: any) => {
+    const role = counterpartyLocationRole(c);
+    if (!role || (c.id == null)) return;
+    contactAddresses(c).forEach(({ address, index }) => {
+      const id = warehouseCpLocId(c.id, index);
+      const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
+      const loc: Location = { id, type: role.type, legacyType: role.legacyType, name, country: c.country || "", address: address || undefined };
+      const existing = LOCATIONS.find(l => String(l.id) === String(id));
+      if (!existing) LOCATIONS.push(loc);
+      else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; }
+    });
+  });
+}
+
+function readContactsFromStorage(): any[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem("marianna-erp:v1:contacts");
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn("[locations] Could not read contacts for location bootstrap:", err);
+    return [];
+  }
+}
+
+// Bootstrap at module load — runs to completion before importers snapshot LOCATIONS.
+registerCounterpartyLocations(readContactsFromStorage());

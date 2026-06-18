@@ -1931,85 +1931,51 @@ ${blockNote}`.trim(),
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
-        {/* KPI strip */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginTop: 6 }}>{activeCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>Draft → Shipped</div>
+        {/* KPI strip — compact */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· Draft→Shipped</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ARRIVED · NOT CLOSED</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: arrivedCount > 0 ? "#16A34A" : "#111", marginTop: 6 }}>{arrivedCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>awaiting invoicing</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ARRIVED <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· not closed</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: arrivedCount > 0 ? "#16A34A" : "#111", marginTop: 2 }}>{arrivedCount}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>PENDING VALUE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginTop: 6 }}>{fmtMoney(pendingValue, "PLN")}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>all active + arrived</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>PENDING VALUE</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtMoney(pendingValue, "PLN")}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>LOADING OVERDUE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: overdueLoading > 0 ? "#DC2626" : "#111", marginTop: 6 }}>{overdueLoading}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>POs past loading date</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>LOADING OVERDUE</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: overdueLoading > 0 ? "#DC2626" : "#111", marginTop: 2 }}>{overdueLoading}</div>
           </Card>
         </div>
 
-        {/* Filters */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PO#, supplier, product, linked refs…" style={{ flex: "1 1 280px", minWidth: 260, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>STATUS</span>
-          <button onClick={() => setFilterStatus("Active")} style={chipStyle(filterStatus === "Active")}>Active</button>
-          <button onClick={() => setFilterStatus("All")} style={chipStyle(filterStatus === "All")}>All</button>
-          {Object.keys(PO_STATUSES).map(s => (
-            <button key={s} onClick={() => setFilterStatus(s)} style={chipStyle(filterStatus === s, PO_STATUSES[s].color)}>{s}</button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>FLOW</span>
-          <button onClick={() => setFilterFlow("All")} style={chipStyle(filterFlow === "All")}>All</button>
-        </div>
-        {FLOW_GROUPS.map(g => (
-          <div key={g.id} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: g.color, fontWeight: 700, letterSpacing: "0.06em", marginRight: 4, minWidth: 50 }}>{g.label}</span>
-            {Object.entries(FLOW_TYPES).filter(([, f]) => f.group === g.id).map(([k, f]) => (
-              <button key={k} onClick={() => setFilterFlow(k)} style={chipStyle(filterFlow === k, g.color)}>{f.emoji} {f.short}</button>
+        {/* Filters — compact single row of dropdowns */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PO#, supplier, product…" style={{ flex: "1 1 240px", minWidth: 200, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+            <option value="Active">Active</option>
+            <option value="All">All statuses</option>
+            {Object.keys(PO_STATUSES).map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={filterFlow} onChange={e => setFilterFlow(e.target.value)} title="Filter by flow" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 240 }}>
+            <option value="All">All flows</option>
+            {FLOW_GROUPS.map(g => (
+              <optgroup key={g.id} label={g.label}>
+                {Object.entries(FLOW_TYPES).filter(([, f]: any) => f.group === g.id).map(([k, f]: any) => <option key={k} value={k}>{f.emoji} {f.short}</option>)}
+              </optgroup>
             ))}
-          </div>
-        ))}
-        <div style={{ height: 10 }} />
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>SUPPLIER</span>
+          </select>
           {(() => {
-            // v6.4.0: only suppliers that actually appear on POs (was: every supplier
-            // counterparty). Ordered by PO count; collapses to a dropdown when many.
             const counts: Record<string, number> = {};
             (orders || []).forEach((o: any) => { const n = o.supplier?.name; if (n) counts[n] = (counts[n] || 0) + 1; });
             const activeSuppliers = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-            if (activeSuppliers.length === 0) {
-              return <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>no POs yet</span>;
-            }
-            if (activeSuppliers.length > 8) {
-              return (
-                <select value={filterSupplier} onChange={e => setFilterSupplier(e.target.value)}
-                  style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 10px", fontSize: 11.5, background: "#fff", fontFamily: "inherit" }}>
-                  <option value="All">All ({(orders || []).length})</option>
-                  {activeSuppliers.map(([name, n]) => <option key={name} value={name}>{name} ({n})</option>)}
-                </select>
-              );
-            }
             return (
-              <>
-                <button onClick={() => setFilterSupplier("All")} style={chipStyle(filterSupplier === "All")}>All</button>
-                {activeSuppliers.map(([name, n]) => (
-                  <button key={name} onClick={() => setFilterSupplier(name)} style={chipStyle(filterSupplier === name)}>{name} · {n}</button>
-                ))}
-              </>
+              <select value={filterSupplier} onChange={e => setFilterSupplier(e.target.value)} title="Filter by supplier" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 220 }}>
+                <option value="All">All suppliers</option>
+                {activeSuppliers.map(([name, n]) => <option key={name} value={name}>{name} ({n})</option>)}
+              </select>
             );
           })()}
         </div>

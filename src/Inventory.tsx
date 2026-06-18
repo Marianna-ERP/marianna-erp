@@ -1872,67 +1872,47 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
-        {/* KPIs */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 14, marginBottom: 20 }}>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>IN STOCK</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginTop: 6 }}>{fmtNum(Math.round(totalKgInStock))} <span style={{ fontSize: 14, color: "#888", fontWeight: 600 }}>kg</span></div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>{inStock.length} active lots</div>
+        {/* KPIs — compact */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 12 }}>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>IN STOCK <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· {inStock.length} lots</span></div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtNum(Math.round(totalKgInStock))} <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>kg</span></div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>STOCK VALUE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#16A34A", marginTop: 6 }}>{fmtMoney(totalValueInStock)}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>at cost basis</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>STOCK VALUE</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#16A34A", marginTop: 2 }}>{fmtMoney(totalValueInStock)}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>AT PORT / CUSTOMS</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: lotsAtPort > 0 ? "#D97706" : "#111", marginTop: 6 }}>{lotsAtPort}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>awaiting clearance</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>AT PORT / CUSTOMS</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: lotsAtPort > 0 ? "#D97706" : "#111", marginTop: 2 }}>{lotsAtPort}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>WITH VARIANCE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: lotsWithVariance > 0 ? "#D97706" : "#111", marginTop: 6 }}>{lotsWithVariance}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>actual ≠ expected ≥1%</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>WITH VARIANCE</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: lotsWithVariance > 0 ? "#D97706" : "#111", marginTop: 2 }}>{lotsWithVariance}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DAMAGED</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: totalDamagedKg > 0 ? "#DC2626" : "#111", marginTop: 6 }}>{fmtNum(totalDamagedKg)} <span style={{ fontSize: 14, color: "#888", fontWeight: 600 }}>kg</span></div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>across all lots</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DAMAGED</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: totalDamagedKg > 0 ? "#DC2626" : "#111", marginTop: 2 }}>{fmtNum(totalDamagedKg)} <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>kg</span></div>
           </Card>
         </div>
 
-        {/* Filters */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot ref, product, PO/SO, location…" style={{ flex: "1 1 280px", minWidth: 260, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>STATUS</span>
-          <button onClick={() => setFilterStatus("inPossession")} style={chipStyle(filterStatus === "inPossession")}>In our possession</button>
-          <button onClick={() => setFilterStatus("all")} style={chipStyle(filterStatus === "all")}>All</button>
-          {Object.keys(LOT_STATUSES).map(s => (
-            <button key={s} onClick={() => setFilterStatus(s)} style={chipStyle(filterStatus === s, LOT_STATUSES[s].color)}>{s}</button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>LOCATION</span>
-          {["All", ...Object.keys(LOCATION_TYPES)].map(t => (
-            <button key={t} onClick={() => setFilterLocationType(t)} style={chipStyle(filterLocationType === t)}>
-              {t === "All" ? "All" : `${locType(t).icon} ${locType(t).label}`}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>PRODUCT</span>
-          {["All", ...PRODUCTS].map(p => (
-            <button key={p} onClick={() => setFilterProduct(p)} style={chipStyle(filterProduct === p)}>{p}</button>
-          ))}
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginLeft: 16, marginRight: 4 }}>QUALITY</span>
-          {["All", ...QUALITY_GRADES].map(q => (
-            <button key={q} onClick={() => setFilterQuality(q)} style={chipStyle(filterQuality === q)}>{q === "All" ? "All" : `Kl. ${q}`}</button>
-          ))}
+        {/* Filters — compact single row of dropdowns */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot, product, PO/SO, location…" style={{ flex: "1 1 220px", minWidth: 190, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+            <option value="inPossession">In our possession</option>
+            <option value="all">All statuses</option>
+            {Object.keys(LOT_STATUSES).map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={filterLocationType} onChange={e => setFilterLocationType(e.target.value)} title="Filter by location" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+            {["All", ...Object.keys(LOCATION_TYPES)].map(t => <option key={t} value={t}>{t === "All" ? "All locations" : `${locType(t).icon} ${locType(t).label}`}</option>)}
+          </select>
+          <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} title="Filter by product" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 180 }}>
+            {["All", ...PRODUCTS].map(p => <option key={p} value={p}>{p === "All" ? "All products" : p}</option>)}
+          </select>
+          <select value={filterQuality} onChange={e => setFilterQuality(e.target.value)} title="Filter by quality" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 140 }}>
+            {["All", ...QUALITY_GRADES].map(q => <option key={q} value={q}>{q === "All" ? "All grades" : `Kl. ${q}`}</option>)}
+          </select>
         </div>
 
         {/* Table */}

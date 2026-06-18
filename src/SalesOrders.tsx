@@ -2626,44 +2626,36 @@ export default function SalesOrders({
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
-        {/* KPI strip */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginTop: 6 }}>{activeCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>orders in progress</div>
+        {/* KPI strip — compact */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· in progress</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE VALUE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#16A34A", marginTop: 6 }}>{fmtMoney(activeValuePLN, "PLN")}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>net total</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE VALUE</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#16A34A", marginTop: 2 }}>{fmtMoney(activeValuePLN, "PLN")}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERED · TO INVOICE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 6 }}>{deliveredNotInvoicedCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>awaiting SINV</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERED <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· to invoice</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 2 }}>{deliveredNotInvoicedCount}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERIES WITHIN 7 DAYS</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 6 }}>{upcomingDeliveryCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>upcoming dispatches</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERIES <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· ≤7 days</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 2 }}>{upcomingDeliveryCount}</div>
           </Card>
         </div>
 
-        {/* Filters */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SO, client, product, LOT or PO ref…" style={{ flex: "1 1 280px", minWidth: 260, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
-          <Sel value={filterClient} onChange={e => setFilterClient(e.target.value)} style={{ width: 220 }}>
+        {/* Filters — compact single row */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SO, client, product, LOT/PO…" style={{ flex: "1 1 240px", minWidth: 200, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+            {["All", ...Object.keys(SO_STATUSES)].map(s => <option key={s} value={s}>{s === "All" ? "All statuses" : s}</option>)}
+          </select>
+          <Sel value={filterClient} onChange={e => setFilterClient(e.target.value)} style={{ maxWidth: 220 }}>
             <option value="All">All clients</option>
             {clients.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
           </Sel>
-        </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>STATUS</span>
-          {["All", ...Object.keys(SO_STATUSES)].map(s => (
-            <button key={s} onClick={() => setFilterStatus(s)}
-              style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: filterStatus === s ? "#111" : "#E5E7EB", background: filterStatus === s ? "#111" : "#fff", color: filterStatus === s ? "#fff" : "#555", fontSize: 11, cursor: "pointer", fontWeight: 500 }}>{s}</button>
-          ))}
         </div>
 
         {/* Table */}
