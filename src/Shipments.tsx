@@ -1071,6 +1071,40 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const isDDPPurchase = sourceType === "PO" && !!selectedPO && String(selectedPO.buyIncoterm || "").toUpperCase() === "DDP";
   const selectedSO = (orders || []).find(o => o.number === ref);
   const selectedLot = (lots || []).find(l => l.number === form.lotRef);
+  const [overrideDup, setOverrideDup] = useState(false);
+  // v6.16 (#2): avoid duplicating a shipment for a PO that's already been shipped.
+  // Compare kg already carried on non-cancelled shipments for this PO against the
+  // PO quantity; if it's all shipped (or the PO has Arrived/Closed), warn and gate.
+  const poShipState = (() => {
+    if (sourceType !== "PO" || !selectedPO) return null;
+    const existing = (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && s.status !== "Cancelled");
+    const poQty = (selectedPO.items || []).reduce((a: number, it: any) => a + parseNum(it.qty), 0);
+    const shippedKg = existing.reduce((sum: number, sh: any) => sum + (sh.goods || []).filter((g: any) => g.poRef === selectedPO.number).reduce((a: number, g: any) => a + parseNum(g.qtyKg), 0), 0);
+    const fullyShipped = existing.length > 0 && ((poQty > 0 && shippedKg >= poQty - 1) || ["Arrived", "Closed"].includes(selectedPO.status));
+    return { existing, poQty, shippedKg, remaining: Math.max(0, poQty - shippedKg), fullyShipped };
+  })();
+  const blockCreate = !!poShipState && poShipState.fullyShipped && !overrideDup;
+  // v6.16 (#4): the PO loading date starts the whole shipment and the SO delivery
+  // date ends it. Prefill the header Expected loading / delivery dates from those
+  // when the reference changes (in-between dates are set per leg later).
+  React.useEffect(() => {
+    if (sourceType === "PO" && selectedPO) {
+      const linkedSO = (orders || []).find((o: any) => (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selectedPO.number));
+      setForm(prev => ({
+        ...prev,
+        loadingDate: selectedPO.loadingDate || prev.loadingDate,
+        expectedDeliveryDate: (linkedSO && linkedSO.deliveryDate) || selectedPO.expectedDeliveryDate || prev.expectedDeliveryDate,
+      }));
+    } else if (sourceType === "SO" && selectedSO) {
+      const linkedPO = (pos || []).find((p: any) => (selectedSO.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === p.number));
+      setForm(prev => ({
+        ...prev,
+        loadingDate: (linkedPO && linkedPO.loadingDate) || prev.loadingDate,
+        expectedDeliveryDate: selectedSO.deliveryDate || prev.expectedDeliveryDate,
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref, sourceType]);
   const providers = form.mode === "Road" || form.mode === "Rail" ? roadProviders : form.mode === "Air" ? logisticsProviders(contacts, "Air") : seaProviders;
   function create() {
     let sh;
@@ -1126,6 +1160,24 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           </div>
         </Card>
 
+        {poShipState && poShipState.existing.length > 0 && (
+          <Card style={{ gridColumn: "1 / 3", background: poShipState.fullyShipped ? "#FEF2F2" : "#FFFBEB", border: `1px solid ${poShipState.fullyShipped ? "#FECACA" : "#FDE68A"}` }}>
+            <div style={{ fontSize: 12.5, color: poShipState.fullyShipped ? "#991B1B" : "#92400E", lineHeight: 1.5 }}>
+              {poShipState.fullyShipped ? "⛔" : "⚠"} <strong>{selectedPO?.number}</strong> already has {poShipState.existing.length} shipment(s): {poShipState.existing.map((s: any) => s.number).join(", ")}.
+              {poShipState.poQty > 0 && <> About {fmtNum(poShipState.shippedKg)} of {fmtNum(poShipState.poQty)} kg is already on shipments{poShipState.fullyShipped ? "" : `, ~${fmtNum(poShipState.remaining)} kg remaining`}.</>}
+              {poShipState.fullyShipped
+                ? " This PO looks fully shipped — there's nothing left in our warehouse to ship, so a new shipment would likely be a duplicate."
+                : " You can still ship the remaining quantity."}
+            </div>
+            {poShipState.fullyShipped && (
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, marginTop: 9, fontSize: 12, color: "#991B1B", cursor: "pointer" }}>
+                <input type="checkbox" checked={overrideDup} onChange={e => setOverrideDup(e.target.checked)} />
+                Create anyway (I know this isn't a duplicate)
+              </label>
+            )}
+          </Card>
+        )}
+
         {sourceType === "PO" && selectedPO && (selectedPO.items || []).length > 0 && (
           <Card>
             <SectionTitle>Products to load on this shipment</SectionTitle>
@@ -1152,9 +1204,9 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           </Card>
         )}
         <Card>
-          <SectionTitle>{(form.mode === "Multimodal" || form.mode === "Sea") ? "Providers" : "Provider and cost"}</SectionTitle>
+          <SectionTitle>{form.mode === "Multimodal" ? "Providers" : "Provider and cost"}</SectionTitle>
           <div style={{ display: "grid", gap: 12 }}>
-            {(form.mode === "Multimodal" || form.mode === "Sea") ? (
+            {form.mode === "Multimodal" ? (
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div><Lbl>Road carrier (pre/on-carriage)</Lbl><Sel value={form.carrierId || ""} onChange={e => sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— none —</option>{roadProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
@@ -1176,7 +1228,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
               </>
             ) : (
               <>
-                <div><Lbl>{form.mode === "Air" ? "Air forwarder" : "Carrier"}</Lbl><Sel value={form.mode === "Air" ? (form.forwarderId || "") : (form.carrierId || "")} onChange={e => form.mode === "Air" ? sf("forwarderId", e.target.value ? parseNum(e.target.value) : null) : sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— select —</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}</Sel></div>
+                <div><Lbl>{form.mode === "Air" ? "Air forwarder" : form.mode === "Sea" ? "Sea forwarder / line" : "Carrier"}</Lbl><Sel value={(form.mode === "Air" || form.mode === "Sea") ? (form.forwarderId || "") : (form.carrierId || "")} onChange={e => (form.mode === "Air" || form.mode === "Sea") ? sf("forwarderId", e.target.value ? parseNum(e.target.value) : null) : sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— select —</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}</Sel></div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}><div><Lbl>Freight amount</Lbl><Inp type="number" value={form.amount} onChange={e => sf("amount", e.target.value)} /></div><div><Lbl>FX to PLN</Lbl><Inp type="number" value={form.fxRate} onChange={e => sf("fxRate", e.target.value)} /></div></div>
                 <div style={{ fontSize: 12, color: "#666", background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: 10 }}>Expected logistics cost: <strong>{fmtMoney(parseNum(form.amount) * parseNum(form.fxRate, 1), "PLN")}</strong></div>
               </>
@@ -1186,8 +1238,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         <Card>
           <SectionTitle>Dates and temperature</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div><Lbl>Loading date</Lbl><Inp type="date" value={form.loadingDate} onChange={e => sf("loadingDate", e.target.value)} /></div>
-            <div><Lbl>Expected delivery</Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
+            <div><Lbl>Expected loading date</Lbl><Inp type="date" value={form.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the whole shipment — from the PO loading date" /></div>
+            <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="End of the whole shipment — from the SO delivery date" /></div>
             <div><Lbl>Temp min C</Lbl><Inp type="number" value={form.temperatureMinC} onChange={e => sf("temperatureMinC", e.target.value)} /></div>
             <div><Lbl>Temp max C</Lbl><Inp type="number" value={form.temperatureMaxC} onChange={e => sf("temperatureMaxC", e.target.value)} /></div>
           </div>
@@ -1218,7 +1270,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="green" onClick={create}>Create shipment</SmallButton>
+        <SmallButton kind="green" onClick={create} disabled={blockCreate} title={blockCreate ? "This PO looks fully shipped — tick 'Create anyway' to override" : ""}>Create shipment</SmallButton>
       </div>
     </div>
   </div>;
@@ -1356,8 +1408,8 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
-            <div><Lbl>Loading date</Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} /></div>
-            <div><Lbl>Expected delivery</Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} /></div>
+            <div><Lbl>Expected loading date</Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the whole shipment (PO loading date). In-between dates are set per leg below." /></div>
+            <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="End of the whole shipment (SO delivery date)." /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 110px", gap: 10, marginTop: 10 }}>
             <div><Lbl>Carrier</Lbl><Sel value={draft.carrierId || ""} onChange={e => sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">None</option>{roadProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
@@ -1408,9 +1460,9 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
             <div style={{ display: "grid", gridTemplateColumns: "90px 110px 1fr 1fr 1fr 1fr", gap: 9 }}>
               <div><Lbl>Mode</Lbl><Sel value={leg.mode} onChange={e => updateLeg(i, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
               <div><Lbl>Status</Lbl><Sel value={leg.status} onChange={e => updateLeg(i, "status", e.target.value)}>{LEG_STATUSES.map(st => <option key={st}>{st}</option>)}</Sel></div>
-              <LegLocationSelect label="From" mode={leg.mode} locationId={leg.fromLocationId} custom={leg.fromCustom}
+              <LegLocationSelect label="Loading" mode={leg.mode} locationId={leg.fromLocationId} custom={leg.fromCustom}
                 onChange={({ locationId, custom }) => updateLegLocation(i, "from", locationId, custom)} />
-              <LegLocationSelect label="To" mode={leg.mode} locationId={leg.toLocationId} custom={leg.toCustom}
+              <LegLocationSelect label="Unloading" mode={leg.mode} locationId={leg.toLocationId} custom={leg.toCustom}
                 onChange={({ locationId, custom }) => updateLegLocation(i, "to", locationId, custom)} />
               <div><Lbl>Pickup</Lbl><Inp type="date" value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} />
                 <Inp value={leg.plannedPickupTime || ""} onChange={e => updateLeg(i, "plannedPickupTime", e.target.value)} placeholder="time, e.g. 08:00–14:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Loading time or time window — printed on the transport order" /></div>
@@ -1862,9 +1914,22 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   const providerLegList: any[] = providerLegs(shipment, providerId);
   const firstProviderLeg: any = providerLegList[0] || (shipment.legs || [])[0] || {};
   const lastProviderLeg: any = providerLegList[providerLegList.length - 1] || firstProviderLeg;
-  const providerFreight = providerCosts(shipment, providerId).reduce((s: number, c: any) => s + parseNum(c.amountPLN || (parseNum(c.amount) * parseNum(c.fxRate, 1))), 0) || shipmentCostPLN(shipment);
+  // v6.16 (#7): show the freight in the currency chosen for this provider's leg(s),
+  // not the system PLN default. Mixed currencies are listed per currency.
+  const freightText = (() => {
+    const pCosts = providerCosts(shipment, providerId);
+    const byCur: Record<string, number> = {};
+    pCosts.forEach((c: any) => { const cur = c.currency || "PLN"; byCur[cur] = (byCur[cur] || 0) + parseNum(c.amount); });
+    const entries = Object.entries(byCur).filter(([, v]) => v > 0);
+    return entries.length ? entries.map(([cur, v]) => fmtMoney(v, cur)).join(" + ") : fmtMoney(shipmentCostPLN(shipment), "PLN");
+  })();
+  const makeBody = () => `Dear ${provider.contact || provider.name || "Carrier / Forwarder"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipment.originLocationId, firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(lastProviderLeg.toLocationId || shipment.destinationLocationId, lastProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${firstProviderLeg.plannedPickupDate || shipment.loadingDate || "TBA"}\nFreight: ${freightText}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`;
   const [subject, setSubject] = useState(`Transport Order ${shipment.transportOrderNo || shipment.number} / Zlecenie transportowe — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${provider.contact || provider.name || "Carrier"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipment.originLocationId, firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(lastProviderLeg.toLocationId || shipment.destinationLocationId, lastProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${firstProviderLeg.plannedPickupDate || shipment.loadingDate || "TBA"}\nFreight: ${fmtMoney(providerFreight, "PLN")}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`);
+  const [body, setBody] = useState(makeBody());
+  // v6.16 (#6): for multimodal there are several providers — when the user switches
+  // the provider, rebuild the body so it addresses the chosen carrier/forwarder
+  // (and its own leg + freight), instead of keeping the first provider's text.
+  React.useEffect(() => { setBody(makeBody()); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [providerId]);
   const recipient = provider.email || "";
   function openMailClient() {
     const mailto = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -1926,8 +1991,8 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
         {(shipment.legs || []).map((leg, i) => { const mc = MODE_CONFIG[leg.mode] || MODE_CONFIG.Road; return <div key={leg.id || i} style={{ display: "grid", gridTemplateColumns: "36px 70px 1fr 1fr 1.1fr", gap: 10, alignItems: "start", padding: "10px 0 10px 10px", borderLeft: `3px solid ${mc.color}`, borderBottom: i === (shipment.legs || []).length - 1 ? "none" : "1px solid #F1F5F9" }}>
           <div style={{ width: 26, height: 26, borderRadius: 999, background: mc.color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>{i + 1}</div>
           <div><ModeBadge mode={leg.mode} /><div style={{ marginTop: 4 }}><StatusBadge status={leg.status} /></div></div>
-          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>FROM</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedPickupDate || "").slice(0, 10) || "-"}</div></div>
-          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>TO</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedDeliveryDate || "").slice(0, 10) || "-"}</div></div>
+          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>LOADING</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedPickupDate || "").slice(0, 10) || "-"}</div></div>
+          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>UNLOADING</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedDeliveryDate || "").slice(0, 10) || "-"}</div></div>
           <div style={{ fontSize: 11.5, color: "#555", lineHeight: 1.45 }}>
             {transportUnitsForLeg(leg).length > 0 ? transportUnitsForLeg(leg).map((u, ui) => (
               <div key={u.id || ui} style={{ padding: "4px 0", borderBottom: ui === transportUnitsForLeg(leg).length - 1 ? "none" : "1px dashed #E5E7EB" }}>

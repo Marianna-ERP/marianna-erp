@@ -1829,7 +1829,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       {it.sourceType ? "Change source" : "Pick source →"}
                     </button>
                     {it.sourceType && (
-                      <button onClick={() => clearSource(i)} style={{ padding: "3px 8px", borderRadius: 5, border: "1px solid transparent", background: "transparent", color: "#9CA3AF", fontSize: 11, cursor: "pointer" }}>Clear</button>
+                      <button onClick={() => clearSource(i)} title="Remove the source link from this line" style={{ padding: "3px 10px", borderRadius: 5, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✕ Clear source</button>
                     )}
                     <div style={{ marginLeft: "auto", fontSize: 10.5, color: lineIsBlocking ? "#991B1B" : "#777" }}>
                       {lineIsBlocking

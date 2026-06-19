@@ -153,6 +153,29 @@ function findCol(headers: string[], ...keys: string[]): number {
   return -1;
 }
 
+// v6.16 (#9): the Fakturownia cost-register export has several "Numer …" columns
+// (accounting no., position no., order no.). Plain substring matching on "numer"
+// grabbed the wrong one and left the real invoice number blank. This prefers the
+// genuine invoice-number headers and skips the lookalikes.
+function findInvoiceNoCol(headers: string[]): number {
+  const H = headers.map(h => String(h || "").toLowerCase().trim());
+  const bad = (h: string) => /(ksi[ęe]g|konta|pozycj|zam[óo]w|ewidenc|rachunk|korekt|proform|wewn)/.test(h);
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+  // 1) exact / near-exact header names
+  const exact = ["numer faktury", "nr faktury", "numer dokumentu", "nr dokumentu", "numer obcy", "nr obcy", "invoice number", "invoice no", "invoice no.", "numer", "nr", "number"];
+  for (const k of exact) {
+    const i = H.findIndex(h => !bad(h) && norm(h) === k);
+    if (i >= 0) return i;
+  }
+  // 2) substring fallback, still skipping the lookalike columns
+  const subs = ["numer faktury", "nr faktury", "numer dokumentu", "numer obcy", "invoice", "faktur", "numer", "number"];
+  for (const k of subs) {
+    const i = H.findIndex(h => !bad(h) && h.includes(k));
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
 function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onImport, onClose }: any) {
   const [rows, setRows] = useState<any[]>([]);
   const [fileName, setFileName] = useState("");
@@ -171,7 +194,7 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
         const aoa: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
         if (!aoa.length) { setError("File appears empty."); return; }
         const headers = (aoa[0] || []).map((x: any) => String(x || ""));
-        const cNo = findCol(headers, "numer faktury", "numer", "nr faktury", "invoice number", "invoice no", "number", "nr ", "faktura");
+        const cNo = findInvoiceNoCol(headers);
         const cSeller = findCol(headers, "sprzedawca", "kontrahent", "seller", "dostawca", "supplier", "nazwa");
         const cDate = findCol(headers, "data wystaw", "issue date", "issue_date", "data sprzeda", "sell date", "data faktury", "data");
         const cNet = findCol(headers, "netto", "net");
@@ -903,8 +926,8 @@ export default function Finance({
           </>
         ) : (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1.5fr", gap: 14, alignItems: "start" }}>
-              <Card>
+            <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1.1fr", gap: 14, alignItems: "start" }}>
+              <Card style={{ order: 2 }}>
                 <SectionTitle>{form.id && (operationalCosts || []).some(c => c.id === form.id) ? "EDIT OPERATIONAL COST" : "ADD OPERATIONAL COST"}</SectionTitle>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <Field label="Period"><Inp value={form.period} onChange={(e: any) => setForm({ ...form, period: e.target.value })} placeholder="2026-05" /></Field>
@@ -933,7 +956,7 @@ export default function Finance({
                 </div>
               </Card>
 
-              <div>
+              <div style={{ order: 1 }}>
                 <Card style={{ marginBottom: 14 }}>
                   <SectionTitle>OPERATIONAL COSTS SUMMARY</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
