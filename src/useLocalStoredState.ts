@@ -69,6 +69,10 @@ export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T
 export const DATA_KEYS = [
   "contacts", "pos", "lots", "orders", "shipments", "operationalCosts",
   "customLocations", "warehouseInvoices", "settledRefs", "creditNotes", "logisticsPoints",
+  // v6.18.1: the Invoicing module's stores were missing — without these, invoices
+  // and credit/debit notes were dropped from shared JSON files, auto-backups and
+  // reset. They are real data and must travel with everything else.
+  "invoices", "financeNotes",
 ];
 
 export function exportAllData(): string {
