@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef } from "react";
+import { locationsByLegacyType, warehouseLocationOptions, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -386,9 +387,9 @@ export const INIT_COUNTERPARTIES = [
 ];
 
 // ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────
-function Inp({ value, onChange, type, placeholder, style }: any) {
+function Inp({ value, onChange, type, placeholder, style, inputMode }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
-  return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} style={{ ...base, ...style }} />;
+  return <input value={value || ""} onChange={onChange} type={type || "text"} inputMode={inputMode} placeholder={placeholder} style={{ ...base, ...style }} />;
 }
 function Sel({ value, onChange, children, style }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
@@ -474,18 +475,70 @@ export function getLogisticsProvidersByService(counterparties, service) {
 }
 
 // ─── COUNTERPARTY MODAL — company-level details ─────────────────────────────
-function CounterpartyModal({ counterparty, onSave, onClose }: any) {
+function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any) {
   const defaultFinance = { bankName: "", accountNumber: "", swift: "" };
   const blank = { type: "Client", additionalTypes: [], name: "", country: "", address: "", nip: "", vatEuId: "", defaultCurrency: "PLN", paymentTerms: "30 days from invoice date", paymentTermsOther: "", services: [], finance: defaultFinance, notes: "" };
   const [form, setForm] = useState(counterparty ? { additionalTypes: [], services: [], paymentTermsOther: "", ...counterparty, finance: { ...defaultFinance, ...(counterparty.finance || {}) } } : { ...blank, id: null });
   const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const sff = (k, v) => setForm(f => ({ ...f, finance: { ...(f.finance || {}), [k]: v } }));
+  // v6.10 (#6): keep the RAW typed text in the tariff fields while editing so
+  // intermediate states like "0," / "0." and comma decimals ("0,30") survive.
+  // Coercion to a number happens once, on save (see numC / handleSave).
+  const sft = (k, v) => setForm(f => ({ ...f, warehouseTariff: { ...(f.warehouseTariff || {}), [k]: v } }));
+  const toggleTariffLocation = (id) => setForm(f => {
+    const cur = (f.warehouseTariff?.locationIds || []).map(String);
+    const next = cur.includes(String(id)) ? cur.filter(x => x !== String(id)) : [...cur, String(id)];
+    return { ...f, warehouseTariff: { ...(f.warehouseTariff || {}), locationIds: next } };
+  });
+  // v6.10 (#7/#8): operated-location candidates = built-in warehouse locations +
+  // every warehouse counterparty's address(es), not just the two seed warehouses.
+  const warehouseLocations = warehouseLocationOptions(contacts || []);
+  // v6.10 (#8): a warehouse company can have more than one delivery address.
+  const addExtraAddress = () => setForm(f => ({ ...f, extraAddresses: [...(f.extraAddresses || []), ""] }));
+  const setExtraAddress = (i, v) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).map((a, idx) => idx === i ? v : a) }));
+  const removeExtraAddress = (i) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).filter((_, idx) => idx !== i) }));
+  // v6.6: seasonal commission rates (consignment sales)
+  const setCommissionRate = (i, k, v) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).map((r, idx) => idx === i ? { ...r, [k]: v } : r) }));
+  const addCommissionRate = () => setForm(f => ({ ...f, commissionRates: [...(f.commissionRates || []), { id: Date.now(), season: "", validFrom: "", pct: "" }] }));
+  const removeCommissionRate = (i) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).filter((_, idx) => idx !== i) }));
   const toggleService = (s) => setForm(f => ({ ...f, services: (f.services || []).includes(s) ? f.services.filter(x => x !== s) : [...(f.services || []), s] }));
   const toggleAdditionalType = (t) => setForm(f => ({ ...f, additionalTypes: (f.additionalTypes || []).includes(t) ? f.additionalTypes.filter(x => x !== t) : [...(f.additionalTypes || []), t] }));
   // Services field is visible if PRIMARY type OR any additional type is logistics-related
   const allTypes = [form.type, ...(form.additionalTypes || [])];
   const showServices = allTypes.some(t => TYPES_WITH_SERVICES.has(t));
   const showOtherTerms = form.paymentTerms === "Other";
+
+  // v6.10 (#6): comma-tolerant numeric coercion applied once, on save. Empty
+  // stays empty; "0,30" / "0.30" both become 0.3; garbage becomes empty.
+  const numC = (v: any) => {
+    if (v === "" || v === null || v === undefined) return "";
+    const n = parseFloat(String(v).replace(/\s/g, "").replace(",", "."));
+    return isFinite(n) ? n : "";
+  };
+  function handleSave() {
+    if (!form.name) return;
+    const t = form.warehouseTariff;
+    const normTariff = t ? {
+      ...t,
+      storagePerKgDay: numC(t.storagePerKgDay),
+      storagePerPalletDay: numC(t.storagePerPalletDay),
+      freeDays: numC(t.freeDays),
+      handlingInPerKg: numC(t.handlingInPerKg),
+      handlingOutPerKg: numC(t.handlingOutPerKg),
+      sortingPerKg: numC(t.sortingPerKg),
+      fxToPLN: numC(t.fxToPLN),
+    } : t;
+    const normCommissions = form.commissionRates
+      ? form.commissionRates.map((r: any) => ({ ...r, pct: numC(r.pct) }))
+      : form.commissionRates;
+    const cleanExtra = (form.extraAddresses || []).map((a: any) => (typeof a === "string" ? a : a?.address || "")).filter((a: string) => String(a).trim());
+    onSave({
+      ...form,
+      ...(t ? { warehouseTariff: normTariff } : {}),
+      ...(form.commissionRates ? { commissionRates: normCommissions } : {}),
+      extraAddresses: cleanExtra,
+    });
+  }
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -577,6 +630,62 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
               <div><Lbl>SWIFT / BIC</Lbl><Inp value={form.finance?.swift || ""} onChange={e => sff("swift", e.target.value)} placeholder="BPKOPLPW" /></div>
             </div>
           </div>
+          {allTypes.includes("Warehouse") && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>WAREHOUSE TARIFF <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· used to predict and check this warehouse's invoices</span></div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 10 }}>
+                <div><Lbl>Storage / kg / day</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.storagePerKgDay ?? ""} onChange={e => sft("storagePerKgDay", e.target.value)} placeholder="e.g. 0,01" /></div>
+                <div><Lbl>Storage / pallet / day</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.storagePerPalletDay ?? ""} onChange={e => sft("storagePerPalletDay", e.target.value)} placeholder="e.g. 2,00" /></div>
+                <div><Lbl>Free days from receipt</Lbl><Inp type="text" inputMode="numeric" value={form.warehouseTariff?.freeDays ?? ""} onChange={e => sft("freeDays", e.target.value)} placeholder="0" /></div>
+                <div><Lbl>Handling in / kg</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.handlingInPerKg ?? ""} onChange={e => sft("handlingInPerKg", e.target.value)} placeholder="e.g. 0,30" /></div>
+                <div><Lbl>Handling out / kg</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.handlingOutPerKg ?? ""} onChange={e => sft("handlingOutPerKg", e.target.value)} placeholder="e.g. 0,30" /></div>
+                <div><Lbl>Sorting / kg</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.sortingPerKg ?? ""} onChange={e => sft("sortingPerKg", e.target.value)} placeholder="e.g. 0,15" /></div>
+                <div><Lbl>Currency</Lbl>
+                  <select value={form.warehouseTariff?.currency || "PLN"} onChange={e => sft("currency", e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}>
+                    {["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div><Lbl>FX → PLN</Lbl><Inp type="text" inputMode="decimal" value={form.warehouseTariff?.fxToPLN ?? ""} onChange={e => sft("fxToPLN", e.target.value)} placeholder={(form.warehouseTariff?.currency || "PLN") === "PLN" ? "1" : "4,25"} /></div>
+              </div>
+              <Lbl>Locations this warehouse operates <span style={{ color: "#AAA", fontWeight: 400 }}>(lots stored there are charged on this tariff)</span></Lbl>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                {warehouseLocations.map((l: any) => {
+                  const on = (form.warehouseTariff?.locationIds || []).map(String).includes(String(l.id));
+                  return (
+                    <button key={l.id} type="button" onClick={() => toggleTariffLocation(l.id)}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 7, border: `1.5px solid ${on ? "#16A34A" : "#E5E7EB"}`, background: on ? "#F0FDF4" : "#fff", color: on ? "#15803D" : "#666", fontSize: 12, fontWeight: on ? 600 : 500, cursor: "pointer", fontFamily: "inherit" }}>
+                      {l.name}{on && <span style={{ fontSize: 10, opacity: 0.7 }}>✓</span>}
+                    </button>
+                  );
+                })}
+                {!warehouseLocations.length && <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>No warehouse locations yet — add them in Settings → Locations &amp; ports.</span>}
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <Lbl>Additional delivery addresses <span style={{ color: "#AAA", fontWeight: 400 }}>(if this warehouse has more than one site we can send cargo to)</span></Lbl>
+                {(form.extraAddresses || []).map((a: any, i: number) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 34px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+                    <Inp value={typeof a === "string" ? a : (a?.address || "")} onChange={e => setExtraAddress(i, e.target.value)} placeholder="Street, City, Postcode" />
+                    <button type="button" onClick={() => removeExtraAddress(i)} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                  </div>
+                ))}
+                <button type="button" onClick={addExtraAddress} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add another address</button>
+              </div>
+            </div>
+          )}
+          {allTypes.includes("Supplier") && (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>COMMISSION — CONSIGNMENT SALES <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· season rates; the rate valid on the settlement date is prefilled</span></div>
+              {(form.commissionRates || []).map((r: any, i: number) => (
+                <div key={r.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr 34px", gap: 8, marginBottom: 6, alignItems: "end" }}>
+                  <div><Lbl>Season</Lbl><Inp value={r.season || ""} onChange={e => setCommissionRate(i, "season", e.target.value)} placeholder="e.g. 2026/27" /></div>
+                  <div><Lbl>Valid from</Lbl><Inp type="date" value={r.validFrom || ""} onChange={e => setCommissionRate(i, "validFrom", e.target.value)} /></div>
+                  <div><Lbl>Commission %</Lbl><Inp type="text" inputMode="decimal" value={r.pct ?? ""} onChange={e => setCommissionRate(i, "pct", e.target.value)} placeholder="e.g. 10" /></div>
+                  <button type="button" onClick={() => removeCommissionRate(i)} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                </div>
+              ))}
+              <button type="button" onClick={addCommissionRate} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add season rate</button>
+            </div>
+          )}
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>NOTES</div>
             <textarea value={form.notes} onChange={e => sf("notes", e.target.value)} rows={3}
@@ -586,7 +695,7 @@ function CounterpartyModal({ counterparty, onSave, onClose }: any) {
         </div>
         <div style={{ padding: "14px 24px", borderTop: "1px solid #F3F4F6", display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <button onClick={onClose} style={{ padding: "8px 20px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-          <button onClick={() => { if (!form.name) return; onSave(form); }}
+          <button onClick={handleSave}
             style={{ padding: "8px 22px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: form.name ? "pointer" : "not-allowed", opacity: form.name ? 1 : 0.5 }}>
             {counterparty ? "Save Changes" : "Add Counterparty"}
           </button>
@@ -1238,7 +1347,244 @@ function bulkStyle(color) {
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
-export default function Contacts({ contacts: extContacts, setContacts: extSetContacts }: any = {}) {
+// ─── v6.3.0: DUPLICATE DETECTION & MERGE ────────────────────────────────────
+// Fuzzy company-name matching (strips punctuation and legal suffixes) plus
+// strict tax-ID matching. Used when saving a counterparty manually and by the
+// "Find duplicates" scan. Merging keeps one record (its id survives), combines
+// contact people and linked docs, and remembers the absorbed id in
+// mergedFromIds so App-level snapshot refreshing re-points old documents.
+
+const LEGAL_SUFFIX_TOKENS = new Set([
+  "sp", "z", "o", "oo", "k", "j", "sa", "s", "a", "c", "srl", "r", "l", "gmbh",
+  "ltd", "llc", "inc", "bv", "b", "v", "sarl", "sas", "plc", "oy", "ab", "as",
+  "doo", "d", "sl", "spzoo", "co", "company", "spolka", "spółka", "zoo",
+]);
+
+function normalizeCompanyName(name) {
+  const tokens = String(name || "")
+    .toLowerCase()
+    .replace(/[.,;:()"'’&/\\-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  // Drop trailing legal-form tokens ("sp z o o", "s r l", "gmbh"...) but never
+  // drop everything — keep at least the first token.
+  let end = tokens.length;
+  while (end > 1 && LEGAL_SUFFIX_TOKENS.has(tokens[end - 1])) end--;
+  return tokens.slice(0, end).join(" ");
+}
+
+function taxDigits(value) {
+  return String(value || "").replace(/[^0-9]/g, "");
+}
+
+function namesFuzzyMatch(a, b) {
+  const na = normalizeCompanyName(a);
+  const nb = normalizeCompanyName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  // containment ("owoce polska" vs "owoce polska sp z o o" already handled by
+  // suffix stripping; this also catches "freshfarm" vs "freshfarm valencia")
+  if (na.length >= 5 && nb.length >= 5 && (na.includes(nb) || nb.includes(na))) return true;
+  return false;
+}
+
+function findCounterpartyDuplicates(candidate, list, excludeId) {
+  const candTax = taxDigits(candidate.nip || candidate.vatEuId);
+  const matches = [];
+  (list || []).forEach(c => {
+    if (excludeId != null && String(c.id) === String(excludeId)) return;
+    const cTax = taxDigits(c.nip || c.vatEuId);
+    if (candTax && cTax && candTax.length >= 6 && candTax === cTax) {
+      matches.push({ counterparty: c, reason: "tax", detail: `same tax ID ${candidate.nip || candidate.vatEuId}` });
+      return;
+    }
+    if (namesFuzzyMatch(candidate.name, c.name)) {
+      matches.push({ counterparty: c, reason: "name", detail: `similar name "${c.name}"` });
+    }
+  });
+  return matches;
+}
+
+// Fields offered for per-field choice in the merge dialog.
+const MERGE_FIELDS = [
+  { key: "name", label: "Company name" },
+  { key: "type", label: "Main type" },
+  { key: "country", label: "Country" },
+  { key: "address", label: "Address" },
+  { key: "nip", label: "NIP / Tax ID / EU VAT" },
+  { key: "defaultCurrency", label: "Default currency" },
+  { key: "paymentTerms", label: "Payment terms" },
+  { key: "paymentTermsOther", label: "Payment terms (other)" },
+  { key: "notes", label: "Notes" },
+];
+
+function mergeValueDisplay(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (Array.isArray(v)) return v.join(", ") || "—";
+  return String(v);
+}
+
+function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
+  // Per-field choice: "keep" | "incoming". Default: keep, unless keep's value is empty.
+  // v6.10: for the tax-id row, compare the combined identity (nip OR vatEuId) so
+  // a record whose only tax value sits in vatEuId still surfaces as a choice.
+  const mergeFieldValue = (rec: any, key: string) => key === "nip" ? (rec?.nip || rec?.vatEuId || "") : rec?.[key];
+  const [choices, setChoices] = useState(() => {
+    const init: any = {};
+    MERGE_FIELDS.forEach(f => {
+      const kv = mergeFieldValue(keep, f.key), iv = mergeFieldValue(incoming, f.key);
+      init[f.key] = (!kv && iv) ? "incoming" : "keep";
+    });
+    return init;
+  });
+  const differing = MERGE_FIELDS.filter(f => {
+    const kv = mergeFieldValue(keep, f.key) ?? "", iv = mergeFieldValue(incoming, f.key) ?? "";
+    return String(kv) !== String(iv) && (kv !== "" || iv !== "");
+  });
+  function buildMerged() {
+    const merged: any = { ...keep };
+    MERGE_FIELDS.forEach(f => {
+      merged[f.key] = choices[f.key] === "incoming" ? (incoming[f.key] ?? "") : (keep[f.key] ?? "");
+    });
+    // v6.10: tax identity (nip + vatEuId) is a single paired choice. The chosen
+    // side's tax id wins COMPLETELY — both nip and vatEuId are taken from it — so
+    // a stale EU-VAT carried over from the kept record can never resurface. This
+    // was the cause of "the VAT number in certain cases cannot be deleted".
+    const taxSide = choices["nip"] === "incoming" ? incoming : keep;
+    merged.nip = taxSide.nip ?? "";
+    merged.vatEuId = taxSide.vatEuId ?? "";
+    // Union of secondary types and services
+    merged.additionalTypes = Array.from(new Set([...(keep.additionalTypes || []), ...(incoming.additionalTypes || []), ...(incoming.type && incoming.type !== merged.type ? [incoming.type] : [])])).filter(t => t !== merged.type);
+    merged.services = Array.from(new Set([...(keep.services || []), ...(incoming.services || [])]));
+    // Combine people (dedupe by name+email) and linked docs
+    const people = [...(keep.contacts || [])];
+    (incoming.contacts || []).forEach(p => {
+      const dup = people.find(x => String(x.name || "").trim().toLowerCase() === String(p.name || "").trim().toLowerCase() && String(x.email || "").trim().toLowerCase() === String(p.email || "").trim().toLowerCase());
+      if (!dup) people.push({ ...p, id: Math.max(0, ...people.map(x => x.id || 0)) + 1, isPrimary: false });
+    });
+    merged.contacts = people;
+    merged.linkedDocs = Array.from(new Set([...(keep.linkedDocs || []), ...(incoming.linkedDocs || [])]));
+    // Finance: keep's unless empty
+    merged.finance = {
+      bankName: keep.finance?.bankName || incoming.finance?.bankName || "",
+      accountNumber: keep.finance?.accountNumber || incoming.finance?.accountNumber || "",
+      swift: keep.finance?.swift || incoming.finance?.swift || "",
+    };
+    // Remember absorbed ids so saved PO/SO snapshots re-point to the survivor
+    merged.mergedFromIds = Array.from(new Set([...(keep.mergedFromIds || []), ...(incoming.id != null ? [String(incoming.id)] : []), ...(incoming.mergedFromIds || [])]));
+    return merged;
+  }
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130, padding: 20 }}>
+      <div style={{ width: 720, maxHeight: "88vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid #EBEBEB" }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Merge duplicate counterparties</div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>
+            Keeping <strong style={{ color: "#111" }}>{keep.name}</strong>{incoming.id != null ? <> — absorbing <strong style={{ color: "#DC2626" }}>{incoming.name}</strong> (it will be removed; its contact people, linked documents and references move to the kept record)</> : <> — folding in the data you just entered</>}.
+          </div>
+        </div>
+        <div style={{ padding: "16px 24px" }}>
+          {differing.length === 0 && (
+            <div style={{ fontSize: 13, color: "#666", padding: "10px 0" }}>All compared fields are identical — contact people and linked documents will simply be combined.</div>
+          )}
+          {differing.map(f => (
+            <div key={f.key} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#888", letterSpacing: "0.04em", marginBottom: 5 }}>{f.label.toUpperCase()}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {(["keep", "incoming"] as const).map(side => {
+                  const rec = side === "keep" ? keep : incoming;
+                  const active = choices[f.key] === side;
+                  return (
+                    <label key={side} style={{ display: "flex", gap: 8, alignItems: "flex-start", border: `1.5px solid ${active ? "#16A34A" : "#E5E7EB"}`, background: active ? "#F0FDF4" : "#fff", borderRadius: 8, padding: "8px 10px", cursor: "pointer" }}>
+                      <input type="radio" checked={active} onChange={() => setChoices(prev => ({ ...prev, [f.key]: side }))} style={{ marginTop: 2 }} />
+                      <span>
+                        <span style={{ fontSize: 9.5, fontWeight: 700, color: side === "keep" ? "#16A34A" : "#D97706", display: "block" }}>{side === "keep" ? "KEPT RECORD" : (incoming.id != null ? "DUPLICATE RECORD" : "NEW ENTRY")}</span>
+                        <span style={{ fontSize: 12.5, color: "#111" }}>{mergeValueDisplay(mergeFieldValue(rec, f.key))}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: "#1E40AF", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 7, padding: "8px 10px", marginTop: 4 }}>
+            Contact people and linked documents from both records are combined automatically. Existing POs, SOs and shipments that pointed at the removed record re-point to the kept one.
+          </div>
+        </div>
+        <div style={{ padding: "14px 24px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={onCancel} style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button onClick={() => onApply(buildMerged(), incoming.id ?? null)} style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Merge records</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DuplicateReviewModal({ candidate, matches, onOpenExisting, onMergeInto, onSaveAnyway, onCancel }: any) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 125, padding: 20 }}>
+      <div style={{ width: 640, maxHeight: "85vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid #EBEBEB" }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>⚠ Possible duplicate counterparty</div>
+          <div style={{ fontSize: 12.5, color: "#666", marginTop: 4, lineHeight: 1.5 }}>
+            You're saving <strong>"{candidate.name}"</strong>, but {matches.length === 1 ? "a similar record already exists" : `${matches.length} similar records already exist`}. Check below before creating a duplicate.
+          </div>
+        </div>
+        <div style={{ padding: "14px 24px" }}>
+          {matches.map((m, i) => (
+            <div key={i} style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 9, padding: "11px 13px", marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: "#111" }}>{m.counterparty.name}</div>
+                  <div style={{ fontSize: 11.5, color: "#92400E", marginTop: 2 }}>
+                    Match: {m.reason === "tax" ? "same tax ID" : "similar name"} · {m.counterparty.country || "—"} · {m.counterparty.type}{m.counterparty.nip ? ` · ${m.counterparty.nip}` : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                  <button onClick={() => onOpenExisting(m.counterparty)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Open existing</button>
+                  <button onClick={() => onMergeInto(m.counterparty)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "#2563EB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Merge…</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "14px 24px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", gap: 10 }}>
+          <button onClick={onCancel} style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>← Go back &amp; edit</button>
+          <button onClick={onSaveAnyway} style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>These are different companies — save anyway</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 125, padding: 20 }}>
+      <div style={{ width: 640, maxHeight: "85vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>Find duplicates</div>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{pairs.length ? `${pairs.length} suspected duplicate pair${pairs.length !== 1 ? "s" : ""} found — review and merge.` : "No suspected duplicates found. 🎉"}</div>
+          </div>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 22, color: "#888", cursor: "pointer" }}>×</button>
+        </div>
+        <div style={{ padding: "14px 24px" }}>
+          {pairs.map((p, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, border: "1px solid #F3F4F6", borderRadius: 9, padding: "10px 13px", marginBottom: 8 }}>
+              <div style={{ fontSize: 12.5, color: "#111", lineHeight: 1.5 }}>
+                <strong>{p.a.name}</strong> <span style={{ color: "#AAA" }}>↔</span> <strong>{p.b.name}</strong>
+                <div style={{ fontSize: 11, color: "#92400E" }}>{p.reason === "tax" ? "Same tax ID" : "Similar name"} · {p.a.type}/{p.b.type}</div>
+              </div>
+              <button onClick={() => onReview(p)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", background: "#2563EB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>Review &amp; merge</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function Contacts({ contacts: extContacts, setContacts: extSetContacts, logisticsPoints: extLogisticsPoints, setLogisticsPoints: extSetLogisticsPoints }: any = {}) {
   // Integration mode: if parent passes state in, use it (shell owns state).
   // Standalone mode: use local state with the baked-in seed.
   const [localContacts, setLocalContacts] = useState(INIT_COUNTERPARTIES);
@@ -1246,12 +1592,19 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   const setCounterparties = extSetContacts ?? setLocalContacts;
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState("All");
-  const [viewMode, setViewMode] = useState("companies"); // companies | people
+  const [viewMode, setViewMode] = useState("companies"); // companies | people | logistics
+  const [localLogisticsPoints, setLocalLogisticsPoints] = useState(() => readLogisticsPoints());
+  const logisticsPoints = extLogisticsPoints ?? localLogisticsPoints;
+  const setLogisticsPoints = extSetLogisticsPoints ?? setLocalLogisticsPoints;
   const [selectedId, setSelectedId] = useState(null);
   const [modal, setModal] = useState(null); // null | "new" | counterparty-to-edit
   const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
   const [showImport, setShowImport] = useState(false);
   const [importResult, setImportResult] = useState(null); // toast { count } | null
+  // v6.3.0 duplicate handling
+  const [dupReview, setDupReview] = useState(null);   // { candidate, matches } | null
+  const [mergeTarget, setMergeTarget] = useState(null); // { keep, incoming } | null
+  const [dupePairs, setDupePairs] = useState(null);   // array | null (Find duplicates results)
 
   const selected = counterparties.find(c => c.id === selectedId) || null;
 
@@ -1303,6 +1656,29 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
 
   // ── mutations ──────────────────────────────────────────────────────────
   function saveCounterparty(c) {
+    // v6.3.0: duplicate guard — on a NEW record, or when an existing record's
+    // name/tax-ID changed, check for matches (tax-ID strict, name fuzzy) and
+    // let the user open the existing record, merge, or save anyway.
+    let shouldCheck = true;
+    if (c.id) {
+      const before = counterparties.find(p => p.id === c.id);
+      if (before
+        && normalizeCompanyName(before.name) === normalizeCompanyName(c.name)
+        && taxDigits(before.nip || before.vatEuId) === taxDigits(c.nip || c.vatEuId)) {
+        shouldCheck = false; // name and tax unchanged — don't nag on routine edits
+      }
+    }
+    if (shouldCheck) {
+      const matches = findCounterpartyDuplicates(c, counterparties, c.id);
+      if (matches.length) {
+        setDupReview({ candidate: c, matches });
+        return;
+      }
+    }
+    commitCounterparty(c);
+  }
+
+  function commitCounterparty(c) {
     setCounterparties(prev => {
       if (c.id) return prev.map(p => p.id === c.id ? { ...p, ...c } : p);
       const newC = { ...c, id: Date.now(), contacts: [], linkedDocs: [] };
@@ -1310,6 +1686,31 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
       return [...prev, newC];
     });
     setModal(null);
+    setDupReview(null);
+  }
+
+  function applyMerge(merged, removeId) {
+    setCounterparties(prev => prev
+      .filter(p => removeId == null || String(p.id) !== String(removeId))
+      .map(p => String(p.id) === String(merged.id) ? merged : p));
+    setSelectedId(merged.id);
+    setMergeTarget(null);
+    setDupReview(null);
+    setModal(null);
+    setDupePairs(null);
+  }
+
+  function scanForDuplicates() {
+    const pairs: any[] = [];
+    for (let i = 0; i < counterparties.length; i++) {
+      for (let j = i + 1; j < counterparties.length; j++) {
+        const a = counterparties[i], b = counterparties[j];
+        const aTax = taxDigits(a.nip || a.vatEuId), bTax = taxDigits(b.nip || b.vatEuId);
+        if (aTax && bTax && aTax.length >= 6 && aTax === bTax) { pairs.push({ a, b, reason: "tax" }); continue; }
+        if (namesFuzzyMatch(a.name, b.name)) pairs.push({ a, b, reason: "name" });
+      }
+    }
+    setDupePairs(pairs);
   }
   function deleteCounterparty(id) {
     setCounterparties(prev => prev.filter(c => c.id !== id));
@@ -1397,8 +1798,34 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
       {modal && (
         <CounterpartyModal
           counterparty={modal === "new" ? null : modal}
+          contacts={counterparties}
           onSave={saveCounterparty}
           onClose={() => setModal(null)}
+        />
+      )}
+      {dupReview && !mergeTarget && (
+        <DuplicateReviewModal
+          candidate={dupReview.candidate}
+          matches={dupReview.matches}
+          onOpenExisting={(c) => { setDupReview(null); setModal(null); setSelectedId(c.id); }}
+          onMergeInto={(c) => setMergeTarget({ keep: c, incoming: dupReview.candidate })}
+          onSaveAnyway={() => commitCounterparty(dupReview.candidate)}
+          onCancel={() => setDupReview(null)}
+        />
+      )}
+      {mergeTarget && (
+        <MergeCounterpartiesModal
+          keep={mergeTarget.keep}
+          incoming={mergeTarget.incoming}
+          onApply={applyMerge}
+          onCancel={() => setMergeTarget(null)}
+        />
+      )}
+      {dupePairs && !mergeTarget && (
+        <FindDuplicatesModal
+          pairs={dupePairs}
+          onReview={(p) => setMergeTarget({ keep: p.a, incoming: p.b })}
+          onClose={() => setDupePairs(null)}
         />
       )}
       {emailTarget && <EmailModal counterparty={emailTarget.counterparty} person={emailTarget.person} onClose={() => setEmailTarget(null)} />}
@@ -1417,6 +1844,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           {[
             { key: "companies", label: "Companies", icon: "🏢" },
             { key: "people", label: "People", icon: "👤" },
+            { key: "logistics", label: "Logistics points", icon: "⚓" },
           ].map(o => (
             <button key={o.key} onClick={() => setViewMode(o.key)}
               style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: viewMode === o.key ? "#fff" : "transparent", color: viewMode === o.key ? "#111" : "#888", fontSize: 12, fontWeight: 600, cursor: "pointer", boxShadow: viewMode === o.key ? "0 1px 2px rgba(0,0,0,0.06)" : "none", display: "flex", alignItems: "center", gap: 5 }}>
@@ -1427,6 +1855,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
         </div>
         <button onClick={() => setShowImport(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
         <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ Export CSV</button>
+        <button onClick={scanForDuplicates} title="Scan all counterparties for suspected duplicates (same tax ID or similar name)" style={{ background: "#fff", color: "#2563EB", border: "1px solid #BFDBFE", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>⧉ Find duplicates</button>
         <button onClick={() => setModal("new")} style={{ background: "#16A34A", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
       </div>
 
@@ -1434,6 +1863,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
         {/* Main area */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {/* Filter chips */}
+          {viewMode !== "logistics" && (<>
           <div style={{ padding: "14px 28px 0", display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
             {[{ label: "All", count: counts.All }, ...COUNTERPARTY_TYPES.map(t => ({ label: t, count: counts[t] || 0 }))].map(({ label, count }) => (
               <button key={label} onClick={() => setFilterType(label)}
@@ -1449,9 +1879,13 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder={viewMode === "companies" ? "Search companies, NIP, contacts…" : "Search people, role, email, company…"}
               style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
           </div>
+          </>)}
 
           {/* Table */}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
+            {viewMode === "logistics" ? (
+              <LogisticsPointsView points={logisticsPoints} setPoints={setLogisticsPoints} />
+            ) : (<>
             <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
               {viewMode === "companies" ? (
                 <CompaniesTable
@@ -1477,6 +1911,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
               Showing {viewMode === "companies" ? filteredCompanies.length : filteredPeople.length}
               {viewMode === "companies" ? ` of ${counterparties.length} companies` : ` of ${counterparties.reduce((s, c) => s + c.contacts.length, 0)} people`}
             </div>
+            </>)}
           </div>
         </div>
 
@@ -1498,9 +1933,80 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   );
 }
 
-// ─── COMPANIES TABLE ────────────────────────────────────────────────────────
-function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail }: any) {
+// ─── LOGISTICS POINTS (v6.12) ───────────────────────────────────────────────
+// Ports of loading / discharge, relay points and forwarder cross-dock warehouses
+// — the only places that are NOT a counterparty's own premises. Managed here so
+// every From / To / Destination picker (and the transport confirmation) draws
+// from one source. Saving reloads the app so the location registry re-bootstraps.
+function blankLogisticsPoint() {
+  return { id: null, name: "", kind: LOGISTICS_POINT_KINDS[0].key, country: "", address: "", notes: "" };
+}
+function LogisticsPointsView({ points = [], setPoints }: any) {
+  const [form, setForm] = useState<any>(() => blankLogisticsPoint());
+  const sf = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
+  const kindLabel = (key: string) => (LOGISTICS_POINT_KINDS.find(k => k.key === key) || {}).label || key;
+
+  const persistAndReload = (next: any[]) => {
+    writeLogisticsPoints(next);   // synchronous, so the reload re-bootstraps with it
+    setPoints(next);
+    if (typeof window !== "undefined") setTimeout(() => window.location.reload(), 30);
+  };
+  const save = () => {
+    if (!String(form.name || "").trim()) { window.alert("Enter a name for the location."); return; }
+    const list = [...(points || [])];
+    if (form.id == null) {
+      const nextId = Math.max(0, ...list.map((p: any) => Number(p.id) || 0)) + 1;
+      list.push({ ...form, id: nextId, name: form.name.trim() });
+    } else {
+      const i = list.findIndex((p: any) => p.id === form.id);
+      if (i >= 0) list[i] = { ...form, name: form.name.trim() };
+    }
+    persistAndReload(list);
+  };
+  const edit = (p: any) => setForm({ ...p });
+  const del = (p: any) => { if (window.confirm(`Delete "${p.name}"? Documents already using it keep their saved address.`)) persistAndReload((points || []).filter((x: any) => x.id !== p.id)); };
+
   return (
+    <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 16 }}>
+      <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{form.id == null ? "New logistics point" : "Edit logistics point"}</div>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 12, lineHeight: 1.45 }}>Ports, relay points and forwarder cross-dock warehouses. Supplier / client / warehouse addresses come from their counterparty record — don't re-enter them here.</div>
+        <div style={{ marginBottom: 10 }}><Lbl>Kind</Lbl><Sel value={form.kind} onChange={e => sf("kind", e.target.value)}>{LOGISTICS_POINT_KINDS.map(k => <option key={k.key} value={k.key}>{k.label}</option>)}</Sel></div>
+        <div style={{ marginBottom: 10 }}><Lbl>Name</Lbl><Inp value={form.name} onChange={e => sf("name", e.target.value)} placeholder="e.g. Gdańsk DCT, Mersin cross-dock" /></div>
+        <div style={{ marginBottom: 10 }}><Lbl>Country</Lbl><Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="Poland / Türkiye / …" /></div>
+        <div style={{ marginBottom: 10 }}><Lbl>Address</Lbl><Inp value={form.address} onChange={e => sf("address", e.target.value)} placeholder="full address used on the transport order" /></div>
+        <div style={{ marginBottom: 14 }}><Lbl>Notes</Lbl><Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="optional" /></div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={save} style={{ flex: 1, padding: "9px", border: "none", borderRadius: 8, background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{form.id == null ? "Add point" : "Save changes"}</button>
+          {form.id != null && <button onClick={() => setForm(blankLogisticsPoint())} style={{ padding: "9px 14px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>}
+        </div>
+      </div>
+
+      <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "160px 1.2fr 1fr 120px 90px", padding: "10px 16px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.05em" }}>
+          <div>KIND</div><div>NAME</div><div>ADDRESS</div><div>COUNTRY</div><div></div>
+        </div>
+        {(points || []).length === 0 && <div style={{ padding: 18, fontSize: 12.5, color: "#888" }}>No logistics points yet. Add the ports, relay points and forwarder cross-dock warehouses you use — they'll appear in every From / To / Destination picker.</div>}
+        {(points || []).map((p: any) => (
+          <div key={p.id} style={{ display: "grid", gridTemplateColumns: "160px 1.2fr 1fr 120px 90px", padding: "11px 16px", borderBottom: "1px solid #F7F7F7", fontSize: 12, alignItems: "center" }}>
+            <div style={{ color: "#555" }}>{kindLabel(p.kind)}</div>
+            <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.name}>{p.name}</div>
+            <div style={{ color: "#666", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={p.address}>{p.address || "—"}</div>
+            <div style={{ color: "#666" }}>{p.country || "—"}</div>
+            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+              <button onClick={() => edit(p)} title="Edit" style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, padding: "3px 7px" }}>✎</button>
+              <button onClick={() => del(p)} title="Delete" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 12, padding: "3px 7px" }}>✕</button>
+            </div>
+          </div>
+        ))}
+        <div style={{ padding: "10px 16px", fontSize: 10.5, color: "#AAA", lineHeight: 1.5 }}>Saving reloads the app so these points appear in every picker and on the transport confirmation.</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── COMPANIES TABLE ────────────────────────────────────────────────────────
+function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail }: any) {  return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 110px 80px 130px", padding: "10px 20px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
         {["TYPE", "COMPANY", "PRIMARY CONTACT", "COUNTRY", "PEOPLE", "ACTIONS"].map((h, i) => (

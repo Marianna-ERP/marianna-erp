@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from "react";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
+import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { localTodayISO, localMonthISO } from "./dates";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -327,7 +329,7 @@ function parsePaymentTermsDays(terms) {
 // Mirrors the shape of invoice objects in Invoices.tsx (INIT_INVOICES seed there)
 // so when integration happens, the object slots directly into the invoices state.
 function buildInvoiceFromSO(order, invoiceNumber, today) {
-  const issueDate = today || new Date().toISOString().split("T")[0];
+  const issueDate = today || localTodayISO();
   const saleDate = order.deliveryDate || issueDate; // when goods physically shipped
   const days = parsePaymentTermsDays(order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms);
   let dueDate = "";
@@ -896,6 +898,8 @@ function SODoc({ order }: any) {
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
     { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationLabel },
+    ...(order.importPermitNo ? [{ en: "Import permit no.", pl: "Nr pozwolenia importowego", value: order.importPermitNo, strong: true }] : []),
+    ...(order.acidNo ? [{ en: "ACID no.", pl: "Nr ACID", value: order.acidNo, strong: true }] : []),
   ];
   const clientRows = [
     { en: "Name",      pl: "Nazwa",     value: order.client?.name    || "—" },
@@ -1006,7 +1010,7 @@ function SODoc({ order }: any) {
             const lt = ((parseFloat(item.qty) || 0) * (parseFloat(item.unitPrice) || 0)).toFixed(2);
             return (
               <tr key={i}>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}{item.cnCode ? <div style={{ fontSize: 8.5, fontWeight: 400, color: "#666" }}>CN/HS: {item.cnCode}</div> : null}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.size}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>Kl. {item.quality}</td>
@@ -1126,7 +1130,7 @@ function PrintModal({ order, onClose }: any) {
 function EmailModal({ order, onClose }: any) {
   const recipient = order.client?.email || order.client?.contact || "";
   const [subject, setSubject] = useState(`Sales Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nDelivery date: ${order.deliveryDate || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nDelivery date: ${order.deliveryDate || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}${order.importPermitNo ? `\nImport permit no.: ${order.importPermitNo}` : ""}${order.acidNo ? `\nACID no.: ${order.acidNo}` : ""}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
 
   function openPrintForPdf() {
     const node = document.getElementById("so-print-doc-email");
@@ -1215,7 +1219,7 @@ function EmailModal({ order, onClose }: any) {
 // exported into the actual invoices state. For now this gives the user a clear
 // record of the invoice that needs to be created in Fakturownia / the Invoices module.
 function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfirm }: any) {
-  const today = new Date().toISOString().split("T")[0];
+  const today = localTodayISO();
   const initial = buildInvoiceFromSO(order, nextSINVNumber(existingInvoiceNumbers || []), today);
   const [invoice, setInvoice] = useState(initial);
 
@@ -1339,8 +1343,47 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   const removeItem = (i) => setOrder(o => ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
-    sf("client", c || null);
+    setOrder(o => {
+      const next: any = { ...o, client: c || null };
+      // v6.10 (#15): the delivery destination defaults to the client's own
+      // registered address, unless the user has switched to an "Other" address.
+      if ((o.destinationMode || ((o.destinationLocationId || o.destinationText) ? "other" : "client")) === "client") {
+        next.destinationMode = "client";
+        next.destinationLocationId = null;
+        next.destinationText = c?.address || "";
+      }
+      return next;
+    });
   };
+  // v6.10 (#15): "client" = deliver to the client's registered address;
+  // "other" = a different place (dropdown or free text).
+  const destMode = order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client");
+  const setDestMode = (mode) => {
+    if (mode === "client") setOrder(o => ({ ...o, destinationMode: "client", destinationLocationId: null, destinationText: o.client?.address || "" }));
+    else setOrder(o => ({ ...o, destinationMode: "other" }));
+  };
+  // v6.11 (#7): destination guidance must match the chosen Incoterm.
+  const incotermDestinationHint = (() => {
+    const ic = String(order.sellIncoterm || "").toUpperCase();
+    if (ic === "EXW") return "EXW — we don't deliver: the client collects from the supplier or our warehouse, so no destination is required.";
+    if (ic === "FCA" || ic === "FOB") return `${ic} — destination is the relay point or the port of departure where we hand the goods over.`;
+    if (ic === "CIF" || ic === "CFR") return `${ic} — destination is the port of arrival.`;
+    if (ic === "DAP" || ic === "DDP") return `${ic} — destination is the client's address, or another address the client indicates.`;
+    return "Select the Sell Incoterm above for destination guidance.";
+  })();
+
+  // v6.3.0: live duplicate check for import-document numbers. Import permits and
+  // ACID numbers are single-use — flag immediately if another SO already carries them.
+  const permitDupes = React.useMemo(() => {
+    const result: any = {};
+    (["importPermitNo", "acidNo"] as const).forEach(field => {
+      const v = String(order[field] || "").trim().toLowerCase();
+      if (!v || v === "n/a") return;
+      const clash = (allOrders || []).find(p => p.id !== order.id && String(p[field] || "").trim().toLowerCase() === v);
+      if (clash) result[field] = clash.number;
+    });
+    return result;
+  }, [order.importPermitNo, order.acidNo, order.id, allOrders]);
 
   // Source picker state
   const [sourceFor, setSourceFor] = useState(null); // index of item being sourced, or null
@@ -1408,8 +1451,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   order.items.forEach((it, idx) => {
     if (it.sourceType === "PO" && it.sourceRef) {
       const po = PO_REFS.find(p => p.number === it.sourceRef);
-      if (po && order.deliveryDate && po.expectedDelivery && order.deliveryDate < po.expectedDelivery) {
-        deliveryWarnings.push({ idx, lineProduct: it.product, poRef: it.sourceRef, poETA: po.expectedDelivery });
+      // v6.4.1 fix: field is expectedDeliveryDate — the old name (expectedDelivery)
+      // never existed, so this warning could never fire.
+      const poETA = po && ((po as any).expectedDeliveryDate || (po as any).expectedDelivery);
+      if (po && order.deliveryDate && poETA && order.deliveryDate < poETA) {
+        deliveryWarnings.push({ idx, lineProduct: it.product, poRef: it.sourceRef, poETA });
       }
     }
   });
@@ -1562,8 +1608,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               </div>
               <div>
                 <Lbl>Actual delivery {order.actualDeliveryDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" title="When the goods actually reached the client. Leave blank until it happens." />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once delivered</div>
+                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" disabled={order.status !== "Delivered"} title={order.status !== "Delivered" ? "Available once the status is set to Delivered." : "When the goods actually reached the client."} />
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
               <div><Lbl>Status</Lbl>
                 <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
@@ -1614,6 +1660,26 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   <Inp value={order.paymentTermsOther} onChange={e => sf("paymentTermsOther", e.target.value)} placeholder="Specify terms…" style={{ marginTop: 6 }} />
                 )}
               </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <Lbl>Import permit no. <span style={{ color: "#AAA", fontWeight: 400 }}>· client-country import licence</span></Lbl>
+                <Inp value={order.importPermitNo === "N/A" ? "" : (order.importPermitNo || "")} onChange={e => sf("importPermitNo", e.target.value)} placeholder={order.importPermitNo === "N/A" ? "Not applicable" : "e.g. IP-2026-00871"} disabled={order.importPermitNo === "N/A"} />
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#666", marginTop: 4, cursor: "pointer" }}>
+                  <input type="checkbox" checked={order.importPermitNo === "N/A"} onChange={e => sf("importPermitNo", e.target.checked ? "N/A" : "")} /> Not applicable
+                </label>
+                {permitDupes.importPermitNo && (
+                  <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.importPermitNo}</div>
+                )}
+              </div>
+              <div style={{ gridColumn: "span 2" }}>
+                <Lbl>ACID no. <span style={{ color: "#AAA", fontWeight: 400 }}>· Egypt Advance Cargo Information Declaration</span></Lbl>
+                <Inp value={order.acidNo === "N/A" ? "" : (order.acidNo || "")} onChange={e => sf("acidNo", e.target.value)} placeholder={order.acidNo === "N/A" ? "Not applicable" : "19-digit ACID"} disabled={order.acidNo === "N/A"} />
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#666", marginTop: 4, cursor: "pointer" }}>
+                  <input type="checkbox" checked={order.acidNo === "N/A"} onChange={e => sf("acidNo", e.target.checked ? "N/A" : "")} /> Not applicable
+                </label>
+                {permitDupes.acidNo && (
+                  <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.acidNo}</div>
+                )}
+              </div>
             </div>
           </Card>
 
@@ -1635,27 +1701,46 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               </div>
               <div>
                 <Lbl>Destination</Lbl>
-                <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
-                  <option value="">— select —</option>
-                  <optgroup label="🎯 Client Site / DC">
-                    {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </optgroup>
-                  <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
-                    {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </optgroup>
-                  <optgroup label="🏢 Our Warehouse (EXW pickup)">
-                    {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                  </optgroup>
+                <div style={{ fontSize: 10.5, color: order.sellIncoterm ? "#2563EB" : "#888", margin: "2px 0 6px", lineHeight: 1.4 }}>{incotermDestinationHint}</div>
+                <Sel value={destMode} onChange={e => setDestMode(e.target.value)}>
+                  <option value="client">Client's registered address</option>
+                  <option value="other">Other address (specify below)</option>
                 </Sel>
-                <Inp
-                  value={order.destinationText || ""}
-                  onChange={e => sf("destinationText", e.target.value)}
-                  placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
-                  style={{ marginTop: 6 }}
-                />
-                <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                  For CIF/CFR sales, destination is normally the destination port. For DAP/DDP sales, use the client site. Use free text when the exact port is missing.
-                </div>
+                {destMode === "client" ? (
+                  <div style={{ marginTop: 8, padding: "9px 11px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#FAFAFA", fontSize: 12, color: "#444", lineHeight: 1.45 }}>
+                    {order.client ? (
+                      order.client.address
+                        ? <><strong>{order.client.name}</strong><div style={{ color: "#666", marginTop: 2 }}>{order.client.address}{order.client.country ? `, ${order.client.country}` : ""}</div></>
+                        : <span style={{ color: "#B45309" }}>This client has no address on file — add one in Counterparties, or choose “Other address”.</span>
+                    ) : (
+                      <span style={{ color: "#888" }}>Select the client above — the delivery destination defaults to their registered address.</span>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
+                      <option value="">— select a known place —</option>
+                      <optgroup label="🎯 Client Site / DC">
+                        {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      </optgroup>
+                      <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
+                        {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      </optgroup>
+                      <optgroup label="🏢 Our Warehouse (EXW pickup)">
+                        {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      </optgroup>
+                    </Sel>
+                    <Inp
+                      value={order.destinationText || ""}
+                      onChange={e => sf("destinationText", e.target.value)}
+                      placeholder="…or type the exact delivery address (free text)"
+                      style={{ marginTop: 6 }}
+                    />
+                    <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                      Pick a known place, or type the exact address (relay, port, or client site as the Incoterm requires). Free text takes precedence on the printed SO.
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </Card>
@@ -1744,7 +1829,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       {it.sourceType ? "Change source" : "Pick source →"}
                     </button>
                     {it.sourceType && (
-                      <button onClick={() => clearSource(i)} style={{ padding: "3px 8px", borderRadius: 5, border: "1px solid transparent", background: "transparent", color: "#9CA3AF", fontSize: 11, cursor: "pointer" }}>Clear</button>
+                      <button onClick={() => clearSource(i)} title="Remove the source link from this line" style={{ padding: "3px 10px", borderRadius: 5, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✕ Clear source</button>
                     )}
                     <div style={{ marginLeft: "auto", fontSize: 10.5, color: lineIsBlocking ? "#991B1B" : "#777" }}>
                       {lineIsBlocking
@@ -1824,7 +1909,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       )}
                     </div>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.9fr 1fr 1.3fr 1.2fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.9fr 0.8fr 0.9fr 1.1fr 1fr 1fr 1.3fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
                       <Lbl>Product <span style={{ color: "#BBB", fontWeight: 400 }}>· autocomplete</span></Lbl>
                       <input
@@ -1839,9 +1924,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
+                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice" /></div>
                     <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" /></div>
                     <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
-                    <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
+                    <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
                   <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
@@ -1878,7 +1964,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // P/L visibility rule:
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
@@ -2075,6 +2161,8 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                   <div><div style={{ fontSize: 10, color: "#888" }}>CURRENCY</div><div style={{ fontWeight: 600 }}>{order.currency} {order.fxLockedAt ? "🔒" : ""}</div></div>
                   <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>PAYMENT TERMS</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}</div></div>
                   <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${destination ? LOCATION_TYPES[destination.type]?.icon : "📍"} ${destinationLabel}` : "—"}</div></div>
+                  {order.importPermitNo && <div><div style={{ fontSize: 10, color: "#888" }}>IMPORT PERMIT NO.</div><div style={{ fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{order.importPermitNo}</div></div>}
+                  {order.acidNo && <div><div style={{ fontSize: 10, color: "#888" }}>ACID NO.</div><div style={{ fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{order.acidNo}</div></div>}
                 </div>
               </Card>
 
@@ -2097,9 +2185,21 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                       </div>
                     </div>
                   ))}
-                  <div style={{ fontSize: 10, color: "#16A34A", marginTop: 8, lineHeight: 1.4, fontStyle: "italic" }}>
-                    Enter this invoice in Fakturownia and link the PDF. Once the Invoices module is integrated, the SINV will appear there directly.
-                  </div>
+                  {order.pendingInvoices.some(inv => inv.fktMatched) ? (
+                    <div style={{ fontSize: 10.5, color: "#0C4A6E", marginTop: 8, lineHeight: 1.5, padding: "7px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6 }}>
+                      {order.pendingInvoices.filter(inv => inv.fktMatched).map((inv, i) => (
+                        <div key={i}>✓ Matched in Fakturownia{inv.ksef ? <> · KSeF <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.ksef}</span></> : null} · <strong>{inv.fktPaid ? "PAID" : "unpaid"}</strong></div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 10, color: "#16A34A", marginTop: 8, lineHeight: 1.4, fontStyle: "italic" }}>
+                      Enter this invoice in Fakturownia, then use "Match from Fakturownia" to pull its KSeF number and paid status.
+                    </div>
+                  )}
+                  {fktConfigured && (
+                    <button onClick={() => onMatchInvoices(order)} disabled={fktMatching} style={{ marginTop: 8, padding: "6px 12px", borderRadius: 7, border: "none", background: fktMatching ? "#A7F3D0" : "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: fktMatching ? "wait" : "pointer", fontFamily: "inherit" }}>{fktMatching ? "Matching…" : "↻ Match from Fakturownia (read-only)"}</button>
+                  )}
+                  {fktMatchMsg && <div style={{ fontSize: 10.5, color: fktMatchMsg.kind === "error" ? "#DC2626" : "#15803D", marginTop: 6 }}>{fktMatchMsg.text}</div>}
                 </Card>
               )}
 
@@ -2146,6 +2246,40 @@ export default function SalesOrders({
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
   const orders = extOrders ?? localOrders;
   const setOrders = extSetOrders ?? setLocalOrders;
+
+  // v6.9: read-only Fakturownia sales-invoice matching
+  const fktCfg = readFakturowniaConfig();
+  const fktConfigured = !!fktCfg;
+  const [fktMatching, setFktMatching] = useState(false);
+  const [fktMatchMsg, setFktMatchMsg] = useState(null);
+  async function matchInvoicesFromFakturownia(order) {
+    if (!fktCfg) return;
+    setFktMatching(true); setFktMatchMsg(null);
+    const r = await fetchInvoices(fktCfg, { income: 1, period: "this_year" });
+    setFktMatching(false);
+    if (!r.ok) { setFktMatchMsg({ kind: "error", text: r.corsLikely ? "Browser can't reach Fakturownia (CORS) — matching will run from the Phase-2 backend." : (r.error || "Fetch failed.") }); return; }
+    const invoices = (r.data || []).map(mapInvoice);
+    let matched = 0;
+    setOrders(prev => prev.map(o => {
+      if (o.id !== order.id) return o;
+      const next = { ...o, pendingInvoices: (o.pendingInvoices || []).map(pi => {
+        // match by exact invoice number, else by client tax id + gross amount + close date
+        let hit = invoices.find(iv => String(iv.number).trim() === String(pi.number).trim());
+        if (!hit) {
+          hit = invoices.find(iv => {
+            const amtClose = Math.abs((iv.grossTotal || 0) - (pi.grossAmount || 0)) < 1;
+            const taxMatch = o.client?.nip && iv.buyerTaxNo && String(iv.buyerTaxNo).replace(/\D/g, "").includes(String(o.client.nip).replace(/\D/g, ""));
+            return amtClose && taxMatch;
+          });
+        }
+        if (!hit) return pi;
+        matched++;
+        return { ...pi, fktMatched: true, fktNumber: hit.number, ksef: hit.ksefNo || "", fktPaid: !!hit.paid, fktStatus: hit.status };
+      }) };
+      return next;
+    }));
+    setFktMatchMsg({ kind: matched ? "success" : "error", text: matched ? `Matched ${matched} invoice(s) from Fakturownia.` : "No matching invoice found in Fakturownia for this SO yet." });
+  }
 
   // Sync the module-scope LOTS and PO_REFS with shell-provided live data BEFORE any helpers run.
   // This works because (a) React renders synchronously, (b) every reader of LOTS/PO_REFS is invoked
@@ -2214,10 +2348,12 @@ export default function SalesOrders({
       number: nextSONumber(orders),
       status: "Draft",
       createdBy: userName || userRole || "",
-      orderDate: new Date().toISOString().split("T")[0],
+      orderDate: localTodayISO(),
       deliveryDate: "",
       promisedDateMeans: "Delivery to client",
       actualDeliveryDate: null,
+      importPermitNo: "",
+      acidNo: "",
       paymentTerms: "30 days from invoice date",
       paymentTermsOther: "",
       sellIncoterm: "DAP",
@@ -2236,7 +2372,7 @@ export default function SalesOrders({
     // Cancelling an SO already releases reservations automatically because Cancelled is not a reserving status.
     // This function additionally reverses any physical SHIP_OUT movement that was already posted for this SO.
     if (!extSetLots || !order) return;
-    const today = new Date().toISOString().split("T")[0];
+    const today = localTodayISO();
     extSetLots(prevLots => prevLots.map(lot => {
       const alreadyReversed = (lot.movements || []).some(m => m.type === "REVERSAL" && String(m.note || "").includes(order.number));
       if (alreadyReversed) return lot;
@@ -2279,6 +2415,39 @@ export default function SalesOrders({
     // Duplicate number guard
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
     if (dup) { alert(`SO number ${o.number} already exists.`); return; }
+    // v6.3.0: import-document duplicate guard. Import permits and ACID numbers are
+    // single-use — re-using one across orders/shipments risks customs rejection.
+    // Block by default; allow an explicit, recorded override.
+    {
+      const conflicts: any[] = [];
+      (["importPermitNo", "acidNo"] as const).forEach(field => {
+        const v = String(o[field] || "").trim();
+        if (!v || v.toLowerCase() === "n/a") return;
+        orders.forEach(p => {
+          if (p.id === o.id) return;
+          if (String(p[field] || "").trim().toLowerCase() !== v.toLowerCase()) return;
+          const linkedShipments = (extShipments || [])
+            .filter((sh: any) => (sh.soRefs || []).includes(p.number))
+            .map((sh: any) => sh.number);
+          conflicts.push({ field, value: v, soNumber: p.number, shipments: linkedShipments });
+        });
+      });
+      if (conflicts.length) {
+        const label = (f: string) => f === "importPermitNo" ? "Import permit" : "ACID number";
+        const lines = conflicts.map(c =>
+          `• ${label(c.field)} "${c.value}" already used on ${c.soNumber}${c.shipments.length ? ` (shipment${c.shipments.length > 1 ? "s" : ""} ${c.shipments.join(", ")})` : ""}`
+        ).join("\n");
+        const ok = window.confirm(
+          `⚠ DUPLICATE IMPORT DOCUMENT NUMBER\n\n${lines}\n\n` +
+          `Import permits and ACID numbers are normally single-use. Saving this SO with a number that was already used may cause customs rejection at destination.\n\n` +
+          `Press OK to OVERRIDE and save anyway (the override is recorded in the SO notes), or Cancel to go back and change the number.`
+        );
+        if (!ok) return;
+        const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+        const overrideNote = `[${stamp}] OVERRIDE: saved despite duplicate ${conflicts.map(c => `${label(c.field)} "${c.value}" (also on ${c.soNumber})`).join("; ")}.`;
+        o = { ...o, notes: o.notes ? `${o.notes}\n${overrideNote}` : overrideNote };
+      }
+    }
     // Sourcing rule guard — defensive, even though the UI already blocks this
     const src = validateSourcing(o.items);
     const needsSource = !src.allSourced && o.status !== "Draft" && o.status !== "Cancelled";
@@ -2343,7 +2512,7 @@ export default function SalesOrders({
   }
   function deleteOrder() {
     if (!window.confirm(`Cancel SO ${selected.number}? Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.`)) return;
-    const cancelled = { ...selected, status: "Cancelled", cancelledAt: new Date().toISOString().split("T")[0] };
+    const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     reverseCancelledSOInInventory(cancelled);
     setOrders(prev => prev.map(p => p.id === selected.id ? cancelled : p));
     setSelected(null);
@@ -2413,6 +2582,10 @@ export default function SalesOrders({
         <OrderDetail
           order={selected}
           allOrders={orders}
+          fktConfigured={fktConfigured}
+          fktMatching={fktMatching}
+          fktMatchMsg={fktMatchMsg}
+          onMatchInvoices={matchInvoicesFromFakturownia}
           lots={extInvLots || []}
           pos={extPOs || []}
           shipments={extShipments || []}
@@ -2453,44 +2626,36 @@ export default function SalesOrders({
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
-        {/* KPI strip */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginTop: 6 }}>{activeCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>orders in progress</div>
+        {/* KPI strip — compact */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· in progress</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE VALUE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#16A34A", marginTop: 6 }}>{fmtMoney(activeValuePLN, "PLN")}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>net total</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE VALUE</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#16A34A", marginTop: 2 }}>{fmtMoney(activeValuePLN, "PLN")}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERED · TO INVOICE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 6 }}>{deliveredNotInvoicedCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>awaiting SINV</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERED <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· to invoice</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 2 }}>{deliveredNotInvoicedCount}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERIES WITHIN 7 DAYS</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 6 }}>{upcomingDeliveryCount}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>upcoming dispatches</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERIES <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· ≤7 days</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 2 }}>{upcomingDeliveryCount}</div>
           </Card>
         </div>
 
-        {/* Filters */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SO, client, product, LOT or PO ref…" style={{ flex: "1 1 280px", minWidth: 260, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
-          <Sel value={filterClient} onChange={e => setFilterClient(e.target.value)} style={{ width: 220 }}>
+        {/* Filters — compact single row */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SO, client, product, LOT/PO…" style={{ flex: "1 1 240px", minWidth: 200, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+            {["All", ...Object.keys(SO_STATUSES)].map(s => <option key={s} value={s}>{s === "All" ? "All statuses" : s}</option>)}
+          </select>
+          <Sel value={filterClient} onChange={e => setFilterClient(e.target.value)} style={{ maxWidth: 220 }}>
             <option value="All">All clients</option>
             {clients.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
           </Sel>
-        </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>STATUS</span>
-          {["All", ...Object.keys(SO_STATUSES)].map(s => (
-            <button key={s} onClick={() => setFilterStatus(s)}
-              style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: filterStatus === s ? "#111" : "#E5E7EB", background: filterStatus === s ? "#111" : "#fff", color: filterStatus === s ? "#fff" : "#555", fontSize: 11, cursor: "pointer", fontWeight: 500 }}>{s}</button>
-          ))}
         </div>
 
         {/* Table */}

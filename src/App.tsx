@@ -9,6 +9,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState } from "./useLocalStoredState";
+import { APP_VERSION } from "./version";
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
@@ -48,8 +49,11 @@ function counterpartySnapshot(c: any) {
 function resolveCounterpartySnapshot(saved: any, contacts: any[]) {
   if (!saved) return saved;
   const byId = contacts.find((c: any) => String(c.id) === String(saved.id));
+  // Merged duplicates: the surviving record keeps the absorbed record's id in
+  // mergedFromIds, so documents that referenced the removed duplicate re-point here.
+  const byMergedId = contacts.find((c: any) => (c.mergedFromIds || []).map(String).includes(String(saved.id)));
   const byName = contacts.find((c: any) => normalizeName(c.name) === normalizeName(saved.name));
-  const c = byId || byName;
+  const c = byId || byMergedId || byName;
   return c ? counterpartySnapshot(c) : saved;
 }
 
@@ -121,6 +125,7 @@ function TopNav({ active, onNav = () => {} }: any) {
         })}
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "#AAA", paddingLeft: 16, whiteSpace: "nowrap" }}>
+        <span title="App build version. Everyone sharing a JSON file must be on the same version." style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
         <span>Hazem Osman</span>
         <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>HO</div>
       </div>
@@ -135,6 +140,10 @@ export default function App() {
   const [orders, setOrders] = useLocalStoredState("orders", SHELL_SEED.orders);
   const [shipments, setShipments] = useLocalStoredState("shipments", SHELL_SEED.shipments);
   const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
+  const [warehouseInvoices, setWarehouseInvoices] = useLocalStoredState("warehouseInvoices", SHELL_SEED.warehouseInvoices || []);
+  const [settledRefs, setSettledRefs] = useLocalStoredState("settledRefs", []);
+  const [creditNotes, setCreditNotes] = useLocalStoredState("creditNotes", []);
+  const [logisticsPoints, setLogisticsPoints] = useLocalStoredState("logisticsPoints", []);
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
   const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
   const [userName, setUserName] = useLocalStoredState("userName", "");
@@ -163,13 +172,13 @@ export default function App() {
       case "dashboard":
         return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} creditNotes={creditNotes} setCreditNotes={setCreditNotes} />;
       case "contacts":
-        return <Contacts contacts={contacts} setContacts={setContactsCascade} />;
+        return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} />;
       case "pos":
         return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} />;
       case "lots":
-        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} />;
+        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} pos={pos} />;
       case "orders":
         return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} />;
       case "shipments":

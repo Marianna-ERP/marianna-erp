@@ -100,3 +100,51 @@ This version adds integrity rules requested during testing:
 - Cancelled POs block related expected lots and return non-terminal related SOs to Draft for sourcing review.
 
 See `V5_8_INTEGRITY_WORKFLOWS.md` for details.
+
+## Update V6.3.0 - Feedback batch
+
+- Contacts: duplicate detection on save (tax-ID strict + fuzzy name), a field-by-field merge dialog that combines people/linked docs and re-points existing documents, and a "Find duplicates" scan.
+- Inventory: fixed Record movement / Record inspection erroring on any quantity for direct-flow lots; fixed lot status derivation after the v5.8 location consolidation; Linked now also shows SOs connected via shipments; compact quantity breakdown.
+- Shipments: loading/expected-delivery date semantics clarified; Vehicles field removed (derived unit count); customs/broker dropdown from Contacts; billing status moved to Costs and billing; standard conditional document checklist + DHL courier tracking for documents sent to client; numbered legs; grouped From/To selectors with auto-chaining; mode-driven leg/unit fields; Multimodal defaults to 2 legs, other modes to 1.
+- Sales Orders: Import permit no. and ACID no. fields (printed and emailed), with a single-use duplicate alarm and recorded override.
+- Settings: user-managed custom locations/ports available across all modules and included in JSON export/import.
+
+See `CHANGELOG_v6.3.0.md` for details.
+
+## Update V6.4.0 - Shipment & transport order rework
+
+- PO supplier filter shows only suppliers with POs (with counts; dropdown when many).
+- Shipments list rows are one compact line (number · mode · status + missing-docs dot); detail header trimmed to number/mode/status/billing + PO/SO/LOT pills, with SO links derived from all sources.
+- Temp recorder no. field (checklist + printed order); per-currency cost subtotals with PLN total and EUR equivalent; per-leg pickup/delivery time fields.
+- Transport order is now strictly leg-scoped: places and date+time from the selected legs only (no shipment-level fallback — fixes the supplier-privacy leak and the CIF date logic); mode-driven unit table without From→To/Kg; SO backfilled in cargo; road orders keep standard CMR terms, sea/air/rail orders use manually entered terms saved per shipment; goods line covers trailer/container.
+- "Port warehouse" custom location type.
+
+See `CHANGELOG_v6.4.0.md` for details.
+
+## Update V6.4.1 - System test & date-integrity hotfix
+
+40 engine scenario tests added and passing (margins, overhead, duplicates, checklists, inventory recompute). Fixes: dead delivery-vs-PO-arrival warning; PO overdue off-by-one; pre-carriage delivery date default; local-time "today" everywhere; Dashboard upcoming-deliveries includes today; header-vs-leg date drift warning; legacy datetime display; Settings reset copy; Goods table SO backfill. See CHANGELOG_v6.4.1.md.
+
+## Update V6.5.0 - Warehouse charges
+
+Warehouse tariffs on Contacts (kg/day + pallet/day, handling, sorting, free days, operated locations); per-lot expected charges card with sorting log and per-lot expected invoice in Inventory; Finance → Warehouse charges tab with monthly expected-vs-invoice reconciliation, variance, and Approve & allocate into lot landed costs (flows into SO P/L). New pure engine warehouseCharges.ts; test suite now 48 scenarios. See CHANGELOG_v6.5.0.md.
+
+## Update V6.6.0 - Consignment & settlement
+
+Consignment pricing mode on POs (no purchase price — settled on sales); seasonal commission rates on producers; per-lot/truck settlement in Inventory with auto gross sales, full expense deduction, bilingual printable statement, producer-invoice variance, and closing that writes producer invoice + commission credit into lot costs so SO P/L equals the commission; CN/HS codes on SO lines and the printed SO. New engine consignment.ts; suite now 56 scenarios. See CHANGELOG_v6.6.0.md.
+
+## Update V6.7.0 - Fakturownia cost bridge
+
+Invoice-number field on operational costs; Copy last month button; Import from Fakturownia (cost register XLS/CSV) with lenient PL/EN column detection, duplicate protection, category guessing, per-row allocation method, and automatic routing of warehouse suppliers into the Warehouse charges reconciliation. Fixed a Finance prop-annotation issue that would have broken the production build. Suite now 64 scenarios. See CHANGELOG_v6.7.0.md.
+
+## Update V6.7.1 - Build hotfix
+
+Fixed the TS2551 build failure in SalesOrders (expectedDeliveryDate vs the standalone stub's expectedDelivery). Releases are now verified with a full TypeScript type-check replicating the production build. Cumulative zip — supersedes v6.4.1 through v6.7.0.
+
+## Update V6.8.0 - Fakturownia live bridge (read-only)
+
+Settings → Fakturownia connection (account + API token, kept browser-local and excluded from exports, with Test connection). Finance → Operational Costs gains live "Fetch cost invoices from Fakturownia" (read-only) feeding the same review screen as the file import, with duplicate protection, category guessing and warehouse routing. Graceful CORS fallback to file import. See CHANGELOG_v6.8.0.md.
+
+## Update V6.9.0 - Financial loop closed
+
+Finance gains a Receivables & Payables ledger (sales invoices in; producer payouts, warehouse/cost invoices and firm POs out; overdue flagged; mark-paid; net position). SO detail gains read-only Fakturownia sales-invoice matching (KSeF number + paid status, flowing into Receivables). TEST_SCENARIOS.md rewritten for v6.9. New engine ledger.ts; suite now 72 scenarios. See CHANGELOG_v6.9.0.md.

@@ -1,5 +1,7 @@
 import React, { useRef, useState } from "react";
-import { exportAllData, importAllData, clearAllData, STORAGE_VERSION } from "./useLocalStoredState";
+import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta } from "./useLocalStoredState";
+import { APP_VERSION } from "./version";
+import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -54,6 +56,43 @@ export default function Settings({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
 
+  // v6.15: the "Locations & ports" panel was removed — ports / relay points / cross-dock
+  // warehouses are managed in Counterparties → Logistics points, and supplier/client/
+  // warehouse addresses come from the counterparty record. Any locations added here in
+  // older versions still resolve on existing documents (readCustomLocations in locations.ts).
+
+  // v6.8: Fakturownia read-only connection (token kept browser-local, never exported)
+  const existingFkt = readFakturowniaConfig();
+  const [fktSub, setFktSub] = useState(existingFkt?.subdomain || "");
+  const [fktToken, setFktToken] = useState(existingFkt?.apiToken || "");
+  const [fktBusy, setFktBusy] = useState(false);
+  const [fktMsg, setFktMsg] = useState<{ kind: "success" | "error" | "info"; text: string } | null>(null);
+
+  async function handleFktTest() {
+    setFktBusy(true); setFktMsg(null);
+    const cfg: FakturowniaConfig = { subdomain: fktSub.trim(), apiToken: fktToken.trim() };
+    const r = await testConnection(cfg);
+    setFktBusy(false);
+    if (r.ok) setFktMsg({ kind: "success", text: "Connection works — Fakturownia responded. You can now sync cost invoices from Finance → Operational Costs." });
+    else if (r.corsLikely) setFktMsg({ kind: "error", text: "The browser couldn't reach Fakturownia (likely a CORS restriction on direct browser access). The file import still works; live sync will run from the Phase-2 backend." });
+    else setFktMsg({ kind: "error", text: r.error || "Connection failed." });
+  }
+
+  function handleFktSave() {
+    if (!fktSub.trim() || !fktToken.trim()) { setFktMsg({ kind: "error", text: "Enter both the account name and the API token." }); return; }
+    writeFakturowniaConfig({ subdomain: fktSub.trim(), apiToken: fktToken.trim() });
+    setFktMsg({ kind: "success", text: "Saved in this browser only. The token is never included in the data export." });
+  }
+
+  function handleFktDisconnect() {
+    writeFakturowniaConfig(null);
+    setFktSub(""); setFktToken("");
+    setFktMsg({ kind: "info", text: "Disconnected — the token has been removed from this browser." });
+  }
+
+  const [backups, setBackups] = useState<BackupMeta[]>(() => listBackups());
+  const refreshBackups = () => setBackups(listBackups());
+
   function handleExport() {
     try {
       const json = exportAllData();
@@ -62,12 +101,14 @@ export default function Settings({
       const a = document.createElement("a");
       a.href = url;
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      a.download = `marianna-erp-export-${stamp}.json`;
+      // v6.17: stamp the build + schema version so testers can see at a glance
+      // whether a shared file matches their app build before importing.
+      a.download = `marianna-erp_v${APP_VERSION}_schema-v${STORAGE_VERSION}_${stamp}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      setMessage({ kind: "success", text: "Export downloaded. Send this file to a colleague to share your test data." });
+      setMessage({ kind: "success", text: `Export downloaded (build v${APP_VERSION}). Whoever imports it must be on the same app version (v${APP_VERSION}).` });
     } catch (err) {
       setMessage({ kind: "error", text: "Export failed: " + (err instanceof Error ? err.message : String(err)) });
     }
@@ -80,6 +121,15 @@ export default function Settings({
   function handleFileSelected(e: any) {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = ""; // reset early so the same file can be re-picked later
+    // v6.17: loud confirmation — import REPLACES everything. A backup is taken first.
+    const proceed = window.confirm(
+      "Import will REPLACE all data currently in this browser with the contents of this file.\n\n" +
+      "There is no merge — anything here that isn't in the file will be gone.\n\n" +
+      "A backup of your current data will be saved automatically first, so you can undo it from Settings → Local backups.\n\n" +
+      "Continue?"
+    );
+    if (!proceed) { setMessage({ kind: "info", text: "Import cancelled — nothing was changed." }); return; }
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result;
@@ -92,31 +142,48 @@ export default function Settings({
         setMessage({ kind: "error", text: outcome.error || "Import failed." });
         return;
       }
+      refreshBackups();
       const loadedDesc = (outcome.loaded || []).join(", ") || "no recognized data";
-      setMessage({ kind: "success", text: `Imported: ${loadedDesc}. Reloading page to refresh state...` });
-      // Reload after a short delay so the user sees the message
-      setTimeout(() => {
-        // Force a page reload so all modules pick up the new localStorage values
-        window.location.reload();
-      }, 1200);
+      const backupNote = outcome.backup ? " A backup of your previous data was saved (Settings → Local backups)." : "";
+      setMessage({ kind: "success", text: `Imported: ${loadedDesc}.${backupNote} Reloading…` });
+      setTimeout(() => { window.location.reload(); }, 1400);
     };
     reader.onerror = () => setMessage({ kind: "error", text: "Could not read the file." });
     reader.readAsText(file);
-    // Reset the input so selecting the same file twice still fires onChange
-    e.target.value = "";
+  }
+
+  function handleBackupNow() {
+    const meta = createBackup("Manual backup");
+    refreshBackups();
+    setMessage(meta ? { kind: "success", text: "Backup saved locally." } : { kind: "error", text: "Could not save a backup (storage may be full)." });
+  }
+
+  function handleRestore(b: BackupMeta) {
+    if (!window.confirm(`Restore the backup from ${new Date(b.createdAt).toLocaleString()}?\n\nThis REPLACES current data. Your current data will itself be backed up first, so this is reversible.`)) return;
+    const outcome = restoreBackup(b.id);
+    if (!outcome.ok) { setMessage({ kind: "error", text: outcome.error || "Restore failed." }); return; }
+    setMessage({ kind: "success", text: "Backup restored. Reloading…" });
+    setTimeout(() => window.location.reload(), 1200);
+  }
+
+  function handleDeleteBackup(b: BackupMeta) {
+    if (!window.confirm("Delete this backup permanently?")) return;
+    deleteBackup(b.id);
+    refreshBackups();
   }
 
   function handleReset() {
     const confirmed = window.confirm(
       "Start fresh — clear ALL your data?\n\n" +
-      "This wipes contacts, POs, lots, sales orders, shipments, and operational costs, " +
-      "returning the system to a completely empty state. Anything you've entered will be lost. " +
-      "This cannot be undone — export a backup first if you want to keep it."
+      "This wipes contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points, " +
+      "returning the system to a completely empty state.\n\n" +
+      "A backup will be saved automatically first, so you can undo this from Settings → Local backups."
     );
     if (!confirmed) return;
-    clearAllData();
-    setMessage({ kind: "info", text: "All data cleared. Reloading to an empty system..." });
-    setTimeout(() => window.location.reload(), 800);
+    const backup = clearAllData();
+    refreshBackups();
+    setMessage({ kind: "info", text: `All data cleared${backup ? " (a backup was saved first)" : ""}. Reloading to an empty system…` });
+    setTimeout(() => window.location.reload(), 1000);
   }
 
   return (
@@ -170,9 +237,45 @@ export default function Settings({
         </Card>
 
         <Card style={{ marginBottom: 16 }}>
+          <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· read-only invoice sync</span></SectionTitle>
+          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+            Connect your Fakturownia account to pull cost invoices (issued to you via KSeF) straight into Operational Costs — no file export needed.
+            This is <strong>read-only</strong>: the ERP only reads invoices, never creates or changes them. Your API token is stored
+            <strong> only in this browser</strong> and is deliberately <strong>excluded from the data export</strong>, so it never travels in a shared file.
+          </div>
+          <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400E", marginBottom: 14 }}>
+            Get the token in Fakturownia → Settings → API. Treat it like a password — if it has ever been shared, rotate it there first.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Account name</label>
+              <input value={fktSub} onChange={e => setFktSub(e.target.value)} placeholder="e.g. marianna2" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+              <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 3 }}>the part before .fakturownia.pl</div>
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>API token</label>
+              <input type="password" value={fktToken} onChange={e => setFktToken(e.target.value)} placeholder="paste API token" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "ui-monospace, Menlo, monospace" }} />
+            </div>
+          </div>
+          {fktMsg && (
+            <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 7, fontSize: 12.5,
+              background: fktMsg.kind === "success" ? "#ECFDF5" : fktMsg.kind === "error" ? "#FEE2E2" : "#EFF6FF",
+              border: `1px solid ${fktMsg.kind === "success" ? "#A7F3D0" : fktMsg.kind === "error" ? "#FCA5A5" : "#BFDBFE"}`,
+              color: fktMsg.kind === "success" ? "#065F46" : fktMsg.kind === "error" ? "#991B1B" : "#1E40AF" }}>
+              {fktMsg.text}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10 }}>
+            <Button onClick={handleFktSave} variant="primary">Save connection</Button>
+            <Button onClick={handleFktTest} disabled={fktBusy || !fktSub.trim() || !fktToken.trim()}>{fktBusy ? "Testing…" : "Test connection"}</Button>
+            {existingFkt && <Button onClick={handleFktDisconnect} variant="danger">Disconnect</Button>}
+          </div>
+        </Card>
+
+        <Card style={{ marginBottom: 16 }}>
           <SectionTitle>EXPORT</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Download a JSON file containing all your contacts, POs, lots, sales orders, shipments, and operational costs. Share this with a colleague so they can see exactly what you see, or send it to Hazem as feedback.
+            Download a JSON file containing all your data (contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points). Share it with a colleague, or send it to Hazem as feedback. The filename includes the app version (<strong>v{APP_VERSION}</strong>) — whoever imports it must be on the same version.
           </div>
           <Button onClick={handleExport} variant="primary">📥 Export all data as JSON</Button>
         </Card>
@@ -180,18 +283,42 @@ export default function Settings({
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>IMPORT</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Load a colleague's exported JSON file. <strong>This replaces your current data</strong> — export first if you want to keep what you have.
+            Load a colleague's exported JSON file. <strong>This replaces all your current data — there is no merge.</strong> A backup of your current data is saved automatically first, so you can undo it from Local backups below. The file must come from the same app version (v{APP_VERSION}).
           </div>
           <input ref={fileInputRef} type="file" accept=".json,application/json" onChange={handleFileSelected} style={{ display: "none" }} />
           <Button onClick={handleImportClick}>📤 Choose JSON file to import...</Button>
         </Card>
 
+        <Card style={{ marginBottom: 16 }}>
+          <SectionTitle>LOCAL BACKUPS</SectionTitle>
+          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+            Automatic snapshots taken before each import or reset, kept in this browser (last {8}). Use one to undo an overwrite. These are a safety net, not a substitute for exporting a file you keep elsewhere.
+          </div>
+          <div style={{ marginBottom: 12 }}><Button onClick={handleBackupNow} variant="primary">＋ Create backup now</Button></div>
+          {backups.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: "#888" }}>No backups yet. One will be created automatically the next time you import or reset.</div>
+          ) : (
+            <div style={{ border: "1px solid #EDEDED", borderRadius: 8, overflow: "hidden" }}>
+              {backups.map((b: BackupMeta) => (
+                <div key={b.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 10, alignItems: "center", padding: "9px 12px", borderBottom: "1px solid #F5F5F5" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{b.label}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{new Date(b.createdAt).toLocaleString()} · {b.sizeKB} KB · schema v{b.version}</div>
+                  </div>
+                  <button onClick={() => handleRestore(b)} title="Replace current data with this backup" style={{ border: "1px solid #BFDBFE", background: "#fff", color: "#2563EB", borderRadius: 6, padding: "5px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Restore</button>
+                  <button onClick={() => handleDeleteBackup(b)} title="Delete this backup" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "5px 9px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>
           <SectionTitle>RESET</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Erase everything you've entered and reload the original demo data. Use this if you've made test data unusable and want to start fresh.
+            Erase everything you've entered and return the system to a completely empty state. Use this if you've made test data unusable and want to start fresh. A backup is saved automatically first (see Local backups).
           </div>
-          <Button onClick={handleReset} variant="danger">⚠ Reset to demo data</Button>
+          <Button onClick={handleReset} variant="danger">⚠ Start fresh — erase ALL data</Button>
         </Card>
 
         <div style={{ marginTop: 24, padding: "14px 16px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>

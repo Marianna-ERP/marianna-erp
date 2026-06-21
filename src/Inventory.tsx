@@ -1,5 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { localTodayISO, localMonthISO } from "./dates";
+import { computeLotWarehouseCharges } from "./warehouseCharges";
+import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
@@ -303,7 +306,7 @@ const MOVEMENT_TYPES: Record<string, any> = {
 };
 
 // ─── SEED DATA — lots covering all 7 flows ──────────────────────────────────
-const today = new Date().toISOString().split("T")[0];
+const today = localTodayISO();
 
 function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
 
@@ -392,7 +395,7 @@ function lotReservations(lot, sourceSOs) {
 
 // Returns array of SO references this lot has ever been linked to
 // (across all statuses including Shipped+ historical).
-function soRefsFor(lot, sourceSOs) {
+function soRefsFor(lot, sourceSOs, shipmentsList = []) {
   const list = sourceSOs ?? SOS;
   const refs = [];
   list.forEach(o => {
@@ -408,7 +411,37 @@ function soRefsFor(lot, sourceSOs) {
       }
     });
   });
+  // v6.3.0: also surface SOs linked to this lot THROUGH A SHIPMENT — the shipment
+  // knows the SO (header soRefs and per-goods soRef) even when the SO line itself
+  // isn't sourced from this lot/PO directly.
+  (shipmentsList || []).forEach(sh => {
+    if (!sh || sh.status === "Cancelled") return;
+    const carriesLot = (sh.lotRefs || []).includes(lot.number)
+      || (sh.goods || []).some(g => g.lotRef === lot.number);
+    if (!carriesLot) return;
+    const shipmentSONumbers = uniqStrings([
+      ...(sh.soRefs || []),
+      ...((sh.goods || []).filter(g => g.lotRef === lot.number).map(g => g.soRef)),
+    ]);
+    shipmentSONumbers.forEach(soNumber => {
+      if (!soNumber) return;
+      if (refs.find(r => r.number === soNumber)) return;
+      const so = list.find(o => o.number === soNumber);
+      if (so && so.status === "Cancelled") return;
+      refs.push({
+        number: soNumber,
+        status: so ? so.status : "—",
+        clientName: so ? _soClientName(so) : "",
+        sourceType: "SHIPMENT",
+        viaShipment: sh.number,
+      });
+    });
+  });
   return refs;
+}
+
+function uniqStrings(arr) {
+  return Array.from(new Set((arr || []).map(x => String(x || "")).filter(Boolean)));
 }
 
 export const INIT_LOTS = [
@@ -737,12 +770,15 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
     }
   });
   // Derive status from the final physical state + location.
+  // v6.3.0 fix: locById returns the shared (rich) taxonomy — the legacy OWN/PORT/CLIENT
+  // strings this logic was written against now live in legacyType.
   const loc = locById(locationId);
+  const legacyLocType = (loc as any)?.legacyType || loc?.type;
   if (sawShipOut && physicalKg === 0) status = "Shipped Out";
   else if (sawIn || physicalKg > 0) {
-    if (loc?.type === "OWN") status = "In Stock";
-    else if (loc?.type === "PORT") status = "Customs";
-    else if (loc?.type === "CLIENT") status = "Shipped Out";
+    if (legacyLocType === "OWN") status = "In Stock";
+    else if (legacyLocType === "PORT") status = "Customs";
+    else if (legacyLocType === "CLIENT") status = "Shipped Out";
     else status = "In Transit";
   } else if (movements.length === 0 && lot.expectedKg) {
     status = "Expected";
@@ -751,9 +787,22 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
 }
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
-function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm }: any) {
-  // Default to TRANSFER for in-stock lots; IN for Expected lots. In edit mode, prefill.
-  const [type, setType] = useState(editing?.type || (lot.status === "Expected" ? "IN" : "TRANSFER"));
+function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", onCancel, onConfirm }: any) {
+  // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
+  // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
+  // was 0 kg, making every quantity error out). In edit mode, prefill.
+  const isExpectedLike = lot.status === "Expected" || lot.status === "Direct Expected";
+  // v6.11 (#11) / v6.13 (#14): two modes — "movement" (IN / Transfer / Ship Out)
+  // and "quality" (Damage / Reclassify). The mode is fixed by which button opened
+  // the modal (Record movement vs the red Record quality issue), so there is no
+  // in-modal tab toggle anymore.
+  const QUALITY_TYPES = ["DAMAGE", "RECLASS"];
+  const MOVEMENT_MODE_TYPES = ["IN", "TRANSFER", "SHIP_OUT"];
+  const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
+  const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : (isExpectedLike ? "IN" : "TRANSFER")));
+  // v6.13 (#15): where the quality problem was detected along the journey.
+  const QUALITY_DETECTED_AT = ["At port of discharge", "At the client (export delivery)", "At our warehouse (on arrival)", "At the client's warehouse (direct delivery)", "At supplier / origin", "Other"];
+  const [detectedAt, setDetectedAt] = useState(editing?.detectedAt || QUALITY_DETECTED_AT[0]);
   const [qty, setQty] = useState(editing ? String(editing.qtyKg ?? "") : "");
   const [fromId, setFromId] = useState(editing?.fromId ?? lot.locationId);
   const [toId, setToId] = useState(editing?.toId ?? lot.locationId);
@@ -761,15 +810,25 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
   const [date, setDate] = useState(editing?.date || today);
   const reservationState = lotReservations(lot, liveSOs);
   const liveAvailableKg = reservationState.liveAvailable;
+  // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
+  // so quantity-reducing movements validate against the expected/direct quantity —
+  // consistent with how lotReservations computes availability for direct lots.
+  const isDirect = !!lot.directFlow || lot.status === "Direct Expected";
+  const physicalBasis = isDirect
+    ? Math.max(parseNum(lot.expectedKg), lot.physicalKg || 0)
+    : (lot.physicalKg || 0);
   // In edit mode the max should add back this movement's own effect so it isn't
   // double-counted against itself.
   const selfQty = editing && (editing.type === type) ? parseNum(editing.qtyKg) : 0;
   const maxByType = {
     IN:       Infinity,
-    TRANSFER: (lot.physicalKg || 0) + selfQty,
-    SHIP_OUT: (liveAvailableKg || 0) + selfQty,
-    DAMAGE:   (lot.physicalKg || 0) + selfQty,
-    RECLASS:  (lot.physicalKg || 0) + selfQty,
+    TRANSFER: physicalBasis + selfQty,
+    // v6.11 (#8): a Ship Out is the *physical* dispatch — for an EXW sale the lot is
+    // already reserved/sold (liveAvailable = 0), which used to block it. Cap by the
+    // physical (or expected, for direct flows) quantity instead of the reserved-net.
+    SHIP_OUT: physicalBasis + selfQty,
+    DAMAGE:   physicalBasis + selfQty,
+    RECLASS:  physicalBasis + selfQty,
   };
   const max = maxByType[type];
   const qtyNum = parseFloat(qty) || 0;
@@ -781,17 +840,23 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
       <div style={{ background: "#fff", borderRadius: 14, width: 540, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "20px 24px", borderBottom: "1px solid #EBEBEB" }}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? "Edit movement" : "Record movement"}</div>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? (mode === "quality" ? "Edit quality issue" : "Edit movement") : (mode === "quality" ? "Record quality issue" : "Record movement")}</div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
         </div>
         <div style={{ padding: 24 }}>
-          <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
-            <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
-          </div>
+          {mode === "movement" ? (
+            <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
+              <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
+            </div>
+          ) : (
+            <div style={{ padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11.5, color: "#991B1B", lineHeight: 1.5, marginBottom: 16 }}>
+              <strong>Quality issue.</strong> Record the result of inspecting / sorting this lot: <strong>Damage</strong> writes off rejected kg (reduces stock on hand), and <strong>Reclassify</strong> changes the quality grade (e.g. Kl. I → Kl. II) with no quantity change. Use this for post-sorting outcomes — not for normal receipts, transfers or dispatches.
+            </div>
+          )}
 
-          <div style={{ marginBottom: 4 }}><Lbl>Movement type</Lbl>
+          <div style={{ marginBottom: 4 }}><Lbl>{mode === "quality" ? "Quality issue type" : "Movement type"}</Lbl>
             <Sel value={type} onChange={e => setType(e.target.value)}>
-              {Object.entries(MOVEMENT_TYPES).filter(([k]) => k !== "REVERSAL" && k !== "DAMAGE" && k !== "RECLASS").map(([k, v]: any) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+              {Object.entries(MOVEMENT_TYPES).filter(([k]) => k !== "REVERSAL" && (mode === "quality" ? QUALITY_TYPES.includes(k) : MOVEMENT_MODE_TYPES.includes(k))).map(([k, v]: any) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
             </Sel>
           </div>
           {/* Live plain-language description of the selected type */}
@@ -829,20 +894,37 @@ function MovementModal({ lot, liveSOs = [], editing = null, onCancel, onConfirm 
             </div>
           )}
 
+          {mode === "quality" && (
+            <div style={{ marginBottom: 14 }}>
+              <Lbl>Where was it detected?</Lbl>
+              <Sel value={detectedAt} onChange={e => setDetectedAt(e.target.value)}>
+                {QUALITY_DETECTED_AT.map(d => <option key={d}>{d}</option>)}
+              </Sel>
+              <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 4, lineHeight: 1.4 }}>The problem is recorded against this lot, but it's usually found later in the journey — at the port of discharge, on arrival at our warehouse, or at the client.</div>
+            </div>
+          )}
+
           <div style={{ marginBottom: 18 }}>
             <Lbl>Note</Lbl>
-            <Inp value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Reserved for SO-2026-0094 (Biedronka)" />
+            <Inp value={note} onChange={e => setNote(e.target.value)} placeholder={mode === "quality" ? "e.g. 2 pallets soft/over-ripe found on arrival at Gdańsk" : "e.g. Reserved for SO-2026-0094 (Biedronka)"} />
           </div>
           {isInvalid && qty && (
             <div style={{ padding: "8px 12px", background: "#FEE2E2", color: "#9A1B1B", fontSize: 12, borderRadius: 6, marginBottom: 12 }}>
               {qtyNum > max ? `Quantity exceeds max (${max.toLocaleString()} kg)` : "Quantity must be greater than zero"}
             </div>
           )}
+          {max === 0 && type !== "IN" && (
+            <div style={{ padding: "8px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontSize: 12, borderRadius: 6, marginBottom: 12 }}>
+              This lot has <strong>no {type === "SHIP_OUT" ? "available" : "physical"} stock yet</strong>, so a {String(typeInfo.label || type).toLowerCase()} of any quantity is blocked.
+              {(lot.physicalKg || 0) === 0 && !isDirect && <> Record a <strong>⊕ Receipt (IN)</strong> first to bring goods into stock, then come back to this movement.</>}
+              {type === "SHIP_OUT" && (lot.physicalKg || 0) > 0 && <> All physical stock is currently reserved by confirmed SOs.</>}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date })} disabled={isInvalid}
+            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date, ...(mode === "quality" ? { detectedAt } : {}) })} disabled={isInvalid}
               style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: isInvalid ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: isInvalid ? "not-allowed" : "pointer" }}>
-              {editing ? "Save changes" : "Record movement"}
+              {editing ? "Save changes" : (mode === "quality" ? "Record quality issue" : "Record movement")}
             </button>
           </div>
         </div>
@@ -897,77 +979,63 @@ const INSPECTION_CONTEXTS = [
   { code: "customs", label: "Customs examination" },
 ];
 const INSPECTION_OUTCOMES = [
-  { code: "damage", label: "Damage / spoiled (write-off)" },
+  { code: "ok", label: "Passed — no issue" },
   { code: "weight_loss", label: "Weight loss / shrinkage" },
-  { code: "reclass", label: "Reclassify (quality downgrade)" },
+  { code: "damage", label: "Damaged / spoiled (write-off)" },
+  { code: "downgrade", label: "Quality downgrade" },
   { code: "rejection", label: "Client rejection" },
-  { code: "ok", label: "Checked — no action" },
-];
-// Where the problem occurred → which invoice a credit note would target.
-const CN_TARGETS = [
-  { code: "supplier", label: "Supplier invoice (goods fault at origin)" },
-  { code: "carrier", label: "Carrier invoice (1st leg — road damage/temperature)" },
-  { code: "forwarder", label: "Forwarder invoice (sea leg — reefer/temperature)" },
-  { code: "client", label: "Client sales invoice (we credit the client)" },
-  { code: "other", label: "Other / to be decided" },
 ];
 function InspectionModal({ lot, onCancel, onConfirm }: any) {
   const [context, setContext] = useState("arrival");
   const [date, setDate] = useState(today);
-  const [outcome, setOutcome] = useState("damage");
+  const [outcome, setOutcome] = useState("ok");
   const [lossKg, setLossKg] = useState("");
-  const [whereNote, setWhereNote] = useState("");
   const [findings, setFindings] = useState("");
-  const [proposeCN, setProposeCN] = useState(true);
-  const [cnTarget, setCnTarget] = useState("supplier");
+  const [proposeCN, setProposeCN] = useState(false);
   const [cnAmount, setCnAmount] = useState("");
   const [cnCurrency, setCnCurrency] = useState(lot.currency || "PLN");
   const affectsStock = outcome === "weight_loss" || outcome === "damage" || outcome === "rejection";
-  const maxLoss = lot.physicalKg || 0;
+  // v6.3.0: direct-flow lots never enter our warehouse (physicalKg 0), so quality
+  // write-offs validate against the expected/direct quantity instead.
+  const lotIsDirect = !!lot.directFlow || lot.status === "Direct Expected";
+  const maxLoss = lotIsDirect ? Math.max(parseFloat(lot.expectedKg) || 0, lot.physicalKg || 0) : (lot.physicalKg || 0);
   const lossNum = parseFloat(lossKg) || 0;
   const lossInvalid = affectsStock && (lossNum <= 0 || lossNum > maxLoss);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 95, padding: 20 }}>
-      <div style={{ width: 560, maxHeight: "90vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
+      <div style={{ width: 540, maxHeight: "88vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <strong>⚠ Record quality issue</strong>
+          <strong>🔍 Record inspection</strong>
           <span style={{ fontSize: 12, color: "#888" }}>{lot.number} · {lot.product}</span>
         </div>
         <div style={{ padding: 20, display: "grid", gap: 12 }}>
-          <div style={{ fontSize: 11.5, color: "#64748B", lineHeight: 1.5, background: "#F8FAFC", border: "1px solid #EEF2F7", borderRadius: 8, padding: "8px 10px" }}>
-            Record a damage, weight loss, downgrade or rejection found at any point — on arrival, in storage, at customs, or reported by the client after delivery. A quality issue can be the basis for a credit note against whichever invoice carries the fault.
-          </div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
             <div><Lbl>When / context</Lbl><Sel value={context} onChange={e => setContext(e.target.value)}>{INSPECTION_CONTEXTS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}</Sel></div>
             <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
           </div>
-          <div><Lbl>Issue type</Lbl><Sel value={outcome} onChange={e => setOutcome(e.target.value)}>{INSPECTION_OUTCOMES.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}</Sel></div>
-          <div><Lbl>Where it happened (free note)</Lbl>
-            <Inp value={whereNote} onChange={e => setWhereNote(e.target.value)} placeholder="e.g. collapsed on 1st leg (bad driving); reefer too warm on sea leg; mould reported by client" />
-          </div>
+          <div><Lbl>Outcome</Lbl><Sel value={outcome} onChange={e => setOutcome(e.target.value)}>{INSPECTION_OUTCOMES.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}</Sel></div>
           {affectsStock && (
             <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: 12 }}>
               <Lbl>Affected quantity (kg) · max {maxLoss.toLocaleString()}</Lbl>
               <Inp type="number" value={lossKg} onChange={e => setLossKg(e.target.value)} placeholder="0" />
-              <div style={{ fontSize: 10.5, color: "#9A3412", marginTop: 6 }}>Records a write-off movement that reduces stock on hand by this amount. (Reclassify does not change quantity.)</div>
+              <div style={{ fontSize: 10.5, color: "#9A3412", marginTop: 6 }}>This records a write-off movement that reduces stock on hand by this amount.</div>
             </div>
           )}
-          <div><Lbl>Findings / detail</Lbl>
-            <textarea value={findings} onChange={e => setFindings(e.target.value)} rows={2}
+          <div><Lbl>Findings / notes</Lbl>
+            <textarea value={findings} onChange={e => setFindings(e.target.value)} rows={3}
               style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }}
-              placeholder="What was found, photo reference, which pallets, etc." />
+              placeholder="e.g. 3% shrinkage on arrival; soft fruit in 2 pallets; client reported mould on delivery" />
           </div>
           <div style={{ borderTop: "1px solid #F3F4F6", paddingTop: 12 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer", fontWeight: 600 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
               <input type="checkbox" checked={proposeCN} onChange={e => setProposeCN(e.target.checked)} />
-              Propose a credit note for this issue
+              Propose a credit note for this inspection
             </label>
             {proposeCN && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                <div style={{ gridColumn: "span 2" }}><Lbl>Credit note against</Lbl><Sel value={cnTarget} onChange={e => setCnTarget(e.target.value)}>{CN_TARGETS.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
-                <div><Lbl>Proposed amount</Lbl><Inp type="number" value={cnAmount} onChange={e => setCnAmount(e.target.value)} placeholder="0" /></div>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginTop: 10 }}>
+                <div><Lbl>Proposed credit amount</Lbl><Inp type="number" value={cnAmount} onChange={e => setCnAmount(e.target.value)} placeholder="0" /></div>
                 <div><Lbl>Currency</Lbl><Sel value={cnCurrency} onChange={e => setCnCurrency(e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
-                <div style={{ gridColumn: "span 2", fontSize: 10.5, color: "#92400E", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "6px 9px" }}>Records a <strong>proposed</strong> credit note on the lot, tagged to the chosen invoice. Formal issuing happens in the Invoicing module (later).</div>
+                <div style={{ gridColumn: "span 2", fontSize: 10.5, color: "#92400E", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "6px 9px" }}>This records a <strong>proposed</strong> credit note on the lot. Issuing it formally happens in the Invoicing module (later).</div>
               </div>
             )}
           </div>
@@ -978,11 +1046,11 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
               onClick={() => onConfirm({
                 context, date, outcome,
                 lossKg: affectsStock ? lossNum : 0,
-                whereNote, findings,
-                creditNote: proposeCN ? { amount: parseFloat(cnAmount) || 0, currency: cnCurrency, target: cnTarget } : null,
+                findings,
+                creditNote: proposeCN ? { amount: parseFloat(cnAmount) || 0, currency: cnCurrency } : null,
               })}
-              style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: (lossInvalid || (proposeCN && (parseFloat(cnAmount) || 0) <= 0)) ? "#D1D5DB" : "#DC2626", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-              Save quality issue
+              style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: (lossInvalid || (proposeCN && (parseFloat(cnAmount) || 0) <= 0)) ? "#D1D5DB" : "#0E7490", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              Save inspection
             </button>
           </div>
         </div>
@@ -992,7 +1060,239 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
 }
 
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments }: any) {
+
+// ─── v6.6: print helper for the settlement statement (same pattern as Shipments) ─
+function printHtmlNodeInv(nodeId, title) {
+  const node = document.getElementById(nodeId);
+  if (!node) { alert("Print preview not ready"); return; }
+  const existing = document.getElementById(`${nodeId}-frame`);
+  if (existing) existing.remove();
+  const iframe = document.createElement("iframe");
+  iframe.id = `${nodeId}-frame`;
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(iframe);
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: Arial, Calibri, sans-serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  table { border-collapse: collapse; width: 100%; page-break-inside: avoid; }
+  tr { page-break-inside: avoid; }
+</style></head><body>${node.outerHTML}</body></html>`;
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) { iframe.remove(); return; }
+  doc.open(); doc.write(html); doc.close();
+  setTimeout(() => {
+    try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
+    setTimeout(() => iframe.remove(), 1000);
+  }, 150);
+}
+
+
+// ─── v6.6: CONSIGNMENT SETTLEMENT MODAL ─────────────────────────────────────
+// Per-lot/truck settlement: gross sales (auto from SOs) − expenses (auto from
+// lot costs + manual) = net sales value → producer invoice; commission % × net
+// → our invoice; payout = net − commission. Closing writes the two cost
+// components onto the lot so SO P/L lands at exactly the commission.
+function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, onSave }: any) {
+  const po = (pos || []).find((p: any) => p.number === lot.poRef);
+  const producer = po ? (contacts || []).find((c: any) => normName(c.name) === normName(po.supplier?.name)) : null;
+  const seasonPct = producer ? currentCommissionPct(producer, localTodayISO()) : null;
+  const st = lot.settlement || { status: "None" };
+  const [pct, setPct] = useState<any>(st.commissionPct ?? (seasonPct ?? ""));
+  const [extra, setExtra] = useState<any[]>(st.extraExpenses || []);
+  const [prodInvNo, setProdInvNo] = useState(st.producerInvoiceNo || "");
+  const [prodInvPLN, setProdInvPLN] = useState<any>(st.producerInvoiceAmountPLN ?? "");
+  const [commInvNo, setCommInvNo] = useState(st.commissionInvoiceNo || "");
+  const calc = computeLotSettlement(lot, orders, parseFloat(pct) || 0, extra);
+  const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
+  const status = st.status || "None";
+  const prodInvNum = parseFloat(prodInvPLN);
+  const invVariance = isFinite(prodInvNum) && prodInvNum > 0 ? Math.round((prodInvNum - calc.netPLN) * 100) / 100 : null;
+
+  function save(nextStatus: string) {
+    const settlement = {
+      ...st,
+      status: nextStatus,
+      commissionPct: parseFloat(pct) || 0,
+      extraExpenses: extra,
+      producerInvoiceNo: prodInvNo,
+      producerInvoiceAmountPLN: isFinite(prodInvNum) ? prodInvNum : null,
+      commissionInvoiceNo: commInvNo,
+      expectedNetPLN: calc.netPLN,
+      expectedCommissionPLN: calc.commissionPLN,
+      // commission is charged on the producer's ACTUAL invoiced net sales value
+      finalCommissionPLN: isFinite(prodInvNum) && prodInvNum > 0 ? Math.round(prodInvNum * (parseFloat(pct) || 0)) / 100 : calc.commissionPLN,
+      ...(nextStatus === "Sent" && !st.sentAt ? { sentAt: localTodayISO() } : {}),
+      ...(nextStatus === "Closed" ? { closedAt: localTodayISO() } : {}),
+    };
+    onSave(settlement, nextStatus === "Closed");
+  }
+
+  function canClose() {
+    return isFinite(prodInvNum) && prodInvNum > 0 && (parseFloat(pct) || 0) > 0;
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120, padding: 20 }}>
+      <div style={{ width: 860, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>Consignment settlement · {lot.number}</div>
+            <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{po ? `${po.number} · ${po.supplier?.name || "producer"}` : "No PO link"} · status: <strong>{status}</strong>{producer && seasonPct !== null && <> · season rate {seasonPct}%</>}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => printHtmlNodeInv("settlement-statement", `Settlement-${lot.number}`)} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Print / PDF statement</button>
+            <button onClick={onCancel} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Close</button>
+          </div>
+        </div>
+
+        <div style={{ padding: "14px 22px", display: "grid", gridTemplateColumns: "200px 1fr 1fr 1fr", gap: 10, alignItems: "end", borderBottom: "1px solid #F3F4F6", background: "#FAFAFA" }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Commission %</label>
+            <input type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} disabled={status === "Closed"} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Producer invoice no. (their FV to us)</label>
+            <input value={prodInvNo} onChange={e => setProdInvNo(e.target.value)} disabled={status === "Closed"} placeholder="FV/…" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Producer invoice amount (PLN)</label>
+            <input type="number" value={prodInvPLN} onChange={e => setProdInvPLN(e.target.value)} disabled={status === "Closed"} placeholder={`expected ${fmt(calc.netPLN)}`} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+            {invVariance !== null && Math.abs(invVariance) >= 1 && <div style={{ fontSize: 10.5, color: invVariance > 0 ? "#DC2626" : "#D97706", marginTop: 3, fontWeight: 600 }}>{invVariance > 0 ? "+" : ""}{fmt(invVariance)} vs expected net</div>}
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Our commission invoice no.</label>
+            <input value={commInvNo} onChange={e => setCommInvNo(e.target.value)} disabled={status === "Closed"} placeholder="FV/…" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+          </div>
+        </div>
+
+        {calc.warnings.length > 0 && (
+          <div style={{ margin: "12px 22px 0", padding: "8px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 7, fontSize: 11.5, color: "#92400E" }}>
+            {calc.warnings.map((w, i) => <div key={i}>· {w}</div>)}
+          </div>
+        )}
+
+        {/* The bilingual statement — also the print target */}
+        <div style={{ padding: 22 }}>
+          <div id="settlement-statement" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "18px 22px", fontSize: 11.5 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800 }}>CONSIGNMENT SETTLEMENT / ROZLICZENIE SPRZEDAŻY KOMISOWEJ</div>
+                <div style={{ color: "#555", marginTop: 2 }}>Lot / Partia: <strong>{lot.number}</strong> · {lot.product} · {po ? `PO ${po.number}` : ""} · Date / Data: {localTodayISO()}</div>
+              </div>
+              <div style={{ textAlign: "right", color: "#555" }}>
+                <div style={{ fontWeight: 700 }}>MARIANNA</div>
+                <div>for / dla: {po?.supplier?.name || "Producer"}</div>
+              </div>
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 11, marginTop: 6 }}>1. Sales / Sprzedaż</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 3 }}>
+              <thead><tr>{["SO", "Client / Klient", "Product / Produkt", "Kg", "Price / Cena", "Value / Wartość PLN"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left", fontSize: 10 }}>{h}</th>)}</tr></thead>
+              <tbody>{calc.salesLines.map((l, i) => <tr key={i}>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.soNumber}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.client}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.product}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.kg.toLocaleString("pl-PL")}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.unitPrice.toFixed(2)} {l.currency}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.pln.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
+              </tr>)}</tbody>
+            </table>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 2px", fontWeight: 700 }}>
+              <span>Gross sales value / Wartość sprzedaży brutto ({calc.soldKg.toLocaleString("pl-PL")} kg)</span><span>{fmt(calc.grossPLN)}</span>
+            </div>
+            <div style={{ fontWeight: 800, fontSize: 11, marginTop: 6 }}>2. Deducted expenses / Potrącone koszty</div>
+            {calc.expenseLines.map((l, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "2px 2px", borderBottom: "1px dotted #E5E7EB" }}>
+                <span>{l.label}{l.manual ? " (manual / ręczny)" : ""}</span><span>−{l.pln.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span>
+              </div>
+            ))}
+            {!calc.expenseLines.length && <div style={{ color: "#888", fontStyle: "italic", padding: "2px 2px" }}>No expenses recorded / Brak kosztów</div>}
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 2px", fontWeight: 700 }}>
+              <span>Total expenses / Suma kosztów</span><span>−{fmt(calc.expensesPLN)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6, marginTop: 6, fontWeight: 800 }}>
+              <span>3. NET SALES VALUE / WARTOŚĆ SPRZEDAŻY NETTO — producer invoices us this amount / producent wystawia fakturę na tę kwotę</span><span>{fmt(calc.netPLN)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 8px", marginTop: 4 }}>
+              <span>4. Our commission / Nasza prowizja ({calc.commissionPct}% × net)</span><span>−{fmt(calc.commissionPLN)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, fontWeight: 800 }}>
+              <span>5. PRODUCER PAYOUT / DO WYPŁATY PRODUCENTOWI</span><span>{fmt(calc.payoutPLN)}</span>
+            </div>
+          </div>
+
+          {/* manual expense editor (not printed) */}
+          {status !== "Closed" && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em", marginBottom: 6 }}>MANUAL EXPENSE LINES</div>
+              {extra.map((e: any, i: number) => (
+                <div key={e.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 160px 34px", gap: 8, marginBottom: 6 }}>
+                  <input value={e.label} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, label: ev.target.value } : x))} placeholder="e.g. Phytosanitary certificate" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
+                  <input type="number" value={e.pln} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, pln: ev.target.value } : x))} placeholder="PLN" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
+                  <button onClick={() => setExtra(prev => prev.filter((_, idx) => idx !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                </div>
+              ))}
+              <button onClick={() => setExtra(prev => [...prev, { id: Date.now(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save draft</button>}
+          {(status === "None" || status === "Draft") && <button onClick={() => save("Sent")} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Mark statement sent</button>}
+          {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={() => { if (window.confirm(`Close settlement for ${lot.number}?\n\nProducer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`)) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function normName(v: any) { return String(v || "").trim().toLowerCase(); }
+
+// ─── v6.5: SORTING EVENT MODAL ──────────────────────────────────────────────
+// Logs a warehouse sorting service on the lot (kg sorted on a date). No stock
+// change — it feeds the expected warehouse charges (sorting rate × kg).
+function SortingModal({ lot, onCancel, onConfirm }: any) {
+  const [kg, setKg] = useState("");
+  const [date, setDate] = useState(localTodayISO());
+  const [note, setNote] = useState("");
+  const kgNum = parseNum(kg);
+  const maxKg = Math.max(lot.physicalKg || 0, parseNum(lot.expectedKg));
+  const invalid = !(kgNum > 0) || kgNum > maxKg;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120, padding: 20 }}>
+      <div style={{ width: 440, background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB" }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Record sorting · {lot.number}</div>
+          <div style={{ fontSize: 11.5, color: "#888", marginTop: 3 }}>Warehouse sorting service — charged per kg on the warehouse tariff. Does not change stock; record any rejected kg separately as a quality issue.</div>
+        </div>
+        <div style={{ padding: "16px 22px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Sorted quantity (kg)</label>
+              <input type="number" value={kg} onChange={e => setKg(e.target.value)} placeholder={`max ${maxKg.toLocaleString("pl-PL")}`} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Date</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+            </div>
+          </div>
+          <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Note (optional)</label>
+          <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. pre-dispatch sorting for SO-2026-014" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+          {invalid && kg && <div style={{ marginTop: 10, padding: "7px 10px", background: "#FEE2E2", borderRadius: 6, fontSize: 12, color: "#991B1B" }}>Quantity must be between 0 and {maxKg.toLocaleString("pl-PL")} kg.</div>}
+        </div>
+        <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={onCancel} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button disabled={invalid} onClick={() => onConfirm({ kg: kgNum, date, note })} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: invalid ? "#E5E7EB" : "#16A34A", color: invalid ? "#9CA3AF" : "#fff", fontSize: 13, fontWeight: 700, cursor: invalid ? "not-allowed" : "pointer", fontFamily: "inherit" }}>Record sorting</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── v6.5 anchor end ────────────────────────────────────────────────────────
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1015,7 +1315,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Inventory</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
           <button onClick={onMove} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Record movement</button>
-          <button onClick={onInspect} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
+          <button onClick={onQualityIssue} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -1041,32 +1341,89 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
             </div>
           </div>
 
-          {/* Qty breakdown — compact: five figures + a proportion bar */}
-          <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>QUANTITY BREAKDOWN</SectionTitle>
-            <div style={{ marginBottom: 10, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
-              <div><div style={{ fontSize: 9.5, color: "#888" }}>EXPECTED</div><div style={{ fontSize: 13.5, fontWeight: 600, color: "#555" }}>{fmtNum(lot.expectedKg)} kg</div></div>
-              <div><div style={{ fontSize: 9.5, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#111" }}>{fmtNum(lot.receivedKg)} kg</div></div>
-              <div title="Live: physicalKg − reservations from pre-dispatch SOs"><div style={{ fontSize: 9.5, color: "#16A34A" }}>AVAILABLE</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} kg</div></div>
-              <div title="From Confirmed/Reserved/Loading SOs"><div style={{ fontSize: 9.5, color: "#7C3AED" }}>RESERVED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#7C3AED" }}>{fmtNum(res.totalReserved)} kg</div></div>
-              <div><div style={{ fontSize: 9.5, color: "#DC2626" }}>DAMAGED</div><div style={{ fontSize: 13.5, fontWeight: 700, color: "#DC2626" }}>{fmtNum(lot.damagedKg)} kg</div></div>
-            </div>
-            {totalKg > 0 && (
-              <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", border: "1px solid #F3F4F6" }} title={segments.map(s => `${s.key}: ${s.kg.toLocaleString()} kg`).join("  ·  ")}>
-                {segments.map((s, i) => (
-                  <div key={i} title={`${s.key}: ${s.kg.toLocaleString()} kg (${((s.kg / totalKg) * 100).toFixed(1)}%)`} style={{ background: s.color, width: `${(s.kg / totalKg) * 100}%` }} />
-                ))}
+          {/* Qty breakdown — v6.3.0 compact strip (PO-module density): figures + bar on one row */}
+          <Card style={{ marginBottom: 12, padding: "12px 16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "110px repeat(5, minmax(72px, 1fr)) 1.5fr", gap: 10, alignItems: "center" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>QUANTITY<br />BREAKDOWN</div>
+              <div><div style={{ fontSize: 9, color: "#888" }}>EXPECTED</div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#555" }}>{fmtNum(lot.expectedKg)} kg</div></div>
+              <div><div style={{ fontSize: 9, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#111" }}>{fmtNum(lot.receivedKg)} kg</div></div>
+              <div title="Live: physicalKg − reservations from pre-dispatch SOs"><div style={{ fontSize: 9, color: "#16A34A" }}>AVAILABLE</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} kg</div></div>
+              <div title="From Confirmed/Reserved/Loading SOs"><div style={{ fontSize: 9, color: "#7C3AED" }}>RESERVED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#7C3AED" }}>{fmtNum(res.totalReserved)} kg</div></div>
+              <div><div style={{ fontSize: 9, color: "#DC2626" }}>DAMAGED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#DC2626" }}>{fmtNum(lot.damagedKg)} kg</div></div>
+              <div>
+                {totalKg > 0 && (
+                  <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", border: "1px solid #F3F4F6" }} title={segments.map(s => `${s.key}: ${s.kg.toLocaleString()} kg`).join("  ·  ")}>
+                    {segments.map((s, i) => (
+                      <div key={i} title={`${s.key}: ${s.kg.toLocaleString()} kg (${((s.kg / totalKg) * 100).toFixed(1)}%)`} style={{ background: s.color, width: `${(s.kg / totalKg) * 100}%` }} />
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
             {variance !== 0 && lot.receivedKg > 0 && (
-              <div style={{ marginTop: 10, padding: "8px 10px", background: variance < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${variance < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 8, fontSize: 11.5, color: variance < 0 ? "#92400E" : "#1E40AF" }}>
-                <strong>{variance > 0 ? "Surplus" : "Shortfall"}:</strong> {Math.abs(variance).toLocaleString()} kg ({((variance / lot.expectedKg) * 100).toFixed(2)}%) vs PO {lot.poRef}.
-                {variance < 0 ? " Common causes: moisture loss in transit, weight check at port, damage. Consider raising a damage report if responsibility lies with carrier or supplier." : " Higher than ordered — confirm with supplier."}
+              <div style={{ marginTop: 8, padding: "5px 9px", background: variance < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${variance < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 6, fontSize: 11, color: variance < 0 ? "#92400E" : "#1E40AF" }}>
+                <strong>{variance > 0 ? "Surplus" : "Shortfall"}:</strong> {Math.abs(variance).toLocaleString()} kg ({((variance / lot.expectedKg) * 100).toFixed(2)}%) vs PO {lot.poRef}
+                <span title={variance < 0 ? "Common causes: moisture loss in transit, weight check at port, damage. Consider raising a damage report if responsibility lies with carrier or supplier." : "Higher than ordered — confirm with supplier."} style={{ marginLeft: 6, cursor: "help", color: "inherit", opacity: 0.7 }}>ⓘ</span>
               </div>
             )}
           </Card>
 
-          {/* Reservations card — only shown when there are live reservations */}
+          {/* v6.6: consignment banner + settlement entry point */}
+          {lot.consignment && (
+            <Card style={{ marginBottom: 12, border: "1px solid #DDD6FE", background: "#FAF5FF" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: "#6D28D9" }}>⚖ CONSIGNMENT LOT — price settled on sales</div>
+                  <div style={{ fontSize: 11.5, color: "#7C3AED", marginTop: 3, lineHeight: 1.5 }}>
+                    Producer's goods in our custody. Sell at your prices; all expenses are deducted at settlement.
+                    Settlement status: <strong>{(lot.settlement && lot.settlement.status) || "None"}</strong>
+                    {lot.settlement?.closedAt ? ` · closed ${lot.settlement.closedAt}` : lot.settlement?.sentAt ? ` · statement sent ${lot.settlement.sentAt}` : ""}
+                  </div>
+                </div>
+                <button onClick={() => onOpenSettlement && onOpenSettlement(lot)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#7C3AED", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {(lot.settlement?.status === "Closed") ? "View settlement" : "Open settlement"}
+                </button>
+              </div>
+            </Card>
+          )}
+
+          {/* v6.5: expected warehouse charges — predicted from movements + tariff */}
+          {(() => {
+            const wh = computeLotWarehouseCharges(lot, contacts, localTodayISO());
+            if (!wh) return null;
+            return (
+              <Card style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div>
+                    <SectionTitle>WAREHOUSE CHARGES — EXPECTED · {wh.warehouseName.toUpperCase()}</SectionTitle>
+                    <div style={{ fontSize: 10.5, color: "#888", marginTop: -8 }}>
+                      {wh.basis === "pallet"
+                        ? `${wh.chargeablePalletDays.toLocaleString("pl-PL")} chargeable pallet-days`
+                        : `${wh.chargeableKgDays.toLocaleString("pl-PL")} chargeable kg-days`}
+                      {" "}accrued to date · predicted from this lot's movements — compare against the warehouse invoice
+                    </div>
+                  </div>
+                  <button onClick={() => onRecordSorting && onRecordSorting(lot)} style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>+ Record sorting</button>
+                </div>
+                {wh.lines.map((l, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #F9FAFB", fontSize: 12, color: "#444" }}>
+                    <span>{l.label}{l.date ? <span style={{ color: "#999", fontSize: 10.5 }}> · {l.date}</span> : null}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                    <span style={{ fontWeight: 600 }}>{l.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {wh.currency}</span>
+                  </div>
+                ))}
+                {!wh.lines.length && <div style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>No chargeable activity yet (free period or no stock days).</div>}
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, padding: "8px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#0C4A6E" }}>Expected invoice for this lot (to date)</span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: "#0C4A6E" }}>
+                    {wh.total.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {wh.currency}
+                    {wh.currency !== "PLN" && <span style={{ fontWeight: 500, color: "#0369A1", marginLeft: 8, fontSize: 11 }}>≈ {wh.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>}
+                  </span>
+                </div>
+                {wh.notes.map((n, i) => <div key={i} style={{ fontSize: 10.5, color: "#92400E", marginTop: 6 }}>ⓘ {n}</div>)}
+                <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>Monthly totals per warehouse and invoice reconciliation: Finance → Warehouse charges.</div>
+              </Card>
+            );
+          })()}
           {res.reservations.length > 0 && (
             <Card style={{ marginBottom: 16, border: "1px solid #DDD6FE", background: "#FAF8FF" }}>
               <SectionTitle>RESERVATIONS · {res.reservations.length} SO{res.reservations.length !== 1 ? "s" : ""}</SectionTitle>
@@ -1090,7 +1447,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
           <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
             <div>
               {/* Journey (v6.1b) — planned stages from the PO flow, with ownership coding */}
-              {(() => { if (lot.category === "packaging") return null; const journey = journeyForLot(lot, shipments || [], liveSOs || []); return journey.length > 0 && (
+              {(() => { const journey = journeyForLot(lot, shipments || [], liveSOs || []); return journey.length > 0 && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>JOURNEY · {journey.length} STAGES</SectionTitle>
                   <div style={{ fontSize: 11, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>
@@ -1166,27 +1523,25 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
                 );
               })()}
 
-              {/* Quality issues — recordable at any stage; basis for credit notes */}
+              {/* Inspections (v6.2) — recordable at any stage */}
               <Card style={{ marginBottom: 16 }}>
-                <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>⚠ Record quality issue</button>}>QUALITY ISSUES{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
-                {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No quality issues recorded. Use “Record quality issue” for damage, weight loss, downgrade or client rejection — found on arrival, in storage, at customs, on a transport leg, or reported by the client after delivery.</div>}
+                <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ Record inspection</button>}>INSPECTIONS{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
+                {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No inspections recorded. Record one when goods are checked on arrival, in storage, by a client, or at customs.</div>}
                 {(lot.inspections || []).map((ins, i) => {
                   const ctx = INSPECTION_CONTEXTS.find(c => c.code === ins.context);
                   const out = INSPECTION_OUTCOMES.find(o => o.code === ins.outcome);
-                  const cnt = ins.creditNote && CN_TARGETS.find(t => t.code === ins.creditNote.target);
                   const bad = ins.outcome !== "ok";
                   return (
                     <div key={i} style={{ padding: "10px 0", borderBottom: i < lot.inspections.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111" }}>⚠ {ctx ? ctx.label.split(" (")[0] : ins.context}</div>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111" }}>🔍 {ctx ? ctx.label.split(" (")[0] : ins.context}</div>
                         <span style={{ fontSize: 10.5, color: "#AAA" }}>{ins.date}</span>
                       </div>
                       <div style={{ fontSize: 11.5, color: bad ? "#B91C1C" : "#16A34A", fontWeight: 600, marginTop: 3 }}>
                         {out ? out.label : ins.outcome}{ins.lossKg ? ` · −${fmtNum(ins.lossKg)} kg` : ""}
                       </div>
-                      {ins.whereNote && <div style={{ fontSize: 11.5, color: "#444", marginTop: 3 }}><span style={{ color: "#888" }}>Where:</span> {ins.whereNote}</div>}
-                      {ins.findings && <div style={{ fontSize: 11.5, color: "#666", marginTop: 2 }}>{ins.findings}</div>}
-                      {ins.creditNote && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "4px 8px", display: "inline-block" }}>Proposed credit note: {fmtNum(ins.creditNote.amount)} {ins.creditNote.currency}{cnt ? ` · against ${cnt.label.split(" (")[0]}` : ""} (to be issued in Invoicing)</div>}
+                      {ins.findings && <div style={{ fontSize: 11.5, color: "#666", marginTop: 3 }}>{ins.findings}</div>}
+                      {ins.creditNote && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "4px 8px", display: "inline-block" }}>Proposed credit note: {fmtNum(ins.creditNote.amount)} {ins.creditNote.currency} (to be issued in Invoicing)</div>}
                     </div>
                   );
                 })}
@@ -1253,11 +1608,13 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
                     ) : <span style={{ fontSize: 12, color: "#AAA" }}>—</span>}
                   </div>
                   <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>SALES ORDERS ({soRefsFor(lot, liveSOs).length})</div>
-                    {soRefsFor(lot, liveSOs).length > 0 ? (
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>SALES ORDERS ({soRefsFor(lot, liveSOs, shipments).length})</div>
+                    {soRefsFor(lot, liveSOs, shipments).length > 0 ? (
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                        {soRefsFor(lot, liveSOs).map(s => (
-                          <div key={s.number} title={`${s.clientName} · ${s.status}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>{s.number}</div>
+                        {soRefsFor(lot, liveSOs, shipments).map(s => (
+                          <div key={s.number} title={`${s.clientName || ""}${s.status && s.status !== "—" ? ` · ${s.status}` : ""}${s.viaShipment ? ` · linked via shipment ${s.viaShipment}` : ""}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                            {s.number}{s.viaShipment ? <span style={{ fontSize: 9, color: "#16A34A", fontWeight: 700, marginLeft: 4 }}>via {s.viaShipment}</span> : null}
+                          </div>
                         ))}
                       </div>
                     ) : <span style={{ fontSize: 12, color: "#AAA" }}>Not yet linked</span>}
@@ -1325,7 +1682,7 @@ function LotDetail({ lot, onBack, onMove, onEditMovement, onDeleteMovement, onDe
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [] }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], pos: extPOs = [] }: any = {}) {
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState(INIT_LOTS);
   const lots = extLots ?? localLots;
@@ -1333,10 +1690,14 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   // Live SOs from shell (replaces the standalone-only module-scope SOS).
   // If shell doesn't pass any (standalone), helpers fall through to local SOS via their default param.
   const liveSOs = extOrders;
+  const shipments = extShipments;
   const [view, setView] = useState("list");
   const [selectedId, setSelectedId] = useState(null);
   const selected = useMemo(() => lots.find(l => l.id === selectedId) ?? null, [lots, selectedId]);
   const [showMovement, setShowMovement] = useState(false);
+  const [movementMode, setMovementMode] = useState<"movement" | "quality">("movement");
+  const [sortingLot, setSortingLot] = useState(null); // v6.5: lot for the sorting-event modal
+  const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
   const [editingMovement, setEditingMovement] = useState(null);
   const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
   const [showInspection, setShowInspection] = useState(false);
@@ -1368,7 +1729,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       if (filterProduct !== "All" && l.product !== filterProduct) return false;
       if (filterQuality !== "All" && l.quality !== filterQuality) return false;
       if (q) {
-        const soList = soRefsFor(l, liveSOs).map(s => s.number).join(" ");
+        const soList = soRefsFor(l, liveSOs, shipments).map(s => s.number).join(" ");
         const hay = `${l.number} ${l.product} ${l.poRef || ""} ${soList} ${loc?.name || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
@@ -1425,60 +1786,20 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     setShowCustoms(null);
   }
 
-  function addPackaging() {
-    const name = window.prompt("Packaging material name (e.g. Wooden crate 30×40, Carton 5 kg, EUR pallet):", "");
-    if (!name) return;
-    const qty = parseFloat(window.prompt("Quantity received into our warehouse (units):", "0") || "0") || 0;
-    // A packaging material is a simple lot: category "packaging", lives at our WH,
-    // no flow/journey/quality machinery. It uses the same movement engine (IN to
-    // receive, SHIP_OUT or a shipment to dispatch to a supplier).
-    const ownWh = LOCATIONS.find(l => l.type === "OWN");
-    const baseLoc = ownWh ? ownWh.id : (LOCATIONS[0] && LOCATIONS[0].id);
-    const id = Date.now();
-    const lot = {
-      id, number: `PKG-${new Date().getFullYear()}-${String(id).slice(-4)}`,
-      category: "packaging",
-      product: name, size: "", quality: "", origin: "",
-      flow: null, directFlow: false,
-      poRef: null, soRef: null,
-      expectedKg: 0, receivedKg: 0, physicalKg: 0, damagedKg: 0,
-      unit: "units",
-      locationId: baseLoc, baseLocationId: baseLoc,
-      status: "In Stock",
-      currency: "PLN",
-      costs: [], movements: [], journey: [], inspections: [],
-      customs: {}, notes: "Packaging material — own stock, dispatched to suppliers.",
-      createdAt: today,
-    };
-    let withQty = lot;
-    if (qty > 0) {
-      withQty = recomputeLotFromMovements({ ...lot }, [{ id: id + 1, date: today, type: "IN", qtyKg: qty, fromId: baseLoc, toId: baseLoc, note: "Packaging received into our warehouse" }]);
-    }
-    setLots(prev => [...prev, withQty]);
-    setSelectedId(id);
-    setView("detail");
-  }
-
   function saveInspection(data) {
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
       const inspections = [...(l.inspections || []), {
         context: data.context, date: data.date, outcome: data.outcome,
-        lossKg: data.lossKg || 0, whereNote: data.whereNote || "", findings: data.findings || "",
+        lossKg: data.lossKg || 0, findings: data.findings || "",
         creditNote: data.creditNote || null,
       }];
       let movements = l.movements || [];
-      // Damage / weight-loss / rejection write off stock via a DAMAGE movement.
+      // A weight-loss / damage / rejection outcome records a DAMAGE write-off movement.
       if (data.lossKg > 0) {
-        const label = data.outcome === "weight_loss" ? "Quality: weight loss" : data.outcome === "rejection" ? "Quality: client rejection" : "Quality: damage";
-        const detail = [data.whereNote, data.findings].filter(Boolean).join(" — ");
-        movements = [...movements, { id: Date.now(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${detail ? " — " + detail : ""}` }];
-      }
-      // Reclassify records a RECLASS movement (no quantity change) for the audit trail.
-      if (data.outcome === "reclass") {
-        const detail = [data.whereNote, data.findings].filter(Boolean).join(" — ");
-        movements = [...movements, { id: Date.now() + 1, date: data.date || today, type: "RECLASS", qtyKg: 0, fromId: l.locationId, toId: l.locationId, note: `Quality: reclassify${detail ? " — " + detail : ""}` }];
+        const label = data.outcome === "weight_loss" ? "Inspection: weight loss" : data.outcome === "rejection" ? "Inspection: client rejection" : "Inspection: damage";
+        movements = [...movements, { id: Date.now(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${data.findings ? " — " + data.findings : ""}` }];
       }
       const recomputed = recomputeLotFromMovements({ ...l, baseLocationId, inspections }, movements);
       return recomputed;
@@ -1499,20 +1820,43 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     const brokers = (extContacts || []).filter((c: any) => c.type === "Broker" || c.type === "Forwarder" || (c.services || []).includes("Customs"));
     return (
       <>
-        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
-        {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
-        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
+        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
+
+        {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
+          setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: Date.now(), type: "SORTING", kg, date, note }] } : l));
+          setSortingLot(null);
+        }} />}        {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
+
+        {settlementLot && <SettlementModal lot={lots.find(l => l.id === settlementLot.id) || settlementLot} orders={liveSOs} contacts={extContacts} pos={extPOs}
+          onCancel={() => setSettlementLot(null)}
+          onSave={(settlement, close) => {
+            setLots(prev => prev.map(l => {
+              if (l.id !== settlementLot.id) return l;
+              let next = { ...l, settlement };
+              if (close) {
+                const comps = settlementCostComponents(l, settlement.producerInvoiceAmountPLN, settlement.finalCommissionPLN ?? settlement.expectedCommissionPLN, settlement.producerInvoiceNo, settlement.commissionInvoiceNo);
+                const have = new Set((l.costs || []).map(c => c.source));
+                next = { ...next, costs: [...(l.costs || []), ...comps.filter(c => !have.has(c.source))] };
+              }
+              return next;
+            }));
+            if (close) setSettlementLot(null);
+          }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
-          onMove={() => { setEditingMovement(null); setShowMovement(true); }}
-          onEditMovement={(m: any) => { setEditingMovement(m); setShowMovement(true); }}
+          onMove={() => { setEditingMovement(null); setMovementMode("movement"); setShowMovement(true); }}
+          onQualityIssue={() => { setEditingMovement(null); setMovementMode("quality"); setShowMovement(true); }}
+          onEditMovement={(m: any) => { setEditingMovement(m); setMovementMode(["DAMAGE", "RECLASS"].includes(m.type) ? "quality" : "movement"); setShowMovement(true); }}
           onDeleteMovement={deleteMovement}
           onCustoms={(k: any) => setShowCustoms(k)}
           onInspect={() => setShowInspection(true)}
           onDelete={deleteLot}
           liveSOs={liveSOs}
           shipments={extShipments}
+          contacts={extContacts}
+          onRecordSorting={(l) => setSortingLot(l)}
+          onOpenSettlement={(l) => setSettlementLot(l)}
         />
       </>
     );
@@ -1523,74 +1867,52 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>
       {/* Top bar */}
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Inventory</div>
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-          <button onClick={addPackaging} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ New packaging material</button>
-        </div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Inventory Lots</div>
+        <div style={{ marginLeft: "auto", fontSize: 12, color: "#AAA" }}>Phase 1 — lot tracking · cost view · movements</div>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
-        {/* KPIs */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 14, marginBottom: 20 }}>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>IN STOCK</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", marginTop: 6 }}>{fmtNum(Math.round(totalKgInStock))} <span style={{ fontSize: 14, color: "#888", fontWeight: 600 }}>kg</span></div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>{inStock.length} active lots</div>
+        {/* KPIs — compact */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 12 }}>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>IN STOCK <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· {inStock.length} lots</span></div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtNum(Math.round(totalKgInStock))} <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>kg</span></div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>STOCK VALUE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#16A34A", marginTop: 6 }}>{fmtMoney(totalValueInStock)}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>at cost basis</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>STOCK VALUE</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#16A34A", marginTop: 2 }}>{fmtMoney(totalValueInStock)}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>AT PORT / CUSTOMS</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: lotsAtPort > 0 ? "#D97706" : "#111", marginTop: 6 }}>{lotsAtPort}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>awaiting clearance</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>AT PORT / CUSTOMS</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: lotsAtPort > 0 ? "#D97706" : "#111", marginTop: 2 }}>{lotsAtPort}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>WITH VARIANCE</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: lotsWithVariance > 0 ? "#D97706" : "#111", marginTop: 6 }}>{lotsWithVariance}</div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>actual ≠ expected ≥1%</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>WITH VARIANCE</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: lotsWithVariance > 0 ? "#D97706" : "#111", marginTop: 2 }}>{lotsWithVariance}</div>
           </Card>
-          <Card>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DAMAGED</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: totalDamagedKg > 0 ? "#DC2626" : "#111", marginTop: 6 }}>{fmtNum(totalDamagedKg)} <span style={{ fontSize: 14, color: "#888", fontWeight: 600 }}>kg</span></div>
-            <div style={{ fontSize: 11, color: "#AAA", marginTop: 4 }}>across all lots</div>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DAMAGED</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: totalDamagedKg > 0 ? "#DC2626" : "#111", marginTop: 2 }}>{fmtNum(totalDamagedKg)} <span style={{ fontSize: 12, color: "#888", fontWeight: 600 }}>kg</span></div>
           </Card>
         </div>
 
-        {/* Filters */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot ref, product, PO/SO, location…" style={{ flex: "1 1 280px", minWidth: 260, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>STATUS</span>
-          <button onClick={() => setFilterStatus("inPossession")} style={chipStyle(filterStatus === "inPossession")}>In our possession</button>
-          <button onClick={() => setFilterStatus("all")} style={chipStyle(filterStatus === "all")}>All</button>
-          {Object.keys(LOT_STATUSES).map(s => (
-            <button key={s} onClick={() => setFilterStatus(s)} style={chipStyle(filterStatus === s, LOT_STATUSES[s].color)}>{s}</button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>LOCATION</span>
-          {["All", ...Object.keys(LOCATION_TYPES)].map(t => (
-            <button key={t} onClick={() => setFilterLocationType(t)} style={chipStyle(filterLocationType === t)}>
-              {t === "All" ? "All" : `${locType(t).icon} ${locType(t).label}`}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>PRODUCT</span>
-          {["All", ...PRODUCTS].map(p => (
-            <button key={p} onClick={() => setFilterProduct(p)} style={chipStyle(filterProduct === p)}>{p}</button>
-          ))}
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginLeft: 16, marginRight: 4 }}>QUALITY</span>
-          {["All", ...QUALITY_GRADES].map(q => (
-            <button key={q} onClick={() => setFilterQuality(q)} style={chipStyle(filterQuality === q)}>{q === "All" ? "All" : `Kl. ${q}`}</button>
-          ))}
+        {/* Filters — compact single row of dropdowns */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot, product, PO/SO, location…" style={{ flex: "1 1 220px", minWidth: 190, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+            <option value="inPossession">In our possession</option>
+            <option value="all">All statuses</option>
+            {Object.keys(LOT_STATUSES).map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={filterLocationType} onChange={e => setFilterLocationType(e.target.value)} title="Filter by location" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+            {["All", ...Object.keys(LOCATION_TYPES)].map(t => <option key={t} value={t}>{t === "All" ? "All locations" : `${locType(t).icon} ${locType(t).label}`}</option>)}
+          </select>
+          <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} title="Filter by product" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 180 }}>
+            {["All", ...PRODUCTS].map(p => <option key={p} value={p}>{p === "All" ? "All products" : p}</option>)}
+          </select>
+          <select value={filterQuality} onChange={e => setFilterQuality(e.target.value)} title="Filter by quality" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 140 }}>
+            {["All", ...QUALITY_GRADES].map(q => <option key={q} value={q}>{q === "All" ? "All grades" : `Kl. ${q}`}</option>)}
+          </select>
         </div>
 
         {/* Table */}
@@ -1605,7 +1927,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             const loc = locById(l.locationId);
             const cpk = costPerKg(l);
             const res = lotReservations(l, liveSOs);
-            const soList = soRefsFor(l, liveSOs);
+            const soList = soRefsFor(l, liveSOs, shipments);
             return (
               <div key={l.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 140px 130px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
                 onClick={() => { setSelectedId(l.id); setView("detail"); }}

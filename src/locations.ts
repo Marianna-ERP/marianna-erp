@@ -102,6 +102,164 @@ export const LOCATIONS: Location[] = [
   L(202, "Airport", "PORT", "Frankfurt Cargo Airport", "Germany"),
 ];
 
+// ─── CUSTOM LOCATIONS (v6.3.0) ──────────────────────────────────────────────
+// User-managed locations (new ports, airports, warehouses, client sites...)
+// added via Settings → Locations & ports. Stored in localStorage under the
+// same namespaced key scheme as all other app data, so they travel with the
+// Settings JSON export/import. IDs start at 10000 to never clash with the
+// built-in reference list above.
+
+export const CUSTOM_LOCATION_ID_BASE = 10000;
+const CUSTOM_LOCATIONS_KEY = "marianna-erp:v1:customLocations";
+
+// Options offered in the Settings UI → mapped to (type, legacyType) pairs.
+export const CUSTOM_LOCATION_TYPE_OPTIONS: { key: LocationType; label: string; legacyType: string }[] = [
+  { key: "Port",             label: "Port",                          legacyType: "PORT" },
+  { key: "PortWarehouse",    label: "Port warehouse",                legacyType: "PORT" },
+  { key: "Airport",          label: "Airport (cargo)",               legacyType: "PORT" },
+  { key: "ClientFacility",   label: "Client site / DC",              legacyType: "CLIENT" },
+  { key: "SupplierFacility", label: "Supplier / producer site",      legacyType: "SUPPLIER" },
+  { key: "RentedWarehouse",  label: "Our warehouse (own or rented)", legacyType: "OWN" },
+  { key: "Customs",          label: "Customs / border point",        legacyType: "BROKER" },
+];
+
+function legacyTypeFor(type: LocationType): string {
+  const opt = CUSTOM_LOCATION_TYPE_OPTIONS.find(o => o.key === type);
+  return opt ? opt.legacyType : "PORT";
+}
+
+export function readCustomLocations(): Location[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_LOCATIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((l: any) => l && l.name)
+      .map((l: any) => ({
+        id: Number(l.id),
+        type: (l.type || "Port") as LocationType,
+        legacyType: l.legacyType || legacyTypeFor(l.type || "Port"),
+        name: String(l.name),
+        country: String(l.country || ""),
+        address: l.address || undefined,
+        custom: true,
+      } as Location & { custom: boolean }));
+  } catch (err) {
+    console.warn("[locations] Could not read custom locations:", err);
+    return [];
+  }
+}
+
+function writeCustomLocations(list: Location[]): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(CUSTOM_LOCATIONS_KEY, JSON.stringify(list));
+  } catch (err) {
+    console.warn("[locations] Could not write custom locations:", err);
+  }
+}
+
+export function addCustomLocation(input: { name: string; country: string; type: LocationType; address?: string }): Location {
+  const existing = readCustomLocations();
+  const nextId = Math.max(CUSTOM_LOCATION_ID_BASE, ...existing.map(l => Number(l.id) || 0)) + 1;
+  const loc: Location = {
+    id: nextId,
+    type: input.type,
+    legacyType: legacyTypeFor(input.type),
+    name: input.name.trim(),
+    country: (input.country || "").trim(),
+    address: (input.address || "").trim() || undefined,
+  };
+  writeCustomLocations([...existing, { ...loc, custom: true } as any]);
+  return loc;
+}
+
+export function removeCustomLocation(id: number): void {
+  writeCustomLocations(readCustomLocations().filter(l => Number(l.id) !== Number(id)));
+}
+
+// Merge custom locations into the canonical list at module load. Modules that
+// snapshot LOCATIONS at import time therefore see customs too; Settings reloads
+// the page after add/remove so every module picks up changes consistently.
+readCustomLocations().forEach(cl => {
+  if (!LOCATIONS.find(l => String(l.id) === String(cl.id))) LOCATIONS.push(cl);
+});
+
+// ─── LOGISTICS POINTS (v6.12) ───────────────────────────────────────────────
+// The places that are NOT a counterparty's own premises: ports of loading and
+// discharge, relay points, and cross-dock warehouses named by a forwarder
+// (which are third-party sites, NOT the forwarder's address). They are managed
+// in Counterparties → Logistics points and stored in localStorage. We register
+// them into LOCATIONS at module load — before any module snapshots LOCATIONS —
+// so every From/To/Destination picker and the (frozen) transport confirmation
+// resolve them by id with no further wiring. Adding one reloads the app so this
+// bootstrap re-runs, exactly like the legacy custom-locations did.
+
+export const LOGISTICS_POINT_BASE = 800000;
+const LOGISTICS_POINTS_KEY = "marianna-erp:v1:logisticsPoints";
+
+export const LOGISTICS_POINT_KINDS: { key: string; label: string; type: LocationType; legacyType: string }[] = [
+  { key: "PortLoading",   label: "Port of loading",       type: "Port",       legacyType: "PORT" },
+  { key: "PortDischarge", label: "Port of discharge",     type: "Port",       legacyType: "PORT" },
+  { key: "Relay",         label: "Relay point",           type: "RelayPoint", legacyType: "PORT" },
+  { key: "CrossDock",     label: "Cross-dock warehouse",  type: "RelayPoint", legacyType: "PORT" },
+];
+
+export function logisticsPointLocId(id: any): number {
+  return LOGISTICS_POINT_BASE + Number(id || 0);
+}
+
+export function readLogisticsPoints(): any[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(LOGISTICS_POINTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn("[locations] Could not read logistics points:", err);
+    return [];
+  }
+}
+
+// Synchronous write so a follow-up page reload re-bootstraps with the new data
+// (mirrors how custom locations persisted before a reload).
+export function writeLogisticsPoints(list: any[]): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(LOGISTICS_POINTS_KEY, JSON.stringify(list || []));
+  } catch (err) {
+    console.warn("[locations] Could not write logistics points:", err);
+  }
+}
+
+// Register (idempotently) logistics points as Location entries so locById/locText
+// resolve them everywhere — including the transport confirmation snapshot.
+export function registerLogisticsPoints(points: any[]): void {
+  (points || []).forEach((p: any) => {
+    if (!p || !p.name) return;
+    const kind = LOGISTICS_POINT_KINDS.find(k => k.key === p.kind) || LOGISTICS_POINT_KINDS[0];
+    const id = logisticsPointLocId(p.id);
+    const loc: Location = {
+      id,
+      type: kind.type,
+      legacyType: kind.legacyType,
+      name: String(p.name),
+      country: String(p.country || ""),
+      address: (p.address || "").trim() || undefined,
+    };
+    const existing = LOCATIONS.find(l => String(l.id) === String(id));
+    if (!existing) LOCATIONS.push(loc);
+    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; }
+  });
+}
+
+// Bootstrap at module load (mirrors the custom-locations merge above) so every
+// consumer that snapshots LOCATIONS at import sees logistics points too.
+registerLogisticsPoints(readLogisticsPoints());
+
 // ─── Lookups ────────────────────────────────────────────────────────────────
 
 export function locById(id: any): Location | null {
@@ -130,3 +288,132 @@ export function locationsByLegacyType(legacyType: string): Location[] {
 export function allLocations(): Location[] {
   return LOCATIONS.filter(l => !l.aliasOf);
 }
+
+// ─── v6.10: WAREHOUSE COUNTERPARTIES AS LOCATIONS ───────────────────────────
+// Warehouses are counterparties (we receive invoices from them) and one
+// warehouse company can have several delivery addresses. These helpers turn the
+// "Warehouse" counterparties (and each of their addresses) into selectable
+// Location entries so that (a) the tariff's "operates" picker can reference them
+// and (b) destination dropdowns can send cargo to them. Synthetic ids are
+// derived from the counterparty id + address index and never clash with the
+// built-in/custom ranges. locations.ts cannot import Contacts, so callers pass
+// the contacts list in.
+
+export const WAREHOUSE_CP_LOC_BASE = 900000;
+
+export function isWarehouseContact(c: any): boolean {
+  return !!c && (c.type === "Warehouse" || (c.additionalTypes || []).includes("Warehouse"));
+}
+
+// Every address a counterparty has: its primary address (index 0) plus any
+// extraAddresses[] (index 1..n). Always returns at least one entry.
+export function contactAddresses(c: any): { address: string; index: number }[] {
+  const list: { address: string; index: number }[] = [];
+  if (c?.address) list.push({ address: String(c.address), index: 0 });
+  (c?.extraAddresses || []).forEach((a: any, i: number) => {
+    const addr = typeof a === "string" ? a : (a?.address || "");
+    if (String(addr).trim()) list.push({ address: String(addr), index: i + 1 });
+  });
+  if (!list.length) list.push({ address: "", index: 0 });
+  return list;
+}
+
+export function warehouseCpLocId(contactId: any, addressIndex: number): number {
+  return WAREHOUSE_CP_LOC_BASE + Number(contactId) * 100 + Number(addressIndex || 0);
+}
+
+// Build (and register) Location entries for warehouse counterparties' addresses.
+// Registration is idempotent and additive so locById/locText resolve them in
+// every module without each module having to know about contacts.
+export function warehouseAddressLocations(contacts: any[]): Location[] {
+  const out: Location[] = [];
+  (contacts || []).filter(isWarehouseContact).forEach((c: any) => {
+    contactAddresses(c).forEach(({ address, index }) => {
+      const id = warehouseCpLocId(c.id, index);
+      const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
+      out.push({ id, type: "RentedWarehouse", legacyType: "OWN", name, country: c.country || "", address: address || undefined });
+    });
+  });
+  out.forEach(loc => {
+    const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
+    if (!existing) LOCATIONS.push(loc);
+    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; }
+  });
+  return out;
+}
+
+// Candidate "operated" locations for a warehouse tariff: the built-in/custom
+// warehouse-type locations PLUS the warehouse counterparties' own addresses.
+export function warehouseLocationOptions(contacts: any[]): Location[] {
+  const builtins = LOCATIONS.filter(l =>
+    !l.aliasOf &&
+    Number(l.id) < WAREHOUSE_CP_LOC_BASE &&
+    (l.type === "RentedWarehouse" || l.type === "OwnWarehouse" || l.type === "PortWarehouse" || l.type === "BondedWarehouse")
+  );
+  const cp = warehouseAddressLocations(contacts);
+  const seen = new Set<string>();
+  return [...builtins, ...cp].filter(l => { const k = String(l.id); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// Flat list of warehouse destinations (counterparty × address) for destination
+// dropdowns. Each option stores a stable location id and shows company + address.
+export function warehouseDestinationOptions(contacts: any[]): { id: number; contactId: any; name: string; address: string }[] {
+  const out: { id: number; contactId: any; name: string; address: string }[] = [];
+  (contacts || []).filter(isWarehouseContact).forEach((c: any) => {
+    contactAddresses(c).forEach(({ address, index }) => {
+      out.push({ id: warehouseCpLocId(c.id, index), contactId: c.id, name: c.name, address });
+    });
+  });
+  return out;
+}
+
+// ─── COUNTERPARTY ADDRESSES AS LOCATIONS (v6.15, #6) ────────────────────────
+// From / To / Destination must offer the supplier, client and warehouse
+// addresses entered in the Counterparties module — not a separate list. We
+// register every such address into LOCATIONS with a stable id (the same
+// 900000 + contactId*100 + addressIndex scheme the warehouse helper already
+// uses) and the right legacyType, so the pickers (which filter LOCATIONS by
+// legacyType) and the transport confirmation (which resolves by id) both see
+// them. Bootstrapped at module load from localStorage BEFORE any module
+// snapshots LOCATIONS — mirroring the logistics-points bootstrap. A reload is
+// what propagates newly added counterparties (same pattern used elsewhere).
+
+function counterpartyLocationRole(c: any): { legacyType: string; type: LocationType } | null {
+  if (isWarehouseContact(c)) return { legacyType: "OWN", type: "RentedWarehouse" };
+  const types = [c?.type, ...((c?.additionalTypes) || [])];
+  if (types.includes("Supplier")) return { legacyType: "SUPPLIER", type: "SupplierFacility" };
+  if (types.includes("Client")) return { legacyType: "CLIENT", type: "ClientFacility" };
+  return null; // carriers / forwarders / brokers are providers, not delivery places
+}
+
+// Register (idempotently) supplier / client / warehouse counterparty addresses.
+export function registerCounterpartyLocations(contacts: any[]): void {
+  (contacts || []).forEach((c: any) => {
+    const role = counterpartyLocationRole(c);
+    if (!role || (c.id == null)) return;
+    contactAddresses(c).forEach(({ address, index }) => {
+      const id = warehouseCpLocId(c.id, index);
+      const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
+      const loc: Location = { id, type: role.type, legacyType: role.legacyType, name, country: c.country || "", address: address || undefined };
+      const existing = LOCATIONS.find(l => String(l.id) === String(id));
+      if (!existing) LOCATIONS.push(loc);
+      else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; }
+    });
+  });
+}
+
+function readContactsFromStorage(): any[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem("marianna-erp:v1:contacts");
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn("[locations] Could not read contacts for location bootstrap:", err);
+    return [];
+  }
+}
+
+// Bootstrap at module load — runs to completion before importers snapshot LOCATIONS.
+registerCounterpartyLocations(readContactsFromStorage());

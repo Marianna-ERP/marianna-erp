@@ -51,6 +51,20 @@ export default function SOMarginCard({
     [order, lots, pos, shipments, operationalCosts, allOrders, mode]
   );
 
+  // v6.6: consignment awareness — sources from consignment lots mean P/L will
+  // equal our commission once the settlement closes; before that, COGS is absent.
+  const consignmentSources = React.useMemo(() => {
+    const hits: any[] = [];
+    (order.items || []).forEach((it: any) => {
+      const lot = (lots || []).find((l: any) =>
+        (it.sourceType === "STOCK" && String(it.sourceRef) === String(l.number)) ||
+        (it.sourceType === "PO" && l.poRef && String(it.sourceRef) === String(l.poRef) && String(it.product || "").trim().toLowerCase() === String(l.product || "").trim().toLowerCase()));
+      if (lot && lot.consignment && !hits.find(h => h.number === lot.number)) hits.push(lot);
+    });
+    return hits;
+  }, [order, lots]);
+  const openConsignment = consignmentSources.filter((l: any) => !(l.settlement && l.settlement.status === "Closed"));
+
   const isLoss = margin.netMarginPLN < 0;
   const isThinMargin = margin.netMarginPLN >= 0 && margin.netMarginPct < 5;
   const marginColor = isLoss ? "#DC2626" : isThinMargin ? "#D97706" : "#16A34A";
@@ -84,30 +98,30 @@ export default function SOMarginCard({
       </div>
 
       {/* Big numbers row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 16 }}>
-        <div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 10, color: "#888" }}>REVENUE</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtSO(margin.revenueSO, margin.currency)}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#111", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={fmtSO(margin.revenueSO, margin.currency)}>{fmtSO(margin.revenueSO, margin.currency)}</div>
           {margin.currency !== "PLN" && (
-            <div style={{ fontSize: 11, color: "#888" }}>{fmtPLN(margin.revenuePLN)}</div>
+            <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={fmtPLN(margin.revenuePLN)}>{fmtPLN(margin.revenuePLN)}</div>
           )}
         </div>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 10, color: "#888" }}>CONTRIBUTION</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: margin.contributionMarginPLN < 0 ? "#DC2626" : "#16A34A", marginTop: 2 }}>{fmtPLN(margin.contributionMarginPLN)}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: margin.contributionMarginPLN < 0 ? "#DC2626" : "#16A34A", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={fmtPLN(margin.contributionMarginPLN)}>{fmtPLN(margin.contributionMarginPLN)}</div>
           <div style={{ fontSize: 11, color: "#888" }}>{fmtPct(margin.contributionMarginPct)} before overhead</div>
         </div>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 10, color: "#888" }}>ALLOCATED OVERHEAD</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#64748B", marginTop: 2 }}>{fmtPLN(margin.overheadCostsPLN)}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#64748B", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={fmtPLN(margin.overheadCostsPLN)}>{fmtPLN(margin.overheadCostsPLN)}</div>
           <div style={{ fontSize: 11, color: "#888" }}>{margin.overheadLines.length} overhead line(s)</div>
         </div>
-        <div style={{ textAlign: "right" }}>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 10, color: "#888" }}>NET P/L</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: marginColor, marginTop: 2 }}>{fmtPLN(margin.netMarginPLN)}</div>
+          <div style={{ fontSize: 19, fontWeight: 700, color: marginColor, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={fmtPLN(margin.netMarginPLN)}>{fmtPLN(margin.netMarginPLN)}</div>
           <div style={{ fontSize: 12, color: marginColor, fontWeight: 600 }}>{fmtPct(margin.netMarginPct)}</div>
           {margin.currency !== "PLN" && (
-            <div style={{ fontSize: 11, color: "#888" }}>{fmtSO(margin.netMarginSO, margin.currency)}</div>
+            <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={fmtSO(margin.netMarginSO, margin.currency)}>{fmtSO(margin.netMarginSO, margin.currency)}</div>
           )}
         </div>
       </div>
@@ -150,6 +164,14 @@ export default function SOMarginCard({
         </div>
       )}
 
+      {consignmentSources.length > 0 && (
+        <div style={{ padding: "8px 12px", background: "#FAF5FF", border: "1px solid #DDD6FE", borderRadius: 6, fontSize: 12, color: "#6D28D9", marginBottom: 12 }}>
+          ⚖ This SO sells <strong>consignment goods</strong> ({consignmentSources.map((l: any) => l.number).join(", ")}).
+          {openConsignment.length
+            ? " The producer's price is settled from sales — figures above EXCLUDE the producer cost until the settlement closes; the final P/L will equal your commission."
+            : " Settlement closed — the producer invoice and your commission are in the costs, so the P/L above is final (≈ your commission)."}
+        </div>
+      )}
       {/* Loss warning */}
       {isLoss && (
         <div style={{ padding: "8px 12px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 6, fontSize: 12, color: "#991B1B", marginBottom: 12 }}>

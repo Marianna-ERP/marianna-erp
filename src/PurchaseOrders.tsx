@@ -1,6 +1,7 @@
 import React, { useState, useRef, useMemo } from "react";
 import { getCounterpartiesByType } from "./Contacts";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { localTodayISO, localMonthISO } from "./dates";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -654,9 +655,9 @@ function PODoc({ order }: any) {
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.pallets || "—"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.unit || "Kg"}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.qty || 0).toLocaleString("pl-PL")}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.unitPrice || 0).toFixed(2)}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.currency}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{parseFloat(lt).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : parseFloat(item.unitPrice || 0).toFixed(2)}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : order.currency}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{(order.pricingMode || "firm") === "consignment" ? "Konsygnacja / Consignment" : parseFloat(lt).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
               </tr>
             );
           })}
@@ -671,9 +672,9 @@ function PODoc({ order }: any) {
             <td style={{ border: "1px solid #ccc", padding: "6px 8px", textAlign: "right", background: "#f9f9f9", verticalAlign: "top" }}>
               <BiLbl en="Net Total" pl="Suma netto" align="right" />
             </td>
-            <td style={{ border: "1px solid #ccc", padding: "6px 8px", textAlign: "right", fontWeight: 700, fontSize: 12, verticalAlign: "top" }}>
+            <td style={{ border: "1px solid #ccc", padding: "6px 8px", textAlign: "right", fontWeight: 700, fontSize: 12, verticalAlign: "top" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ fontSize: 10.5 }}>Konsygnacja — rozliczenie ze sprzedaży / Consignment — settled on sales</span> : <>
               {total.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {currency}
-            </td>
+            </>}</td>
           </tr>
         </tbody>
       </table>
@@ -940,42 +941,31 @@ function EmailModal({ order, onClose }: any) {
 
 // ─── LIFECYCLE TIMELINE ─────────────────────────────────────────────────────
 function LifecycleTimeline({ status }: any) {
-  if (status === "Cancelled") {
-    return (
-      <div style={{ padding: "10px 14px", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 12, color: "#9A1B1B", fontWeight: 600 }}>
-        ⊘ Cancelled — no further actions
-      </div>
-    );
-  }
-  const currentIdx = STATUS_LIFECYCLE.indexOf(status);
+  // v6.13 (#1): standardised to match the Sales Order lifecycle bar (pill chips
+  // with check-marks for completed stages) so PO and SO read the same way.
+  const stages = STATUS_LIFECYCLE;
+  const currentIdx = stages.indexOf(status);
+  const isCancelled = status === "Cancelled";
   return (
-    <div style={{ display: "flex", alignItems: "center", padding: "0 4px" }}>
-      {STATUS_LIFECYCLE.map((s, i) => {
-        const reached = i <= currentIdx;
-        const isCurrent = i === currentIdx;
-        const palette = PO_STATUSES[s];
+    <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+      {stages.map((s, i) => {
+        const past = !isCancelled && i < currentIdx;
+        const current = !isCancelled && i === currentIdx;
+        const palette = PO_STATUSES[s] || { bg: "#F3F4F6", color: "#6B7280" };
         return (
-          <div key={s} style={{ flex: i < STATUS_LIFECYCLE.length - 1 ? 1 : 0, display: "flex", alignItems: "center" }}>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-              <div style={{
-                width: isCurrent ? 28 : 22, height: isCurrent ? 28 : 22, borderRadius: "50%",
-                background: reached ? palette.color : "#fff",
-                border: `2px solid ${reached ? palette.color : "#E5E7EB"}`,
-                color: reached ? "#fff" : "#CCC",
-                fontSize: isCurrent ? 13 : 11, fontWeight: 700,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                transition: "all 0.15s",
-              }}>
-                {reached ? "✓" : i + 1}
-              </div>
-              <div style={{ marginTop: 6, fontSize: 10, fontWeight: isCurrent ? 700 : 500, color: reached ? palette.color : "#AAA", whiteSpace: "nowrap" }}>{s}</div>
-            </div>
-            {i < STATUS_LIFECYCLE.length - 1 && (
-              <div style={{ flex: 1, height: 2, background: i < currentIdx ? palette.color : "#E5E7EB", margin: "0 6px", transition: "background 0.15s" }} />
-            )}
-          </div>
+          <React.Fragment key={s}>
+            <div style={{
+              padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600,
+              background: current ? palette.bg : (past ? "#F3F4F6" : "#FAFAFA"),
+              color: current ? palette.color : (past ? "#374151" : "#CCC"),
+              border: current ? `1px solid ${palette.color}` : "1px solid transparent",
+              whiteSpace: "nowrap",
+            }}>{past && "✓ "}{s}</div>
+            {i < stages.length - 1 && <div style={{ width: 8, height: 1, background: past ? "#9CA3AF" : "#E5E7EB" }} />}
+          </React.Fragment>
         );
       })}
+      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Cancelled</span>}
     </div>
   );
 }
@@ -984,7 +974,17 @@ function LifecycleTimeline({ status }: any) {
 function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
+  // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at
+  // origin. Block the forward transition while the loading date is still ahead.
+  const SHIP_OR_LATER = ["Shipped", "Arrived", "Closed"];
+  const setStatus = (newStatus) => {
+    if (SHIP_OR_LATER.includes(newStatus) && order.loadingDate && String(order.loadingDate) > localTodayISO()) {
+      alert(`This PO can't be set to "${newStatus}" yet — the loading date (${order.loadingDate}) hasn't been reached.\n\nGoods can't leave origin before they are loaded. Update the loading date if it has actually changed, or wait until the loading date.`);
+      return;
+    }
+    sf("status", newStatus);
+  };
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
   const showOtherTerms = order.paymentTerms === "Other";
@@ -1031,7 +1031,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 {order.flow && <FlowBadge flow={order.flow} />}
               </div>
               <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
-              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "FX rate locked at confirmation · some fields read-only" : "Draft — all fields editable"}</div>
+              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Confirmed — product, quantities, supplier & commercial terms are locked" : "Draft — all fields editable"}</div>
             </div>
             <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Total net</div>
@@ -1040,6 +1040,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>{fmtNum(totalKg)} kg total</div>
             </div>
           </div>
+
+          {isLocked && (
+            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12.5, color: "#92400E", lineHeight: 1.5 }}>
+              🔒 <strong>This PO is confirmed and locked.</strong> Product, quantities, supplier, incoterm, flow and commercial terms can't be changed — inventory lots, sales orders and shipments already depend on them. You can still update operational fields (dates, status, notes). To change the locked details, cancel this PO and raise a new one.
+            </div>
+          )}
 
           {/* Header card */}
           <Card style={{ marginBottom: 16 }}>
@@ -1071,13 +1077,13 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once it arrives</div>
               </div>
               <div><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
+                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)}>
                   {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
                 </Sel>
               </div>
               <div style={{ gridColumn: "span 3" }}>
                 <Lbl>Supplier</Lbl>
-                <Sel value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
+                <Sel disabled={isLocked} value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
                   <option value="">— select —</option>
                   {suppliers.map(s => <option key={s.id} value={s.name}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
                 </Sel>
@@ -1091,7 +1097,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
               <div>
                 <Lbl>Flow type</Lbl>
-                <Sel value={order.flow || ""} onChange={e => {
+                <Sel disabled={isLocked} value={order.flow || ""} onChange={e => {
                   const nextFlow = e.target.value;
                   setOrder(o => ({
                     ...o,
@@ -1125,7 +1131,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Destination {order.flow && <span style={{ color: "#BBB", fontWeight: 400 }}>· typical: {LOCATION_TYPES[FLOW_DESTINATION_TYPE[order.flow]]?.label}</span>}</Lbl>
-                <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
+                <Sel disabled={isLocked} value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
                   <option value="">— select —</option>
                   {(() => {
                     // Show typical destination type first, then the others
@@ -1147,6 +1153,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   })()}
                 </Sel>
                 <Inp
+                  disabled={isLocked}
                   value={order.destinationText || ""}
                   onChange={e => sf("destinationText", e.target.value)}
                   placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
@@ -1160,7 +1167,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             {/* Sea freight toggle — separate flag, not tied to flow choice */}
             <div style={{ marginTop: 14, padding: "10px 14px", background: order.requiresSea ? "#E0F2FE" : "#F9FAFB", border: `1px solid ${order.requiresSea ? "#BAE6FD" : "#F3F4F6"}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: order.requiresSea ? "#0369A1" : "#555" }}>
-                <input type="checkbox" checked={!!order.requiresSea} onChange={e => sf("requiresSea", e.target.checked)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+                <input type="checkbox" disabled={isLocked} checked={!!order.requiresSea} onChange={e => sf("requiresSea", e.target.checked)} style={{ width: 16, height: 16, cursor: isLocked ? "not-allowed" : "pointer" }} />
                 <span>⚓ Sea freight involved</span>
               </label>
               <div style={{ fontSize: 11, color: "#888", lineHeight: 1.4, flex: 1 }}>
@@ -1178,7 +1185,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 14 }}>
               <div>
                 <Lbl>Payment terms</Lbl>
-                <Sel value={order.paymentTerms} onChange={e => sf("paymentTerms", e.target.value)}>
+                <Sel disabled={isLocked} value={order.paymentTerms} onChange={e => sf("paymentTerms", e.target.value)}>
                   {PAYMENT_TERMS.map(p => <option key={p}>{p}</option>)}
                 </Sel>
                 {showOtherTerms && (
@@ -1188,8 +1195,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 )}
               </div>
               <div>
+                <Lbl>Pricing</Lbl>
+                <Sel value={order.pricingMode || "firm"} onChange={e => sf("pricingMode", e.target.value)} disabled={isLocked}
+                  title="Consignment: the producer's price is settled from your sales later — the PO saves WITHOUT purchase prices.">
+                  <option value="firm">Firm price</option>
+                  <option value="consignment">Consignment — settled on sales</option>
+                </Sel>
+              </div>
+              <div>
                 <Lbl>Currency</Lbl>
-                <Sel value={order.currency} onChange={e => sf("currency", e.target.value)} disabled={isLocked}>
+                <Sel value={order.currency} onChange={e => setOrder(o => ({ ...o, currency: e.target.value, items: (o.items || []).map(it => ({ ...it, currency: e.target.value })) }))} disabled={isLocked}>
                   {CURRENCIES.map(c => <option key={c}>{c}</option>)}
                 </Sel>
               </div>
@@ -1203,11 +1218,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 
           {/* Line items */}
           <Card style={{ marginBottom: 16 }}>
-            <SectionTitle right={<button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>+ Add line</button>}>LINE ITEMS ({order.items.length})</SectionTitle>
+            <SectionTitle right={<button onClick={isLocked ? undefined : addItem} disabled={isLocked} title={isLocked ? "Confirmed PO — line items are locked" : ""} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: isLocked ? "#9CA3AF" : "#16A34A", fontSize: 11, fontWeight: 600, cursor: isLocked ? "not-allowed" : "pointer", opacity: isLocked ? 0.5 : 1 }}>+ Add line</button>}>LINE ITEMS ({order.items.length})</SectionTitle>
             {/* Shared datalist — product autocomplete pulls from this; grows as POs are added */}
             <datalist id="po-product-suggestions">
               {productSuggestions.map(p => <option key={p} value={p} />)}
             </datalist>
+            <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             {order.items.map((it, i) => {
               const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
@@ -1235,18 +1251,22 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 19500" /></div>
-                    <div><Lbl>Unit price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" /></div>
+                    <div><Lbl>Unit price</Lbl>{(order.pricingMode || "firm") === "consignment"
+                      ? <div style={{ padding: "8px 10px", border: "1px dashed #D8B4FE", borderRadius: 6, fontSize: 12, color: "#7C3AED", background: "#FAF5FF", fontWeight: 600 }} title="Consignment — the producer's price is settled from your sales">Consignment ⚖</div>
+                      : <Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" />}</div>
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr", gap: 8, marginTop: 8 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr 0.7fr", gap: 8, marginTop: 8 }}>
                     <div><Lbl>Coloration / Variety</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" /></div>
+                    <div><Lbl>Boxes</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
                     <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
                   </div>
                 </div>
               );
             })}
+            </fieldset>
           </Card>
 
           {/* Notes */}
@@ -1330,7 +1350,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ background: "#F9FAFB" }}>
-                      {["Product", "Origin", "Size", "Kl.", "Packaging", "Qty kg", "Unit price", "Total"].map((h, i) => (
+                      {["Product", "Origin", "Size", "Kl.", "Packaging", "Boxes", "Qty kg", "Unit price", "Total"].map((h, i) => (
                         <th key={i} style={{ padding: "8px 10px", textAlign: i >= 5 ? "right" : "left", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.06em" }}>{h}</th>
                       ))}
                     </tr>
@@ -1348,14 +1368,16 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                           <td style={{ padding: "10px", color: "#555" }}>{it.size || "—"}</td>
                           <td style={{ padding: "10px" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
+                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{it.boxes ? fmtNum(it.boxes) : "—"}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
-                          <td style={{ padding: "10px", textAlign: "right" }}>{parseFloat(it.unitPrice || 0).toFixed(2)} {it.currency}</td>
+                          <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {order.currency}</>}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{lt.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
                         </tr>
                       );
                     })}
                     <tr style={{ background: "#F9FAFB" }}>
                       <td colSpan={5} style={{ padding: "10px", fontWeight: 700, color: "#111" }}>Total</td>
+                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s, it) => s + (parseFloat(it.boxes) || 0), 0)) || "—"}</td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(totalKg)} kg</td>
                       <td></td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>
@@ -1430,7 +1452,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
               <Card>
                 <SectionTitle>LINKED RECORDS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
-                <LinkRow label="Shipments" items={computedShipments.length ? computedShipments : order.linkedShipments} color="#0284C7" bg="#E0F2FE" />
+                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
                 <LinkRow label="Inventory lots" items={order.linkedLots} color="#92400E" bg="#FEF3C7" />
                 <LinkRow label="Invoices" items={order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
                 <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
@@ -1498,7 +1520,7 @@ function poInventoryTransferErrors(order) {
     const unitPrice = parseFloat(it.unitPrice);
     if (!String(it.product || "").trim()) errors.push(`${line}: product is missing`);
     if (!isFinite(qty) || qty <= 0) errors.push(`${line}: quantity must be greater than zero`);
-    if (!isFinite(unitPrice) || unitPrice <= 0) errors.push(`${line}: purchase price must be greater than zero`);
+    if ((order.pricingMode || "firm") !== "consignment" && (!isFinite(unitPrice) || unitPrice <= 0)) errors.push(`${line}: purchase price must be greater than zero`);
   });
   if (!(order.items || []).length) errors.push("At least one PO line is required");
   return errors;
@@ -1592,8 +1614,9 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 
     const qty = parseFloat(it.qty) || 0;
     const unitPrice = parseFloat(it.unitPrice) || 0;
-    const purchaseAmount = Math.round(qty * unitPrice * 100) / 100;
-    const purchasePLN = Math.round(purchaseAmount * fx * 100) / 100;
+    const isConsignment = (order.pricingMode || "firm") === "consignment";
+    const purchaseAmount = isConsignment ? 0 : Math.round(qty * unitPrice * 100) / 100;
+    const purchasePLN = isConsignment ? 0 : Math.round(purchaseAmount * fx * 100) / 100;
     const lotNumber = `LOT-${year}-${nextLotSerial([...(existingLots || []), ...newLots], year, 1)}`;
     lotRefs.push(lotNumber);
     newLots.push({
@@ -1620,12 +1643,14 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
       status: isDirectFlow(order.flow) ? "Direct Expected" : "Expected",
       arrivalDate: order.expectedDeliveryDate || null,
       productionDate: null,
-      costs: [
+      consignment: isConsignment,
+      settlement: isConsignment ? { status: "None" } : undefined,
+      costs: isConsignment ? [] : [
         { type: "purchase", label: `Purchase expected (${order.number})`, source: order.number, amount: purchaseAmount, currency: order.currency || "PLN", pln: purchasePLN },
       ],
       movements: [],
       journey: buildJourneyFromFlow(order),
-      notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg at purchase price ${unitPrice} ${order.currency || "PLN"}/kg. Destination: ${destinationDisplay(order)}. ${directFlowLabel(order)}.`,
+      notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg ${isConsignment ? "ON CONSIGNMENT (price settled on sales)" : `at purchase price ${unitPrice} ${order.currency || "PLN"}/kg`}. Destination: ${destinationDisplay(order)}. ${directFlowLabel(order)}.`,
     });
   });
 
@@ -1678,7 +1703,9 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
   const overdueLoading = orders.filter(o => {
     if (o.status === "Closed" || o.status === "Cancelled" || o.status === "Arrived" || o.status === "Shipped") return false;
     if (!o.loadingDate) return false;
-    return new Date(o.loadingDate) < new Date();
+    // v6.4.1 fix: compare to midnight-normalized today — a PO is overdue the day
+    // AFTER its loading date, not on the loading day itself.
+    return new Date(o.loadingDate) < todayStart;
   }).length;
 
   // filtered
@@ -1688,7 +1715,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
       if (filterStatus === "Active" && !activeStatuses.has(o.status)) return false;
       if (filterStatus !== "All" && filterStatus !== "Active" && o.status !== filterStatus) return false;
       if (filterFlow !== "All" && o.flow !== filterFlow) return false;
-      if (filterSupplier !== "All" && !(o.supplier?.name || "").toLowerCase().includes(filterSupplier.toLowerCase())) return false;
+      if (filterSupplier !== "All" && o.supplier?.name !== filterSupplier) return false;
       if (q) {
         const hay = `${o.number} ${o.supplier?.name || ""} ${o.items.map(i => i.product).join(" ")} ${o.linkedShipments?.join(" ") || ""} ${o.linkedLots?.join(" ") || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -1707,7 +1734,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
         poStatus: "Cancelled",
         status: hasPhysical ? "Blocked · PO Cancelled" : "Cancelled",
         expectedKg: hasPhysical ? lot.expectedKg : 0,
-        cancelledAt: new Date().toISOString().split("T")[0],
+        cancelledAt: localTodayISO(),
         notes: `${lot.notes || ""}
 PO ${po.number} was cancelled. Lot excluded from expected procurement availability.`.trim(),
       };
@@ -1716,7 +1743,7 @@ PO ${po.number} was cancelled. Lot excluded from expected procurement availabili
 
   function reflectCancelledPOInSOs(po: any) {
     if (!extSetSOs || !po?.number) return;
-    const today = new Date().toISOString().split("T")[0];
+    const today = localTodayISO();
     extSetSOs((prevSOs: any[]) => (prevSOs || []).map((so: any) => {
       const usesPO = (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === po.number);
       if (!usesPO) return so;
@@ -1759,24 +1786,41 @@ ${blockNote}`.trim(),
       inventoryPlan = buildExpectedLotsFromPO(o, lots);
     }
 
+    // v6.11 (#2): when a PO line is removed, its still-expected lot must leave
+    // Inventory too. We only prune lots that belong to this PO, are tied to a now
+    // missing line id, and have NOT received any goods or movements — so real
+    // stock is never destroyed.
+    const currentLineIds = new Set((o.items || []).map((it, idx) => String(it.id ?? idx + 1)));
+    const orphanLotNumbers = new Set(
+      (lots || [])
+        .filter(l => l.poRef === o.number
+          && l.poLineId != null && String(l.poLineId) !== ""
+          && !currentLineIds.has(String(l.poLineId))
+          && (l.status === "Expected" || l.status === "Direct Expected")
+          && !(parseFloat(l.receivedKg) > 0) && !(parseFloat(l.physicalKg) > 0)
+          && !((l.movements || []).length))
+        .map(l => l.number)
+    );
+
     const savedId = o.id ?? Date.now();
     const updated = {
       ...o,
       id: savedId,
       linkedShipments: o.linkedShipments || [],
-      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]),
+      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]).filter(n => !orphanLotNumbers.has(n)),
       linkedInvoices: o.linkedInvoices || [],
     };
 
     if (updated.status === "Confirmed" && !updated.fxLockedAt) {
-      updated.fxLockedAt = new Date().toISOString().split("T")[0];
+      updated.fxLockedAt = localTodayISO();
     }
 
-    if (extSetLots && inventoryPlan.newLots?.length) {
+    if (extSetLots && (inventoryPlan.newLots?.length || orphanLotNumbers.size)) {
       extSetLots(prev => {
         const existingNumbers = new Set((prev || []).map(l => l.number));
-        const additions = inventoryPlan.newLots.filter(l => !existingNumbers.has(l.number));
-        return [...(prev || []), ...additions];
+        const additions = (inventoryPlan.newLots || []).filter(l => !existingNumbers.has(l.number));
+        const kept = (prev || []).filter(l => !orphanLotNumbers.has(l.number));
+        return [...kept, ...additions];
       });
     }
 
@@ -1799,7 +1843,7 @@ ${blockNote}`.trim(),
     const nextNum = nextPONumber(orders);
     setForm({
       number: nextNum, status: "Draft",
-      orderDate: new Date().toISOString().split("T")[0],
+      orderDate: localTodayISO(),
       loadingDate: "", expectedDeliveryDate: "", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
       paymentTerms: "30 days from invoice date", paymentTermsOther: "",
       buyIncoterm: "", flow: "",
@@ -1814,7 +1858,7 @@ ${blockNote}`.trim(),
 
   function deleteOrder() {
     if (!window.confirm(`Cancel PO ${selected.number}? Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.`)) return;
-    const cancelled = { ...selected, status: "Cancelled", cancelledAt: new Date().toISOString().split("T")[0] };
+    const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     setOrders(prev => prev.map(o => o.id === selected.id ? cancelled : o));
     reflectCancelledPOInInventory(cancelled);
     reflectCancelledPOInSOs(cancelled);
@@ -1860,7 +1904,7 @@ ${blockNote}`.trim(),
         {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
         <OrderDetail
           order={selected}
-          computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number)).map((s: any) => s.number)}
+          computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
           computedSOs={(extSOs || []).filter((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}
@@ -1895,64 +1939,54 @@ ${blockNote}`.trim(),
         </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>
         {/* KPI strip — compact */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
-          {[
-            { label: "ACTIVE", value: activeCount, color: "#111", sub: "Draft → Shipped" },
-            { label: "ARRIVED · NOT CLOSED", value: arrivedCount, color: arrivedCount > 0 ? "#16A34A" : "#111", sub: "awaiting invoicing" },
-            { label: "PENDING VALUE", value: fmtMoney(pendingValue, "PLN"), color: "#111", sub: "all active + arrived" },
-            { label: "LOADING OVERDUE", value: overdueLoading, color: overdueLoading > 0 ? "#DC2626" : "#111", sub: "past loading date" },
-          ].map((k, i) => (
-            <div key={i} style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
-              <div>
-                <div style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.04em" }}>{k.label}</div>
-                <div style={{ fontSize: 11, color: "#BBB", marginTop: 1 }}>{k.sub}</div>
-              </div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: k.color, whiteSpace: "nowrap" }}>{k.value}</div>
-            </div>
-          ))}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· Draft→Shipped</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
+          </Card>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ARRIVED <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· not closed</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: arrivedCount > 0 ? "#16A34A" : "#111", marginTop: 2 }}>{arrivedCount}</div>
+          </Card>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>PENDING VALUE</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtMoney(pendingValue, "PLN")}</div>
+          </Card>
+          <Card style={{ padding: "9px 12px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>LOADING OVERDUE</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: overdueLoading > 0 ? "#DC2626" : "#111", marginTop: 2 }}>{overdueLoading}</div>
+          </Card>
         </div>
 
-        {/* Filters */}
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PO#, supplier, product, linked refs…" style={{ flex: "1 1 280px", minWidth: 260, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 14px", fontSize: 13, outline: "none", background: "#fff" }} />
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>STATUS</span>
-          <button onClick={() => setFilterStatus("Active")} style={chipStyle(filterStatus === "Active")}>Active</button>
-          <button onClick={() => setFilterStatus("All")} style={chipStyle(filterStatus === "All")}>All</button>
-          {Object.keys(PO_STATUSES).map(s => (
-            <button key={s} onClick={() => setFilterStatus(s)} style={chipStyle(filterStatus === s, PO_STATUSES[s].color)}>{s}</button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>FLOW</span>
-          <button onClick={() => setFilterFlow("All")} style={chipStyle(filterFlow === "All")}>All</button>
-        </div>
-        {FLOW_GROUPS.map(g => (
-          <div key={g.id} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: g.color, fontWeight: 700, letterSpacing: "0.06em", marginRight: 4, minWidth: 50 }}>{g.label}</span>
-            {Object.entries(FLOW_TYPES).filter(([, f]) => f.group === g.id).map(([k, f]) => (
-              <button key={k} onClick={() => setFilterFlow(k)} style={chipStyle(filterFlow === k, g.color)}>{f.emoji} {f.short}</button>
-            ))}
-          </div>
-        ))}
-        <div style={{ height: 10 }} />
-
+        {/* Filters — compact single row of dropdowns */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#AAA", fontWeight: 700, letterSpacing: "0.06em", marginRight: 4 }}>SUPPLIER</span>
-          <input
-            value={filterSupplier === "All" ? "" : filterSupplier}
-            onChange={e => setFilterSupplier(e.target.value || "All")}
-            placeholder="Type to filter by supplier name…"
-            style={{ flex: "1 1 260px", minWidth: 220, border: "1px solid #E5E7EB", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, outline: "none", background: "#fff" }}
-          />
-          {filterSupplier !== "All" && (
-            <button onClick={() => setFilterSupplier("All")} style={{ fontSize: 11, padding: "5px 10px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", color: "#555" }}>Clear</button>
-          )}
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PO#, supplier, product…" style={{ flex: "1 1 240px", minWidth: 200, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+            <option value="Active">Active</option>
+            <option value="All">All statuses</option>
+            {Object.keys(PO_STATUSES).map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={filterFlow} onChange={e => setFilterFlow(e.target.value)} title="Filter by flow" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 240 }}>
+            <option value="All">All flows</option>
+            {FLOW_GROUPS.map(g => (
+              <optgroup key={g.id} label={g.label}>
+                {Object.entries(FLOW_TYPES).filter(([, f]: any) => f.group === g.id).map(([k, f]: any) => <option key={k} value={k}>{f.emoji} {f.short}</option>)}
+              </optgroup>
+            ))}
+          </select>
+          {(() => {
+            const counts: Record<string, number> = {};
+            (orders || []).forEach((o: any) => { const n = o.supplier?.name; if (n) counts[n] = (counts[n] || 0) + 1; });
+            const activeSuppliers = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+            return (
+              <select value={filterSupplier} onChange={e => setFilterSupplier(e.target.value)} title="Filter by supplier" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 220 }}>
+                <option value="All">All suppliers</option>
+                {activeSuppliers.map(([name, n]) => <option key={name} value={name}>{name} ({n})</option>)}
+              </select>
+            );
+          })()}
         </div>
 
         {/* Table */}
@@ -1967,7 +2001,7 @@ ${blockNote}`.trim(),
             const total = netTotal(o.items);
             const totalKg = totalQtyKg(o.items);
             const totalPLN = plnTotal(o);
-            const isLoadingOverdue = activeStatuses.has(o.status) && o.loadingDate && new Date(o.loadingDate) < new Date();
+            const isLoadingOverdue = activeStatuses.has(o.status) && o.loadingDate && new Date(o.loadingDate) < todayStart;
             return (
               <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 200px 130px 120px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
                 onClick={() => { setSelected(o); setView("detail"); }}
