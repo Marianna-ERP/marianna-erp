@@ -157,8 +157,9 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     let shippedKg = 0;
     lots.forEach((lot: any) => {
       arr(lot.movements).forEach((m: any) => {
-        if (m.type === "SHIP_OUT" && (String(m.soRef || "") === soNo || String(m.note || "").includes(soNo))) shippedKg += num(m.qtyKg);
-        if (m.type === "REVERSAL" && (String(m.soRef || "") === soNo || String(m.note || "").includes(soNo))) shippedKg -= num(m.qtyKg);
+        const matches = m.soRef ? String(m.soRef) === soNo : String(m.note || "").includes(soNo);
+        if (m.type === "SHIP_OUT" && matches) shippedKg += num(m.qtyKg);
+        if (m.type === "REVERSAL" && matches) shippedKg -= num(m.qtyKg);
       });
     });
     const demand = arr(o.items).reduce((s: number, it: any) => s + num(it.qty), 0);
@@ -193,11 +194,12 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
 
   // ── 6. Allocations referencing a missing warehouse invoice ─────────────────
   // Cost lines tagged with a warehouse-invoice ref whose invoice no longer exists.
-  const whInvoiceIds = new Set(warehouseInvoices.map((w: any) => `WHINV:${w.id}`));
+  // Finance tags allocated warehouse cost lines with source `WHINV-<id>` (hyphen).
+  const whInvoiceIds = new Set(warehouseInvoices.map((w: any) => `WHINV-${w.id}`));
   lots.forEach((lot: any) => {
     arr(lot.costs).forEach((c: any) => {
       const src = String(c.source || "");
-      if (src.startsWith("WHINV:") && !whInvoiceIds.has(src)) {
+      if (src.startsWith("WHINV-") && !whInvoiceIds.has(src)) {
         add("warning", "ALLOC_MISSING_INVOICE", "Inventory", lot.number || "(unnumbered lot)",
           `A cost line is tagged to ${src}, but that warehouse invoice no longer exists. The allocation is stale.`);
       }

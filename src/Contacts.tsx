@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef } from "react";
+import { nextId } from "./ids";
 import { locationsByLegacyType, warehouseLocationOptions, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
@@ -499,7 +500,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any
   const removeExtraAddress = (i) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).filter((_, idx) => idx !== i) }));
   // v6.6: seasonal commission rates (consignment sales)
   const setCommissionRate = (i, k, v) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).map((r, idx) => idx === i ? { ...r, [k]: v } : r) }));
-  const addCommissionRate = () => setForm(f => ({ ...f, commissionRates: [...(f.commissionRates || []), { id: Date.now(), season: "", validFrom: "", pct: "" }] }));
+  const addCommissionRate = () => setForm(f => ({ ...f, commissionRates: [...(f.commissionRates || []), { id: nextId(), season: "", validFrom: "", pct: "" }] }));
   const removeCommissionRate = (i) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).filter((_, idx) => idx !== i) }));
   const toggleService = (s) => setForm(f => ({ ...f, services: (f.services || []).includes(s) ? f.services.filter(x => x !== s) : [...(f.services || []), s] }));
   const toggleAdditionalType = (t) => setForm(f => ({ ...f, additionalTypes: (f.additionalTypes || []).includes(t) ? f.additionalTypes.filter(x => x !== t) : [...(f.additionalTypes || []), t] }));
@@ -1019,7 +1020,7 @@ function defaultCurrencyByCountry(country) {
 }
 
 // Parse a Fakturownia row into our counterparty shape
-function parseFakturowniaRow(row, existingNips, existingNames) {
+function parseFakturowniaRow(row, existingCounterparties) {
   const taxId = parseTaxId(row["TAX ID"]);
   const hasNip = !!(taxId.nip || taxId.vatEuId);
   const isCompany = row["Company"] === true || row["Company"] === "true" || row["Company"] === "True";
@@ -1038,11 +1039,16 @@ function parseFakturowniaRow(row, existingNips, existingNames) {
       ? { id: 1, name: "—", role: "Other", email, phone: String(phone).trim(), isPrimary: true, notes: "Contact person name unknown" }
       : null;
 
-  // Dedup detection — match by NIP first, then by exact name
+  // Dedup detection — use the SAME fuzzy matcher as the merge tool (tax-digit
+  // match + legal-suffix-stripped name containment), so the import flags the same
+  // duplicates the merge screen would, instead of a narrower exact-match rule.
+  const dupMatches = findCounterpartyDuplicates(
+    { name, nip: taxId.nip, vatEuId: taxId.vatEuId },
+    existingCounterparties || [],
+    null
+  );
   let duplicateOf = null;
-  if (taxId.nip && existingNips.has(taxId.nip.replace(/\s/g, ""))) duplicateOf = "nip";
-  else if (taxId.vatEuId && existingNips.has(taxId.vatEuId.replace(/\s/g, ""))) duplicateOf = "vatEuId";
-  else if (existingNames.has(name.toLowerCase())) duplicateOf = "name";
+  if (dupMatches.length) duplicateOf = dupMatches[0].reason === "tax" ? "nip" : "name";
 
   return {
     // Importer-only fields (not persisted)
@@ -1100,17 +1106,9 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
         const sheet = workbook.Sheets[sheetName];
         const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
-        // Build existing-record indices for dedup
-        const existingNips = new Set();
-        existingCounterparties.forEach(c => {
-          if (c.nip) existingNips.add(c.nip.replace(/\s/g, ""));
-          if (c.vatEuId) existingNips.add(c.vatEuId.replace(/\s/g, ""));
-        });
-        const existingNames = new Set(existingCounterparties.map(c => (c.name || "").toLowerCase()));
-
         const parsed = rows
           .filter(r => r["Client"] && String(r["Client"]).trim() && String(r["Client"]).trim() !== "-")
-          .map(r => parseFakturowniaRow(r, existingNips, existingNames));
+          .map(r => parseFakturowniaRow(r, existingCounterparties));
         setParsedRows(parsed);
         setStage("review");
       } catch (err) {
@@ -1444,7 +1442,7 @@ function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
     const people = [...(keep.contacts || [])];
     (incoming.contacts || []).forEach(p => {
       const dup = people.find(x => String(x.name || "").trim().toLowerCase() === String(p.name || "").trim().toLowerCase() && String(x.email || "").trim().toLowerCase() === String(p.email || "").trim().toLowerCase());
-      if (!dup) people.push({ ...p, id: Math.max(0, ...people.map(x => x.id || 0)) + 1, isPrimary: false });
+      if (!dup) people.push({ ...p, id: nextId(), isPrimary: false });
     });
     merged.contacts = people;
     merged.linkedDocs = Array.from(new Set([...(keep.linkedDocs || []), ...(incoming.linkedDocs || [])]));
@@ -1665,7 +1663,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   function commitCounterparty(c) {
     setCounterparties(prev => {
       if (c.id) return prev.map(p => p.id === c.id ? { ...p, ...c } : p);
-      const newC = { ...c, id: Date.now(), contacts: [], linkedDocs: [] };
+      const newC = { ...c, id: nextId(), contacts: [], linkedDocs: [] };
       setSelectedId(newC.id);
       return [...prev, newC];
     });
@@ -1707,7 +1705,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
       if (person.id) {
         nextContacts = c.contacts.map(p => p.id === person.id ? { ...p, ...person } : p);
       } else {
-        const newId = Math.max(0, ...c.contacts.map(p => p.id || 0)) + 1;
+        const newId = nextId();
         const isFirstPrimary = c.contacts.length === 0;
         nextContacts = [...c.contacts, { ...person, id: newId, isPrimary: person.isPrimary || isFirstPrimary }];
       }
@@ -1744,11 +1742,10 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   }
 
   function handleImport(toImport) {
-    // Assign fresh IDs and merge into state
-    const maxId = counterparties.reduce((m, c) => Math.max(m, c.id || 0), 0);
-    const newRecords = toImport.map((r, i) => ({
+    // Assign fresh, never-reused IDs and merge into state.
+    const newRecords = toImport.map((r) => ({
       ...r,
-      id: maxId + i + 1,
+      id: nextId(),
       linkedDocs: [],
     }));
     setCounterparties(prev => [...prev, ...newRecords]);
@@ -1939,8 +1936,8 @@ function LogisticsPointsView({ points = [], setPoints }: any) {
     if (!String(form.name || "").trim()) { window.alert("Enter a name for the location."); return; }
     const list = [...(points || [])];
     if (form.id == null) {
-      const nextId = Math.max(0, ...list.map((p: any) => Number(p.id) || 0)) + 1;
-      list.push({ ...form, id: nextId, name: form.name.trim() });
+      const newPointId = nextId();
+      list.push({ ...form, id: newPointId, name: form.name.trim() });
     } else {
       const i = list.findIndex((p: any) => p.id === form.id);
       if (i >= 0) list[i] = { ...form, name: form.name.trim() };

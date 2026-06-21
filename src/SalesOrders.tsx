@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { nextId } from "./ids";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
@@ -1339,7 +1340,7 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
 function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (i, k, v) => setOrder(o => ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
   const removeItem = (i) => setOrder(o => ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
@@ -2361,7 +2362,7 @@ export default function SalesOrders({
       destinationLocationId: null,
       destinationText: "",
       currency: "PLN", fxRate: 1, fxLockedAt: null,
-      items: [{ id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
+      items: [{ id: nextId(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
       notes: "",
       linkedInvoices: [], linkedShipments: [],
     });
@@ -2374,7 +2375,7 @@ export default function SalesOrders({
     if (!extSetLots || !order) return;
     const today = localTodayISO();
     extSetLots(prevLots => prevLots.map(lot => {
-      const alreadyReversed = (lot.movements || []).some(m => m.type === "REVERSAL" && String(m.note || "").includes(order.number));
+      const alreadyReversed = (lot.movements || []).some(m => m.type === "REVERSAL" && (m.soRef ? String(m.soRef) === String(order.number) : String(m.note || "").includes(order.number)));
       if (alreadyReversed) return lot;
 
       let qtyToRestore = 0;
@@ -2386,19 +2387,20 @@ export default function SalesOrders({
         if (!matchesLot) return;
 
         const shippedForSO = (lot.movements || [])
-          .filter(m => m.type === "SHIP_OUT" && String(m.note || "").includes(order.number))
+          .filter(m => m.type === "SHIP_OUT" && (m.soRef ? String(m.soRef) === String(order.number) : String(m.note || "").includes(order.number)))
           .reduce((sum, m) => sum + (parseFloat(m.qtyKg) || 0), 0);
         if (shippedForSO > 0) qtyToRestore += Math.min(lineQty || shippedForSO, shippedForSO);
       });
 
       if (qtyToRestore <= 0) return lot;
       const reversal = {
-        id: Date.now() + Math.round(Math.random() * 100000),
+        id: nextId(),
         date: today,
         type: "REVERSAL",
         qtyKg: qtyToRestore,
         fromId: lot.locationId,
         toId: lot.locationId,
+        soRef: order.number,
         note: `Inventory reversal for cancelled ${order.number}`,
       };
       const nextPhysical = (parseFloat(lot.physicalKg) || 0) + qtyToRestore;
@@ -2483,7 +2485,7 @@ export default function SalesOrders({
     const alreadyInvoiced = (o.linkedInvoices && o.linkedInvoices.length > 0)
       || (o.pendingInvoices && o.pendingInvoices.length > 0);
 
-    const savedOrder = { ...o, id: o.id ?? Date.now() };
+    const savedOrder = { ...o, id: o.id ?? nextId() };
     setOrders(prev => {
       const exists = prev.find(p => p.id === savedOrder.id);
       if (exists) return prev.map(p => p.id === savedOrder.id ? savedOrder : p);

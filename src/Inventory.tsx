@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from "react";
+import { nextId } from "./ids";
+import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
 import { localTodayISO, localMonthISO } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
@@ -807,6 +809,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   const [fromId, setFromId] = useState(editing?.fromId ?? lot.locationId);
   const [toId, setToId] = useState(editing?.toId ?? lot.locationId);
   const [note, setNote] = useState(editing?.note || "");
+  const [soRef, setSoRef] = useState(editing?.soRef || "");
   const [date, setDate] = useState(editing?.date || today);
   const reservationState = lotReservations(lot, liveSOs);
   const liveAvailableKg = reservationState.liveAvailable;
@@ -904,6 +907,23 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
             </div>
           )}
 
+          {type === "SHIP_OUT" && (
+            <div style={{ marginBottom: 14 }}>
+              <Lbl>For Sales Order <span style={{ color: "#BBB", fontWeight: 400 }}>(links this dispatch to the SO for correct P/L)</span></Lbl>
+              <select value={soRef} onChange={e => setSoRef(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", background: "#fff" }}>
+                <option value="">— none / not linked —</option>
+                {(reservationState.reservations || []).map((r: any) => (
+                  <option key={r.soNumber} value={r.soNumber}>{r.soNumber}{r.clientName ? ` · ${r.clientName}` : ""} ({r.qty.toLocaleString("pl-PL")} kg)</option>
+                ))}
+                {/* Also allow any non-cancelled SO that sources this lot, even if not currently reserving */}
+                {(liveSOs || [])
+                  .filter((o: any) => !(reservationState.reservations || []).some((r: any) => r.soNumber === o.number))
+                  .filter((o: any) => (o.items || []).some((it: any) => (it.sourceType === "STOCK" && it.sourceRef === lot.number) || (it.sourceType === "PO" && it.sourceRef === lot.poRef)))
+                  .map((o: any) => <option key={o.number} value={o.number}>{o.number}{o.client?.name ? ` · ${o.client.name}` : ""}</option>)}
+              </select>
+            </div>
+          )}
+
           <div style={{ marginBottom: 18 }}>
             <Lbl>Note</Lbl>
             <Inp value={note} onChange={e => setNote(e.target.value)} placeholder={mode === "quality" ? "e.g. 2 pallets soft/over-ripe found on arrival at Gdańsk" : "e.g. Reserved for SO-2026-0094 (Biedronka)"} />
@@ -922,7 +942,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
           )}
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date, ...(mode === "quality" ? { detectedAt } : {}) })} disabled={isInvalid}
+            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date, soRef: type === "SHIP_OUT" ? (soRef || null) : (editing?.soRef ?? null), ...(mode === "quality" ? { detectedAt } : {}) })} disabled={isInvalid}
               style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: isInvalid ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: isInvalid ? "not-allowed" : "pointer" }}>
               {editing ? "Save changes" : (mode === "quality" ? "Record quality issue" : "Record movement")}
             </button>
@@ -1233,7 +1253,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
                   <button onClick={() => setExtra(prev => prev.filter((_, idx) => idx !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
                 </div>
               ))}
-              <button onClick={() => setExtra(prev => [...prev, { id: Date.now(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
+              <button onClick={() => setExtra(prev => [...prev, { id: nextId(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
             </div>
           )}
         </div>
@@ -1738,7 +1758,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality]);
 
   // ── mutations ───────────────────────────────────────────────────────
-  function recordMovement({ id, type, qtyKg, fromId, toId, note, date }: any) {
+  function recordMovement({ id, type, qtyKg, fromId, toId, note, date, soRef }: any) {
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       // Capture a stable base location for replay (origin before any movement).
@@ -1746,10 +1766,10 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       let movements;
       if (id != null) {
         // EDIT: replace the existing movement by id.
-        movements = (l.movements || []).map(m => m.id === id ? { ...m, type, qtyKg, fromId, toId, note, date } : m);
+        movements = (l.movements || []).map(m => m.id === id ? { ...m, type, qtyKg, fromId, toId, note, date, soRef: soRef ?? m.soRef ?? null } : m);
       } else {
         // ADD: append a new movement.
-        movements = [...(l.movements || []), { id: Date.now(), date: date || today, type, qtyKg, fromId, toId, note }];
+        movements = [...(l.movements || []), { id: nextId(), date: date || today, type, qtyKg, fromId, toId, note, soRef: soRef ?? null }];
       }
       // Recompute all derived quantities/status/location from the full movement list.
       return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
@@ -1775,7 +1795,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       // Mirror the customs cost into the lot's cost breakdown (replace any prior
       // customs cost line for this kind, so editing doesn't double-count).
       const tag = kind === "export" ? "Export customs" : "Import customs";
-      const fx = data.currency === "PLN" ? 1 : data.currency === "EUR" ? 4.25 : 3.9;
+      const fx = defaultFxRate(data.currency);
       const otherCosts = (l.costs || []).filter(c => c.label !== tag);
       const costs = data.cost > 0
         ? [...otherCosts, { type: "customs", label: tag, source: data.declRef || "customs", amount: data.cost, currency: data.currency, pln: Math.round(data.cost * fx * 100) / 100 }]
@@ -1799,7 +1819,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       // A weight-loss / damage / rejection outcome records a DAMAGE write-off movement.
       if (data.lossKg > 0) {
         const label = data.outcome === "weight_loss" ? "Inspection: weight loss" : data.outcome === "rejection" ? "Inspection: client rejection" : "Inspection: damage";
-        movements = [...movements, { id: Date.now(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${data.findings ? " — " + data.findings : ""}` }];
+        movements = [...movements, { id: nextId(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${data.findings ? " — " + data.findings : ""}` }];
       }
       const recomputed = recomputeLotFromMovements({ ...l, baseLocationId, inspections }, movements);
       return recomputed;
@@ -1809,7 +1829,44 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 
   function deleteLot() {
     if (!selected) return;
-    if (!window.confirm(`Delete lot ${selected.number}? It will be soft-deleted.`)) return;
+    const lotNo = selected.number;
+
+    // Gather dependents that would be orphaned by removing this lot.
+    const dependentSOs = (liveSOs || []).filter((o: any) =>
+      o.status !== "Cancelled" &&
+      (o.items || []).some((it: any) =>
+        (it.sourceType === "STOCK" && String(it.sourceRef) === String(lotNo)) ||
+        (it.sourceType === "PO" && selected.poRef && String(it.sourceRef) === String(selected.poRef))
+      )
+    ).map((o: any) => o.number);
+
+    const dependentShipments = (shipments || []).filter((sh: any) =>
+      (sh.lotRefs || []).map(String).includes(String(lotNo)) ||
+      (sh.goods || []).some((g: any) => String(g.lotRef) === String(lotNo))
+    ).map((sh: any) => sh.number);
+
+    const hasPhysical = (parseFloat(selected.receivedKg) || 0) > 0
+      || (parseFloat(selected.physicalKg) || 0) > 0
+      || (selected.movements || []).length > 0;
+
+    const blockers: string[] = [];
+    if (dependentSOs.length) blockers.push(`• Sales Order(s): ${[...new Set(dependentSOs)].join(", ")}`);
+    if (dependentShipments.length) blockers.push(`• Shipment(s): ${[...new Set(dependentShipments)].join(", ")}`);
+    if (hasPhysical) blockers.push("• This lot has received goods / recorded movements (real stock history).");
+
+    if (blockers.length) {
+      const proceed = window.confirm(
+        `⚠ Lot ${lotNo} is still referenced and deleting it will break those links:\n\n` +
+        `${blockers.join("\n")}\n\n` +
+        `Deleting now leaves dangling references that distort COGS and reports. ` +
+        `The safer action is to leave it (or cancel the dependent documents first).\n\n` +
+        `Press OK ONLY if you understand the references will be broken, or Cancel to keep it.`
+      );
+      if (!proceed) return;
+    } else {
+      if (!window.confirm(`Delete lot ${lotNo}? This permanently removes it from inventory.`)) return;
+    }
+
     setLots(prev => prev.filter(l => l.id !== selected.id));
     setSelectedId(null);
     setView("list");
@@ -1823,7 +1880,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
 
         {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
-          setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: Date.now(), type: "SORTING", kg, date, note }] } : l));
+          setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: nextId(), type: "SORTING", kg, date, note }] } : l));
           setSortingLot(null);
         }} />}        {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
 
@@ -1835,8 +1892,12 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
               let next = { ...l, settlement };
               if (close) {
                 const comps = settlementCostComponents(l, settlement.producerInvoiceAmountPLN, settlement.finalCommissionPLN ?? settlement.expectedCommissionPLN, settlement.producerInvoiceNo, settlement.commissionInvoiceNo);
-                const have = new Set((l.costs || []).map(c => c.source));
-                next = { ...next, costs: [...(l.costs || []), ...comps.filter(c => !have.has(c.source))] };
+                // Replace-by-ref: drop any prior settlement components for THIS lot
+                // (so re-closing a corrected settlement rewrites cleanly and never
+                // double-counts), then add the fresh pair.
+                const compSources = new Set(comps.map((c: any) => c.source));
+                const withoutPrior = (l.costs || []).filter((c: any) => !compSources.has(c.source));
+                next = { ...next, costs: [...withoutPrior, ...comps] };
               }
               return next;
             }));

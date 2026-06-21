@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from "react";
+import { nextId } from "./ids";
+import { resolveFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
 import { localTodayISO, localMonthISO } from "./dates";
 
@@ -483,7 +485,7 @@ function withStandardDocs(shipment) {
   const have = new Set(existing.map(d => String(d.type || "").trim().toLowerCase()));
   const missing = standardDocTypesFor(shipment)
     .filter(t => !have.has(t.toLowerCase()))
-    .map((t, idx) => ({ id: Date.now() + idx + 1, type: t, ref: "", status: "Required", date: "", notes: "" }));
+    .map((t) => ({ id: nextId(), type: t, ref: "", status: "Required", date: "", notes: "" }));
   if (!missing.length) return shipment;
   return { ...shipment, documents: [...existing, ...missing] };
 }
@@ -544,7 +546,7 @@ function providerCosts(shipment, providerId) {
 
 function blankTransportUnit(mode = "Road") {
   return {
-    id: Date.now() + Math.round(Math.random() * 100000),
+    id: nextId(),
     mode,
     qtyKg: 0,
     pallets: 0,
@@ -753,7 +755,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
   // (user fills them in) rather than every leg inheriting the same guessed amount.
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || (mode === "Sea" || mode === "Multimodal" ? "USD" : "PLN");
-  const fxRate = parseNum(opts.fxRate, currency === "PLN" ? 1 : currency === "EUR" ? 4.25 : 3.9);
+  const fxRate = resolveFxRate(opts.fxRate, currency);
   const freightType = mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight";
   const baseCost = { id: 1, type: freightType, supplierId: carrierId || forwarderId || null, amount, currency, fxRate, amountPLN: Math.round(amount * fxRate * 100) / 100, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Expected logistics cost" };
 
@@ -862,7 +864,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
   });
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || "PLN";
-  const fxRate = parseNum(opts.fxRate, currency === "PLN" ? 1 : currency === "EUR" ? 4.25 : 3.9);
+  const fxRate = resolveFxRate(opts.fxRate, currency);
   return {
     id,
     number,
@@ -917,7 +919,7 @@ function buildManualShipment__raw(opts, shipments) {
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || "PLN";
-  const fxRate = parseNum(opts.fxRate, currency === "PLN" ? 1 : currency === "EUR" ? 4.25 : 3.9);
+  const fxRate = resolveFxRate(opts.fxRate, currency);
   const qtyKg = parseNum(opts.qtyKg, 0);
   return {
     id,
@@ -1129,7 +1131,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         firstRoad.costResponsibility = "Supplier";
         if (form.ddpTruckPlate || form.ddpTrailerPlate || form.ddpDriverName || form.ddpDriverPhone) {
           firstRoad.vehicles = [{
-            id: Date.now() + 1, mode: "Road", qtyKg: parseNum(form.qtyKg), pallets: parseNum(form.pallets),
+            id: nextId(), mode: "Road", qtyKg: parseNum(form.qtyKg), pallets: parseNum(form.pallets),
             truckPlate: form.ddpTruckPlate || "", trailerPlate: form.ddpTrailerPlate || "",
             driverName: form.ddpDriverName || "", driverPhone: form.ddpDriverPhone || "",
             notes: "Supplier-arranged carrier (DDP)",
@@ -1316,7 +1318,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
     setDraft(prev => ({ ...prev, documents: (prev.documents || []).map((d, i) => i === idx ? { ...d, [k]: v } : d) }));
   }
   function addDoc() {
-    setDraft(prev => ({ ...prev, documents: [...(prev.documents || []), { id: Date.now(), type: "", ref: "", status: "Required", date: "", notes: "" }] }));
+    setDraft(prev => ({ ...prev, documents: [...(prev.documents || []), { id: nextId(), type: "", ref: "", status: "Required", date: "", notes: "" }] }));
   }
   function removeDoc(idx) {
     const d = (draft.documents || [])[idx];
@@ -1326,7 +1328,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
   function addCost() {
     // New manual lines default to a non-freight type ("other") so they're freely
     // deletable; freight lines are reserved for the per-leg freight created by the builder.
-    setDraft(prev => ({ ...prev, costs: [...(prev.costs || []), { id: Date.now(), type: "other", supplierId: prev.carrierId || prev.forwarderId || 1001, amount: 0, currency: "PLN", fxRate: 1, amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] }));
+    setDraft(prev => ({ ...prev, costs: [...(prev.costs || []), { id: nextId(), type: "other", supplierId: prev.carrierId || prev.forwarderId || 1001, amount: 0, currency: "PLN", fxRate: 1, amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] }));
   }
   function removeCost(idx) {
     const c = (draft.costs || [])[idx];
@@ -1371,7 +1373,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
       return {
         ...prev,
         legs: [...prevLegs, {
-          id: Date.now(),
+          id: nextId(),
           mode: prev.mode === "Sea" ? "Sea" : "Road",
           status: "Booked",
           // auto-chain: a new leg starts where the previous one ends
@@ -2237,7 +2239,7 @@ export default function Shipments({
     setLots(prev => prev.map(lot => {
       const relatedGoods = (sh.goods || []).filter(g => g.lotRef === lot.number);
       if (!relatedGoods.length) return lot;
-      const hasMovement = (lot.movements || []).some(m => String(m.note || "").includes(sh.number));
+      const hasMovement = (lot.movements || []).some(m => (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(sh.number)));
       if (hasMovement) return lot;
       const qty = relatedGoods.reduce((s, g) => s + parseNum(g.qtyKg), 0);
       const lastLeg = (sh.legs || [])[((sh.legs || []).length || 1) - 1] || {};
@@ -2245,8 +2247,11 @@ export default function Shipments({
       const movementType = isSO ? "SHIP_OUT" : isTransfer ? "TRANSFER" : "TRANSFER";
       const currentPhysical = parseNum(lot.physicalKg);
       const nextPhysical = movementType === "SHIP_OUT" ? Math.max(0, currentPhysical - qty) : currentPhysical;
+      // Structured links: prefer a goods-row's own soRef, else the shipment's first SO ref.
+      const goodsSoRef = relatedGoods.map(g => g.soRef).find(Boolean);
+      const soRef = isSO ? (goodsSoRef || (sh.soRefs || [])[0] || null) : null;
       const note = `${movementType} via ${sh.number}${(sh.soRefs || []).length ? ` for ${(sh.soRefs || []).join(", ")}` : ""}`;
-      const movement = { id: Date.now() + Math.round(Math.random() * 10000), date: sh.actualDeliveryDate || todayISO(), type: movementType, qtyKg: qty, fromId: firstLeg.fromLocationId || lot.locationId, toId: lastLeg.toLocationId || sh.destinationLocationId || lot.locationId, note };
+      const movement = { id: nextId(), date: sh.actualDeliveryDate || todayISO(), type: movementType, qtyKg: qty, fromId: firstLeg.fromLocationId || lot.locationId, toId: lastLeg.toLocationId || sh.destinationLocationId || lot.locationId, soRef, shipmentRef: sh.number, note };
       return { ...lot, physicalKg: nextPhysical, status: movementType === "SHIP_OUT" && nextPhysical <= 0 ? "Shipped Out" : lot.status, movements: [...(lot.movements || []), movement] };
     }));
     if (isSO) {

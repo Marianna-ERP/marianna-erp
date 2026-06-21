@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from "react";
+import { nextId } from "./ids";
+import { defaultFxRate } from "./fx";
 import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO } from "./dates";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
@@ -105,7 +107,7 @@ function newCostTemplate(): OperationalCost {
   const now = new Date();
   const period = localMonthISO();
   return {
-    id: Date.now(),
+    id: nextId(),
     period,
     date: localTodayISO(),
     category: "salary",
@@ -220,7 +222,7 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
           return {
             id: i, include: !dup && amount > 0, dup,
             invoiceNo, seller, date, amount, currency,
-            fxRate: currency === "PLN" ? 1 : currency === "EUR" ? 4.25 : 3.9,
+            fxRate: defaultFxRate(currency),
             description: desc || `${seller} ${invoiceNo}`.trim(),
             route: whMatch ? "warehouse" : "cost",
             warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
@@ -267,7 +269,7 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
         id: i, include: !dup && (m.netTotal || m.grossTotal) > 0, dup,
         invoiceNo: m.number, seller: m.sellerName, date: m.issueDate || m.sellDate,
         amount: m.netTotal || m.grossTotal, currency: m.currency,
-        fxRate: m.currency === "PLN" ? 1 : m.currency === "EUR" ? 4.25 : 3.9,
+        fxRate: defaultFxRate(m.currency),
         description: m.description || `${m.sellerName} ${m.number}`.trim(),
         route: whMatch ? "warehouse" : "cost",
         warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
@@ -284,9 +286,9 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
       const amountPLN = Math.round(r.amount * (parseFloat(r.fxRate) || 1) * 100) / 100;
       if (r.route === "warehouse" && r.warehouseId) {
         const wh = tariffWarehouses.find((w: any) => String(w.id) === String(r.warehouseId));
-        whInvoices.push({ id: Date.now() + i, warehouseId: r.warehouseId, warehouseName: wh?.name || r.seller, period: String(r.date || localTodayISO()).slice(0, 7), invoiceNo: r.invoiceNo, date: r.date || localTodayISO(), amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
+        whInvoices.push({ id: nextId(), warehouseId: r.warehouseId, warehouseName: wh?.name || r.seller, period: String(r.date || localTodayISO()).slice(0, 7), invoiceNo: r.invoiceNo, date: r.date || localTodayISO(), amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
       } else {
-        costs.push({ id: Date.now() + i, period: String(r.date || localTodayISO()).slice(0, 7), date: r.date || localTodayISO(), category: r.category, description: r.description, supplierName: r.seller, invoiceNo: r.invoiceNo, amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, costCenter: "general", allocationMethod: r.allocationMethod, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
+        costs.push({ id: nextId(), period: String(r.date || localTodayISO()).slice(0, 7), date: r.date || localTodayISO(), category: r.category, description: r.description, supplierName: r.seller, invoiceNo: r.invoiceNo, amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, costCenter: "general", allocationMethod: r.allocationMethod, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
       }
     });
     onImport(costs, whInvoices);
@@ -465,7 +467,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     const amount = parseFloat(inv.amount) || 0;
     if (amount <= 0 || !inv.invoiceNo.trim()) return;
     const fx = parseFloat(inv.fxRate) || 1;
-    const rec = { id: Date.now(), warehouseId: whId, warehouseName: wh?.name || "", period, invoiceNo: inv.invoiceNo.trim(), date: inv.date, amount, currency: inv.currency, fxRate: fx, amountPLN: Math.round(amount * fx * 100) / 100, status: "Received", notes: inv.notes };
+    const rec = { id: nextId(), warehouseId: whId, warehouseName: wh?.name || "", period, invoiceNo: inv.invoiceNo.trim(), date: inv.date, amount, currency: inv.currency, fxRate: fx, amountPLN: Math.round(amount * fx * 100) / 100, status: "Received", notes: inv.notes };
     setWarehouseInvoices((prev: any[]) => [...(prev || []), rec]);
     setInv({ invoiceNo: "", amount: "", currency: inv.currency, fxRate: inv.fxRate, date: today, notes: "" });
   }
@@ -478,11 +480,18 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     const allocations = result.rows.map((r: any) => ({ lotNumber: r.lotNumber, amountPLN: Math.round(invoice.amountPLN * (r.totalPLN / totalExpectedPLN) * 100) / 100 }));
     if (setLots) {
       const source = `WHINV-${invoice.id}`;
+      const byLot = new Map(allocations.map((a: any) => [String(a.lotNumber), a.amountPLN]));
       setLots((prev: any[]) => prev.map((lot: any) => {
-        const a = allocations.find(x => x.lotNumber === lot.number);
-        if (!a || a.amountPLN <= 0) return lot;
-        if ((lot.costs || []).some((c: any) => c.source === source)) return lot;
-        return { ...lot, costs: [...(lot.costs || []), { id: Date.now() + Math.random(), type: "Warehousing", label: `${invoice.warehouseName || "Warehouse"} ${period} · inv ${invoice.invoiceNo}`, pln: a.amountPLN, source }] };
+        // Replace-by-ref discipline: remove any prior line tagged to THIS invoice
+        // (so re-approving a corrected invoice re-allocates cleanly instead of
+        // stacking or going stale), then add the fresh share if this lot has one.
+        const withoutPrior = (lot.costs || []).filter((c: any) => c.source !== source);
+        const amt = byLot.get(String(lot.number));
+        if (amt && amt > 0) {
+          return { ...lot, costs: [...withoutPrior, { id: nextId(), type: "Warehousing", label: `${invoice.warehouseName || "Warehouse"} ${period} · inv ${invoice.invoiceNo}`, pln: amt, source }] };
+        }
+        // Lot no longer in the allocation set: keep it stripped of any stale line.
+        return withoutPrior.length === (lot.costs || []).length ? lot : { ...lot, costs: withoutPrior };
       }));
     }
     setWarehouseInvoices((prev: any[]) => prev.map((i: any) => i.id === invoice.id ? { ...i, status: "Approved", allocatedLots: allocations } : i));
@@ -601,7 +610,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
 const CN_CATEGORIES = ["Transport / freight", "Goods / quality", "Shipment claim", "Warehouse", "Price adjustment", "Other"];
 const CN_STATUSES = ["Draft", "Issued", "Applied", "Cancelled"];
 function blankCreditNote() {
-  return { id: Date.now(), date: localTodayISO(), direction: "outgoing", partyName: "", category: CN_CATEGORIES[0], relatedRef: "", amount: "", currency: "PLN", fxRate: "1", status: "Draft", reason: "" };
+  return { id: nextId(), date: localTodayISO(), direction: "outgoing", partyName: "", category: CN_CATEGORIES[0], relatedRef: "", amount: "", currency: "PLN", fxRate: "1", status: "Draft", reason: "" };
 }
 function CreditNotesView({ creditNotes = [], setCreditNotes, contacts = [], pos = [], orders = [], shipments = [] }: any) {
   const [form, setForm] = useState<any>(() => blankCreditNote());
@@ -836,7 +845,7 @@ export default function Finance({
     const existingNext = (operationalCosts || []).filter((c: OperationalCost) => c.period === next);
     const copies = source
       .filter((c: OperationalCost) => !existingNext.some(e => e.description === c.description && e.category === c.category))
-      .map((c: OperationalCost, i: number) => ({ ...c, id: Date.now() + i, period: next, date: `${next}-${String(c.date || "").slice(8, 10) || "15"}`, status: "Expected" as any, invoiceNo: "", allocations: undefined, notes: `Copied from ${last}. ${c.notes || ""}`.trim() }));
+      .map((c: OperationalCost, i: number) => ({ ...c, id: nextId(), period: next, date: `${next}-${String(c.date || "").slice(8, 10) || "15"}`, status: "Expected" as any, invoiceNo: "", allocations: undefined, notes: `Copied from ${last}. ${c.notes || ""}`.trim() }));
     if (!copies.length) { alert(`All ${last} costs already exist in ${next}.`); return; }
     if (!window.confirm(`Copy ${copies.length} cost line(s) from ${last} into ${next} as "Expected"?`)) return;
     setOperationalCosts((prev: OperationalCost[]) => [...(prev || []), ...copies]);

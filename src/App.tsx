@@ -11,6 +11,7 @@ import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
+import { primeIdsFrom } from "./ids";
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
@@ -160,6 +161,12 @@ export default function App() {
     setShipments((prevShipments: any[]) => refreshShipmentCounterparties(prevShipments, contacts));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contacts]);
+
+  // Keep the stable-id generator primed above every id already in loaded data, so a
+  // freshly minted id can never collide with one from storage or a JSON import.
+  useEffect(() => {
+    primeIdsFrom(contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts);
+  }, [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts]);
 
   const [activeModule, setActiveModule] = useState("dashboard");
   // One-time reminder for testers to export/back up their data (localStorage only).

@@ -1,4 +1,6 @@
 import React, { useState, useRef, useMemo } from "react";
+import { nextId, nextIds } from "./ids";
+import { FX_RATES, defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
 import { localTodayISO, localMonthISO } from "./dates";
@@ -292,7 +294,7 @@ const FLOW_DESTINATION_TYPE: Record<string, string> = {
 };
 
 // Stub FX rates for currency conversion in summary (would come from NBP in production)
-const FX_RATES: Record<string, number> = { PLN: 1, EUR: 4.2531, USD: 3.8812 };
+// FX_RATES now sourced from ./fx (single source of truth)
 
 // ─── SEED DATA ──────────────────────────────────────────────────────────────
 const SUPPLIERS = getSuppliersStub();
@@ -984,7 +986,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
     }
     sf("status", newStatus);
   };
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
   const showOtherTerms = order.paymentTerms === "Other";
@@ -1620,7 +1622,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
     const lotNumber = `LOT-${year}-${nextLotSerial([...(existingLots || []), ...newLots], year, 1)}`;
     lotRefs.push(lotNumber);
     newLots.push({
-      id: Date.now() + idx,
+      id: nextId(),
       number: lotNumber,
       product: it.product || "Goods",
       quality: it.quality || "I",
@@ -1802,7 +1804,7 @@ ${blockNote}`.trim(),
         .map(l => l.number)
     );
 
-    const savedId = o.id ?? Date.now();
+    const savedId = o.id ?? nextId();
     const updated = {
       ...o,
       id: savedId,
@@ -1849,7 +1851,7 @@ ${blockNote}`.trim(),
       buyIncoterm: "", flow: "",
       supplier: null, destinationLocationId: null, destinationText: "", requiresSea: false,
       currency: "PLN", fxRate: 1, fxLockedAt: null,
-      items: [{ id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
+      items: [{ id: nextId(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
       notes: "",
       linkedShipments: [], linkedLots: [], linkedInvoices: [], variance: null,
     });

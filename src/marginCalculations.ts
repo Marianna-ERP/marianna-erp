@@ -80,18 +80,19 @@ function lotCostPerKg(lot: any): number {
   return denom > 0 ? totalPLN / denom : 0;
 }
 
-// Sum SHIP_OUT kg from this lot that mention the given SO number in the note.
-// Inventory's SHIP_OUT movements have notes like "Shipped for SO-2026-0091 (Euro-Papryka)".
+// Sum SHIP_OUT kg from this lot for the given SO. Prefers the structured `soRef`
+// field; falls back to substring-matching the SO number in the note for legacy
+// movements created before soRef existed.
 function lotShippedKgForSO(lot: any, soNumber: string): number {
   return (lot.movements || [])
-    .filter((m: any) => m.type === "SHIP_OUT" && String(m.note || "").includes(soNumber))
+    .filter((m: any) => m.type === "SHIP_OUT" && (m.soRef ? String(m.soRef) === String(soNumber) : String(m.note || "").includes(soNumber)))
     .reduce((s: number, m: any) => s + safe(m.qtyKg), 0);
 }
 
 // Same but for REVERSAL (when an SO was cancelled and its ship-out was reversed).
 function lotReversedKgForSO(lot: any, soNumber: string): number {
   return (lot.movements || [])
-    .filter((m: any) => m.type === "REVERSAL" && String(m.note || "").includes(soNumber))
+    .filter((m: any) => m.type === "REVERSAL" && (m.soRef ? String(m.soRef) === String(soNumber) : String(m.note || "").includes(soNumber)))
     .reduce((s: number, m: any) => s + safe(m.qtyKg), 0);
 }
 
