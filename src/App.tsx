@@ -10,6 +10,7 @@ import Settings from "./Settings";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
+import IntegrityBadge from "./IntegrityBadge";
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
@@ -93,7 +94,7 @@ const NAV_ITEMS = [
   { key: "settings", icon: "⚙", label: "Settings" },
 ];
 
-function TopNav({ active, onNav = () => {} }: any) {
+function TopNav({ active, onNav = () => {}, rightSlot = null }: any) {
   return (
     <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", minHeight: 56, display: "flex", alignItems: "center", gap: 0, flexShrink: 0, overflowX: "auto" }}>
       <div style={{ fontSize: 17, fontWeight: 700, color: "#111", letterSpacing: "-0.3px", marginRight: 24, whiteSpace: "nowrap" }}>
@@ -125,6 +126,7 @@ function TopNav({ active, onNav = () => {} }: any) {
         })}
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "#AAA", paddingLeft: 16, whiteSpace: "nowrap" }}>
+        {rightSlot}
         <span title="App build version. Everyone sharing a JSON file must be on the same version." style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
         <span>Hazem Osman</span>
         <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>HO</div>
@@ -192,7 +194,12 @@ export default function App() {
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
-      <TopNav active={activeModule} onNav={setActiveModule} />
+      <TopNav active={activeModule} onNav={setActiveModule} rightSlot={
+        <IntegrityBadge
+          data={{ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes }}
+          onNavigate={setActiveModule}
+        />
+      } />
       {!backupReminderDismissed && (
         <div style={{ background: "#FEF3C7", borderBottom: "1px solid #FDE68A", padding: "10px 28px", display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: "#92400E", flexShrink: 0 }}>
           <span style={{ fontSize: 15 }}>💾</span>
