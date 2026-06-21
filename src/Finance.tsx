@@ -678,25 +678,30 @@ function CreditNotesView({ creditNotes = [], setCreditNotes, contacts = [], pos 
       </div>
 
       <div style={{ background: "#fff", border: "1px solid #EDEDED", borderRadius: 12, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "90px 90px 1.3fr 1fr 1.4fr 1fr 90px 70px", padding: "10px 14px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.05em" }}>
-          <div>DATE</div><div>DIR.</div><div>COUNTERPARTY</div><div>CATEGORY</div><div>REASON · REF</div><div style={{ textAlign: "right" }}>AMOUNT</div><div>STATUS</div><div></div>
+        <div style={{ display: "grid", gridTemplateColumns: "80px 52px 1.1fr 0.9fr 1.8fr 0.9fr 110px 92px 58px", padding: "10px 14px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.05em" }}>
+          <div>DATE</div><div>DIR.</div><div>COUNTERPARTY</div><div>CATEGORY</div><div>REASON</div><div>REF</div><div style={{ textAlign: "right" }}>AMOUNT</div><div>STATUS</div><div></div>
         </div>
         {sorted.length === 0 && <div style={{ padding: 18, fontSize: 12.5, color: "#888" }}>No credit notes yet. Record one above — e.g. a carrier's credit for transport damage, or a credit you issue a client for a shortfall.</div>}
-        {sorted.map((cn: any) => (
-          <div key={cn.id} style={{ display: "grid", gridTemplateColumns: "90px 90px 1.3fr 1fr 1.4fr 1fr 90px 70px", padding: "10px 14px", borderBottom: "1px solid #F7F7F7", fontSize: 12, alignItems: "center", opacity: cn.status === "Cancelled" ? 0.5 : 1 }}>
-            <div>{cn.date}</div>
+        {sorted.map((cn: any) => {
+          const stColor: Record<string, { bg: string; fg: string }> = { Draft: { bg: "#F3F4F6", fg: "#6B7280" }, Issued: { bg: "#DBEAFE", fg: "#2563EB" }, Received: { bg: "#DBEAFE", fg: "#2563EB" }, Settled: { bg: "#DCFCE7", fg: "#16A34A" }, Cancelled: { bg: "#FEE2E2", fg: "#DC2626" } };
+          const sc = stColor[cn.status] || stColor.Draft;
+          return (
+          <div key={cn.id} style={{ display: "grid", gridTemplateColumns: "80px 52px 1.1fr 0.9fr 1.8fr 0.9fr 110px 92px 58px", padding: "10px 14px", borderBottom: "1px solid #F7F7F7", fontSize: 12, alignItems: "center", opacity: cn.status === "Cancelled" ? 0.5 : 1 }}>
+            <div style={{ whiteSpace: "nowrap" }}>{cn.date}</div>
             <div><span title={cn.direction} style={{ color: cn.direction === "incoming" ? "#16A34A" : "#DC2626", fontWeight: 700 }}>{cn.direction === "incoming" ? "↓ in" : "↑ out"}</span></div>
             <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={cn.partyName}>{cn.partyName}</div>
             <div style={{ color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={cn.category}>{cn.category}</div>
-            <div style={{ color: "#555", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={`${cn.reason || ""}${cn.relatedRef ? ` · ${cn.relatedRef}` : ""}`}>{cn.reason || "—"}{cn.relatedRef ? <span style={{ color: "#999" }}> · {cn.relatedRef}</span> : null}</div>
-            <div style={{ textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{(parseFloat(cn.amount) || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {cn.currency}</div>
-            <div style={{ fontSize: 11, color: "#555" }}>{cn.status}</div>
+            <div style={{ color: "#444", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={cn.reason || ""}>{cn.reason || "—"}</div>
+            <div style={{ color: "#777", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={cn.relatedRef || ""}>{cn.relatedRef || "—"}</div>
+            <div style={{ textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{(parseFloat(cn.amount) || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {cn.currency}</div>
+            <div><span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 11, background: sc.bg, color: sc.fg, fontSize: 10.5, fontWeight: 700 }}>{cn.status}</span></div>
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => edit(cn)} title="Edit" style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, padding: "3px 6px" }}>✎</button>
               <button onClick={() => del(cn.id)} title="Delete" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 12, padding: "3px 6px" }}>✕</button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
       <div style={{ fontSize: 10.5, color: "#888", marginTop: 8, lineHeight: 1.5 }}>
         Credit notes are recorded and totalled here. Incoming notes reduce what we owe (or are due back from) a supplier, carrier or warehouse; outgoing notes reduce what a client owes us. Link each to the related shipment, PO, SO or invoice via the “Related ref” field.

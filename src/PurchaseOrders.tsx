@@ -1031,7 +1031,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 {order.flow && <FlowBadge flow={order.flow} />}
               </div>
               <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
-              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "FX rate locked at confirmation · some fields read-only" : "Draft — all fields editable"}</div>
+              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Confirmed — product, quantities, supplier & commercial terms are locked" : "Draft — all fields editable"}</div>
             </div>
             <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Total net</div>
@@ -1040,6 +1040,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>{fmtNum(totalKg)} kg total</div>
             </div>
           </div>
+
+          {isLocked && (
+            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12.5, color: "#92400E", lineHeight: 1.5 }}>
+              🔒 <strong>This PO is confirmed and locked.</strong> Product, quantities, supplier, incoterm, flow and commercial terms can't be changed — inventory lots, sales orders and shipments already depend on them. You can still update operational fields (dates, status, notes). To change the locked details, cancel this PO and raise a new one.
+            </div>
+          )}
 
           {/* Header card */}
           <Card style={{ marginBottom: 16 }}>
@@ -1077,7 +1083,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div style={{ gridColumn: "span 3" }}>
                 <Lbl>Supplier</Lbl>
-                <Sel value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
+                <Sel disabled={isLocked} value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
                   <option value="">— select —</option>
                   {suppliers.map(s => <option key={s.id} value={s.name}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
                 </Sel>
@@ -1091,7 +1097,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
               <div>
                 <Lbl>Flow type</Lbl>
-                <Sel value={order.flow || ""} onChange={e => {
+                <Sel disabled={isLocked} value={order.flow || ""} onChange={e => {
                   const nextFlow = e.target.value;
                   setOrder(o => ({
                     ...o,
@@ -1125,7 +1131,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Destination {order.flow && <span style={{ color: "#BBB", fontWeight: 400 }}>· typical: {LOCATION_TYPES[FLOW_DESTINATION_TYPE[order.flow]]?.label}</span>}</Lbl>
-                <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
+                <Sel disabled={isLocked} value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
                   <option value="">— select —</option>
                   {(() => {
                     // Show typical destination type first, then the others
@@ -1147,6 +1153,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   })()}
                 </Sel>
                 <Inp
+                  disabled={isLocked}
                   value={order.destinationText || ""}
                   onChange={e => sf("destinationText", e.target.value)}
                   placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
@@ -1160,7 +1167,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             {/* Sea freight toggle — separate flag, not tied to flow choice */}
             <div style={{ marginTop: 14, padding: "10px 14px", background: order.requiresSea ? "#E0F2FE" : "#F9FAFB", border: `1px solid ${order.requiresSea ? "#BAE6FD" : "#F3F4F6"}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: order.requiresSea ? "#0369A1" : "#555" }}>
-                <input type="checkbox" checked={!!order.requiresSea} onChange={e => sf("requiresSea", e.target.checked)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+                <input type="checkbox" disabled={isLocked} checked={!!order.requiresSea} onChange={e => sf("requiresSea", e.target.checked)} style={{ width: 16, height: 16, cursor: isLocked ? "not-allowed" : "pointer" }} />
                 <span>⚓ Sea freight involved</span>
               </label>
               <div style={{ fontSize: 11, color: "#888", lineHeight: 1.4, flex: 1 }}>
@@ -1178,7 +1185,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 14 }}>
               <div>
                 <Lbl>Payment terms</Lbl>
-                <Sel value={order.paymentTerms} onChange={e => sf("paymentTerms", e.target.value)}>
+                <Sel disabled={isLocked} value={order.paymentTerms} onChange={e => sf("paymentTerms", e.target.value)}>
                   {PAYMENT_TERMS.map(p => <option key={p}>{p}</option>)}
                 </Sel>
                 {showOtherTerms && (
@@ -1211,11 +1218,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 
           {/* Line items */}
           <Card style={{ marginBottom: 16 }}>
-            <SectionTitle right={<button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>+ Add line</button>}>LINE ITEMS ({order.items.length})</SectionTitle>
+            <SectionTitle right={<button onClick={isLocked ? undefined : addItem} disabled={isLocked} title={isLocked ? "Confirmed PO — line items are locked" : ""} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: isLocked ? "#9CA3AF" : "#16A34A", fontSize: 11, fontWeight: 600, cursor: isLocked ? "not-allowed" : "pointer", opacity: isLocked ? 0.5 : 1 }}>+ Add line</button>}>LINE ITEMS ({order.items.length})</SectionTitle>
             {/* Shared datalist — product autocomplete pulls from this; grows as POs are added */}
             <datalist id="po-product-suggestions">
               {productSuggestions.map(p => <option key={p} value={p} />)}
             </datalist>
+            <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             {order.items.map((it, i) => {
               const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
@@ -1258,6 +1266,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 </div>
               );
             })}
+            </fieldset>
           </Card>
 
           {/* Notes */}
@@ -1443,7 +1452,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
               <Card>
                 <SectionTitle>LINKED RECORDS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
-                <LinkRow label="Shipments" items={computedShipments.length ? computedShipments : order.linkedShipments} color="#0284C7" bg="#E0F2FE" />
+                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
                 <LinkRow label="Inventory lots" items={order.linkedLots} color="#92400E" bg="#FEF3C7" />
                 <LinkRow label="Invoices" items={order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
                 <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
@@ -1895,7 +1904,7 @@ ${blockNote}`.trim(),
         {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
         <OrderDetail
           order={selected}
-          computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number)).map((s: any) => s.number)}
+          computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
           computedSOs={(extSOs || []).filter((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}

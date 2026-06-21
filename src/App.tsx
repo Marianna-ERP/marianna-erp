@@ -9,6 +9,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState } from "./useLocalStoredState";
+import { APP_VERSION } from "./version";
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
@@ -124,6 +125,7 @@ function TopNav({ active, onNav = () => {} }: any) {
         })}
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "#AAA", paddingLeft: 16, whiteSpace: "nowrap" }}>
+        <span title="App build version. Everyone sharing a JSON file must be on the same version." style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
         <span>Hazem Osman</span>
         <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>HO</div>
       </div>
