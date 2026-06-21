@@ -12,6 +12,8 @@ import { useLocalStoredState } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import { primeIdsFrom } from "./ids";
+import Invoices from "./Invoices";
+import { migrateLegacyInvoices } from "./invoicing";
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
@@ -91,6 +93,7 @@ const NAV_ITEMS = [
   { key: "lots", icon: "▣", label: "Inventory" },
   { key: "orders", icon: "↑", label: "Sales Orders" },
   { key: "shipments", icon: "▤", label: "Shipments" },
+  { key: "invoices", icon: "₣", label: "Invoices" },
   { key: "contacts", icon: "◻", label: "Counterparties" },
   { key: "settings", icon: "⚙", label: "Settings" },
 ];
@@ -146,6 +149,8 @@ export default function App() {
   const [warehouseInvoices, setWarehouseInvoices] = useLocalStoredState("warehouseInvoices", SHELL_SEED.warehouseInvoices || []);
   const [settledRefs, setSettledRefs] = useLocalStoredState("settledRefs", []);
   const [creditNotes, setCreditNotes] = useLocalStoredState("creditNotes", []);
+  const [invoices, setInvoices] = useLocalStoredState("invoices", []);
+  const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
   const [logisticsPoints, setLogisticsPoints] = useLocalStoredState("logisticsPoints", []);
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
   const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
@@ -167,6 +172,17 @@ export default function App() {
   useEffect(() => {
     primeIdsFrom(contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts);
   }, [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts]);
+
+  // Fold the four legacy invoice representations (SO pendingInvoices, warehouse
+  // invoices, invoice-backed operational costs) into the unified Invoicing model.
+  // Idempotent by source tag — safe to run on every relevant change; never duplicates.
+  useEffect(() => {
+    setInvoices((prev: any[]) => {
+      const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts });
+      return merged.length !== (prev || []).length ? merged : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, warehouseInvoices, operationalCosts]);
 
   const [activeModule, setActiveModule] = useState("dashboard");
   // One-time reminder for testers to export/back up their data (localStorage only).
@@ -192,6 +208,8 @@ export default function App() {
         return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} />;
       case "shipments":
         return <Shipments shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} />;
+      case "invoices":
+        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} lots={lots} />;
       case "settings":
         return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} />;
       default:
