@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo } from "react";
 import { nextId, nextIds } from "./ids";
 import { FX_RATES, defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
-import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./locations";
 import { localTodayISO, localMonthISO } from "./dates";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -973,7 +973,7 @@ function LifecycleTimeline({ status }: any) {
 }
 
 // ─── ORDER FORM ─────────────────────────────────────────────────────────────
-function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, onSave, onCancel, onPrint, onEmail }: any) {
+function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
   // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at
@@ -1138,6 +1138,13 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 <Sel disabled={isLocked} value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
                   <option value="">— select —</option>
                   {(() => {
+                    // v6.18.3 (#2): merge the static location list with live warehouse
+                    // counterparty addresses from the current contacts, so a warehouse
+                    // added this session shows up immediately — no browser refresh.
+                    const live = warehouseAddressLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+                    const byId = new Map<string, any>();
+                    [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
+                    const allLocs = [...byId.values()];
                     // Show typical destination type first, then the others
                     const typeOrder = ["OWN", "PORT", "CLIENT"];
                     const preferred = FLOW_DESTINATION_TYPE[order.flow];
@@ -1145,12 +1152,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                       ? [preferred, ...typeOrder.filter(t => t !== preferred)]
                       : typeOrder;
                     return sortedTypes.map(t => {
-                      const locs = LOCATIONS.filter(l => l.type === t);
+                      const locs = allLocs.filter((l: any) => l.type === t);
                       if (locs.length === 0) return null;
                       const label = `${locType(t).icon} ${locType(t).label}${preferred === t ? "  · typical for this flow" : ""}`;
                       return (
                         <optgroup key={t} label={label}>
-                          {locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                          {locs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
                         </optgroup>
                       );
                     });
@@ -1880,6 +1887,7 @@ ${blockNote}`.trim(),
           order={form} setOrder={setForm}
           productSuggestions={productSuggestions}
           suppliers={suppliers}
+          contacts={extContacts}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={() => {

@@ -1073,19 +1073,22 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const isDDPPurchase = sourceType === "PO" && !!selectedPO && String(selectedPO.buyIncoterm || "").toUpperCase() === "DDP";
   const selectedSO = (orders || []).find(o => o.number === ref);
   const selectedLot = (lots || []).find(l => l.number === form.lotRef);
-  const [overrideDup, setOverrideDup] = useState(false);
-  // v6.16 (#2): avoid duplicating a shipment for a PO that's already been shipped.
-  // Compare kg already carried on non-cancelled shipments for this PO against the
-  // PO quantity; if it's all shipped (or the PO has Arrived/Closed), warn and gate.
+  // v6.18.3 (#5): HARD-BLOCK over-shipping a PO. Compare kg already on non-cancelled
+  // shipments for this PO, plus what THIS shipment would add (the selected lines'
+  // qty), against the PO quantity. No override once it's fully covered or would exceed.
   const poShipState = (() => {
     if (sourceType !== "PO" || !selectedPO) return null;
     const existing = (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && s.status !== "Cancelled");
     const poQty = (selectedPO.items || []).reduce((a: number, it: any) => a + parseNum(it.qty), 0);
     const shippedKg = existing.reduce((sum: number, sh: any) => sum + (sh.goods || []).filter((g: any) => g.poRef === selectedPO.number).reduce((a: number, g: any) => a + parseNum(g.qtyKg), 0), 0);
-    const fullyShipped = existing.length > 0 && ((poQty > 0 && shippedKg >= poQty - 1) || ["Arrived", "Closed"].includes(selectedPO.status));
-    return { existing, poQty, shippedKg, remaining: Math.max(0, poQty - shippedKg), fullyShipped };
+    const items = (selectedPO.items || []).filter((it: any, idx: number) => selectedItemIds.length === 0 || selectedItemIds.map(String).includes(String(it.id ?? idx + 1)));
+    const thisKg = items.reduce((a: number, it: any) => a + parseNum(it.qty), 0);
+    const projected = shippedKg + thisKg;
+    const alreadyFull = poQty > 0 && shippedKg >= poQty - 1;
+    const wouldExceed = poQty > 0 && projected > poQty + 1;
+    return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), alreadyFull, wouldExceed, exceedBy: Math.max(0, Math.round(projected - poQty)) };
   })();
-  const blockCreate = !!poShipState && poShipState.fullyShipped && !overrideDup;
+  const blockCreate = !!poShipState && (poShipState.alreadyFull || poShipState.wouldExceed);
   // v6.16 (#4): the PO loading date starts the whole shipment and the SO delivery
   // date ends it. Prefill the header Expected loading / delivery dates from those
   // when the reference changes (in-between dates are set per leg later).
@@ -1162,23 +1165,35 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           </div>
         </Card>
 
-        {poShipState && poShipState.existing.length > 0 && (
-          <Card style={{ gridColumn: "1 / 3", background: poShipState.fullyShipped ? "#FEF2F2" : "#FFFBEB", border: `1px solid ${poShipState.fullyShipped ? "#FECACA" : "#FDE68A"}` }}>
-            <div style={{ fontSize: 12.5, color: poShipState.fullyShipped ? "#991B1B" : "#92400E", lineHeight: 1.5 }}>
-              {poShipState.fullyShipped ? "⛔" : "⚠"} <strong>{selectedPO?.number}</strong> already has {poShipState.existing.length} shipment(s): {poShipState.existing.map((s: any) => s.number).join(", ")}.
-              {poShipState.poQty > 0 && <> About {fmtNum(poShipState.shippedKg)} of {fmtNum(poShipState.poQty)} kg is already on shipments{poShipState.fullyShipped ? "" : `, ~${fmtNum(poShipState.remaining)} kg remaining`}.</>}
-              {poShipState.fullyShipped
-                ? " This PO looks fully shipped — there's nothing left in our warehouse to ship, so a new shipment would likely be a duplicate."
-                : " You can still ship the remaining quantity."}
-            </div>
-            {poShipState.fullyShipped && (
-              <label style={{ display: "inline-flex", alignItems: "center", gap: 7, marginTop: 9, fontSize: 12, color: "#991B1B", cursor: "pointer" }}>
-                <input type="checkbox" checked={overrideDup} onChange={e => setOverrideDup(e.target.checked)} />
-                Create anyway (I know this isn't a duplicate)
-              </label>
-            )}
-          </Card>
-        )}
+        {poShipState && poShipState.poQty > 0 && (poShipState.existing.length > 0 || poShipState.wouldExceed) && (() => {
+          const pct = Math.min(100, Math.round((poShipState.shippedKg / poShipState.poQty) * 100));
+          const thisPct = Math.min(100 - pct, Math.round((poShipState.thisKg / poShipState.poQty) * 100));
+          const blocked = poShipState.alreadyFull || poShipState.wouldExceed;
+          return (
+            <Card style={{ gridColumn: "1 / 3", background: blocked ? "#FEF2F2" : "#FFFBEB", border: `1px solid ${blocked ? "#FECACA" : "#FDE68A"}` }}>
+              <div style={{ fontSize: 12.5, color: blocked ? "#991B1B" : "#92400E", lineHeight: 1.5, marginBottom: 10 }}>
+                {blocked ? "⛔" : "⚠"} <strong>{selectedPO?.number}</strong> already has {poShipState.existing.length} shipment(s){poShipState.existing.length ? `: ${poShipState.existing.map((s: any) => s.number).join(", ")}` : ""}.
+              </div>
+              {/* kg bar: shipped (solid) + this shipment (striped) against PO total */}
+              <div style={{ display: "flex", height: 22, borderRadius: 6, overflow: "hidden", border: "1px solid #E5E7EB", background: "#fff", marginBottom: 8 }}>
+                <div style={{ width: `${pct}%`, background: "#3B82F6" }} title={`Already shipped: ${fmtNum(poShipState.shippedKg)} kg`} />
+                <div style={{ width: `${thisPct}%`, background: poShipState.wouldExceed ? "#DC2626" : "#22C55E", backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(255,255,255,0.35) 5px, rgba(255,255,255,0.35) 10px)" }} title={`This shipment: ${fmtNum(poShipState.thisKg)} kg`} />
+              </div>
+              <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 16, flexWrap: "wrap" }}>
+                <span><span style={{ display: "inline-block", width: 9, height: 9, background: "#3B82F6", borderRadius: 2, marginRight: 4 }} />Already shipped <strong>{fmtNum(poShipState.shippedKg)}</strong></span>
+                <span><span style={{ display: "inline-block", width: 9, height: 9, background: poShipState.wouldExceed ? "#DC2626" : "#22C55E", borderRadius: 2, marginRight: 4 }} />This shipment <strong>{fmtNum(poShipState.thisKg)}</strong></span>
+                <span>PO total <strong>{fmtNum(poShipState.poQty)}</strong> kg</span>
+              </div>
+              {blocked && (
+                <div style={{ fontSize: 12.5, color: "#991B1B", fontWeight: 700, marginTop: 10 }}>
+                  {poShipState.alreadyFull
+                    ? "This PO is fully shipped — there's nothing left to ship. Creating another shipment is blocked."
+                    : `This shipment would exceed the PO by ${fmtNum(poShipState.exceedBy)} kg. Reduce the lines selected, or it's blocked.`}
+                </div>
+              )}
+            </Card>
+          );
+        })()}
 
         {sourceType === "PO" && selectedPO && (selectedPO.items || []).length > 0 && (
           <Card>
@@ -1272,7 +1287,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="green" onClick={create} disabled={blockCreate} title={blockCreate ? "This PO looks fully shipped — tick 'Create anyway' to override" : ""}>Create shipment</SmallButton>
+        <SmallButton kind="green" onClick={create} disabled={blockCreate} title={blockCreate ? (poShipState?.alreadyFull ? "This PO is fully shipped — nothing left to ship" : "This shipment would exceed the PO quantity — reduce the lines selected") : ""}>Create shipment</SmallButton>
       </div>
     </div>
   </div>;

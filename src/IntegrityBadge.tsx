@@ -51,8 +51,8 @@ export default function IntegrityBadge({ data, onNavigate }: { data: IntegrityIn
         <>
           <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 80 }} />
           <div style={{
-            position: "absolute", right: 0, top: 32, zIndex: 81,
-            width: 420, maxHeight: 460, overflow: "auto",
+            position: "fixed", right: 16, top: 52, zIndex: 81,
+            width: 420, maxWidth: "calc(100vw - 32px)", maxHeight: "70vh", overflow: "auto",
             background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12,
             boxShadow: "0 16px 48px rgba(0,0,0,0.18)",
           }}>

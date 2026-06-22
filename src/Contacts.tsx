@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from "react";
 import { nextId } from "./ids";
-import { locationsByLegacyType, warehouseLocationOptions, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
+import { locationsByLegacyType, contactAddresses, warehouseCpLocId, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -491,9 +491,17 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any
     const next = cur.includes(String(id)) ? cur.filter(x => x !== String(id)) : [...cur, String(id)];
     return { ...f, warehouseTariff: { ...(f.warehouseTariff || {}), locationIds: next } };
   });
-  // v6.10 (#7/#8): operated-location candidates = built-in warehouse locations +
-  // every warehouse counterparty's address(es), not just the two seed warehouses.
-  const warehouseLocations = warehouseLocationOptions(contacts || []);
+  // v6.18.3 (#1): a warehouse operates at ITS OWN address(es) — we bill from its
+  // main legal address regardless of which of its sites holds the goods. So the
+  // operating-location candidates are this warehouse's own addresses (main + extra),
+  // not the global list of every warehouse (which wrongly showed WH-01/WH-02).
+  const warehouseLocations = form.id
+    ? contactAddresses(form).map(({ address, index }: any) => ({
+        id: warehouseCpLocId(form.id, index),
+        name: index === 0 ? `${form.name || "Main address"} (main)` : `${form.name || "Site"} — ${address || `address ${index + 1}`}`,
+        address,
+      }))
+    : [];
   // v6.10 (#8): a warehouse company can have more than one delivery address.
   const addExtraAddress = () => setForm(f => ({ ...f, extraAddresses: [...(f.extraAddresses || []), ""] }));
   const setExtraAddress = (i, v) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).map((a, idx) => idx === i ? v : a) }));
@@ -659,7 +667,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any
                     </button>
                   );
                 })}
-                {!warehouseLocations.length && <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>No warehouse locations yet — add them in Settings → Locations &amp; ports.</span>}
+                {!warehouseLocations.length && <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>{form.id ? "This warehouse has no address yet — add one above and it becomes its operating location." : "Save this warehouse first; its address then becomes its operating location. Add more addresses below for extra sites."}</span>}
               </div>
               <div style={{ marginTop: 12 }}>
                 <Lbl>Additional delivery addresses <span style={{ color: "#AAA", fontWeight: 400 }}>(if this warehouse has more than one site we can send cargo to)</span></Lbl>
