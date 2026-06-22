@@ -16,6 +16,7 @@
 //   - SSR-safe (won't crash if `window` is undefined).
 
 import { useState, useEffect } from "react";
+import { APP_VERSION } from "./version";
 
 export const STORAGE_VERSION = 1;
 const NAMESPACE = "marianna-erp";
@@ -80,6 +81,7 @@ export function exportAllData(): string {
     _meta: {
       app: "marianna-erp",
       version: STORAGE_VERSION,
+      appVersion: APP_VERSION,
       exportedAt: new Date().toISOString(),
     },
   };

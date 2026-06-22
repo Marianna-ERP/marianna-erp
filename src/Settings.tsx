@@ -65,6 +65,7 @@ export default function Settings({
   const existingFkt = readFakturowniaConfig();
   const [fktSub, setFktSub] = useState(existingFkt?.subdomain || "");
   const [fktToken, setFktToken] = useState(existingFkt?.apiToken || "");
+  const [fktLiveWrite, setFktLiveWrite] = useState(existingFkt?.liveWriteEnabled === true);
   const [fktBusy, setFktBusy] = useState(false);
   const [fktMsg, setFktMsg] = useState<{ kind: "success" | "error" | "info"; text: string } | null>(null);
 
@@ -80,13 +81,13 @@ export default function Settings({
 
   function handleFktSave() {
     if (!fktSub.trim() || !fktToken.trim()) { setFktMsg({ kind: "error", text: "Enter both the account name and the API token." }); return; }
-    writeFakturowniaConfig({ subdomain: fktSub.trim(), apiToken: fktToken.trim() });
-    setFktMsg({ kind: "success", text: "Saved in this browser only. The token is never included in the data export." });
+    writeFakturowniaConfig({ subdomain: fktSub.trim(), apiToken: fktToken.trim(), liveWriteEnabled: fktLiveWrite });
+    setFktMsg({ kind: "success", text: `Saved in this browser only (token never exported). Live invoice creation is ${fktLiveWrite ? "ENABLED" : "off"}.` });
   }
 
   function handleFktDisconnect() {
     writeFakturowniaConfig(null);
-    setFktSub(""); setFktToken("");
+    setFktSub(""); setFktToken(""); setFktLiveWrite(false);
     setFktMsg({ kind: "info", text: "Disconnected — the token has been removed from this browser." });
   }
 
@@ -122,14 +123,6 @@ export default function Settings({
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = ""; // reset early so the same file can be re-picked later
-    // v6.17: loud confirmation — import REPLACES everything. A backup is taken first.
-    const proceed = window.confirm(
-      "Import will REPLACE all data currently in this browser with the contents of this file.\n\n" +
-      "There is no merge — anything here that isn't in the file will be gone.\n\n" +
-      "A backup of your current data will be saved automatically first, so you can undo it from Settings → Local backups.\n\n" +
-      "Continue?"
-    );
-    if (!proceed) { setMessage({ kind: "info", text: "Import cancelled — nothing was changed." }); return; }
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result;
@@ -137,6 +130,27 @@ export default function Settings({
         setMessage({ kind: "error", text: "Could not read file as text." });
         return;
       }
+      // v6.18.4 (P0-2): the export now stamps appVersion in _meta. Warn loudly if
+      // the file was made on a different build (same schema can still differ in
+      // fields). Schema-version mismatch stays a hard block inside importAllData.
+      let versionWarn = "";
+      try {
+        const meta = JSON.parse(result)?._meta;
+        const fileApp = meta?.appVersion;
+        if (fileApp && fileApp !== APP_VERSION) {
+          versionWarn = `\n\n⚠ This file was made on app v${fileApp}, but you are on v${APP_VERSION}. Fields can differ between builds — everyone sharing files should be on the same version.`;
+        } else if (!fileApp) {
+          versionWarn = `\n\n⚠ This file has no app-version stamp (older export). Import only if you know it matches v${APP_VERSION}.`;
+        }
+      } catch { /* importAllData will report invalid JSON */ }
+      const proceed = window.confirm(
+        "Import will REPLACE all data currently in this browser with the contents of this file.\n\n" +
+        "There is no merge — anything here that isn't in the file will be gone.\n\n" +
+        "A backup of your current data will be saved automatically first, so you can undo it from Settings → Local backups." +
+        versionWarn +
+        "\n\nContinue?"
+      );
+      if (!proceed) { setMessage({ kind: "info", text: "Import cancelled — nothing was changed." }); return; }
       const outcome = importAllData(result);
       if (!outcome.ok) {
         setMessage({ kind: "error", text: outcome.error || "Import failed." });
@@ -237,10 +251,11 @@ export default function Settings({
         </Card>
 
         <Card style={{ marginBottom: 16 }}>
-          <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· read-only invoice sync</span></SectionTitle>
+          <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· invoice sync</span></SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
             Connect your Fakturownia account to pull cost invoices (issued to you via KSeF) straight into Operational Costs — no file export needed.
-            This is <strong>read-only</strong>: the ERP only reads invoices, never creates or changes them. Your API token is stored
+            By default this connection is used for <strong>reading and matching</strong> only. Creating real invoices in Fakturownia from the
+            Invoices module is a separate action that stays <strong>turned off</strong> unless you enable it below. Your API token is stored
             <strong> only in this browser</strong> and is deliberately <strong>excluded from the data export</strong>, so it never travels in a shared file.
           </div>
           <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400E", marginBottom: 14 }}>
@@ -265,6 +280,17 @@ export default function Settings({
               {fktMsg.text}
             </div>
           )}
+          <div style={{ background: fktLiveWrite ? "#FEF2F2" : "#F9FAFB", border: `1px solid ${fktLiveWrite ? "#FECACA" : "#E5E7EB"}`, borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer", fontSize: 12.5, color: "#374151" }}>
+              <input type="checkbox" checked={fktLiveWrite} onChange={e => setFktLiveWrite(e.target.checked)} style={{ marginTop: 2 }} />
+              <span>
+                <strong>Allow creating real invoices in Fakturownia from this browser</strong> (off by default).
+                Leave this off until a backend with a server-side token, role permissions and an audit trail exists — pushing an invoice is a
+                real legal/accounting action. With it off, the Invoices module still lets you <em>copy the payload</em> to create the invoice manually.
+                {fktLiveWrite && <span style={{ display: "block", marginTop: 5, color: "#991B1B", fontWeight: 600 }}>⚠ Live creation is enabled — “Send to Fakturownia” will create real invoices. Use only in a controlled, authorised test.</span>}
+              </span>
+            </label>
+          </div>
           <div style={{ display: "flex", gap: 10 }}>
             <Button onClick={handleFktSave} variant="primary">Save connection</Button>
             <Button onClick={handleFktTest} disabled={fktBusy || !fktSub.trim() || !fktToken.trim()}>{fktBusy ? "Testing…" : "Test connection"}</Button>

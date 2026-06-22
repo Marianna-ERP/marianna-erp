@@ -112,7 +112,14 @@ export default function Invoices(props: any) {
     if (inv.kind !== "SALES") { window.alert("Only sales invoices are pushed to Fakturownia."); return; }
     const cfg = readFakturowniaConfig();
     if (!cfg) { window.alert("Fakturownia is not configured. Add the account name and API token in Settings first."); return; }
-    if (!window.confirm(`Send ${inv.number || "this invoice"} to Fakturownia?\n\nIt will be created there (Fakturownia assigns the legal number) and locked here — further changes will need a credit/debit note.`)) return;
+    // v6.18.4 (P0-1): live invoice creation is OFF by default. Until there's a
+    // backend with a server-side token, roles and an audit trail, pushing a real
+    // invoice from the browser is a legal/accounting action we don't enable silently.
+    if (!cfg.liveWriteEnabled) {
+      window.alert("Live invoice creation in Fakturownia is turned OFF (the safe default).\n\nUse “Copy payload” to create this invoice manually in Fakturownia, or enable live write in Settings → Fakturownia for a controlled, authorised test.");
+      return;
+    }
+    if (!window.confirm(`Send ${inv.number || "this invoice"} to Fakturownia?\n\nThis creates a REAL invoice there (Fakturownia assigns the legal number) and locks it here — further changes will need a credit/debit note.`)) return;
     setPushState({ id: inv.id, msg: "Sending to Fakturownia…", tone: "#2563EB" });
     const payload = buildFakturowniaPayload(inv, { apiToken: cfg.apiToken, sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false });
     const res = await createInvoice(cfg, payload);

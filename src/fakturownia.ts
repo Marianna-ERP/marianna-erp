@@ -8,6 +8,7 @@
 export interface FakturowniaConfig {
   subdomain: string;   // e.g. "marianna2"  → https://marianna2.fakturownia.pl
   apiToken: string;
+  liveWriteEnabled?: boolean;  // v6.18.4: live invoice creation is OFF unless explicitly enabled
 }
 
 const CONFIG_KEY = "marianna-erp:v1:fakturowniaConfig";
@@ -19,7 +20,7 @@ export function readFakturowniaConfig(): FakturowniaConfig | null {
     if (!raw) return null;
     const c = JSON.parse(raw);
     if (!c || !c.subdomain || !c.apiToken) return null;
-    return { subdomain: String(c.subdomain).trim(), apiToken: String(c.apiToken).trim() };
+    return { subdomain: String(c.subdomain).trim(), apiToken: String(c.apiToken).trim(), liveWriteEnabled: c.liveWriteEnabled === true };
   } catch { return null; }
 }
 
@@ -27,7 +28,7 @@ export function writeFakturowniaConfig(c: FakturowniaConfig | null): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
     if (!c) window.localStorage.removeItem(CONFIG_KEY);
-    else window.localStorage.setItem(CONFIG_KEY, JSON.stringify({ subdomain: c.subdomain.trim(), apiToken: c.apiToken.trim() }));
+    else window.localStorage.setItem(CONFIG_KEY, JSON.stringify({ subdomain: c.subdomain.trim(), apiToken: c.apiToken.trim(), liveWriteEnabled: c.liveWriteEnabled === true }));
   } catch { /* ignore */ }
 }
 

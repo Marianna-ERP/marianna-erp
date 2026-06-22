@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { nextId } from "./ids";
 import { resolveFxRate } from "./fx";
-import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
 import { localTodayISO, localMonthISO } from "./dates";
 
 // MARIANNA ERP - Shipments / Logistics module
@@ -87,6 +87,14 @@ function isFreightCostType(type) {
 }
 
 const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
+// v6.18.4 (P0-4): static snapshot + live counterparty addresses, deduped, so a
+// counterparty added this session appears in pickers without a browser refresh.
+function mergedLocations(contacts: any[]) {
+  const live = counterpartyLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+  const byId = new Map<string, any>();
+  [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
+  return [...byId.values()];
+}
 
 const FALLBACK_PROVIDERS = [
   { id: 1001, type: "Carrier", name: "Mikolaj Majewski", country: "Poland", nip: "6010091289", address: "Marysin 36, 26-414 Potworow", services: ["Road"], contact: "Mikolaj Majewski", phone: "", email: "" },
@@ -426,7 +434,8 @@ const LEG_LOC_GROUPS = [
   { label: "Customs / border", type: "BROKER" },
 ];
 
-function LegLocationSelect({ label, locationId, custom, mode, onChange }: any) {
+function LegLocationSelect({ label, locationId, custom, mode, onChange, contacts = [] }: any) {
+  const locsAll = mergedLocations(contacts);
   const [customMode, setCustomMode] = React.useState(!locationId && !!custom);
   React.useEffect(() => { if (locationId) setCustomMode(false); }, [locationId]);
   const portsFirst = mode === "Sea" || mode === "Air" || mode === "Rail";
@@ -445,7 +454,7 @@ function LegLocationSelect({ label, locationId, custom, mode, onChange }: any) {
       }}>
         <option value="">—</option>
         {ordered.map(g => {
-          const locs = LOCATIONS.filter(l => l.type === g.type && !l.aliasOf);
+          const locs = locsAll.filter((l: any) => l.type === g.type && !l.aliasOf);
           if (!locs.length) return null;
           return (
             <optgroup key={g.type} label={g.label}>
@@ -1267,8 +1276,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
             <div><Lbl>Product</Lbl><Inp value={form.product} onChange={e => sf("product", e.target.value)} /></div>
             <div><Lbl>Qty kg</Lbl><Inp type="number" value={form.qtyKg} onChange={e => sf("qtyKg", e.target.value)} /></div>
             <div><Lbl>Pallets</Lbl><Inp type="number" value={form.pallets} onChange={e => sf("pallets", e.target.value)} /></div>
-            <div><Lbl>From</Lbl><Sel value={form.originLocationId} onChange={e => sf("originLocationId", e.target.value)}>{LOCATIONS.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</Sel></div>
-            <div><Lbl>To</Lbl><Sel value={form.destinationLocationId} onChange={e => sf("destinationLocationId", e.target.value)}>{LOCATIONS.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</Sel></div>
+            <div><Lbl>From</Lbl><Sel value={form.originLocationId} onChange={e => sf("originLocationId", e.target.value)}>{mergedLocations(contacts).map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</Sel></div>
+            <div><Lbl>To</Lbl><Sel value={form.destinationLocationId} onChange={e => sf("destinationLocationId", e.target.value)}>{mergedLocations(contacts).map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</Sel></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
             <div><Lbl>PO ref</Lbl><Inp value={form.poRef} onChange={e => sf("poRef", e.target.value)} /></div>
@@ -1477,9 +1486,9 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
             <div style={{ display: "grid", gridTemplateColumns: "90px 110px 1fr 1fr 1fr 1fr", gap: 9 }}>
               <div><Lbl>Mode</Lbl><Sel value={leg.mode} onChange={e => updateLeg(i, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
               <div><Lbl>Status</Lbl><Sel value={leg.status} onChange={e => updateLeg(i, "status", e.target.value)}>{LEG_STATUSES.map(st => <option key={st}>{st}</option>)}</Sel></div>
-              <LegLocationSelect label="Loading" mode={leg.mode} locationId={leg.fromLocationId} custom={leg.fromCustom}
+              <LegLocationSelect label="Loading" contacts={contacts} mode={leg.mode} locationId={leg.fromLocationId} custom={leg.fromCustom}
                 onChange={({ locationId, custom }) => updateLegLocation(i, "from", locationId, custom)} />
-              <LegLocationSelect label="Unloading" mode={leg.mode} locationId={leg.toLocationId} custom={leg.toCustom}
+              <LegLocationSelect label="Unloading" contacts={contacts} mode={leg.mode} locationId={leg.toLocationId} custom={leg.toCustom}
                 onChange={({ locationId, custom }) => updateLegLocation(i, "to", locationId, custom)} />
               <div><Lbl>Pickup</Lbl><Inp type="date" value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} />
                 <Inp value={leg.plannedPickupTime || ""} onChange={e => updateLeg(i, "plannedPickupTime", e.target.value)} placeholder="time, e.g. 08:00–14:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Loading time or time window — printed on the transport order" /></div>
@@ -2263,7 +2272,6 @@ export default function Shipments({
 
   function applyInventoryMovement(sh) {
     const isSO = (sh.soRefs || []).length > 0 || sh.purpose === "SO_DELIVERY";
-    const isTransfer = !isSO && (sh.purpose || "").startsWith("PO");
     setLots(prev => prev.map(lot => {
       const relatedGoods = (sh.goods || []).filter(g => g.lotRef === lot.number);
       if (!relatedGoods.length) return lot;
@@ -2272,15 +2280,50 @@ export default function Shipments({
       const qty = relatedGoods.reduce((s, g) => s + parseNum(g.qtyKg), 0);
       const lastLeg = (sh.legs || [])[((sh.legs || []).length || 1) - 1] || {};
       const firstLeg = (sh.legs || [])[0] || {};
-      const movementType = isSO ? "SHIP_OUT" : isTransfer ? "TRANSFER" : "TRANSFER";
+      const destId = lastLeg.toLocationId || sh.destinationLocationId || lot.locationId;
+      const fromId = firstLeg.fromLocationId || lot.locationId;
       const currentPhysical = parseNum(lot.physicalKg);
-      const nextPhysical = movementType === "SHIP_OUT" ? Math.max(0, currentPhysical - qty) : currentPhysical;
       // Structured links: prefer a goods-row's own soRef, else the shipment's first SO ref.
       const goodsSoRef = relatedGoods.map(g => g.soRef).find(Boolean);
-      const soRef = isSO ? (goodsSoRef || (sh.soRefs || [])[0] || null) : null;
-      const note = `${movementType} via ${sh.number}${(sh.soRefs || []).length ? ` for ${(sh.soRefs || []).join(", ")}` : ""}`;
-      const movement = { id: nextId(), date: sh.actualDeliveryDate || todayISO(), type: movementType, qtyKg: qty, fromId: firstLeg.fromLocationId || lot.locationId, toId: lastLeg.toLocationId || sh.destinationLocationId || lot.locationId, soRef, shipmentRef: sh.number, note };
-      return { ...lot, physicalKg: nextPhysical, status: movementType === "SHIP_OUT" && nextPhysical <= 0 ? "Shipped Out" : lot.status, movements: [...(lot.movements || []), movement] };
+
+      if (isSO) {
+        // Outbound delivery to a client — reduce stock, mark shipped out (unchanged).
+        const nextPhysical = Math.max(0, currentPhysical - qty);
+        const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;
+        const note = `SHIP_OUT via ${sh.number}${(sh.soRefs || []).length ? ` for ${(sh.soRefs || []).join(", ")}` : ""}`;
+        const movement = { id: nextId(), date: sh.actualDeliveryDate || todayISO(), type: "SHIP_OUT", qtyKg: qty, fromId, toId: destId, soRef, shipmentRef: sh.number, note };
+        return { ...lot, physicalKg: nextPhysical, status: nextPhysical <= 0 ? "Shipped Out" : lot.status, movements: [...(lot.movements || []), movement] };
+      }
+
+      // v6.18.5 (P0-6): inbound PO / transfer shipment delivered. Previously this only
+      // logged a TRANSFER and left the lot's location, status and stock unchanged — so
+      // an arrived import still read "Expected" at the old place. Now the delivery
+      // actually moves the lot, and if it hadn't been received yet, it receives it.
+      const isDirect = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected";
+      const notYetReceived = !(parseNum(lot.receivedKg) > 0) && currentPhysical <= 0;
+      let movementType: string; let patch: any;
+      if (isDirect) {
+        // Direct flow: goods go straight to the client/destination, never our stock.
+        movementType = "TRANSFER";
+        patch = { locationId: destId, status: "Delivered (direct)" };
+      } else if (notYetReceived) {
+        // Receipt into our warehouse — an expected lot becomes real stock here.
+        movementType = "IN";
+        patch = {
+          locationId: destId,
+          receivedKg: Math.round((parseNum(lot.receivedKg) + qty) * 1000) / 1000,
+          physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000,
+          status: "In Stock",
+          arrivalDate: sh.actualDeliveryDate || lot.arrivalDate || todayISO(),
+        };
+      } else {
+        // Internal transfer between locations — move the lot, keep its stock.
+        movementType = "TRANSFER";
+        patch = { locationId: destId };
+      }
+      const note = `${movementType} via ${sh.number}`;
+      const movement = { id: nextId(), date: sh.actualDeliveryDate || todayISO(), type: movementType, qtyKg: qty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note };
+      return { ...lot, ...patch, movements: [...(lot.movements || []), movement] };
     }));
     if (isSO) {
       setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" || o.status === "Confirmed" || o.status === "Reserved" || o.status === "Loading" ? "Shipped" : o.status, linkedShipments: uniq([...(o.linkedShipments || []), sh.number]) } : o));

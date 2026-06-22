@@ -973,7 +973,7 @@ function LifecycleTimeline({ status }: any) {
 }
 
 // ─── ORDER FORM ─────────────────────────────────────────────────────────────
-function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], onSave, onCancel, onPrint, onEmail }: any) {
+function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
   // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at
@@ -991,7 +991,19 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
   const showOtherTerms = order.paymentTerms === "Other";
 
-  const isLocked = order.status !== "Draft" && order.id; // Once confirmed, FX rate locks
+  // v6.18.5 (P0-5): a confirmed PO stays editable until something downstream
+  // depends on it — a linked SO, a (non-cancelled) shipment that references it, or
+  // a lot that's been received/moved. The PO is the base of the structure, so once
+  // anything is built on it, changing its commercial terms would jeopardise those
+  // downstream records — that's when we lock. (This replaces the blunt
+  // "any non-Draft PO is locked" rule.)
+  const poNum = order.number;
+  const hasLinkedSO = (allSOs || []).some((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+  const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
+  const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
+  const hasDependents = hasLinkedSO || hasShipment || lotReceivedOrMoved;
+  const terminalStatus = ["Arrived", "Shipped", "Closed", "Cancelled", "Invoiced"].includes(order.status);
+  const isLocked = !!order.id && order.status !== "Draft" && (hasDependents || terminalStatus); // commercial fields lock once anything depends on the PO
 
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
@@ -1033,7 +1045,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 {order.flow && <FlowBadge flow={order.flow} />}
               </div>
               <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
-              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Confirmed — product, quantities, supplier & commercial terms are locked" : "Draft — all fields editable"}</div>
+              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Locked — commercial terms can't change; downstream records depend on this PO" : order.status !== "Draft" && order.id ? "Confirmed — still editable (nothing depends on it yet); edits re-sync the expected lot" : "Draft — all fields editable"}</div>
             </div>
             <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Total net</div>
@@ -1045,7 +1057,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 
           {isLocked && (
             <div style={{ marginBottom: 16, padding: "11px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12.5, color: "#92400E", lineHeight: 1.5 }}>
-              🔒 <strong>This PO is confirmed and locked.</strong> Product, quantities, supplier, incoterm, flow and commercial terms can't be changed — inventory lots, sales orders and shipments already depend on them. You can still update operational fields (dates, status, notes). To change the locked details, cancel this PO and raise a new one.
+              🔒 <strong>This PO is locked.</strong> Its commercial terms (product, quantities, supplier, incoterm, flow, pricing) can't be changed because something downstream already depends on it{(() => {
+                const reasons = [hasLinkedSO && "a sales order is sourced from it", hasShipment && "a shipment references it", lotReceivedOrMoved && "its goods have been received or moved"].filter(Boolean);
+                return reasons.length ? ` — ${reasons.join(", ")}` : "";
+              })()}. You can still update operational fields (dates, status, notes). To change the locked details, cancel this PO and raise a new one.
+            </div>
+          )}
+          {!isLocked && order.id && order.status !== "Draft" && (
+            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 12.5, color: "#1E40AF", lineHeight: 1.5 }}>
+              ✎ <strong>Confirmed, and still editable.</strong> Nothing depends on this PO yet (no sales order, no shipment, goods not received), so you can still change its details — saving will re-sync the expected inventory lot. As soon as you link an SO, create a shipment, or receive goods, the commercial terms lock automatically. Reverting to Draft withdraws the not-yet-received lot.
             </div>
           )}
 
@@ -1615,19 +1635,57 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
   const existingForPO = (existingLots || []).filter(l => l.poRef === order.number);
   const lotRefs = [...existingForPO.map(l => l.number)];
   const newLots = [];
+  const lotPatches = []; // v6.18.5 (P0-5): updates to existing not-yet-received lots
 
   (order.items || []).forEach((it, idx) => {
     const already = existingForPO.find(l => {
       if (String(l.poLineId || "") && String(l.poLineId) === String(it.id)) return true;
       return String(l.product || "").trim().toLowerCase() === String(it.product || "").trim().toLowerCase();
     });
-    if (already) return;
 
     const qty = parseFloat(it.qty) || 0;
     const unitPrice = parseFloat(it.unitPrice) || 0;
     const isConsignment = (order.pricingMode || "firm") === "consignment";
     const purchaseAmount = isConsignment ? 0 : Math.round(qty * unitPrice * 100) / 100;
     const purchasePLN = isConsignment ? 0 : Math.round(purchaseAmount * fx * 100) / 100;
+
+    if (already) {
+      // v6.18.5 (P0-5): a confirmed PO that nothing depends on yet stays editable,
+      // and its edits SYNC the still-expected lot (instead of being silently ignored,
+      // which is the old `if (already) return;` bug). Only touch lots that have NOT
+      // received goods or moved — mirroring the prune guard — so real stock is safe.
+      const untouched = !(parseFloat(already.receivedKg) > 0) && !(parseFloat(already.physicalKg) > 0) && !((already.movements || []).length);
+      if (!untouched) return; // received/in-stock/moved → leave it exactly as is
+      lotPatches.push({
+        number: already.number,
+        patch: {
+          product: it.product || "Goods",
+          quality: it.quality || "I",
+          size: it.size || "",
+          origin: it.origin || order.supplier?.country || "",
+          flow: order.flow || "",
+          poLineId: it.id ?? idx + 1,
+          locationId: order.destinationLocationId || null,
+          destinationText: destinationDisplay(order),
+          directFlow: isDirectFlow(order.flow),
+          custodyType: isDirectFlow(order.flow) ? "Direct" : "Warehouse",
+          flowLabel: directFlowLabel(order),
+          loadingDate: order.loadingDate || null,
+          expectedKg: qty,
+          packaging: it.packaging || "",
+          status: isDirectFlow(order.flow) ? "Direct Expected" : "Expected",
+          arrivalDate: order.expectedDeliveryDate || null,
+          consignment: isConsignment,
+          // resync only the purchase cost line; keep any other cost lines (e.g. freight) intact
+          costs: [
+            ...((already.costs || []).filter((c: any) => c.type !== "purchase")),
+            ...(isConsignment ? [] : [{ type: "purchase", label: `Purchase expected (${order.number})`, source: order.number, amount: purchaseAmount, currency: order.currency || "PLN", pln: purchasePLN }]),
+          ],
+        },
+      });
+      return;
+    }
+
     const lotNumber = `LOT-${year}-${nextLotSerial([...(existingLots || []), ...newLots], year, 1)}`;
     lotRefs.push(lotNumber);
     newLots.push({
@@ -1665,7 +1723,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
     });
   });
 
-  return { lotRefs: uniqRefs(lotRefs), newLots };
+  return { lotRefs: uniqRefs(lotRefs), newLots, lotPatches };
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
@@ -1776,6 +1834,9 @@ ${blockNote}`.trim(),
     // Guard: prevent duplicate PO numbers (in case the user manually edited it)
     const previous = orders.find(p => p.id === o.id);
     const becomesCancelled = o.status === "Cancelled" && (!previous || previous.status !== "Cancelled");
+    // v6.18.5 (P0-5): reverting a confirmed PO back to Draft withdraws its
+    // not-yet-received expected lots (they were auto-committed on confirm).
+    const revertingToDraft = !!previous && previous.status !== "Draft" && o.status === "Draft";
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
     if (dup) {
       window.alert(`PO number "${o.number}" is already used by another record. Please choose a different number.`);
@@ -1813,12 +1874,26 @@ ${blockNote}`.trim(),
         .map(l => l.number)
     );
 
+    // v6.18.5 (P0-5): on revert-to-Draft, withdraw this PO's still-expected lots
+    // (no goods received, no movements). Real stock is never removed.
+    const withdrawLotNumbers = new Set<string>(
+      revertingToDraft
+        ? (lots || [])
+            .filter(l => l.poRef === o.number
+              && (l.status === "Expected" || l.status === "Direct Expected")
+              && !(parseFloat(l.receivedKg) > 0) && !(parseFloat(l.physicalKg) > 0)
+              && !((l.movements || []).length))
+            .map(l => String(l.number))
+        : []
+    );
+    const patchByNumber = new Map<string, any>((inventoryPlan.lotPatches || []).map((p: any) => [String(p.number), p.patch]));
+
     const savedId = o.id ?? nextId();
     const updated = {
       ...o,
       id: savedId,
       linkedShipments: o.linkedShipments || [],
-      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]).filter(n => !orphanLotNumbers.has(n)),
+      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]).filter(n => !orphanLotNumbers.has(n) && !withdrawLotNumbers.has(String(n))),
       linkedInvoices: o.linkedInvoices || [],
     };
 
@@ -1826,11 +1901,13 @@ ${blockNote}`.trim(),
       updated.fxLockedAt = localTodayISO();
     }
 
-    if (extSetLots && (inventoryPlan.newLots?.length || orphanLotNumbers.size)) {
+    if (extSetLots && (inventoryPlan.newLots?.length || orphanLotNumbers.size || patchByNumber.size || withdrawLotNumbers.size)) {
       extSetLots(prev => {
         const existingNumbers = new Set((prev || []).map(l => l.number));
         const additions = (inventoryPlan.newLots || []).filter(l => !existingNumbers.has(l.number));
-        const kept = (prev || []).filter(l => !orphanLotNumbers.has(l.number));
+        const kept = (prev || [])
+          .filter(l => !orphanLotNumbers.has(l.number) && !withdrawLotNumbers.has(String(l.number)))
+          .map(l => patchByNumber.has(String(l.number)) ? { ...l, ...patchByNumber.get(String(l.number)) } : l);
         return [...kept, ...additions];
       });
     }
@@ -1888,6 +1965,9 @@ ${blockNote}`.trim(),
           productSuggestions={productSuggestions}
           suppliers={suppliers}
           contacts={extContacts}
+          allSOs={extSOs}
+          allShipments={extShipments}
+          lots={lots}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={() => {

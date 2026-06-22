@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
-import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
 import { localTodayISO, localMonthISO } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
@@ -29,6 +29,14 @@ function locType(t: string) {
 // rich `type` back onto the legacy single-word `type` field that this module's
 // existing UI code expects (LOCATION_TYPES[loc.type]).
 const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
+// v6.18.4 (P0-4): snapshot + live counterparty addresses, deduped, so movement
+// pickers see a counterparty added this session without a browser refresh.
+function mergedLocations(contacts: any[]) {
+  const live = counterpartyLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+  const byId = new Map<string, any>();
+  [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
+  return [...byId.values()];
+}
 
 // Lot status lifecycle — PHYSICAL states only.
 // Reservations are NOT a lot status (they're computed from SO state — see lotReservations).
@@ -789,7 +797,8 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
 }
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
-function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", onCancel, onConfirm }: any) {
+function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", contacts = [], onCancel, onConfirm }: any) {
+  const moveLocs = mergedLocations(contacts);
   // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
   // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
   // was 0 kg, making every quantity error out). In edit mode, prefill.
@@ -884,14 +893,14 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
               <div>
                 <Lbl>{type === "IN" ? "Received from" : "From"}</Lbl>
                 <Sel value={fromId} onChange={e => setFromId(parseInt(e.target.value))}>
-                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
+                  {moveLocs.map((l: any) => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
                 </Sel>
               </div>
               <div style={{ textAlign: "center", paddingBottom: 9, color: "#94A3B8", fontSize: 16 }}>→</div>
               <div>
                 <Lbl>{type === "SHIP_OUT" ? "Shipped to" : "To"}</Lbl>
                 <Sel value={toId} onChange={e => setToId(parseInt(e.target.value))}>
-                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
+                  {moveLocs.map((l: any) => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
                 </Sel>
               </div>
             </div>
@@ -1877,7 +1886,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     const brokers = (extContacts || []).filter((c: any) => c.type === "Broker" || c.type === "Forwarder" || (c.services || []).includes("Customs"));
     return (
       <>
-        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
+        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
 
         {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
           setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: nextId(), type: "SORTING", kg, date, note }] } : l));

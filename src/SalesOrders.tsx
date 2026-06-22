@@ -3,7 +3,7 @@ import { nextId } from "./ids";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
-import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
+import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
 import { localTodayISO, localMonthISO } from "./dates";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -1337,7 +1337,15 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
 
 
 // ─── ORDER FORM ───────────────────────────────────────────────────────────
-function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, onSave, onCancel, onPrint, onEmail }: any) {
+function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], onSave, onCancel, onPrint, onEmail }: any) {
+  // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
+  // this session shows in the destination picker without a browser refresh.
+  const liveLocations = (() => {
+    const live = counterpartyLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+    const byId = new Map<string, any>();
+    [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
+    return [...byId.values()];
+  })();
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (i, k, v) => setOrder(o => ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
   const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
@@ -1723,13 +1731,13 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
                       <option value="">— select a known place —</option>
                       <optgroup label="🎯 Client Site / DC">
-                        {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                        {liveLocations.filter((l: any) => l.type === "CLIENT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
                       </optgroup>
                       <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
-                        {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                        {liveLocations.filter((l: any) => l.type === "PORT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
                       </optgroup>
                       <optgroup label="🏢 Our Warehouse (EXW pickup)">
-                        {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                        {liveLocations.filter((l: any) => l.type === "OWN").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
                       </optgroup>
                     </Sel>
                     <Inp
@@ -2556,6 +2564,7 @@ export default function SalesOrders({
           productSuggestions={productSuggestions}
           allOrders={orders}
           clients={clients}
+          contacts={extContacts}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={() => {
