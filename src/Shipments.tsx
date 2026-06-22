@@ -485,7 +485,7 @@ function withStandardDocs(shipment) {
   const have = new Set(existing.map(d => String(d.type || "").trim().toLowerCase()));
   const missing = standardDocTypesFor(shipment)
     .filter(t => !have.has(t.toLowerCase()))
-    .map((t) => ({ id: nextId(), type: t, ref: "", status: "Required", date: "", notes: "" }));
+    .map((t) => ({ id: nextId(), type: t, ref: "", status: "Missing", date: "", notes: "" }));
   if (!missing.length) return shipment;
   return { ...shipment, documents: [...existing, ...missing] };
 }
@@ -1318,7 +1318,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
     setDraft(prev => ({ ...prev, documents: (prev.documents || []).map((d, i) => i === idx ? { ...d, [k]: v } : d) }));
   }
   function addDoc() {
-    setDraft(prev => ({ ...prev, documents: [...(prev.documents || []), { id: nextId(), type: "", ref: "", status: "Required", date: "", notes: "" }] }));
+    setDraft(prev => ({ ...prev, documents: [...(prev.documents || []), { id: nextId(), type: "", ref: "", status: "Missing", date: "", notes: "" }] }));
   }
   function removeDoc(idx) {
     const d = (draft.documents || [])[idx];
@@ -1584,16 +1584,11 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
           })()}
         </Card>
         <Card>
-          <SectionTitle right={<SmallButton kind="green" onClick={addDoc}>+ Add document</SmallButton>}>Documents</SectionTitle>
-          <div style={{ fontSize: 10.5, color: "#888", marginBottom: 10, lineHeight: 1.45 }}>
-            Standard checklist (invoice, packing list, EUR.1, phytosanitary certificate, export declaration, plus BL/AWB per transport mode) is added automatically — extra rows can be added manually. The transport order isn't listed here: it's tracked from the email sent to each carrier/forwarder. The CMR is captured per road unit above.
-          </div>
           {(() => {
-            // v6.14 (#10): the BL number lives on the sea/rail leg — surface it here
-            // read-only so it isn't typed twice.
+            // v6.18.2 (#4): a LIGHT, OPTIONAL tracker — collapsed by default, no
+            // per-row dates, simple Missing / Have it / Sent state. It never blocks
+            // a shipment; it's just somewhere to note document progress if useful.
             const legBL = (draft.legs || []).map((l: any) => l.blNumber).filter(Boolean)[0] || "";
-            // v6.14 (#11): the export-declaration reference comes from the linked
-            // lot's export clearance (SAD/MRN) recorded in Inventory.
             const lotRefs = new Set([
               ...((draft.goods || []).map((g: any) => g.lotRef)),
               ...((draft as any).lotRefs || []),
@@ -1602,32 +1597,50 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
               .filter((l: any) => lotRefs.has(String(l.number)))
               .map((l: any) => l.customs?.export?.declRef)
               .filter(Boolean)[0] || "";
-            return (draft.documents || [])
-              // v6.14 (#9/#13): transport order is tracked via email; CMR is per unit.
+            const rows = (draft.documents || [])
               .map((d: any, i: number) => ({ d, i }))
-              .filter(({ d }) => !["transport order", "cmr"].includes(String(d.type || "").trim().toLowerCase()))
-              .map(({ d, i }) => {
-                const t = String(d.type || "").trim().toLowerCase();
-                const isBL = t === "bl";
-                const isExportDecl = t === "export declaration";
-                const autoRef = isBL ? legBL : (isExportDecl ? exportDeclRef : "");
-                const locked = !!autoRef;
-                const refValue = locked ? autoRef : d.ref;
-                return <div key={d.id || i} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.9fr 0.9fr 34px", gap: 8, marginBottom: 8, alignItems: "end" }}>
-                  <div><Lbl>Type</Lbl><Inp value={d.type} onChange={e => updateDoc(i, "type", e.target.value)} /></div>
-                  <div><Lbl>Ref {locked ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· {isBL ? "from leg" : "from clearance"}</span> : null}</Lbl><Inp value={refValue} onChange={e => updateDoc(i, "ref", e.target.value)} disabled={locked} title={isBL ? "Taken from the sea/rail leg's BL number" : (isExportDecl ? "Taken from the lot's export clearance (SAD/MRN) in Inventory" : "")} style={locked ? { background: "#F9FAFB", color: "#666" } : undefined} /></div>
-                  <div><Lbl>Status</Lbl><Sel value={d.status} onChange={e => updateDoc(i, "status", e.target.value)}><option>Required</option><option>Missing</option><option>Generated</option><option>Sent</option><option>Received</option><option>Approved</option><option>N/A</option></Sel></div>
-                  <div><Lbl>Date</Lbl><Inp type="date" value={d.date} onChange={e => updateDoc(i, "date", e.target.value)} /></div>
-                  <button onClick={() => removeDoc(i)} title="Remove this document row"
-                    style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
-                </div>;
-              });
+              .filter(({ d }) => !["transport order", "cmr"].includes(String(d.type || "").trim().toLowerCase()));
+            const ready = rows.filter(({ d }) => ["Have it", "Sent", "N/A"].includes(d.status)).length;
+            const STATES = ["Missing", "Have it", "Sent", "N/A"];
+            return (
+              <details>
+                <summary style={{ cursor: "pointer", listStyle: "none", display: "flex", alignItems: "center", gap: 10, userSelect: "none" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#111", letterSpacing: "0.02em" }}>📄 DOCUMENTS</span>
+                  <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 400 }}>optional tracker — never blocks a shipment</span>
+                  <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: ready === rows.length ? "#16A34A" : "#64748B", background: "#F3F4F6", borderRadius: 10, padding: "2px 9px" }}>{ready}/{rows.length} done ▾</span>
+                </summary>
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+                    <SmallButton kind="green" onClick={addDoc}>+ Add document</SmallButton>
+                  </div>
+                  {rows.map(({ d, i }) => {
+                    const t = String(d.type || "").trim().toLowerCase();
+                    const isBL = t === "bl";
+                    const isExportDecl = t === "export declaration";
+                    const autoRef = isBL ? legBL : (isExportDecl ? exportDeclRef : "");
+                    const locked = !!autoRef;
+                    const refValue = locked ? autoRef : d.ref;
+                    const stateOpts = STATES.includes(d.status) ? STATES : [d.status, ...STATES];
+                    return <div key={d.id || i} style={{ display: "grid", gridTemplateColumns: "1.3fr 1.2fr 0.9fr 32px", gap: 8, marginBottom: 7, alignItems: "end" }}>
+                      <div><Lbl>Type</Lbl><Inp value={d.type} onChange={e => updateDoc(i, "type", e.target.value)} /></div>
+                      <div><Lbl>Ref {locked ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· {isBL ? "from leg" : "from clearance"}</span> : null}</Lbl><Inp value={refValue} onChange={e => updateDoc(i, "ref", e.target.value)} disabled={locked} title={isBL ? "Taken from the sea/rail leg's BL number" : (isExportDecl ? "Taken from the lot's export clearance (SAD/MRN) in Inventory" : "")} style={locked ? { background: "#F9FAFB", color: "#666" } : undefined} /></div>
+                      <div><Lbl>State</Lbl><Sel value={d.status} onChange={e => updateDoc(i, "status", e.target.value)}>{stateOpts.map((s: string) => <option key={s} value={s}>{s}</option>)}</Sel></div>
+                      <button onClick={() => removeDoc(i)} title="Remove this document row"
+                        style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                    </div>;
+                  })}
+                  <div style={{ fontSize: 10.5, color: "#9CA3AF", marginTop: 8, lineHeight: 1.45 }}>
+                    The standard set (invoice, packing list, EUR.1, phytosanitary, export declaration, BL/AWB) is added automatically. The transport order is tracked from the carrier email; the CMR is per road unit. BL and export-declaration refs fill in on their own.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB", alignItems: "end" }}>
+                    <div><Lbl>Courier tracking nr (DHL) — originals to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
+                    <div><Lbl>Sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} /></div>
+                    <div style={{ fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Waybill the original document set was sent to the client under.</div>
+                  </div>
+                </div>
+              </details>
+            );
           })()}
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB", alignItems: "end" }}>
-            <div><Lbl>Courier tracking nr (DHL) — original documents to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
-            <div><Lbl>Sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} /></div>
-            <div style={{ fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>The courier waybill number under which the original document set (BL, EUR.1, phyto...) was sent to the client.</div>
-          </div>
         </Card>
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>

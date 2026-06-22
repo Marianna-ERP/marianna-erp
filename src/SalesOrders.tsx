@@ -1612,8 +1612,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" disabled={order.status !== "Delivered"} title={order.status !== "Delivered" ? "Available once the status is set to Delivered." : "When the goods actually reached the client."} />
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
-              <div><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
+              <div style={{ order: -1 }}><Lbl>Status</Lbl>
+                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}
+                  style={{ borderLeft: `4px solid ${(SO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (SO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
                   {Object.keys(SO_STATUSES).map(s => {
                     // Draft and Cancelled are always available; everything else requires all lines to be
                     // (a) sourced AND (b) have enough combined available qty to cover the demanded qty.

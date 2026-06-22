@@ -1054,6 +1054,13 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <SectionTitle>ORDER DETAILS</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               <div>
+                <Lbl>Status</Lbl>
+                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)}
+                  style={{ borderLeft: `4px solid ${(PO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (PO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
+                  {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
+                </Sel>
+              </div>
+              <div>
                 <Lbl>PO number {!order.id && <span style={{ color: "#16A34A", fontWeight: 500 }}>· auto-generated</span>}</Lbl>
                 <Inp value={order.number} onChange={e => sf("number", e.target.value)} placeholder="PO-2026-NNNN" />
               </div>
@@ -1077,11 +1084,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 <Lbl>Actual availability {order.actualAvailabilityDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
                 <Inp value={order.actualAvailabilityDate || ""} onChange={e => sf("actualAvailabilityDate", e.target.value || null)} type="date" title="When the goods actually became available at our side (customs-cleared / received). Leave blank until it happens." />
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once it arrives</div>
-              </div>
-              <div><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)}>
-                  {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
-                </Sel>
               </div>
               <div style={{ gridColumn: "span 3" }}>
                 <Lbl>Supplier</Lbl>

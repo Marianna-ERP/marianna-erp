@@ -33,7 +33,7 @@ export default function IntegrityBadge({ data, onNavigate }: { data: IntegrityIn
     <div style={{ position: "relative" }}>
       <button
         onClick={() => setOpen(o => !o)}
-        title="Data integrity check"
+        title={clean ? "Data integrity check — click for details" : "Click to see which records have problems"}
         style={{
           display: "flex", alignItems: "center", gap: 6,
           padding: "3px 10px", borderRadius: 11, cursor: "pointer",
@@ -42,8 +42,9 @@ export default function IntegrityBadge({ data, onNavigate }: { data: IntegrityIn
           color: clean ? "#047857" : SEV_COLOR[tone],
           fontSize: 11, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap",
         }}>
-        <span style={{ fontSize: 12 }}>{clean ? "✓" : tone === "error" ? "⚠" : "⚠"}</span>
+        <span style={{ fontSize: 12 }}>{clean ? "✓" : "⚠"}</span>
         {clean ? "Data OK" : `${counts.total} data issue${counts.total === 1 ? "" : "s"}`}
+        <span style={{ fontSize: 9, opacity: 0.7, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.12s" }}>▾</span>
       </button>
 
       {open && (

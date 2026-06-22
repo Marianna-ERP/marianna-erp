@@ -86,16 +86,24 @@ function refreshShipmentCounterparties(shipments: any[], contacts: any[]) {
   }));
 }
 
-const NAV_ITEMS = [
-  { key: "dashboard", icon: "⊞", label: "Dashboard" },
-  { key: "finance", icon: "Σ", label: "Finance" },
-  { key: "pos", icon: "↓", label: "Purchase Orders" },
-  { key: "lots", icon: "▣", label: "Inventory" },
-  { key: "orders", icon: "↑", label: "Sales Orders" },
-  { key: "shipments", icon: "▤", label: "Shipments" },
-  { key: "invoices", icon: "₣", label: "Invoices" },
-  { key: "contacts", icon: "◻", label: "Counterparties" },
-  { key: "settings", icon: "⚙", label: "Settings" },
+// v6.18.2: nav grouped into clusters so it stays compact and doesn't scroll.
+// Short labels keep it tight; full names remain as tooltips.
+const NAV_GROUPS: { items: { key: string; icon: string; label: string; short: string }[] }[] = [
+  { items: [{ key: "dashboard", icon: "⊞", label: "Dashboard", short: "Dashboard" }] },
+  { items: [
+    { key: "pos", icon: "↓", label: "Purchase Orders", short: "POs" },
+    { key: "lots", icon: "▣", label: "Inventory", short: "Inventory" },
+    { key: "orders", icon: "↑", label: "Sales Orders", short: "SOs" },
+    { key: "shipments", icon: "▤", label: "Shipments", short: "Shipments" },
+  ] },
+  { items: [
+    { key: "invoices", icon: "₣", label: "Invoices", short: "Invoices" },
+    { key: "finance", icon: "Σ", label: "Finance", short: "Finance" },
+  ] },
+  { items: [
+    { key: "contacts", icon: "◻", label: "Counterparties", short: "Parties" },
+    { key: "settings", icon: "⚙", label: "Settings", short: "Settings" },
+  ] },
 ];
 
 function TopNav({ active, onNav = () => {}, rightSlot = null }: any) {
@@ -104,30 +112,37 @@ function TopNav({ active, onNav = () => {}, rightSlot = null }: any) {
       <div style={{ fontSize: 17, fontWeight: 700, color: "#111", letterSpacing: "-0.3px", marginRight: 24, whiteSpace: "nowrap" }}>
         MARIANNA <span style={{ fontSize: 11, fontWeight: 500, color: "#AAA", marginLeft: 6, letterSpacing: 0 }}>ERP</span>
       </div>
-      <div style={{ display: "flex", gap: 4 }}>
-        {NAV_ITEMS.map(n => {
-          const isActive = active === n.key;
-          return (
-            <button key={n.key} onClick={() => onNav(n.key)}
-              style={{
-                padding: "8px 12px", borderRadius: 7,
-                border: "none",
-                background: isActive ? "#111" : "transparent",
-                color: isActive ? "#fff" : "#666",
-                fontSize: 12.5, fontWeight: isActive ? 600 : 500,
-                cursor: "pointer",
-                display: "flex", alignItems: "center", gap: 6,
-                fontFamily: "inherit",
-                transition: "background 0.12s",
-                whiteSpace: "nowrap",
-              }}
-              onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "#F3F4F6"; }}
-              onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}>
-              <span style={{ fontSize: 13, opacity: 0.75 }}>{n.icon}</span>
-              {n.label}
-            </button>
-          );
-        })}
+      <div style={{ display: "flex", gap: 0, alignItems: "center" }}>
+        {NAV_GROUPS.map((group, gi) => (
+          <React.Fragment key={gi}>
+            {gi > 0 && <div style={{ width: 1, height: 22, background: "#ECECEC", margin: "0 8px", flexShrink: 0 }} />}
+            <div style={{ display: "flex", gap: 2 }}>
+              {group.items.map(n => {
+                const isActive = active === n.key;
+                return (
+                  <button key={n.key} onClick={() => onNav(n.key)} title={n.label}
+                    style={{
+                      padding: "7px 9px", borderRadius: 7,
+                      border: "none",
+                      background: isActive ? "#111" : "transparent",
+                      color: isActive ? "#fff" : "#666",
+                      fontSize: 12, fontWeight: isActive ? 600 : 500,
+                      cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 5,
+                      fontFamily: "inherit",
+                      transition: "background 0.12s",
+                      whiteSpace: "nowrap",
+                    }}
+                    onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "#F3F4F6"; }}
+                    onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}>
+                    <span style={{ fontSize: 13, opacity: 0.75 }}>{n.icon}</span>
+                    {n.short}
+                  </button>
+                );
+              })}
+            </div>
+          </React.Fragment>
+        ))}
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "#AAA", paddingLeft: 16, whiteSpace: "nowrap" }}>
         {rightSlot}
