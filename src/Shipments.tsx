@@ -1708,8 +1708,10 @@ function printHtmlNode(nodeId, title) {
   if (!doc) { iframe.remove(); return; }
   doc.open(); doc.write(html); doc.close();
   const fire = () => {
+    const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the document
+    document.title = title || prevTitle;
     try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-    setTimeout(() => iframe.remove(), 1000);
+    setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
   };
   const img = doc.querySelector("img");
   if (img && !img.complete) {
@@ -1912,7 +1914,7 @@ function TransportOrderPrintModal({ shipment, contacts, orders = [], onSaveTerms
     <div style={{ width: 980, maxHeight: "94vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
       <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><strong>Transport order confirmation</strong><span style={{ color: "#888", marginLeft: 8, fontSize: 12 }}>One clean order per provider — pick the provider and the legs it covers.</span></div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Sel value={providerId} onChange={e => changeProvider(e.target.value)} style={{ minWidth: 300, maxWidth: 460 }}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel><SmallButton onClick={onMarkSent} kind="green">Mark sent</SmallButton><SmallButton onClick={() => printHtmlNode("transport-order-print", `${shipment.number}-${providerId}`)} kind="dark" disabled={!legIds.length}>Print / PDF</SmallButton>{onEmail && <SmallButton onClick={() => onEmail(providerId)} kind="blue">✉ Email</SmallButton>}<SmallButton onClick={onClose}>Close</SmallButton></div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Sel value={providerId} onChange={e => changeProvider(e.target.value)} style={{ minWidth: 300, maxWidth: 460 }}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel><SmallButton onClick={() => printHtmlNode("transport-order-print", `${shipment.number}-${providerId}`)} kind="dark" disabled={!legIds.length}>Print / PDF</SmallButton>{onEmail && <SmallButton onClick={() => onEmail(providerId)} kind="blue">✉ Email</SmallButton>}<SmallButton onClick={onMarkSent} kind="green">Mark sent</SmallButton><SmallButton onClick={onClose}>Close</SmallButton></div>
       </div>
       <div style={{ padding: "10px 18px", borderBottom: "1px solid #F1F5F9", background: "#FAFAFA", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: "#64748B" }}>LEGS ON THIS ORDER:</span>

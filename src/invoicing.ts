@@ -90,6 +90,7 @@ export function migrateLegacyInvoices(opts: {
   orders: any[];
   warehouseInvoices: any[];
   operationalCosts: any[];
+  pos?: any[];
 }): Invoice[] {
   const existing = arr<Invoice>(opts.existing);
   const haveSource = new Set(existing.map(i => i.source).filter(Boolean));
@@ -186,6 +187,34 @@ export function migrateLegacyInvoices(opts: {
         creditNoteIds: [], allocation: null, fakturownia: { exported: false },
         source: src, createdAt: c.date || "",
       };
+    });
+  });
+
+  // 4. COST (PURCHASE) from firm-price POs once the goods have ARRIVED. The supplier's
+  //    commercial invoice becomes payable on receipt; consignment POs are excluded
+  //    (they settle as producer payouts, not purchase invoices). #5 / v6.18.9.
+  arr(opts.pos).forEach((po: any) => {
+    if ((po.pricingMode || "firm") === "consignment") return;
+    if (!["Arrived", "Received", "Closed"].includes(po.status)) return; // only after goods received
+    const total = arr(po.items).reduce((s: number, it: any) => s + n(it.qty) * n(it.unitPrice), 0);
+    if (total <= 0) return;
+    const src = `migrated:po:${po.id}`;
+    pushIf(src, () => {
+      const fx = resolveFxRate(po.fxRate, po.currency);
+      const grossPLN = r2(total * fx);
+      return {
+        id: nextId(), kind: "COST", category: "PURCHASE", costScope: "SHIPMENT",
+        number: po.supplierInvoiceNo || "", counterparty: po.supplier || { name: po.supplier?.name || "Supplier" },
+        issueDate: po.arrivalDate || po.expectedDeliveryDate || po.orderDate || "", saleDate: po.arrivalDate || po.orderDate || "", dueDate: po.paymentDueDate || "",
+        paymentMethod: "Transfer", currency: po.currency || "PLN", fxRate: fx,
+        netAmount: r2(total), vatRate: 0, vatAmount: 0, grossAmount: r2(total),
+        netPLN: grossPLN, grossPLN,
+        positions: [], links: [{ type: "PO", number: po.number }],
+        paymentStatus: "Issued", paidAmount: 0,
+        notes: po.supplierInvoiceNo ? "" : "Awaiting the supplier's invoice number — add it here when received.",
+        attachment: null, creditNoteIds: [], allocation: null, fakturownia: { exported: false },
+        source: src, createdAt: po.arrivalDate || po.orderDate || "",
+      } as Invoice;
     });
   });
 

@@ -65,6 +65,17 @@ export default function Invoices(props: any) {
     (fStatus === "All" || i.paymentStatus === fStatus)
   ).sort((a: Invoice, b: Invoice) => String(b.issueDate || "").localeCompare(String(a.issueDate || "")));
 
+  // #7: credit/debit notes also belong in the main view (not only hidden on their
+  // invoice). Same search / direction / status filters; a credit reduces the
+  // receivable/payable, a debit increases it.
+  const invoiceById = useMemo(() => new Map((invoices as Invoice[]).map((i: Invoice) => [i.id, i])), [invoices]);
+  const noteDir = (nt: any) => (nt.direction === "incoming" ? "payable" : "receivable");
+  const filteredNotes = (notes || []).filter((nt: any) =>
+    (!search || String(nt.number || "").toLowerCase().includes(search.toLowerCase()) || String(nt.partyName || "").toLowerCase().includes(search.toLowerCase()) || String(nt.relatedRef || "").toLowerCase().includes(search.toLowerCase())) &&
+    (fDir === "All" || noteDir(nt) === fDir) &&
+    (fStatus === "All" || nt.status === fStatus)
+  ).sort((a: any, b: any) => String(b.date || "").localeCompare(String(a.date || "")));
+
   // ── handlers ──
   function newInvoice(kind: "SALES" | "COST") {
     setForm(recomputeInvoiceMoney({
@@ -233,7 +244,7 @@ export default function Invoices(props: any) {
           <div style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "10px 16px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
             {["TYPE", "NUMBER", "COUNTERPARTY", "ISSUED", "DUE", "GROSS", "STATUS", "LINKED"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
           </div>
-          {filtered.length === 0 && <div style={{ padding: "36px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No invoices yet. Create one above, or they'll appear here as Sales Orders are invoiced and cost invoices are recorded.</div>}
+          {filtered.length === 0 && filteredNotes.length === 0 && <div style={{ padding: "36px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No invoices yet. Create one above, or they'll appear here as Sales Orders are invoiced and cost invoices are recorded.</div>}
           {filtered.map((i: Invoice, idx: number) => {
             const d = daysUntil(i.dueDate); const od = i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled" && d !== null && d < 0;
             return (
@@ -249,8 +260,27 @@ export default function Invoices(props: any) {
               </div>
             );
           })}
+          {filteredNotes.length > 0 && (
+            <div style={{ padding: "8px 16px", background: "#FAFAFA", borderTop: "1px solid #EEE", fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>CREDIT / DEBIT NOTES</div>
+          )}
+          {filteredNotes.map((nt: any, idx: number) => {
+            const linked = nt.invoiceId != null ? invoiceById.get(nt.invoiceId) : null;
+            const isCredit = nt.noteType !== "DEBIT";
+            return (
+              <div key={`note-${nt.id}`} onClick={() => { if (linked) { setSelId(linked.id); setView("detail"); } else { setNoteForm({ ...nt }); setView("note"); } }} style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "11px 16px", borderBottom: idx < filteredNotes.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
+                <div><span style={{ background: isCredit ? "#FFF7ED" : "#EFF6FF", color: isCredit ? "#9A3412" : "#1D4ED8", padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em" }}>{isCredit ? "CREDIT" : "DEBIT"}</span></div>
+                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#9A3412", fontFamily: "ui-monospace, Menlo, monospace" }}>{nt.number || "(note)"}</div><div style={{ fontSize: 10, color: "#AAA" }}>{nt.category || nt.reason || "—"}</div></div>
+                <div><div style={{ fontSize: 13, fontWeight: 500 }}>{nt.partyName || "—"}</div></div>
+                <div style={{ fontSize: 12, color: "#555" }}>{nt.date || "—"}</div>
+                <div style={{ fontSize: 12, color: "#AAA" }}>—</div>
+                <div><div style={{ fontSize: 13, fontWeight: 600, color: isCredit ? "#9A3412" : "#1D4ED8" }}>{isCredit ? "−" : "+"}{money(nt.amount, nt.currency)}</div></div>
+                <div><StatusBadge s={nt.status} /></div>
+                <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{linked ? (linked.number || "(invoice)") : "standalone"}</div>
+              </div>
+            );
+          })}
         </div>
-        <div style={{ marginTop: 16, fontSize: 11, color: "#AAA", textAlign: "center" }}>{filtered.length} of {invoices.length} invoices · Sales invoices push to Fakturownia on Send (Fakturownia assigns the legal number) · KSeF submission stays managed in Fakturownia</div>
+        <div style={{ marginTop: 16, fontSize: 11, color: "#AAA", textAlign: "center" }}>{filtered.length} of {invoices.length} invoices{filteredNotes.length > 0 ? ` · ${filteredNotes.length} credit/debit note${filteredNotes.length > 1 ? "s" : ""}` : ""} · Sales invoices push to Fakturownia on Send (Fakturownia assigns the legal number) · KSeF submission stays managed in Fakturownia</div>
       </div>
     </div>
   );
@@ -414,7 +444,7 @@ function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders,
               <div><Lbl>Counterparty</Lbl><Sel value={form.partyName} onChange={(e: any) => sf("partyName", e.target.value)}><option value="">— select —</option>{partyOptions.map((nm: any) => <option key={nm}>{nm}</option>)}</Sel></div>
               <div><Lbl>Reason</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{["Quality complaint", "Short delivery", "Pricing correction", "Returned goods", "Damaged in transit", "Additional charge", "Other"].map(r => <option key={r}>{r}</option>)}</Sel></div>
               <div><Lbl>Amount</Lbl><Inp type="number" value={form.amount} onChange={(e: any) => sf("amount", e.target.value)} /></div>
-              <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={(e: any) => { sf("currency", e.target.value); sf("fxRate", defaultFxRate(e.target.value)); }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
+              <div><Lbl>Currency{form.invoiceId != null ? " (from invoice)" : ""}</Lbl><Sel value={form.currency} disabled={form.invoiceId != null} title={form.invoiceId != null ? "Currency follows the linked invoice" : ""} onChange={(e: any) => { sf("currency", e.target.value); sf("fxRate", defaultFxRate(e.target.value)); }} style={form.invoiceId != null ? { background: "#F3F4F6", color: "#6B7280" } : undefined}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
               <div style={{ gridColumn: "span 2" }}><Lbl>Detail</Lbl><Inp value={form.reason} onChange={(e: any) => sf("reason", e.target.value)} placeholder="What this note covers" /></div>
             </div>
           </Card>

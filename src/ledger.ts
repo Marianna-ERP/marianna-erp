@@ -84,7 +84,7 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
       || fktPaid[String(inv.number)] === true;
     items.push({
       ref, direction: isSales ? "receivable" : "payable",
-      kind: isSales ? "Sales invoice" : (inv.category === "WAREHOUSE" ? "Warehouse invoice" : "Cost invoice"),
+      kind: isSales ? "Sales invoice" : (inv.category === "WAREHOUSE" ? "Warehouse invoice" : inv.category === "PURCHASE" ? "PO purchase" : "Cost invoice"),
       counterparty: inv.counterparty?.name || "—",
       documentNo: inv.number || inv.fakturownia?.legalNumber || String(inv.id),
       date: inv.issueDate || inv.saleDate || "", dueDate: inv.dueDate || "",
@@ -112,10 +112,19 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     });
   });
 
-  // ── PAYABLES: firm-price PO purchases (non-consignment, confirmed) ──
+  // ── PAYABLES: firm-price PO purchases not yet represented by a purchase invoice ──
+  // v6.18.9 (#5): once a PO is Arrived it's folded into a PURCHASE invoice (counted in
+  // the invoices loop above), so here we only count firm POs that don't yet have one —
+  // i.e. the Confirmed-but-not-arrived commitment. Same total, counted exactly once.
+  const poNumbersWithInvoice = new Set(
+    (inp.invoices || [])
+      .filter((inv: any) => inv && inv.kind === "COST")
+      .flatMap((inv: any) => (inv.links || []).filter((l: any) => l.type === "PO").map((l: any) => String(l.number)))
+  );
   (inp.pos || []).forEach((po: any) => {
     if ((po.pricingMode || "firm") === "consignment") return;
     if (!["Confirmed", "Received", "Closed", "Arrived"].includes(po.status)) return;
+    if (poNumbersWithInvoice.has(String(po.number))) return; // now represented by a purchase invoice
     const total = (po.items || []).reduce((s: number, it: any) => s + n(it.qty) * n(it.unitPrice), 0);
     if (total <= 0) return;
     const fx = n(po.fxRate) || 1;

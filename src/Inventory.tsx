@@ -849,8 +849,8 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   const showRoute = type === "TRANSFER" || type === "IN" || type === "SHIP_OUT";
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-      <div style={{ background: "#fff", borderRadius: 14, width: 540, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "24px 16px", overflowY: "auto" }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 540, maxWidth: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", margin: "auto" }}>
         <div style={{ padding: "20px 24px", borderBottom: "1px solid #EBEBEB" }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? (mode === "quality" ? "Edit quality issue" : "Edit movement") : (mode === "quality" ? "Record quality issue" : "Record movement")}</div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
@@ -1112,8 +1112,10 @@ function printHtmlNodeInv(nodeId, title) {
   if (!doc) { iframe.remove(); return; }
   doc.open(); doc.write(html); doc.close();
   setTimeout(() => {
+    const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the document
+    document.title = title || prevTitle;
     try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-    setTimeout(() => iframe.remove(), 1000);
+    setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
   }, 150);
 }
 

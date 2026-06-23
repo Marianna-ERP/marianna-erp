@@ -193,11 +193,11 @@ export default function App() {
   // Idempotent by source tag — safe to run on every relevant change; never duplicates.
   useEffect(() => {
     setInvoices((prev: any[]) => {
-      const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts });
+      const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts, pos });
       return merged.length !== (prev || []).length ? merged : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, warehouseInvoices, operationalCosts]);
+  }, [orders, warehouseInvoices, operationalCosts, pos]);
 
   const [activeModule, setActiveModule] = useState("dashboard");
   // One-time reminder for testers to export/back up their data (localStorage only).

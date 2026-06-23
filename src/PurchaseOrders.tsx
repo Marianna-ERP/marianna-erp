@@ -780,6 +780,10 @@ function PrintModal({ order, onClose }: any) {
 
     // Wait for the embedded base64 logo image to load before triggering print
     const fire = () => {
+      // v6.18.8 (#1): the browser's "Save as PDF" uses the top document's title for
+      // the default filename, so temporarily set it to the PO number, then restore.
+      const prevTitle = document.title;
+      document.title = order.number || prevTitle;
       try {
         iframe.contentWindow?.focus();
         iframe.contentWindow?.print();
@@ -788,7 +792,7 @@ function PrintModal({ order, onClose }: any) {
         alert("Printing failed. Try opening the artifact in its own window and printing from there.");
       }
       // Clean up the iframe after a delay (the print dialog needs time to read it)
-      setTimeout(() => iframe.remove(), 1000);
+      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
     };
 
     // The image inside the iframe needs to finish loading first

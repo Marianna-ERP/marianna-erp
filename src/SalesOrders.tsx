@@ -1091,8 +1091,10 @@ function PrintModal({ order, onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
+      const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the SO
+      document.title = order.number || prevTitle;
       try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => iframe.remove(), 1000);
+      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -1156,8 +1158,10 @@ function EmailModal({ order, onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
+      const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the SO
+      document.title = order.number || prevTitle;
       try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => iframe.remove(), 1000);
+      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -2533,10 +2537,14 @@ export default function SalesOrders({
   // SO's pendingInvoices array and appends its number to linkedInvoices for cross-reference.
   function confirmInvoiceCreation(invoice) {
     const targetId = invoiceOrder.id;
+    // #4: issuing the invoice advances the SO to "Invoiced" (from Shipped/Delivered).
+    // Closed stays Closed; earlier stages aren't forced forward.
+    const advance = (st: string) => (["Shipped", "Delivered"].includes(st) ? "Invoiced" : st);
     setOrders(prev => prev.map(p => {
       if (p.id !== targetId) return p;
       return {
         ...p,
+        status: advance(p.status),
         pendingInvoices: [...(p.pendingInvoices || []), invoice],
         linkedInvoices: [...(p.linkedInvoices || []), invoice.number],
       };
@@ -2545,6 +2553,7 @@ export default function SalesOrders({
     if (selected && selected.id === targetId) {
       setSelected(prev => ({
         ...prev,
+        status: advance(prev.status),
         pendingInvoices: [...(prev.pendingInvoices || []), invoice],
         linkedInvoices: [...(prev.linkedInvoices || []), invoice.number],
       }));
