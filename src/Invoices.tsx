@@ -86,6 +86,18 @@ export default function Invoices(props: any) {
     const rec = recomputeInvoiceMoney(form) as Invoice;
     if (!rec.number && rec.kind === "COST") { window.alert("Enter the supplier's invoice number."); return; }
     if (!rec.counterparty) { window.alert("Select the counterparty."); return; }
+    // P1-4: guard against entering the same invoice twice (same kind + number +
+    // counterparty). A warning, not a hard block — occasionally a number legitimately
+    // repeats across counterparties, but same-counterparty + same-number is almost
+    // always a double entry.
+    const numNorm = String(rec.number || "").trim().toLowerCase();
+    if (numNorm) {
+      const dupe = (invoices || []).find((p: Invoice) =>
+        p.id !== rec.id && p.kind === rec.kind && p.paymentStatus !== "Cancelled" &&
+        String(p.number || "").trim().toLowerCase() === numNorm &&
+        String(p.counterparty?.name || "").trim().toLowerCase() === String(rec.counterparty?.name || "").trim().toLowerCase());
+      if (dupe && !window.confirm(`A ${rec.kind === "SALES" ? "sales" : "cost"} invoice "${rec.number}" from ${rec.counterparty?.name || "this counterparty"} already exists. This looks like a duplicate — save anyway?`)) return;
+    }
     setInvoices((prev: Invoice[]) => {
       const exists = prev.find(p => p.id === rec.id);
       if (exists) return prev.map(p => p.id === rec.id ? { ...(rec as Invoice) } : p);

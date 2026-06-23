@@ -281,6 +281,33 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     }
   });
 
+  // ── 6. Shipment ↔ inventory consistency (v6.18.7, P1-6) ────────────────────
+  // A delivered shipment whose lots show no recorded movement — stock probably
+  // wasn't received/shipped (the "apply inventory" step was missed).
+  shipments.forEach((sh: any) => {
+    if (sh?.status !== "Delivered") return;
+    const lotRefs = new Set([...arr(sh.lotRefs), ...arr(sh.goods).map((g: any) => g.lotRef)].filter(Boolean).map(String));
+    if (!lotRefs.size) return;
+    const anyMissing = [...lotRefs].some((lr) => {
+      const lot = lotByNumber.get(lr);
+      if (!lot) return false; // missing lot is reported separately
+      return !arr(lot.movements).some((m: any) => String(m.shipmentRef) === String(sh.number));
+    });
+    if (anyMissing) add("warning", "SHIPMENT_NO_MOVEMENT", "Shipments", sh.number || "(unnumbered shipment)",
+      `Shipment is Delivered but at least one of its lots has no inventory movement — stock may not have been received or shipped out. Open it and apply the inventory movement.`);
+  });
+
+  // A delivered/arrived shipment carrying logistics costs that were never allocated
+  // to inventory lot costing — those costs are missing from COGS.
+  shipments.forEach((sh: any) => {
+    if (!["Delivered", "Arrived"].includes(sh?.status)) return;
+    const hasCost = arr(sh.costs).some((c: any) => num(c.amountPLN) > 0);
+    if (hasCost && sh.billingStatus !== "Cost allocated") {
+      add("info", "SHIPMENT_COST_UNALLOCATED", "Shipments", sh.number || "(unnumbered shipment)",
+        `Shipment has logistics costs not yet allocated to inventory (billing status: ${sh.billingStatus || "—"}). They won't appear in lot COGS until allocated.`);
+    }
+  });
+
   const counts = {
     error: issues.filter(i => i.severity === "error").length,
     warning: issues.filter(i => i.severity === "warning").length,
