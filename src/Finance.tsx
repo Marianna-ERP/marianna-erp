@@ -377,11 +377,11 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
 
 
 // ─── v6.9: RECEIVABLES & PAYABLES VIEW ──────────────────────────────────────
-function LedgerView({ orders = [], lots = [], pos = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
+function LedgerView({ orders = [], lots = [], pos = [], invoices = [], financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
   const today = localTodayISO();
-  const { items, totals } = buildLedger({ orders, lots, pos, warehouseInvoices, operationalCosts, settledRefs, todayISO: today });
+  const { items, totals } = buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs, todayISO: today });
 
   function togglePaid(ref: string) {
     if (!setSettledRefs) return;
@@ -443,7 +443,7 @@ function LedgerView({ orders = [], lots = [], pos = [], warehouseInvoices = [], 
         </table>
       </div>
       <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 8, lineHeight: 1.5 }}>
-        Receivables come from sales invoices issued on SOs; payables from producer payouts (closed consignment settlements), warehouse invoices, invoice-backed operational costs, and firm-price PO purchases. Payroll and taxes (no invoice number) are excluded. "Mark paid" is a manual flag now; once Fakturownia sales-invoice matching is connected, paid status syncs from there.
+        Receivables and invoice-based payables (sales, warehouse, freight and other cost invoices) now read from the <strong>Invoices</strong> module — the single source of truth — so anything you add, edit or pay there flows straight into this ledger and the P/L. Producer payouts (closed consignment settlements) and firm-price PO purchase commitments are still computed from inventory and the POs. Payroll and taxes (no invoice number) are excluded. "Mark paid" here is a manual flag; recording a payment on the invoice itself (Invoices module) is the cleaner way and also clears it here.
       </div>
     </>
   );
@@ -734,6 +734,8 @@ export default function Finance({
   setOperationalCosts,
   creditNotes = [],
   setCreditNotes,
+  invoices = [],
+  financeNotes = [],
 }: {
   orders?: any[];
   lots?: any[];
@@ -749,6 +751,8 @@ export default function Finance({
   setOperationalCosts?: any;
   creditNotes?: any[];
   setCreditNotes?: any;
+  invoices?: any[];
+  financeNotes?: any[];
 }) {
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger" | "creditNotes">("pl");
@@ -886,7 +890,7 @@ export default function Finance({
         {tab === "creditNotes" ? (
           <CreditNotesView creditNotes={creditNotes} setCreditNotes={setCreditNotes} contacts={contacts} pos={pos} orders={orders} shipments={shipments} />
         ) : tab === "ledger" ? (
-          <LedgerView orders={orders} lots={lots} pos={pos} warehouseInvoices={warehouseInvoices} operationalCosts={operationalCosts} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
+          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
         ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />
         ) : tab === "pl" ? (

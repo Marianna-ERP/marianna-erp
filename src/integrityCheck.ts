@@ -40,6 +40,8 @@ export interface IntegrityInputs {
   warehouseInvoices?: any[];
   operationalCosts?: any[];
   creditNotes?: any[];
+  invoices?: any[];
+  financeNotes?: any[];
 }
 
 // ── small helpers (kept local so this module has zero imports) ──
@@ -228,6 +230,56 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   dupScan(lots, "number", "Inventory", "lots");
   dupScan(orders, "number", "Sales Orders", "SOs");
   dupScan(shipments, "number", "Shipments", "shipments");
+
+  // ── 5. Invoices & finance notes (v6.18.6, P0-7) ────────────────────────────
+  const invoices = arr(inp.invoices);
+  const financeNotes = arr(inp.financeNotes);
+  const shipByNumber = new Set(shipments.map((s: any) => String(s.number)));
+  const invoiceById = new Map(invoices.map((i: any) => [String(i.id), i]));
+
+  // Invoice links pointing at records that no longer exist.
+  invoices.forEach((inv: any) => {
+    if (inv?.paymentStatus === "Cancelled") return;
+    const label = inv.number || `invoice #${inv.id}`;
+    arr(inv.links).forEach((lk: any) => {
+      const num2 = String(lk?.number || "");
+      if (!num2) return;
+      const missing =
+        (lk.type === "SO" && !orderByNumber.has(num2)) ||
+        (lk.type === "PO" && !poByNumber.has(num2)) ||
+        (lk.type === "Lot" && !lotByNumber.has(num2)) ||
+        (lk.type === "Shipment" && !shipByNumber.has(num2));
+      if (missing) add("warning", "INVOICE_ORPHAN_LINK", "Invoices", label,
+        `Invoice links to ${lk.type} ${num2}, which no longer exists.`);
+    });
+    // A recorded payment larger than the invoice total.
+    if (num(inv.paidAmount) > num(inv.grossPLN || inv.netPLN) + 0.01 && num(inv.grossPLN || inv.netPLN) > 0) {
+      add("warning", "INVOICE_OVERPAID", "Invoices", label,
+        `Recorded payments (${r2(num(inv.paidAmount))}) exceed the invoice total (${r2(num(inv.grossPLN || inv.netPLN))}).`);
+    }
+  });
+
+  // Duplicate invoice numbers within the same direction (sales vs cost).
+  const invKeySeen = new Map<string, number>();
+  invoices.forEach((inv: any) => {
+    const num2 = norm(inv.number);
+    if (!num2 || inv.paymentStatus === "Cancelled") return;
+    const k = `${inv.kind || "?"}|${num2}`;
+    invKeySeen.set(k, (invKeySeen.get(k) || 0) + 1);
+  });
+  invKeySeen.forEach((count, k) => {
+    if (count > 1) add("warning", "DUPLICATE_INVOICE_NO", "Invoices", k.split("|")[1],
+      `${count} ${k.split("|")[0] === "SALES" ? "sales" : "cost"} invoices share the number "${k.split("|")[1]}".`);
+  });
+
+  // Finance note (credit/debit) pointing at a missing invoice.
+  financeNotes.forEach((note: any) => {
+    if (note?.invoiceId == null) return;
+    if (!invoiceById.has(String(note.invoiceId))) {
+      add("warning", "NOTE_ORPHAN_INVOICE", "Invoices", note.number || `${note.noteType || "note"} #${note.id}`,
+        `${note.noteType || "Credit/debit"} note references invoice #${note.invoiceId}, which no longer exists.`);
+    }
+  });
 
   const counts = {
     error: issues.filter(i => i.severity === "error").length,
