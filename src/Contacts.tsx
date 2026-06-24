@@ -1088,7 +1088,88 @@ function parseFakturowniaRow(row, existingCounterparties) {
   };
 }
 
-function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
+// ─── CSV IMPORT (our own export format — round-trips contacts.csv) ───────────
+// Minimal RFC-4180 parser: handles quoted fields, escaped quotes ("") and
+// embedded commas / newlines.
+function splitCsvText(text: string): string[][] {
+  const s = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const rows: string[][] = []; let row: string[] = []; let field = ""; let inQ = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inQ) {
+      if (ch === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += ch;
+    } else {
+      if (ch === '"') inQ = true;
+      else if (ch === ",") { row.push(field); field = ""; }
+      else if (ch === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+      else field += ch;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length && !(r.length === 1 && r[0].trim() === ""));
+}
+
+// Parse a CSV produced by our own "Export CSV" (one row per contact person, so
+// several rows can share a company). Groups rows back into counterparties and
+// flags duplicates with the same fuzzy matcher the merge tool uses.
+function parseOwnCsv(text: string, existingCounterparties: any[]) {
+  const rows = splitCsvText(text);
+  if (rows.length < 2) return [];
+  const header = rows[0].map(h => String(h || "").trim().toLowerCase());
+  const col = (name: string) => header.indexOf(name.toLowerCase());
+  const idx = {
+    type: col("Type"), addt: col("Also acts as"), company: col("Company"), country: col("Country"),
+    nip: col("NIP"), vat: col("EU VAT"), address: col("Address"), currency: col("Currency"),
+    terms: col("Payment Terms"), services: col("Services"), pname: col("Person Name"),
+    prole: col("Role"), pemail: col("Email"), pphone: col("Phone"), pprimary: col("Primary"), notes: col("Notes"),
+  };
+  if (idx.company < 0) throw new Error("This CSV doesn't look like a contacts export — the 'Company' column is missing.");
+  const get = (r: string[], i: number) => (i >= 0 && i < r.length ? String(r[i] ?? "").trim() : "");
+  const splitList = (v: string) => String(v || "").split(";").map(x => x.trim()).filter(Boolean);
+  const groups = new Map<string, string[][]>();
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const company = get(r, idx.company);
+    if (!company) continue;
+    const key = `${company.toLowerCase()}||${get(r, idx.country).toLowerCase()}||${get(r, idx.nip).toLowerCase()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+  const out: any[] = [];
+  groups.forEach(grp => {
+    const r0 = grp[0];
+    const name = get(r0, idx.company);
+    const country = get(r0, idx.country);
+    const nip = get(r0, idx.nip);
+    const vatEuId = get(r0, idx.vat);
+    const contacts: any[] = [];
+    grp.forEach(r => {
+      const pn = get(r, idx.pname), pe = get(r, idx.pemail), pp = get(r, idx.pphone);
+      if (pn || pe || pp) contacts.push({
+        id: contacts.length + 1, name: pn || "—", role: get(r, idx.prole) || "Other",
+        email: pe, phone: pp, isPrimary: /^(yes|true|1)$/i.test(get(r, idx.pprimary)) || contacts.length === 0, notes: "",
+      });
+    });
+    const dupMatches = findCounterpartyDuplicates({ name, nip, vatEuId }, existingCounterparties || [], null);
+    const duplicateOf = dupMatches.length ? (dupMatches[0].reason === "tax" ? "nip" : "name") : null;
+    out.push({
+      _row: name, _selected: !duplicateOf, _duplicate: duplicateOf,
+      type: get(r0, idx.type) || "Other",
+      additionalTypes: splitList(get(r0, idx.addt)),
+      name, country, address: get(r0, idx.address), nip, vatEuId,
+      defaultCurrency: get(r0, idx.currency) || defaultCurrencyByCountry(country),
+      paymentTerms: get(r0, idx.terms) || "30 days from invoice date", paymentTermsOther: "",
+      services: splitList(get(r0, idx.services)),
+      finance: { bankName: "", accountNumber: "", swift: "" },
+      notes: get(r0, idx.notes), contacts,
+    });
+  });
+  return out;
+}
+
+function ImportModal({ existingCounterparties, onCancel, onImport, source = "fakturownia" }: any) {
+  const isCsv = source === "csv";
   const [stage, setStage] = useState("upload"); // upload | parsing | review
   const [filename, setFilename] = useState("");
   const [parsedRows, setParsedRows] = useState<any[]>([]); // array of parsed counterparty candidates
@@ -1101,6 +1182,22 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
     if (!file) return;
     setFilename(file.name);
     setStage("parsing");
+    if (isCsv) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const parsed = parseOwnCsv(String(e.target?.result || ""), existingCounterparties);
+          if (!parsed.length) throw new Error("No contact rows found in the file.");
+          setParsedRows(parsed);
+          setStage("review");
+        } catch (err) {
+          alert("Could not parse CSV: " + (err instanceof Error ? err.message : String(err)));
+          setStage("upload");
+        }
+      };
+      reader.readAsText(file);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -1172,9 +1269,9 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
         {/* Header */}
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Import contacts from Fakturownia</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>{isCsv ? "Import contacts from CSV" : "Import contacts from Fakturownia"}</div>
             <div style={{ fontSize: 12, color: "#999", marginTop: 2 }}>
-              {stage === "upload" && "Drop the kontrahenci export (.xls / .xlsx / .csv)"}
+              {stage === "upload" && (isCsv ? "Drop a contacts CSV (same columns as Export CSV)" : "Drop the kontrahenci export (.xls / .xlsx / .csv)")}
               {stage === "parsing" && "Parsing the file…"}
               {stage === "review" && `${parsedRows.length} records parsed — review and assign types, then import`}
             </div>
@@ -1193,12 +1290,14 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
               style={{ border: "2px dashed #E5E7EB", borderRadius: 12, padding: "60px 40px", textAlign: "center", background: "#FAFAFA", cursor: "pointer", transition: "all 0.15s", width: "100%", maxWidth: 520 }}
             >
               <div style={{ fontSize: 44, marginBottom: 12 }}>📊</div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: "#111", marginBottom: 6 }}>Drop the Fakturownia export here</div>
-              <div style={{ fontSize: 12.5, color: "#888" }}>Supports .xls / .xlsx / .csv · max ~10 MB</div>
-              <input ref={fileInputRef} type="file" accept=".xls,.xlsx,.csv" style={{ display: "none" }} onChange={e => handleFile(e.target.files?.[0])} />
+              <div style={{ fontSize: 15, fontWeight: 600, color: "#111", marginBottom: 6 }}>{isCsv ? "Drop a contacts CSV here" : "Drop the Fakturownia export here"}</div>
+              <div style={{ fontSize: 12.5, color: "#888" }}>{isCsv ? "A .csv with the same columns as Export CSV · max ~10 MB" : "Supports .xls / .xlsx / .csv · max ~10 MB"}</div>
+              <input ref={fileInputRef} type="file" accept={isCsv ? ".csv" : ".xls,.xlsx,.csv"} style={{ display: "none" }} onChange={e => handleFile(e.target.files?.[0])} />
             </div>
             <div style={{ marginTop: 18, padding: "12px 16px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, maxWidth: 520, fontSize: 12, color: "#92400E" }}>
-              <strong>Tip:</strong> in Fakturownia, go to <em>Kontrahenci → Eksport → XLS</em>. The columns we expect are <code>ID, Client, TAX ID, City, Country, Company, E-mail, Bank, Account Number</code> and a few more — the standard export already includes them.
+              {isCsv
+                ? <><strong>Tip:</strong> use a file with the same columns as <em>Export CSV</em> (<code>Type, Company, Country, NIP, EU VAT, Address, Currency, Payment Terms, Services, Person Name, Role, Email, Phone, Primary, Notes</code>). Several rows with the same company are merged into one contact with multiple people. Likely duplicates are flagged so you can skip them.</>
+                : <><strong>Tip:</strong> in Fakturownia, go to <em>Kontrahenci → Eksport → XLS</em>. The columns we expect are <code>ID, Client, TAX ID, City, Country, Company, E-mail, Bank, Account Number</code> and a few more — the standard export already includes them.</>}
             </div>
           </div>
         )}
@@ -1590,6 +1689,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   const [modal, setModal] = useState(null); // null | "new" | counterparty-to-edit
   const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
   const [showImport, setShowImport] = useState(false);
+  const [importSource, setImportSource] = useState("fakturownia"); // "fakturownia" | "csv"
   const [importResult, setImportResult] = useState(null); // toast { count } | null
   // v6.3.0 duplicate handling
   const [dupReview, setDupReview] = useState(null);   // { candidate, matches } | null
@@ -1818,7 +1918,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
         />
       )}
       {emailTarget && <EmailModal counterparty={emailTarget.counterparty} person={emailTarget.person} onClose={() => setEmailTarget(null)} />}
-      {showImport && <ImportModal existingCounterparties={counterparties} onCancel={() => setShowImport(false)} onImport={handleImport} />}
+      {showImport && <ImportModal existingCounterparties={counterparties} source={importSource} onCancel={() => setShowImport(false)} onImport={handleImport} />}
       {importResult && (
         <div style={{ position: "fixed", bottom: 24, right: 24, background: "#16A34A", color: "#fff", padding: "14px 20px", borderRadius: 10, boxShadow: "0 6px 24px rgba(0,0,0,0.18)", fontSize: 13, fontWeight: 600, zIndex: 200 }}>
           ✓ Imported {importResult.count} counterparty record{importResult.count !== 1 ? "s" : ""}
@@ -1842,7 +1942,8 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
             </button>
           ))}
         </div>
-        <button onClick={() => setShowImport(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
+        <button onClick={() => { setImportSource("fakturownia"); setShowImport(true); }} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
+        <button onClick={() => { setImportSource("csv"); setShowImport(true); }} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import CSV</button>
         <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ Export CSV</button>
         <button onClick={scanForDuplicates} title="Scan all counterparties for suspected duplicates (same tax ID or similar name)" style={{ background: "#fff", color: "#2563EB", border: "1px solid #BFDBFE", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>⧉ Find duplicates</button>
         <button onClick={() => setModal("new")} style={{ background: "#16A34A", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
