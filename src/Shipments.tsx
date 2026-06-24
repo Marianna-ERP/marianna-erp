@@ -1302,6 +1302,27 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   </div>;
 }
 
+// v6.18.12 (#2): keep a single auto-managed "customs" cost line in sync with the
+// shipment's structured customs section, so the clearance cost flows into allocation
+// and Finance like any other cost. Manual customs cost lines (no _customsAuto) are left
+// untouched.
+function syncCustomsCostLine(sh: any) {
+  const costs = (sh.costs || []).filter((c: any) => !c._customsAuto);
+  const c = sh.customs || {};
+  const amt = parseNum(c.cost);
+  if (c.applies && amt > 0) {
+    const fx = parseNum(c.fxRate) || 1;
+    costs.push({
+      id: Date.now(), type: "customs", supplierId: sh.brokerId || null,
+      amount: amt, currency: c.currency || "PLN", fxRate: fx,
+      amountPLN: Math.round(amt * fx * 100) / 100,
+      invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
+      notes: c.notes || "Customs clearance", _customsAuto: true,
+    });
+  }
+  return { ...sh, costs };
+}
+
 function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: any) {
   const [draft, setDraft] = useState(() => withStandardDocs(JSON.parse(JSON.stringify(shipment))));
   const roadProviders = logisticsProviders(contacts, "Road");
@@ -1456,6 +1477,44 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
             <div><Lbl>Temp max C</Lbl><Inp type="number" value={draft.temperatureMaxC} onChange={e => sf("temperatureMaxC", parseNum(e.target.value))} /></div>
             <div><Lbl>Notes</Lbl><Inp value={draft.notes} onChange={e => sf("notes", e.target.value)} /></div>
           </div>
+        </Card>
+        <Card>
+          <SectionTitle>Customs clearance</SectionTitle>
+          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10, lineHeight: 1.5 }}>
+            EU → EU needs no clearance. Crossing the EU border does: on <strong>export</strong> your PL broker or the forwarder abroad clears it before exit; on <strong>import (CIF)</strong> it's cleared at EU entry by the forwarder, or you move it under <strong>T1</strong> and clear with your local broker.
+          </div>
+          {(() => {
+            const c = draft.customs || {};
+            const setC = (k: string, v: any) => setDraft((prev: any) => ({ ...prev, customs: { ...(prev.customs || {}), [k]: v } }));
+            return (
+              <>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 10, cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!c.applies} onChange={e => setC("applies", e.target.checked)} /> Customs clearance applies to this shipment
+                </label>
+                {c.applies && (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                      <div><Lbl>Cleared by</Lbl><Sel value={c.role || "PL_BROKER"} onChange={e => setC("role", e.target.value)}>
+                        <option value="PL_BROKER">Our PL broker</option>
+                        <option value="FORWARDER">Forwarder (abroad)</option>
+                        <option value="T1_LOCAL">T1 transit + our local broker</option>
+                      </Sel></div>
+                      <div><Lbl>Country of clearance</Lbl><Inp value={c.country || ""} onChange={e => setC("country", e.target.value)} placeholder="e.g. Poland" /></div>
+                      <div><Lbl>Status</Lbl><Sel value={c.status || "Pending"} onChange={e => setC("status", e.target.value)}>{["Pending", "In progress", "Cleared"].map(s => <option key={s}>{s}</option>)}</Sel></div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "120px 120px 110px 1fr", gap: 10, marginTop: 10 }}>
+                      <div><Lbl>Customs cost</Lbl><Inp type="number" value={c.cost ?? ""} onChange={e => setC("cost", parseNum(e.target.value))} /></div>
+                      <div><Lbl>Currency</Lbl><Sel value={c.currency || "PLN"} onChange={e => setC("currency", e.target.value)}>{["PLN", "EUR", "USD"].map(x => <option key={x}>{x}</option>)}</Sel></div>
+                      <div><Lbl>FX → PLN</Lbl><Inp type="number" value={c.fxRate ?? (!c.currency || c.currency === "PLN" ? 1 : "")} onChange={e => setC("fxRate", parseNum(e.target.value))} /></div>
+                      <div style={{ display: "flex", alignItems: "flex-end" }}><label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}><input type="checkbox" checked={!!c.t1} onChange={e => setC("t1", e.target.checked)} /> Moved under T1 transit</label></div>
+                    </div>
+                    <div style={{ marginTop: 10 }}><Lbl>Notes</Lbl><Inp value={c.notes || ""} onChange={e => setC("notes", e.target.value)} placeholder="Declaration ref, phyto, duties…" /></div>
+                    <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 6 }}>The customs cost is synced into this shipment's cost lines (type "customs") for allocation.</div>
+                  </>
+                )}
+              </>
+            );
+          })()}
         </Card>
         <Card>
           <SectionTitle right={<SmallButton onClick={addLeg}>+ Activate extra leg</SmallButton>}>Legs - route, truck / driver / container / BL</SectionTitle>
@@ -1669,7 +1728,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="dark" onClick={() => onSave(draft)}>Save changes</SmallButton>
+        <SmallButton kind="dark" onClick={() => onSave(syncCustomsCostLine(draft))}>Save changes</SmallButton>
       </div>
     </div>
   </div>;

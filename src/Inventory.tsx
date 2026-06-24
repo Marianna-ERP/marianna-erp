@@ -218,7 +218,7 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
   // a later transit_road = on-carriage → last road leg).
   let roadIdx = 0;
 
-  return journey.map((s: any, i: number) => {
+  const stageEvidence = journey.map((s: any, i: number) => {
     let status = "pending";
     let actualDate: string | null = s.actualDate || null;
 
@@ -269,7 +269,27 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
       default: break;
     }
     return { ...s, status, actualDate };
-  }).map((s: any, i: number, arr: any[]) => {
+  });
+
+  // v6.18.11 (#1): monotonic back-fill. Granular leg dates / customs flags often
+  // aren't entered, leaving early stages "pending" even after the goods have clearly
+  // arrived. But physical presence at a later point proves every earlier transit
+  // point happened — you can't be In Stock without having passed sea/customs/road.
+  // So find the furthest point actually reached (from movements + lot status) and
+  // mark every stage up to it done, using the planned date when no actual exists.
+  const idxOf = (kind: string) => { let r = -1; stageEvidence.forEach((s: any, i: number) => { if (s.kind === kind) r = i; }); return r; };
+  const received = !!firstInMove || lot.status === "In Stock" || parseNum(lot.physicalKg) > 0 || parseNum(lot.receivedKg) > 0;
+  const shippedOut = !!shipOutMove || ["Shipped Out", "Delivered"].includes(lot.status) || soDelivered;
+  const directDelivered = lot.status === "Delivered (direct)";
+  const atPort = !!portMove || lot.status === "Customs";
+  let reached = -1;
+  stageEvidence.forEach((s: any, i: number) => { if (s.status === "done") reached = i; });
+  if (atPort) reached = Math.max(reached, idxOf("dest_port"));
+  if (received) reached = Math.max(reached, idxOf("our_wh"));
+  if (shippedOut || directDelivered) reached = Math.max(reached, idxOf("client"), idxOf("dest_port"));
+  const backFilled = stageEvidence.map((s: any, i: number) => (i <= reached && s.status !== "done") ? { ...s, status: "done", actualDate: s.actualDate || s.plannedDate || null } : s);
+
+  return backFilled.map((s: any, i: number, arr: any[]) => {
     // The first non-done stage becomes "active" (current frontier, shown orange).
     if (s.status === "pending") {
       const anyEarlierActive = arr.slice(0, i).some((x: any) => x.status === "active");
@@ -762,7 +782,7 @@ function valueInStock(lot) {
 // lot stays consistent no matter what changed. (Replay-from-zero is valid because
 // every quantity change is represented by a movement.)
 function recomputeLotFromMovements(lot: any, movements: any[]) {
-  let receivedKg = 0, physicalKg = 0, damagedKg = 0;
+  let receivedKg = 0, physicalKg = 0, damagedKg = 0, claimedKg = 0;
   let locationId = lot.baseLocationId ?? lot.locationId;
   let status = lot.expectedKg && movements.length === 0 ? "Expected" : (lot.status || "Expected");
   const ordered = [...movements].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0));
@@ -772,9 +792,15 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
     switch (m.type) {
       case "IN": receivedKg += q; physicalKg += q; locationId = m.toId; sawIn = true; break;
       case "TRANSFER": locationId = m.toId; break;
-      case "SHIP_OUT": physicalKg = Math.max(0, physicalKg - q); locationId = m.toId || locationId; sawShipOut = true; break;
-      case "REVERSAL": physicalKg += q; break;
+      // v6.18.10 (#3): a ship-out reduces stock but does NOT move the lot's location —
+      // the remaining kg are still in our warehouse. (Previously it stamped the lot's
+      // location as the client, so a partial ship made the remainder look "at client".)
+      case "SHIP_OUT": physicalKg = Math.max(0, physicalKg - q); sawShipOut = true; break;
+      case "REVERSAL": physicalKg += q; if (m.toId) locationId = m.toId; break;
       case "DAMAGE": physicalKg = Math.max(0, physicalKg - q); damagedKg += q; break;
+      // v6.18.10 (#5): a CLAIM is a client-side defect on goods we already shipped —
+      // it does NOT touch our warehouse stock; it drives a credit note instead.
+      case "CLAIM": claimedKg += q; break;
       case "RECLASS": break;
       default: break;
     }
@@ -793,7 +819,7 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
   } else if (movements.length === 0 && lot.expectedKg) {
     status = "Expected";
   }
-  return { ...lot, movements: ordered, receivedKg, physicalKg, damagedKg, locationId, status };
+  return { ...lot, movements: ordered, receivedKg, physicalKg, damagedKg, claimedKg, locationId, status };
 }
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
@@ -807,7 +833,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   // and "quality" (Damage / Reclassify). The mode is fixed by which button opened
   // the modal (Record movement vs the red Record quality issue), so there is no
   // in-modal tab toggle anymore.
-  const QUALITY_TYPES = ["DAMAGE", "RECLASS"];
+  const QUALITY_TYPES = ["DAMAGE", "RECLASS", "CLAIM"];
   const MOVEMENT_MODE_TYPES = ["IN", "TRANSFER", "SHIP_OUT"];
   const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
   const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : (isExpectedLike ? "IN" : "TRANSFER")));
@@ -820,6 +846,17 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   const [note, setNote] = useState(editing?.note || "");
   const [soRef, setSoRef] = useState(editing?.soRef || "");
   const [date, setDate] = useState(editing?.date || today);
+  // v6.18.10 (#5): a quality issue detected AT THE CLIENT (after we shipped) is a
+  // client claim, not a warehouse write-off — it leaves our stock alone and drives a
+  // credit note. "Detected at" decides which path runs.
+  const CLIENT_SIDE_DETECTION = ["At the client (export delivery)", "At the client's warehouse (direct delivery)"];
+  const clientSide = mode === "quality" && CLIENT_SIDE_DETECTION.includes(detectedAt);
+  const lotShipSoRefs = Array.from(new Set((lot.movements || []).filter((m: any) => m.type === "SHIP_OUT" && m.soRef).map((m: any) => m.soRef)));
+  const clientSORefs = (lotShipSoRefs.length ? lotShipSoRefs : (liveSOs || []).map((o: any) => o.number)).filter(Boolean);
+  const [claimSoRef, setClaimSoRef] = useState(editing?.soRef || lotShipSoRefs[0] || "");
+  const [claimValue, setClaimValue] = useState(editing?.claimValue != null ? String(editing.claimValue) : "");
+  const [claimCurrency, setClaimCurrency] = useState(editing?.claimCurrency || "PLN");
+  const effectiveType = clientSide && type === "DAMAGE" ? "CLAIM" : type;
   const reservationState = lotReservations(lot, liveSOs);
   const liveAvailableKg = reservationState.liveAvailable;
   // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
@@ -841,10 +878,11 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
     SHIP_OUT: physicalBasis + selfQty,
     DAMAGE:   physicalBasis + selfQty,
     RECLASS:  physicalBasis + selfQty,
+    CLAIM:    (parseNum(lot.receivedKg) || physicalBasis) + selfQty, // can't claim more than was ever received
   };
-  const max = maxByType[type];
+  const max = maxByType[effectiveType] ?? Infinity;
   const qtyNum = parseFloat(qty) || 0;
-  const isInvalid = qtyNum <= 0 || qtyNum > max;
+  const isInvalid = qtyNum <= 0 || qtyNum > max || (clientSide && !(parseFloat(claimValue) > 0));
   const typeInfo = MOVEMENT_TYPES[type] || {};
   const showRoute = type === "TRANSFER" || type === "IN" || type === "SHIP_OUT";
 
@@ -860,9 +898,13 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
             <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
               <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
             </div>
+          ) : clientSide ? (
+            <div style={{ padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5, marginBottom: 16 }}>
+              <strong>Client claim (goods already shipped).</strong> Because this defect was found at the client after delivery, it will <strong>not</strong> change your warehouse stock — those kg already left. Recording it logs a client claim against the delivery and creates a <strong>draft credit note</strong> to the client for the value below, which you can finalise in Invoices.
+            </div>
           ) : (
             <div style={{ padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11.5, color: "#991B1B", lineHeight: 1.5, marginBottom: 16 }}>
-              <strong>Quality issue.</strong> Record the result of inspecting / sorting this lot: <strong>Damage</strong> writes off rejected kg (reduces stock on hand), and <strong>Reclassify</strong> changes the quality grade (e.g. Kl. I → Kl. II) with no quantity change. Use this for post-sorting outcomes — not for normal receipts, transfers or dispatches.
+              <strong>Quality issue (goods in our hands).</strong> <strong>Damage</strong> writes off rejected kg (reduces stock on hand), and <strong>Reclassify</strong> changes the quality grade (e.g. Kl. I → Kl. II) with no quantity change. If the defect is reported by the client after you shipped, change "Detected at" to a client location — it becomes a claim that won't touch your stock.
             </div>
           )}
 
@@ -888,7 +930,30 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
             </div>
           </div>
 
-          {showRoute && (
+          {clientSide && (
+            <div style={{ marginBottom: 12, padding: "12px 14px", background: "#F8FAFF", border: "1px solid #DBEAFE", borderRadius: 8 }}>
+              <div style={{ marginBottom: 10 }}>
+                <Lbl>Delivery / sales order this claim is against</Lbl>
+                <Sel value={claimSoRef} onChange={e => setClaimSoRef(e.target.value)}>
+                  <option value="">— select the delivery —</option>
+                  {clientSORefs.map((r: any) => <option key={r} value={r}>{r}</option>)}
+                </Sel>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 12 }}>
+                <div>
+                  <Lbl>Agreed credit value</Lbl>
+                  <Inp value={claimValue} onChange={e => setClaimValue(e.target.value)} type="number" placeholder="0.00" />
+                </div>
+                <div>
+                  <Lbl>Currency</Lbl>
+                  <Sel value={claimCurrency} onChange={e => setClaimCurrency(e.target.value)}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel>
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "#64748B", marginTop: 8, lineHeight: 1.4 }}>The {qty || "0"} kg won't be removed from warehouse stock. A draft credit note for this value goes to the client (linked to the sales invoice if one exists); finalise it in Invoices.</div>
+            </div>
+          )}
+
+          {showRoute && !clientSide && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 24px 1fr", gap: 8, alignItems: "end", marginBottom: 12 }}>
               <div>
                 <Lbl>{type === "IN" ? "Received from" : "From"}</Lbl>
@@ -951,7 +1016,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
           )}
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date, soRef: type === "SHIP_OUT" ? (soRef || null) : (editing?.soRef ?? null), ...(mode === "quality" ? { detectedAt } : {}) })} disabled={isInvalid}
+            <button onClick={() => onConfirm({ id: editing?.id, type: effectiveType, qtyKg: qtyNum, fromId, toId, note, date, soRef: effectiveType === "CLAIM" ? (claimSoRef || null) : (type === "SHIP_OUT" ? (soRef || null) : (editing?.soRef ?? null)), ...(mode === "quality" ? { detectedAt } : {}), ...(effectiveType === "CLAIM" ? { claimValue: parseFloat(claimValue) || 0, claimCurrency } : {}) })} disabled={isInvalid}
               style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: isInvalid ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: isInvalid ? "not-allowed" : "pointer" }}>
               {editing ? "Save changes" : (mode === "quality" ? "Record quality issue" : "Record movement")}
             </button>
@@ -1323,7 +1388,52 @@ function SortingModal({ lot, onCancel, onConfirm }: any) {
 }
 
 // ─── v6.5 anchor end ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
+function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
+  const locs = mergedLocations(contacts);
+  const ownWarehouses = locs.filter((l: any) => l.type === "OWN");
+  const lastShip = [...(lot.movements || [])].reverse().find((m: any) => m.type === "SHIP_OUT");
+  const defTo = ownWarehouses.find((w: any) => String(w.id) === String(lot.locationId))?.id || ownWarehouses[0]?.id || "";
+  const [kg, setKg] = useState("");
+  const [fromId, setFromId] = useState(String(lastShip?.toId || ""));
+  const [toId, setToId] = useState(String(defTo || ""));
+  const [cost, setCost] = useState("");
+  const [currency, setCurrency] = useState(lot.currency || "PLN");
+  const [fxRate, setFxRate] = useState((lot.currency || "PLN") === "PLN" ? "1" : "");
+  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [reason, setReason] = useState("");
+  const kgN = parseNum(kg);
+  const valid = kgN > 0 && !!toId;
+  const lblStyle: any = { fontSize: 11, fontWeight: 600, color: "#64748B", marginBottom: 4, display: "block" };
+  const inpStyle: any = { width: "100%", padding: "8px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "24px 16px", overflowY: "auto" }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 520, maxWidth: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", margin: "auto", padding: 22 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>↩ Return to warehouse — {lot.number}</div>
+        <div style={{ fontSize: 11.5, color: "#64748B", lineHeight: 1.5, marginBottom: 16 }}>
+          A return restores stock to your warehouse and books the return transport as a shipment with its cost. It does <strong>not</strong> reopen the original sale — settle any value with the client via a quality issue / credit note.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><label style={lblStyle}>Returned kg</label><input type="number" value={kg} onChange={e => setKg(e.target.value)} style={inpStyle} placeholder="e.g. 5" /></div>
+          <div><label style={lblStyle}>Return date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={inpStyle} /></div>
+          <div><label style={lblStyle}>From (client)</label><select value={fromId} onChange={e => setFromId(e.target.value)} style={inpStyle}><option value="">—</option>{locs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+          <div><label style={lblStyle}>To (warehouse)</label><select value={toId} onChange={e => setToId(e.target.value)} style={inpStyle}><option value="">—</option>{ownWarehouses.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+          <div><label style={lblStyle}>Return transport cost</label><input type="number" value={cost} onChange={e => setCost(e.target.value)} style={inpStyle} placeholder="0" /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div><label style={lblStyle}>Currency</label><select value={currency} onChange={e => { setCurrency(e.target.value); setFxRate(e.target.value === "PLN" ? "1" : ""); }} style={inpStyle}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
+            <div><label style={lblStyle}>FX → PLN</label><input type="number" value={fxRate} onChange={e => setFxRate(e.target.value)} style={inpStyle} /></div>
+          </div>
+        </div>
+        <div style={{ marginTop: 12 }}><label style={lblStyle}>Reason / note</label><input value={reason} onChange={e => setReason(e.target.value)} style={inpStyle} placeholder="e.g. Quality dispute — returned by client" /></div>
+        <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E2E8F0", borderRadius: 8, background: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button disabled={!valid} onClick={() => onConfirm({ kg: kgN, fromId, toId, cost: parseNum(cost), currency, fxRate: parseNum(fxRate) || 1, date, reason })} style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: valid ? "#7C3AED" : "#CBD5E1", color: "#fff", fontSize: 13, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Return to warehouse</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1347,6 +1457,9 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
           <button onClick={onMove} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Record movement</button>
           <button onClick={onQualityIssue} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
+          {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
+            <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
+          )}
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -1524,32 +1637,12 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
               {(() => {
                 const kinds = customsStagesForFlow(lot.flow);
                 if (kinds.length === 0) return null;
-                const customs = lot.customs || {};
-                const statusColor = (st: string) => st === "Cleared" ? { c: "#16A34A", bg: "#DCFCE7" } : st === "In progress" ? { c: "#D97706", bg: "#FEF3C7" } : st === "Held" ? { c: "#DC2626", bg: "#FEE2E2" } : { c: "#6B7280", bg: "#F3F4F6" };
                 return (
                   <Card style={{ marginBottom: 16 }}>
                     <SectionTitle>CUSTOMS</SectionTitle>
-                    {kinds.map((k) => {
-                      const c = customs[k] || {};
-                      const st = c.status || "Not started";
-                      const sc = statusColor(st);
-                      return (
-                        <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 0", borderBottom: "1px solid #F3F4F6" }}>
-                          <div>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>🛃 {k === "export" ? "Export clearance" : "Import clearance"}</div>
-                            <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>
-                              {c.declRef ? `Ref ${c.declRef}` : "No declaration ref"}{c.date ? ` · ${c.date}` : ""}
-                              {c.cost ? ` · ${fmtNum(c.cost)} ${c.currency || "PLN"}` : ""}
-                            </div>
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, color: sc.c, background: sc.bg, padding: "2px 9px", borderRadius: 10 }}>{st}</span>
-                            <button onClick={() => onCustoms(k)} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #2563EB", background: "#fff", borderRadius: 6, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 8, fontStyle: "italic" }}>Customs cost entered here flows into the lot's cost breakdown and marks the matching journey stage.</div>
+                    <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.6 }}>
+                      Customs clearance is now managed on the <strong>shipment</strong> that carries this lot (Shipments → open the shipment → <em>Customs clearance</em>) — where it reflects the EU boundary, who clears it (your PL broker, the forwarder, or T1 + local broker) and the customs cost. The journey step above completes automatically when the goods arrive.
+                    </div>
                   </Card>
                 );
               })()}
@@ -1713,7 +1806,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], pos: extPOs = [] }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState(INIT_LOTS);
   const lots = extLots ?? localLots;
@@ -1731,6 +1824,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
   const [editingMovement, setEditingMovement] = useState(null);
   const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
+  const [showReturn, setShowReturn] = useState(false); // v6.18.12 (#4): return-to-warehouse modal
   const [showInspection, setShowInspection] = useState(false);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all"); // all | inPossession | <specific>
@@ -1769,24 +1863,76 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality]);
 
   // ── mutations ───────────────────────────────────────────────────────
-  function recordMovement({ id, type, qtyKg, fromId, toId, note, date, soRef }: any) {
+  function recordMovement({ id, type, qtyKg, fromId, toId, note, date, soRef, detectedAt, claimValue, claimCurrency, partyName }: any) {
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       // Capture a stable base location for replay (origin before any movement).
       const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      const extra: any = {};
+      if (detectedAt) extra.detectedAt = detectedAt;
+      if (type === "CLAIM") { extra.claimValue = parseNum(claimValue); extra.claimCurrency = claimCurrency || "PLN"; }
       let movements;
       if (id != null) {
         // EDIT: replace the existing movement by id.
-        movements = (l.movements || []).map(m => m.id === id ? { ...m, type, qtyKg, fromId, toId, note, date, soRef: soRef ?? m.soRef ?? null } : m);
+        movements = (l.movements || []).map(m => m.id === id ? { ...m, type, qtyKg, fromId, toId, note, date, soRef: soRef ?? m.soRef ?? null, ...extra } : m);
       } else {
         // ADD: append a new movement.
-        movements = [...(l.movements || []), { id: nextId(), date: date || today, type, qtyKg, fromId, toId, note, soRef: soRef ?? null }];
+        movements = [...(l.movements || []), { id: nextId(), date: date || today, type, qtyKg, fromId, toId, note, soRef: soRef ?? null, ...extra }];
       }
       // Recompute all derived quantities/status/location from the full movement list.
       return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
     }));
+    // v6.18.10 (#5): a client-side quality claim creates a DRAFT credit note to the
+    // client (linked to the sales invoice if one exists), leaving warehouse stock alone.
+    if (type === "CLAIM" && parseNum(claimValue) > 0 && extSetFinanceNotes && id == null) {
+      const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && (i.links || []).some((lk: any) => String(lk.number) === String(soRef)));
+      const so = (extOrders || []).find((o: any) => o.number === soRef);
+      const party = partyName || inv?.counterparty?.name || so?.client?.name || "Client";
+      const cur = claimCurrency || inv?.currency || so?.currency || "PLN";
+      const fx = defaultFxRate(cur);
+      const amt = parseNum(claimValue);
+      extSetFinanceNotes((prev: any[]) => [...(prev || []), {
+        id: nextId(), noteType: "CREDIT", direction: "outgoing",
+        invoiceId: inv?.id ?? null, relatedRef: soRef || selected.number, partyName: party,
+        category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
+        status: "Draft", reason: `Quality claim — ${qtyKg} kg defective on ${selected.number}${soRef ? ` (${soRef})` : ""}`,
+        date: date || today, source: `claim:lot:${selected.id}:${Date.now()}`,
+      }]);
+    }
     setShowMovement(false);
     setEditingMovement(null);
+  }
+
+  // v6.18.12 (#4): a return is a standalone event — restore stock to the warehouse
+  // (REVERSAL) and book the return transport as its own shipment with the cost. It does
+  // NOT reopen the original SO; value is settled via the quality-issue / credit-note path.
+  function returnToWarehouse(d: any) {
+    const fx = parseNum(d.fxRate) || 1;
+    const costN = parseNum(d.cost);
+    setLots(prev => prev.map(l => {
+      if (l.id !== selected.id) return l;
+      const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      const movements = [...(l.movements || []), { id: nextId(), date: d.date || today, type: "REVERSAL", qtyKg: d.kg, fromId: d.fromId || null, toId: d.toId, note: d.reason || "Return to warehouse" }];
+      return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
+    }));
+    if (typeof extSetShipments === "function") {
+      extSetShipments((prev: any[]) => {
+        const year = new Date(d.date || Date.now()).getFullYear();
+        const retCount = (prev || []).filter((s: any) => s.purpose === "RETURN").length;
+        const number = `RET-${year}-${String(retCount + 1).padStart(4, "0")}`;
+        const costPLN = Math.round(costN * fx * 100) / 100;
+        const sh = {
+          id: nextId(), number, purpose: "RETURN", status: "Delivered", billingStatus: "Not ready",
+          loadingDate: d.date, expectedDeliveryDate: d.date,
+          legs: [{ id: 1, mode: "Road", status: "Delivered", fromLocationId: d.fromId || null, toLocationId: d.toId, carrierId: null, plannedPickupDate: d.date, plannedDeliveryDate: d.date, costAmount: costN, costCurrency: d.currency, costFxRate: fx, costPLN, notes: "Return from client" }],
+          costs: costN > 0 ? [{ id: 1, type: "return_freight", supplierId: null, amount: costN, currency: d.currency, fxRate: fx, amountPLN: costPLN, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: d.reason || "Return transport" }] : [],
+          documents: [], lotRefs: [selected.number], terms: "", customs: { applies: false },
+          notes: `Return to warehouse: ${d.kg} kg of ${selected.number}.${d.reason ? " " + d.reason : ""}`,
+        };
+        return [sh, ...(prev || [])];
+      });
+    }
+    setShowReturn(false);
   }
 
   function deleteMovement(movId) {
@@ -1893,7 +2039,9 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
           setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: nextId(), type: "SORTING", kg, date, note }] } : l));
           setSortingLot(null);
-        }} />}        {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
+        }} />}
+
+        {showReturn && selected && <ReturnModal lot={selected} contacts={extContacts} onCancel={() => setShowReturn(false)} onConfirm={returnToWarehouse} />}
 
         {settlementLot && <SettlementModal lot={lots.find(l => l.id === settlementLot.id) || settlementLot} orders={liveSOs} contacts={extContacts} pos={extPOs}
           onCancel={() => setSettlementLot(null)}
@@ -1921,8 +2069,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           onQualityIssue={() => { setEditingMovement(null); setMovementMode("quality"); setShowMovement(true); }}
           onEditMovement={(m: any) => { setEditingMovement(m); setMovementMode(["DAMAGE", "RECLASS"].includes(m.type) ? "quality" : "movement"); setShowMovement(true); }}
           onDeleteMovement={deleteMovement}
-          onCustoms={(k: any) => setShowCustoms(k)}
           onInspect={() => setShowInspection(true)}
+          onReturn={() => setShowReturn(true)}
           onDelete={deleteLot}
           liveSOs={liveSOs}
           shipments={extShipments}
