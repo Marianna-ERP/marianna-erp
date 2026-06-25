@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { nextId } from "./ids";
 import { resolveFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
-import { localTodayISO, localMonthISO } from "./dates";
+import { localTodayISO, localMonthISO, formatDMY } from "./dates";
 
 // MARIANNA ERP - Shipments / Logistics module
 // Standalone-friendly: when no props are passed it uses INIT_SHIPMENTS plus small
@@ -610,7 +610,11 @@ function shipmentVehicleCount(shipment) {
 }
 
 function providerFromContact(c) {
-  const primary = (c.contacts || []).find(p => p.isPrimary) || (c.contacts || [])[0] || {};
+  const cs = c.contacts || [];
+  const primary = cs.find(p => p.isPrimary) || cs[0] || {};
+  // v6.18.14 (#6): the email shouldn't depend on it being on the primary contact —
+  // use the primary's email, else the first contact that has one, else the company email.
+  const emailHolder = cs.find(p => p.isPrimary && p.email) || cs.find(p => p.email) || {};
   return {
     id: c.id,
     type: c.type,
@@ -621,8 +625,8 @@ function providerFromContact(c) {
     address: c.address || "",
     services: c.services || [],
     contact: primary.name || "",
-    email: primary.email || "",
-    phone: primary.phone || "",
+    email: emailHolder.email || c.email || "",
+    phone: primary.phone || emailHolder.phone || "",
   };
 }
 
@@ -975,8 +979,8 @@ function buildManualShipment__raw(opts, shipments) {
   };
 }
 
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "" }: any) {
-  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max }: any) {
+  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
 }
 function TextArea({ value, onChange = () => {}, placeholder = "", rows = 3, style = {}, disabled = false }: any) {
   return <textarea value={value ?? ""} onChange={onChange} placeholder={placeholder} rows={rows} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", resize: "vertical", ...style }} />;
@@ -1045,7 +1049,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const roadProviders = logisticsProviders(contacts, "Road");
   const seaProviders = logisticsProviders(contacts, "Sea");
   const [sourceType, setSourceType] = useState("PO");
-  const [ref, setRef] = useState((pos?.[0]?.number) || "");
+  const [ref, setRef] = useState(""); // v6.18.14 (#4): no PO pre-selected — force a choice
   // Which PO line ids are loaded on this shipment (default: all). Lets the user load
   // a subset of a multi-product PO.
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
@@ -1097,7 +1101,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     const wouldExceed = poQty > 0 && projected > poQty + 1;
     return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), alreadyFull, wouldExceed, exceedBy: Math.max(0, Math.round(projected - poQty)) };
   })();
-  const blockCreate = !!poShipState && (poShipState.alreadyFull || poShipState.wouldExceed);
+  const needsRef = sourceType !== "Manual" && !ref; // v6.18.14 (#4)
+  const blockCreate = needsRef || (!!poShipState && (poShipState.alreadyFull || poShipState.wouldExceed));
   // v6.16 (#4): the PO loading date starts the whole shipment and the SO delivery
   // date ends it. Prefill the header Expected loading / delivery dates from those
   // when the reference changes (in-between dates are set per leg later).
@@ -1167,8 +1172,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         <Card style={{ gridColumn: "1 / 3" }}>
           <SectionTitle>Source</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "160px 1fr 160px 160px", gap: 12 }}>
-            <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(e.target.value === "PO" ? (pos?.[0]?.number || "") : e.target.value === "SO" ? (orders?.[0]?.number || "") : ""); }}><option value="PO">From PO</option><option value="SO">From SO</option><option value="Manual">Manual</option></Sel></div>
-            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}>{(pos || []).map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}>{(orders || []).map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
+            <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(""); }}><option value="PO">From PO</option><option value="SO">From SO</option><option value="Manual">Manual</option></Sel></div>
+            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{(pos || []).map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{(orders || []).map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
             <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={e => sf("currency", e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
           </div>
@@ -1296,7 +1301,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="green" onClick={create} disabled={blockCreate} title={blockCreate ? (poShipState?.alreadyFull ? "This PO is fully shipped — nothing left to ship" : "This shipment would exceed the PO quantity — reduce the lines selected") : ""}>Create shipment</SmallButton>
+        <SmallButton kind="green" onClick={create} disabled={blockCreate} title={needsRef ? `Select a ${sourceType} first` : blockCreate ? (poShipState?.alreadyFull ? "This PO is fully shipped — nothing left to ship" : "This shipment would exceed the PO quantity — reduce the lines selected") : ""}>Create shipment</SmallButton>
       </div>
     </div>
   </div>;
@@ -1593,8 +1598,8 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" /></div>
                 </div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
-                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} /></div>
-                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" value={u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "actualUnloadDate", e.target.value)} /></div>
+                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} max={localTodayISO()} /></div>
+                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" value={u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "actualUnloadDate", e.target.value)} max={localTodayISO()} /></div>
                   <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Real per-truck loading/unloading dates — separate from the leg's planned pickup/delivery on the transport order.</div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 9, marginTop: 9 }}>
@@ -1717,7 +1722,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB", alignItems: "end" }}>
                     <div><Lbl>Courier tracking nr (DHL) — originals to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
-                    <div><Lbl>Sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} /></div>
+                    <div><Lbl>Sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} max={localTodayISO()} /></div>
                     <div style={{ fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Waybill the original document set was sent to the client under.</div>
                   </div>
                 </div>
@@ -2023,7 +2028,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
     const entries = Object.entries(byCur).filter(([, v]) => v > 0);
     return entries.length ? entries.map(([cur, v]) => fmtMoney(v, cur)).join(" + ") : fmtMoney(shipmentCostPLN(shipment), "PLN");
   })();
-  const makeBody = () => `Dear ${provider.contact || provider.name || "Carrier / Forwarder"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipment.originLocationId, firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(lastProviderLeg.toLocationId || shipment.destinationLocationId, lastProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${firstProviderLeg.plannedPickupDate || shipment.loadingDate || "TBA"}\nFreight: ${freightText}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`;
+  const makeBody = () => `Dear ${provider.contact || provider.name || "Carrier / Forwarder"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipment.originLocationId, firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(lastProviderLeg.toLocationId || shipment.destinationLocationId, lastProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${formatDMY(firstProviderLeg.plannedPickupDate || shipment.loadingDate) || "TBA"}\nFreight: ${freightText}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`;
   const [subject, setSubject] = useState(`Transport Order ${shipment.transportOrderNo || shipment.number} / Zlecenie transportowe — ${COMPANY.name}`);
   const [body, setBody] = useState(makeBody());
   // v6.16 (#6): for multimodal there are several providers — when the user switches
@@ -2101,7 +2106,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
                 {(u.containerNumber || (u.mode || leg.mode) === "Sea" || (u.mode || leg.mode) === "Rail") && <div>Container: <strong>{u.containerNumber || "TBA"}</strong> · BL {leg.blNumber || "pending"} · Booking {leg.bookingNumber || "TBA"}{leg.shippingLine ? ` · ${leg.shippingLine}` : ""}</div>}
                 {(u.awbNumber || leg.mode === "Air") && <div>AWB: <strong>{u.awbNumber || "TBA"}</strong></div>}
                 {u.tempRecorderNo && <div>Temp recorder: <strong>{u.tempRecorderNo}</strong></div>}
-                {(u.actualLoadDate || u.actualUnloadDate) && <div>Actual: loaded <strong>{u.actualLoadDate || "—"}</strong> · unloaded <strong>{u.actualUnloadDate || "—"}</strong></div>}
+                {(u.actualLoadDate || u.actualUnloadDate) && <div>Actual: loaded <strong>{formatDMY(u.actualLoadDate) || "—"}</strong> · unloaded <strong>{formatDMY(u.actualUnloadDate) || "—"}</strong></div>}
               </div>
             )) : <div>Transport unit details: TBA</div>}
           </div>

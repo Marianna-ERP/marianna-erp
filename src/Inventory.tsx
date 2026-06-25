@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
-import { localTodayISO, localMonthISO } from "./dates";
+import { localTodayISO, localMonthISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
 
@@ -677,9 +677,9 @@ export const INIT_LOTS = [
 ];
 
 // ─── SHARED UI ATOMS ────────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {} }: any) {
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
-  return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} style={{ ...base, ...style }} />;
+  return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} max={max} style={{ ...base, ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {} }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
@@ -926,7 +926,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
             </div>
             <div>
               <Lbl>Date</Lbl>
-              <Inp value={date} onChange={e => setDate(e.target.value)} type="date" />
+              <Inp value={date} onChange={e => setDate(e.target.value)} type="date" max={localTodayISO()} />
             </div>
           </div>
 
@@ -1105,7 +1105,7 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
         <div style={{ padding: 20, display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
             <div><Lbl>When / context</Lbl><Sel value={context} onChange={e => setContext(e.target.value)}>{INSPECTION_CONTEXTS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}</Sel></div>
-            <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+            <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} /></div>
           </div>
           <div><Lbl>Outcome</Lbl><Sel value={outcome} onChange={e => setOutcome(e.target.value)}>{INSPECTION_OUTCOMES.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}</Sel></div>
           {affectsStock && (
@@ -1371,7 +1371,7 @@ function SortingModal({ lot, onCancel, onConfirm }: any) {
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Date</label>
-              <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
             </div>
           </div>
           <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Note (optional)</label>
@@ -1414,7 +1414,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div><label style={lblStyle}>Returned kg</label><input type="number" value={kg} onChange={e => setKg(e.target.value)} style={inpStyle} placeholder="e.g. 5" /></div>
-          <div><label style={lblStyle}>Return date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={inpStyle} /></div>
+          <div><label style={lblStyle}>Return date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={inpStyle} /></div>
           <div><label style={lblStyle}>From (client)</label><select value={fromId} onChange={e => setFromId(e.target.value)} style={inpStyle}><option value="">—</option>{locs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
           <div><label style={lblStyle}>To (warehouse)</label><select value={toId} onChange={e => setToId(e.target.value)} style={inpStyle}><option value="">—</option>{ownWarehouses.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
           <div><label style={lblStyle}>Return transport cost</label><input type="number" value={cost} onChange={e => setCost(e.target.value)} style={inpStyle} placeholder="0" /></div>
@@ -1551,7 +1551,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 </div>
                 {wh.lines.map((l, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #F9FAFB", fontSize: 12, color: "#444" }}>
-                    <span>{l.label}{l.date ? <span style={{ color: "#999", fontSize: 10.5 }}> · {l.date}</span> : null}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                    <span>{l.label}{l.date ? <span style={{ color: "#999", fontSize: 10.5 }}> · {formatDMY(l.date)}</span> : null}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
                     <span style={{ fontWeight: 600 }}>{l.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {wh.currency}</span>
                   </div>
                 ))}
@@ -1620,10 +1620,10 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                             </div>
                             <div style={{ fontSize: 11, marginTop: 2, color: done ? "#9CA3AF" : active ? "#D97706" : "#9CA3AF" }}>
                               {done
-                                ? `${s.actualDate || s.plannedDate || ""} · done`
+                                ? `${formatDMY(s.actualDate || s.plannedDate) || ""} · done`
                                 : active
-                                  ? `${s.plannedDate ? "planned " + s.plannedDate : "date TBA"} · in progress`
-                                  : `${s.plannedDate ? "planned " + s.plannedDate : "date TBA"}`}
+                                  ? `${s.plannedDate ? "planned " + formatDMY(s.plannedDate) : "date TBA"} · in progress`
+                                  : `${s.plannedDate ? "planned " + formatDMY(s.plannedDate) : "date TBA"}`}
                             </div>
                           </div>
                         </div>
@@ -1696,7 +1696,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                                 {isMove && <span style={{ color: "#666", marginLeft: 6 }}>· {fromLoc?.name} → {toLoc?.name}</span>}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                                <span style={{ fontSize: 11, color: "#AAA" }}>{m.date}</span>
+                                <span style={{ fontSize: 11, color: "#AAA" }}>{formatDMY(m.date)}</span>
                                 {onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #2563EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>}
                                 {onDeleteMovement && <button onClick={() => onDeleteMovement(m.id)} title="Delete movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #FECACA", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#DC2626" }}>✕</button>}
                               </div>

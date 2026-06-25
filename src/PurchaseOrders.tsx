@@ -3,7 +3,7 @@ import { nextId, nextIds } from "./ids";
 import { FX_RATES, defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./locations";
-import { localTodayISO, localMonthISO } from "./dates";
+import { localTodayISO, localMonthISO, formatDMY } from "./dates";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -296,6 +296,8 @@ const FLOW_DESTINATION_TYPE: Record<string, string> = {
 // Stub FX rates for currency conversion in summary (would come from NBP in production)
 // FX_RATES now sourced from ./fx (single source of truth)
 
+import { ItemVarietyPicker } from "./ProductPicker";
+
 // ─── SEED DATA ──────────────────────────────────────────────────────────────
 const SUPPLIERS = getSuppliersStub();
 
@@ -401,9 +403,9 @@ export const INITIAL_ORDERS = [
 ];
 
 // ─── SHARED ATOMS ───────────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title }: any) {
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
-  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} style={{ ...base, ...style }} />;
+  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
@@ -530,9 +532,9 @@ function PODoc({ order }: any) {
   // Single source of truth for the row labels in the metadata + supplier blocks
   const meta = [
     { en: "PO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
-    { en: "Order date",         pl: "Data zamówienia",        value: order.orderDate },
-    { en: "Loading date",       pl: "Data załadunku",         value: order.loadingDate },
-    { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: order.expectedDeliveryDate },
+    { en: "Order date",         pl: "Data zamówienia",        value: formatDMY(order.orderDate) },
+    { en: "Loading date",       pl: "Data załadunku",         value: formatDMY(order.loadingDate) },
+    { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: formatDMY(order.expectedDeliveryDate) },
     { en: "Destination",        pl: "Miejsce docelowe",       value: destinationDisplay(order) },
     { en: "Purchase Incoterm",  pl: "Warunki zakupu Incoterms", value: order.buyIncoterm,      strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
@@ -647,7 +649,7 @@ function PODoc({ order }: any) {
             return (
               <tr key={i}>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>
-                  {item.product}
+                  {item.product}{item.variety ? <span style={{ fontWeight: 400 }}> — {item.variety}</span> : null}
                   {item.coloration && <div style={{ fontSize: 9.5, color: "#666", fontWeight: 400, fontStyle: "italic" }}>{item.coloration}</div>}
                 </td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
@@ -832,9 +834,24 @@ function PrintModal({ order, onClose }: any) {
 }
 
 // ─── EMAIL MODAL ────────────────────────────────────────────────────────────
-function EmailModal({ order, onClose }: any) {
+// v6.18.14 (#1): resolve the supplier email LIVE from Contacts at send time, so an
+// email added/changed in Contacts after the PO was created is seen without a refresh.
+// Falls back to the copy embedded on the PO.
+function bestContactEmail(cp: any) {
+  const cs = (cp && cp.contacts) || [];
+  const withEmail = cs.find((p: any) => p.isPrimary && p.email) || cs.find((p: any) => p.email);
+  return (withEmail && withEmail.email) || (cp && cp.email) || "";
+}
+function liveEmailForOrder(order: any, contacts: any[]) {
+  const sid = order && order.supplier && order.supplier.id;
+  const live = (sid != null) ? (contacts || []).find((c: any) => String(c.id) === String(sid)) : null;
+  return bestContactEmail(live) || (order && order.supplier && order.supplier.email) || "";
+}
+
+function EmailModal({ order, contacts = [], onClose }: any) {
+  const resolvedEmail = liveEmailForOrder(order, contacts);
   const [subject, setSubject] = useState(`Purchase Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.supplier?.name || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${order.loadingDate}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.supplier?.name || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${formatDMY(order.loadingDate)}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.name}`);
   const [stage, setStage] = useState("compose"); // compose → opened
 
   // ── Step 1: Open the print dialog so the user can "Save as PDF" ──
@@ -870,8 +887,10 @@ function EmailModal({ order, onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
+      const prevTitle = document.title; // v6.18.14 (#2): name the saved PDF after the PO here too
+      document.title = order.number || prevTitle;
       try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => iframe.remove(), 1000);
+      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -885,7 +904,7 @@ function EmailModal({ order, onClose }: any) {
 
   // ── Step 2: Open the user's email client with the draft message ──
   function openMailClient() {
-    const to = order.supplier?.email || "";
+    const to = resolvedEmail || "";
     const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
   }
@@ -912,7 +931,7 @@ function EmailModal({ order, onClose }: any) {
             </ol>
           </div>
 
-          <div><Lbl>TO</Lbl><Inp value={order.supplier?.email || "(supplier email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
+          <div><Lbl>TO</Lbl><Inp value={resolvedEmail || "(supplier email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
           <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
           <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
 
@@ -928,9 +947,9 @@ function EmailModal({ order, onClose }: any) {
             <button onClick={openPrintForPdf} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>① Save PDF</button>
             <button
               onClick={openMailClient}
-              disabled={!order.supplier?.email}
-              title={!order.supplier?.email ? "Supplier email missing in Contacts" : ""}
-              style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: order.supplier?.email ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 13, fontWeight: 600, cursor: order.supplier?.email ? "pointer" : "not-allowed" }}>
+              disabled={!resolvedEmail}
+              title={!resolvedEmail ? "Supplier email missing in Contacts" : ""}
+              style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: resolvedEmail ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 13, fontWeight: 600, cursor: resolvedEmail ? "pointer" : "not-allowed" }}>
               ② Open email draft →
             </button>
           </div>
@@ -977,13 +996,31 @@ function LifecycleTimeline({ status }: any) {
 }
 
 // ─── ORDER FORM ─────────────────────────────────────────────────────────────
-function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], onSave, onCancel, onPrint, onEmail }: any) {
+function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
-  // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at
-  // origin. Block the forward transition while the loading date is still ahead.
+  // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at origin.
   const SHIP_OR_LATER = ["Shipped", "Arrived", "Closed"];
+
+  // v6.18.5 (P0-5) + v6.18.14 (#3): once anything downstream depends on this PO — a
+  // linked SO line, a non-cancelled shipment, or a lot that's been received/moved — the
+  // PO is the base of the structure and is FULLY locked: no field edits and no status
+  // change at all (including revert-to-Draft and Cancel). It can only be removed by
+  // unlinking every downstream document first, then deleting.
+  const poNum = order.number;
+  const hasLinkedSO = (allSOs || []).some((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+  const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
+  const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
+  const hasDependents = hasLinkedSO || hasShipment || lotReceivedOrMoved;
+  const terminalStatus = ["Arrived", "Shipped", "Closed", "Cancelled", "Invoiced"].includes(order.status);
+  const isLocked = !!order.id && (hasDependents || (order.status !== "Draft" && terminalStatus)); // fully locked once anything depends on it
+
   const setStatus = (newStatus) => {
+    if (hasDependents) {
+      const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
+      alert(`This PO is locked: it has downstream dependents (${what}).\n\nWhile anything is linked, its status can't be changed (including back to Draft) or cancelled — that would corrupt the linked records. Unlink all downstream documents first, then the PO can be changed or deleted.`);
+      return;
+    }
     if (SHIP_OR_LATER.includes(newStatus) && order.loadingDate && String(order.loadingDate) > localTodayISO()) {
       alert(`This PO can't be set to "${newStatus}" yet — the loading date (${order.loadingDate}) hasn't been reached.\n\nGoods can't leave origin before they are loaded. Update the loading date if it has actually changed, or wait until the loading date.`);
       return;
@@ -994,20 +1031,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
   const showOtherTerms = order.paymentTerms === "Other";
-
-  // v6.18.5 (P0-5): a confirmed PO stays editable until something downstream
-  // depends on it — a linked SO, a (non-cancelled) shipment that references it, or
-  // a lot that's been received/moved. The PO is the base of the structure, so once
-  // anything is built on it, changing its commercial terms would jeopardise those
-  // downstream records — that's when we lock. (This replaces the blunt
-  // "any non-Draft PO is locked" rule.)
-  const poNum = order.number;
-  const hasLinkedSO = (allSOs || []).some((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
-  const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
-  const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
-  const hasDependents = hasLinkedSO || hasShipment || lotReceivedOrMoved;
-  const terminalStatus = ["Arrived", "Shipped", "Closed", "Cancelled", "Invoiced"].includes(order.status);
-  const isLocked = !!order.id && order.status !== "Draft" && (hasDependents || terminalStatus); // commercial fields lock once anything depends on the PO
 
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
@@ -1090,7 +1113,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Order date</Lbl>
-                <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" title="The date the PO was created/agreed with the supplier" />
+                <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" max={localTodayISO()} title="The date the PO was created/agreed with the supplier" />
               </div>
               <div>
                 <Lbl>Loading date</Lbl>
@@ -1106,7 +1129,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Actual availability {order.actualAvailabilityDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualAvailabilityDate || ""} onChange={e => sf("actualAvailabilityDate", e.target.value || null)} type="date" title="When the goods actually became available at our side (customs-cleared / received). Leave blank until it happens." />
+                <Inp value={order.actualAvailabilityDate || ""} onChange={e => sf("actualAvailabilityDate", e.target.value || null)} type="date" max={localTodayISO()} title="When the goods actually became available at our side (customs-cleared / received). Leave blank until it happens." />
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once it arrives</div>
               </div>
               <div style={{ gridColumn: "span 3" }}>
@@ -1271,16 +1294,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.9fr 1fr 1.3fr 1.2fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
-                      <Lbl>Product <span style={{ color: "#BBB", fontWeight: 400 }}>· autocomplete</span></Lbl>
-                      <input
-                        value={it.product || ""}
-                        onChange={e => si(i, "product", e.target.value)}
-                        onBlur={e => si(i, "product", normalizeProduct(e.target.value))}
-                        list="po-product-suggestions"
-                        placeholder="Start typing — pick or type new"
-                        title="Pick a product from the suggestions, or type a new one. New products are remembered for next time."
-                        style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" }}
-                      />
+                      <Lbl>Item / Variety</Lbl>
+                      <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />
                     </div>
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
@@ -1396,7 +1411,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                       return (
                         <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                           <td style={{ padding: "10px", fontWeight: 600 }}>
-                            {it.product}
+                            {it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}
                             {it.coloration && <div style={{ fontSize: 10.5, color: "#AAA", fontWeight: 400 }}>{it.coloration}</div>}
                           </td>
                           <td style={{ padding: "10px", color: "#555" }}>{it.origin || "—"}</td>
@@ -1731,7 +1746,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [] }: any = {}) {
+export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], productCatalog = [], setProductCatalog }: any = {}) {
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
   const [localOrders, setLocalOrders] = useState(INITIAL_ORDERS);
   const orders = extPOs ?? localOrders;
@@ -1949,6 +1964,16 @@ ${blockNote}`.trim(),
   }
 
   function deleteOrder() {
+    // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
+    const poNum = selected.number;
+    const hasLinkedSO = (extSOs || []).some((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+    const hasShipment = (extShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
+    const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
+    if (hasLinkedSO || hasShipment || lotReceivedOrMoved) {
+      const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
+      alert(`PO ${poNum} can't be cancelled or deleted: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.`);
+      return;
+    }
     if (!window.confirm(`Cancel PO ${selected.number}? Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.`)) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     setOrders(prev => prev.map(o => o.id === selected.id ? cancelled : o));
@@ -1963,7 +1988,7 @@ ${blockNote}`.trim(),
     return (
       <>
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
-        {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
+        {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         <OrderForm
           order={form} setOrder={setForm}
           productSuggestions={productSuggestions}
@@ -1972,6 +1997,8 @@ ${blockNote}`.trim(),
           allSOs={extSOs}
           allShipments={extShipments}
           lots={lots}
+          productCatalog={productCatalog}
+          setProductCatalog={setProductCatalog}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={() => {
@@ -1997,7 +2024,7 @@ ${blockNote}`.trim(),
     return (
       <>
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
-        {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
+        {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         <OrderDetail
           order={selected}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
@@ -2110,7 +2137,7 @@ ${blockNote}`.trim(),
                 </div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{o.supplier?.name || "—"}</div>
-                  <div style={{ fontSize: 11, color: "#888" }}>{o.items.map(i => `${i.product} · ${fmtNum(i.qty)} kg`).join(" / ")}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{o.items.map(i => `${i.product}${i.variety ? " — " + i.variety : ""} · ${fmtNum(i.qty)} kg`).join(" / ")}</div>
                 </div>
                 <div><StatusBadge status={o.status} /></div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
@@ -2125,8 +2152,8 @@ ${blockNote}`.trim(),
                   <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtNum(totalKg)} kg</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, color: isLoadingOverdue ? "#DC2626" : "#666", fontWeight: isLoadingOverdue ? 600 : 400 }}>Load: {o.loadingDate || "—"}</div>
-                  <div style={{ fontSize: 11, color: "#666" }}>Del: {o.expectedDeliveryDate || "—"}</div>
+                  <div style={{ fontSize: 11, color: isLoadingOverdue ? "#DC2626" : "#666", fontWeight: isLoadingOverdue ? 600 : 400 }}>Load: {formatDMY(o.loadingDate) || "—"}</div>
+                  <div style={{ fontSize: 11, color: "#666" }}>Del: {formatDMY(o.expectedDeliveryDate) || "—"}</div>
                 </div>
                 <div style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace" }}>
                   {o.linkedShipments?.length > 0 && <div style={{ color: "#0284C7" }}>📦 {o.linkedShipments.length}</div>}

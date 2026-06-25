@@ -74,6 +74,8 @@ export const DATA_KEYS = [
   // and credit/debit notes were dropped from shared JSON files, auto-backups and
   // reset. They are real data and must travel with everything else.
   "invoices", "financeNotes",
+  // v6.18.16: the controlled Item/Variety product catalog.
+  "productCatalog",
 ];
 
 export function exportAllData(): string {

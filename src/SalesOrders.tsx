@@ -4,7 +4,8 @@ import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
-import { localTodayISO, localMonthISO } from "./dates";
+import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { ItemVarietyPicker } from "./ProductPicker";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -368,7 +369,7 @@ function buildInvoiceFromSO(order, invoiceNumber, today) {
     linkedDocs: [{ type: "SO", number: order.number }],
     paymentStatus: "Draft",
     paidAmount: 0,
-    notes: `Issued from ${order.number}${order.deliveryDate ? ` — Goods delivered ${order.deliveryDate}` : ""}.\nLines:\n${order.items.map(it => `• ${it.product} ${parseFloat(it.qty || 0).toLocaleString("pl-PL")} kg @ ${parseFloat(it.unitPrice || 0).toFixed(2)} ${order.currency}`).join("\n")}`,
+    notes: `Issued from ${order.number}${order.deliveryDate ? ` — Goods delivered ${order.deliveryDate}` : ""}.\nLines:\n${order.items.map(it => `• ${it.product}${it.variety ? " " + it.variety : ""} ${parseFloat(it.qty || 0).toLocaleString("pl-PL")} kg @ ${parseFloat(it.unitPrice || 0).toFixed(2)} ${order.currency}`).join("\n")}`,
     attachment: null,
     creditNotes: [],
     createdAt: issueDate,
@@ -626,9 +627,9 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
 }
 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title }: any) {
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
-  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} style={{ ...base, ...style }} />;
+  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
@@ -894,8 +895,8 @@ function SODoc({ order }: any) {
 
   const meta = [
     { en: "SO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
-    { en: "Order date",         pl: "Data zamówienia",        value: order.orderDate },
-    { en: "Delivery date",      pl: "Data dostawy",           value: order.deliveryDate },
+    { en: "Order date",         pl: "Data zamówienia",        value: formatDMY(order.orderDate) },
+    { en: "Delivery date",      pl: "Data dostawy",           value: formatDMY(order.deliveryDate) },
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
     { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationLabel },
@@ -1011,7 +1012,7 @@ function SODoc({ order }: any) {
             const lt = ((parseFloat(item.qty) || 0) * (parseFloat(item.unitPrice) || 0)).toFixed(2);
             return (
               <tr key={i}>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}{item.cnCode ? <div style={{ fontSize: 8.5, fontWeight: 400, color: "#666" }}>CN/HS: {item.cnCode}</div> : null}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}{item.variety ? <span style={{ fontWeight: 400 }}> — {item.variety}</span> : null}{item.cnCode ? <div style={{ fontSize: 8.5, fontWeight: 400, color: "#666" }}>CN/HS: {item.cnCode}</div> : null}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.size}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>Kl. {item.quality}</td>
@@ -1130,10 +1131,18 @@ function PrintModal({ order, onClose }: any) {
 
 
 // ─── EMAIL MODAL ──────────────────────────────────────────────────────────
-function EmailModal({ order, onClose }: any) {
-  const recipient = order.client?.email || order.client?.contact || "";
+function bestContactEmail(cp: any) {
+  const cs = (cp && cp.contacts) || [];
+  const withEmail = cs.find((p: any) => p.isPrimary && p.email) || cs.find((p: any) => p.email);
+  return (withEmail && withEmail.email) || (cp && cp.email) || "";
+}
+function EmailModal({ order, contacts = [], onClose }: any) {
+  // v6.18.14 (#1): resolve the client email LIVE from Contacts at send time.
+  const sid = order && order.client && order.client.id;
+  const liveClient = (sid != null) ? (contacts || []).find((c: any) => String(c.id) === String(sid)) : null;
+  const recipient = bestContactEmail(liveClient) || order.client?.email || order.client?.contact || "";
   const [subject, setSubject] = useState(`Sales Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nDelivery date: ${order.deliveryDate || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}${order.importPermitNo ? `\nImport permit no.: ${order.importPermitNo}` : ""}${order.acidNo ? `\nACID no.: ${order.acidNo}` : ""}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nDelivery date: ${formatDMY(order.deliveryDate) || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}${order.importPermitNo ? `\nImport permit no.: ${order.importPermitNo}` : ""}${order.acidNo ? `\nACID no.: ${order.acidNo}` : ""}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
 
   function openPrintForPdf() {
     const node = document.getElementById("so-print-doc-email");
@@ -1264,8 +1273,8 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div><Lbl>Invoice number</Lbl><Inp value={invoice.number} onChange={e => sf("number", e.target.value)} /></div>
               <div><Lbl>Type</Lbl><div style={{ padding: "8px 10px", background: "#DCFCE7", color: "#16A34A", borderRadius: 6, fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>SINV · Sales Invoice (↑ Receivable)</div></div>
-              <div><Lbl>Issue date</Lbl><Inp value={invoice.issueDate} onChange={e => sf("issueDate", e.target.value)} type="date" /></div>
-              <div><Lbl>Sale date</Lbl><Inp value={invoice.saleDate} onChange={e => sf("saleDate", e.target.value)} type="date" /></div>
+              <div><Lbl>Issue date</Lbl><Inp value={invoice.issueDate} onChange={e => sf("issueDate", e.target.value)} type="date" max={localTodayISO()} /></div>
+              <div><Lbl>Sale date</Lbl><Inp value={invoice.saleDate} onChange={e => sf("saleDate", e.target.value)} type="date" max={localTodayISO()} /></div>
               <div><Lbl>Due date</Lbl><Inp value={invoice.dueDate} onChange={e => sf("dueDate", e.target.value)} type="date" /></div>
               <div><Lbl>Payment method</Lbl>
                 <Sel value={invoice.paymentMethod} onChange={e => sf("paymentMethod", e.target.value)}>
@@ -1318,7 +1327,7 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
                   const lt = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
-                      <td style={{ padding: "6px 8px" }}>{it.product}</td>
+                      <td style={{ padding: "6px 8px" }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtNum(it.qty)} kg</td>
                       <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtMoney(it.unitPrice, order.currency)}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{fmtMoney(lt, order.currency)}</td>
@@ -1341,7 +1350,7 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
 
 
 // ─── ORDER FORM ───────────────────────────────────────────────────────────
-function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], onSave, onCancel, onPrint, onEmail }: any) {
+function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
   // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
   // this session shows in the destination picker without a browser refresh.
   const liveLocations = (() => {
@@ -1925,15 +1934,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   )}
                   <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.9fr 0.8fr 0.9fr 1.1fr 1fr 1fr 1.3fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
-                      <Lbl>Product <span style={{ color: "#BBB", fontWeight: 400 }}>· autocomplete</span></Lbl>
-                      <input
-                        value={it.product || ""}
-                        onChange={e => si(i, "product", e.target.value)}
-                        onBlur={e => si(i, "product", normalizeProduct(e.target.value))}
-                        list="so-product-suggestions"
-                        placeholder="Start typing — pick or type new"
-                        style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" }}
-                      />
+                      <Lbl>Item / Variety</Lbl>
+                      <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />
                     </div>
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
@@ -2117,7 +2119,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                         <tr key={i} style={{ borderBottom: "1px solid #F9FAFB", background: av.hasOverage ? "#FFFBEB" : undefined }}>
                           <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef) : ""} /></td>
                           <td style={{ padding: "10px 6px" }}>
-                            <div style={{ fontWeight: 600 }}>{it.product}</div>
+                            <div style={{ fontWeight: 600 }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</div>
                             <div style={{ fontSize: 11, color: "#888" }}>{it.size} · {it.origin} · {it.packaging}{it.pallets ? ` · ${it.pallets} pallets` : ""}</div>
                           </td>
                           <td style={{ padding: "10px 6px", textAlign: "center" }}><QualityBadge quality={it.quality} /></td>
@@ -2188,7 +2190,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                         <div>
                           <div style={{ fontSize: 13, fontWeight: 700, color: "#16A34A", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.number}</div>
-                          <div style={{ fontSize: 10, color: "#888", marginTop: 1 }}>SINV · Issue {inv.issueDate} · Due {inv.dueDate}</div>
+                          <div style={{ fontSize: 10, color: "#888", marginTop: 1 }}>SINV · Issue {formatDMY(inv.issueDate)} · Due {formatDMY(inv.dueDate)}</div>
                         </div>
                         <div style={{ padding: "2px 8px", background: "#DCFCE7", color: "#16A34A", borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em" }}>READY</div>
                       </div>
@@ -2255,6 +2257,8 @@ export default function SalesOrders({
   operationalCosts: extOperationalCosts = [],
   userRole = "General Manager",
   userName = "",
+  productCatalog = [],
+  setProductCatalog,
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
@@ -2566,7 +2570,7 @@ export default function SalesOrders({
     return (
       <>
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
-        {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
+        {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
         <OrderForm
           order={form} setOrder={setForm}
@@ -2574,6 +2578,8 @@ export default function SalesOrders({
           allOrders={orders}
           clients={clients}
           contacts={extContacts}
+          productCatalog={productCatalog}
+          setProductCatalog={setProductCatalog}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={() => {
@@ -2598,7 +2604,7 @@ export default function SalesOrders({
     return (
       <>
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
-        {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
+        {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
         <OrderDetail
           order={selected}
@@ -2713,8 +2719,8 @@ export default function SalesOrders({
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{o.client?.name || "—"}</div>
                   <div style={{ fontSize: 11, color: "#AAA" }}>{o.items.length} {o.items.length === 1 ? "line" : "lines"} · {fmtNum(o.items.reduce((s, it) => s + (parseFloat(it.qty) || 0), 0))} kg</div>
                 </div>
-                <div style={{ fontSize: 12, color: "#555" }}>{o.orderDate}</div>
-                <div style={{ fontSize: 12, color: "#555" }}>{o.deliveryDate || "—"}</div>
+                <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(o.orderDate)}</div>
+                <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(o.deliveryDate) || "—"}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(netTotal(o.items), o.currency)}</div>

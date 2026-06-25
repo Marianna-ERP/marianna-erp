@@ -7,6 +7,7 @@ import SalesOrders from "./SalesOrders";
 import Shipments from "./Shipments";
 import Finance from "./Finance";
 import Settings from "./Settings";
+import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
@@ -165,6 +166,7 @@ export default function App() {
   const [settledRefs, setSettledRefs] = useLocalStoredState("settledRefs", []);
   const [creditNotes, setCreditNotes] = useLocalStoredState("creditNotes", []);
   const [invoices, setInvoices] = useLocalStoredState("invoices", []);
+  const [productCatalog, setProductCatalog] = useLocalStoredState("productCatalog", PRODUCT_CATALOG_SEED);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
   const [logisticsPoints, setLogisticsPoints] = useLocalStoredState("logisticsPoints", []);
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
@@ -216,17 +218,17 @@ export default function App() {
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} />;
       case "pos":
-        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} />;
+        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "lots":
         return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />;
       case "orders":
-        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} />;
+        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "shipments":
         return <Shipments shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} />;
       case "invoices":
         return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} lots={lots} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} />;
+        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       default:
         return null;
     }

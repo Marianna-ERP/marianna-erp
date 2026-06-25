@@ -2,6 +2,7 @@ import React, { useRef, useState } from "react";
 import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
+import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows } from "./productCatalog";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -40,18 +41,102 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
   );
 }
 
+function ProductCatalogPanel({ catalog, setCatalog }: any) {
+  const [newItem, setNewItem] = useState("");
+  const [vDraft, setVDraft] = useState<Record<string, string>>({});
+  const fileRef = useRef<HTMLInputElement>(null);
+  if (!setCatalog) return null;
+  const items = catalog || [];
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13, fontFamily: "inherit", outline: "none" };
+
+  const addItem = () => { const n = newItem.trim(); if (!n) return; setCatalog((c: any) => addCatalogItem(c || [], n)); setNewItem(""); };
+  const addVar = (item: string) => { const v = (vDraft[item] || "").trim(); if (!v) return; setCatalog((c: any) => addCatalogVariety(c || [], item, v)); setVDraft(d => ({ ...d, [item]: "" })); };
+  const rmVar = (item: string, v: string) => setCatalog((c: any) => removeCatalogVariety(c || [], item, v));
+  const rmItem = (item: string) => { if (window.confirm(`Remove "${item}" and its varieties from the catalog?`)) setCatalog((c: any) => removeCatalogItem(c || [], item)); };
+
+  function parseLine(line: string): string[] {
+    const out: string[] = []; let f = "", inQ = false;
+    for (let i = 0; i < line.length; i++) { const ch = line[i]; if (inQ) { if (ch === '"') { if (line[i + 1] === '"') { f += '"'; i++; } else inQ = false; } else f += ch; } else { if (ch === '"') inQ = true; else if (ch === ",") { out.push(f); f = ""; } else f += ch; } }
+    out.push(f); return out;
+  }
+  const importCsv = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = String(e.target?.result || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const lines = text.split("\n").filter(l => l.trim());
+        if (!lines.length) { alert("Empty file."); return; }
+        const hdr = parseLine(lines[0]).map(h => h.trim().toLowerCase());
+        const ii = hdr.indexOf("item"), vi = hdr.indexOf("variety");
+        const start = ii >= 0 ? 1 : 0;
+        const rows = lines.slice(start).map(l => { const cols = parseLine(l); return { item: (ii >= 0 ? cols[ii] : cols[0] || "").trim(), variety: (vi >= 0 ? cols[vi] : cols[1] || "").trim() }; }).filter(r => r.item);
+        if (!rows.length) { alert("No Item rows found. Use columns: Item, Variety."); return; }
+        setCatalog((c: any) => mergeCatalogRows(c || [], rows));
+        alert(`Imported ${rows.length} row(s) into the catalog.`);
+      } catch (err) { alert("Could not read CSV: " + (err instanceof Error ? err.message : String(err))); }
+    };
+    reader.readAsText(file);
+  };
+  const exportCsv = () => {
+    const rows = catalogToRows(items);
+    const csv = "Item,Variety\n" + rows.map(r => `"${r.item.replace(/"/g, '""')}","${r.variety.replace(/"/g, '""')}"`).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" }); const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "product-catalog.csv"; a.click(); URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <SectionTitle>PRODUCT CATALOG <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· Item / Variety used on PO &amp; SO lines</span></SectionTitle>
+      <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+        The single list everyone picks products from, so the same item is named the same way everywhere. New products added from a PO/SO line land here too. Sizes are not part of this — size stays its own field on the line.
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+        <input value={newItem} onChange={e => setNewItem(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addItem(); }} placeholder="New item (e.g. Pears)" style={{ ...inp, minWidth: 220 }} />
+        <Button variant="primary" onClick={addItem}>+ Add item</Button>
+        <span style={{ flex: 1 }} />
+        <Button onClick={() => fileRef.current?.click()}>Import CSV</Button>
+        <Button onClick={exportCsv}>Export CSV</Button>
+        <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) importCsv(f); e.currentTarget.value = ""; }} />
+      </div>
+      <div style={{ maxHeight: 360, overflowY: "auto", border: "1px solid #F0F0F0", borderRadius: 8 }}>
+        {items.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#AAA", fontSize: 13 }}>No items yet. Add one above or import a CSV.</div>}
+        {items.map((c: any) => (
+          <div key={c.item} style={{ padding: "12px 14px", borderBottom: "1px solid #F5F5F5" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{c.item} <span style={{ fontSize: 11, fontWeight: 400, color: "#AAA" }}>· {c.varieties.length} {c.varieties.length === 1 ? "variety" : "varieties"}</span></div>
+              <button onClick={() => rmItem(c.item)} title="Remove item" style={{ border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600 }}>Remove</button>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              {c.varieties.map((v: string) => (
+                <span key={v} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#F3F4F6", borderRadius: 14, padding: "3px 6px 3px 11px", fontSize: 12 }}>
+                  {v}<button onClick={() => rmVar(c.item, v)} title="Remove variety" style={{ border: "none", background: "#E5E7EB", color: "#666", borderRadius: "50%", width: 16, height: 16, lineHeight: "14px", cursor: "pointer", fontSize: 11 }}>×</button>
+                </span>
+              ))}
+              <input value={vDraft[c.item] || ""} onChange={e => setVDraft(d => ({ ...d, [c.item]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addVar(c.item); }} placeholder="+ variety" style={{ ...inp, padding: "4px 8px", fontSize: 12, width: 130 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export default function Settings({
   reloadFromStorage,
   userRole,
   setUserRole,
   userName,
   setUserName,
+  productCatalog = [],
+  setProductCatalog,
 }: {
   reloadFromStorage: () => void;
   userRole?: string;
   setUserRole?: (r: string) => void;
   userName?: string;
   setUserName?: (n: string) => void;
+  productCatalog?: any[];
+  setProductCatalog?: (v: any) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
@@ -249,6 +334,8 @@ export default function Settings({
             </div>
           </div>
         </Card>
+
+        <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog} />
 
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· invoice sync</span></SectionTitle>

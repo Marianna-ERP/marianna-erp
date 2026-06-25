@@ -7,7 +7,7 @@ import {
   recomputeInvoiceMoney, isLocked, invoiceDirection,
   buildFakturowniaPayload, noteSignedPLN,
 } from "./invoicing";
-import { localTodayISO } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 
 const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 
@@ -252,8 +252,8 @@ export default function Invoices(props: any) {
                 <div><CatBadge cat={i.category} /></div>
                 <div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.number || "—"}</div><DirPill inv={i} /></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{i.counterparty?.name || "—"}</div>{i.counterparty?.nip && <div style={{ fontSize: 11, color: "#AAA" }}>NIP {i.counterparty.nip}</div>}</div>
-                <div style={{ fontSize: 12, color: "#555" }}>{i.issueDate || "—"}</div>
-                <div><div style={{ fontSize: 12, color: od ? "#DC2626" : "#555", fontWeight: od ? 600 : 400 }}>{i.dueDate || "—"}</div>{od && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>
+                <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(i.issueDate) || "—"}</div>
+                <div><div style={{ fontSize: 12, color: od ? "#DC2626" : "#555", fontWeight: od ? 600 : 400 }}>{formatDMY(i.dueDate) || "—"}</div>{od && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>
                 <div><div style={{ fontSize: 13, fontWeight: 600 }}>{money(i.grossAmount, i.currency)}</div>{i.currency !== "PLN" && <div style={{ fontSize: 10, color: "#AAA" }}>{money(i.grossPLN, "PLN")}</div>}</div>
                 <div><StatusBadge s={i.paymentStatus} /></div>
                 <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.links[0]?.number || "—"}{i.links.length > 1 && <span style={{ color: "#AAA" }}> +{i.links.length - 1}</span>}{(i.creditNoteIds?.length > 0) && <span title="has credit/debit notes" style={{ color: "#7C3AED", marginLeft: 6 }}>↩</span>}</div>
@@ -271,7 +271,7 @@ export default function Invoices(props: any) {
                 <div><span style={{ background: isCredit ? "#FFF7ED" : "#EFF6FF", color: isCredit ? "#9A3412" : "#1D4ED8", padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em" }}>{isCredit ? "CREDIT" : "DEBIT"}</span></div>
                 <div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#9A3412", fontFamily: "ui-monospace, Menlo, monospace" }}>{nt.number || "(note)"}</div><div style={{ fontSize: 10, color: "#AAA" }}>{nt.category || nt.reason || "—"}</div></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{nt.partyName || "—"}</div></div>
-                <div style={{ fontSize: 12, color: "#555" }}>{nt.date || "—"}</div>
+                <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(nt.date) || "—"}</div>
                 <div style={{ fontSize: 12, color: "#AAA" }}>—</div>
                 <div><div style={{ fontSize: 13, fontWeight: 600, color: isCredit ? "#9A3412" : "#1D4ED8" }}>{isCredit ? "−" : "+"}{money(nt.amount, nt.currency)}</div></div>
                 <div><StatusBadge s={nt.status} /></div>
@@ -344,7 +344,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
 
           {inv.links.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>LINKED DOCUMENTS</SectionTitle><div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{inv.links.map((l: any, i: number) => <div key={i} style={{ padding: "6px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6, fontSize: 12, color: "#1D4ED8", fontWeight: 600 }}>{l.type} · {l.number}</div>)}</div></Card>}
 
-          {relatedNotes.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>CREDIT / DEBIT NOTES</SectionTitle>{relatedNotes.map((nt: FinanceNote, i: number) => <div key={i} style={{ padding: "10px 12px", background: nt.noteType === "DEBIT" ? "#EFF6FF" : "#FFF7ED", border: `1px solid ${nt.noteType === "DEBIT" ? "#BFDBFE" : "#FED7AA"}`, borderRadius: 8, marginBottom: 8, display: "flex", justifyContent: "space-between" }}><div><div style={{ fontSize: 12.5, fontWeight: 600 }}>{nt.noteType === "DEBIT" ? "Debit" : "Credit"} note · {nt.reason || nt.category}</div><div style={{ fontSize: 11, color: "#888" }}>{nt.date} · {nt.partyName}</div></div><div style={{ fontSize: 13, fontWeight: 700, color: nt.noteType === "DEBIT" ? "#1D4ED8" : "#9A3412" }}>{nt.noteType === "DEBIT" ? "+" : "−"}{money(nt.amount, nt.currency)}</div></div>)}<div style={{ fontSize: 11.5, color: "#666", marginTop: 4 }}>Net adjustment: {money(netAdjust, "PLN")} (applied to receivable/payable in Finance)</div></Card>}
+          {relatedNotes.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>CREDIT / DEBIT NOTES</SectionTitle>{relatedNotes.map((nt: FinanceNote, i: number) => <div key={i} style={{ padding: "10px 12px", background: nt.noteType === "DEBIT" ? "#EFF6FF" : "#FFF7ED", border: `1px solid ${nt.noteType === "DEBIT" ? "#BFDBFE" : "#FED7AA"}`, borderRadius: 8, marginBottom: 8, display: "flex", justifyContent: "space-between" }}><div><div style={{ fontSize: 12.5, fontWeight: 600 }}>{nt.noteType === "DEBIT" ? "Debit" : "Credit"} note · {nt.reason || nt.category}</div><div style={{ fontSize: 11, color: "#888" }}>{formatDMY(nt.date)} · {nt.partyName}</div></div><div style={{ fontSize: 13, fontWeight: 700, color: nt.noteType === "DEBIT" ? "#1D4ED8" : "#9A3412" }}>{nt.noteType === "DEBIT" ? "+" : "−"}{money(nt.amount, nt.currency)}</div></div>)}<div style={{ fontSize: 11.5, color: "#666", marginTop: 4 }}>Net adjustment: {money(netAdjust, "PLN")} (applied to receivable/payable in Finance)</div></Card>}
 
           {inv.notes && <Card style={{ marginTop: 16 }}><SectionTitle>NOTES</SectionTitle><div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{inv.notes}</div></Card>}
         </div>
