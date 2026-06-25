@@ -4,6 +4,7 @@ import { FX_RATES, defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./locations";
 import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { ItemVarietyPicker } from "./ProductPicker";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -295,8 +296,6 @@ const FLOW_DESTINATION_TYPE: Record<string, string> = {
 
 // Stub FX rates for currency conversion in summary (would come from NBP in production)
 // FX_RATES now sourced from ./fx (single source of truth)
-
-import { ItemVarietyPicker } from "./ProductPicker";
 
 // ─── SEED DATA ──────────────────────────────────────────────────────────────
 const SUPPLIERS = getSuppliersStub();
