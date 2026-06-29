@@ -85,6 +85,27 @@ const PROTECTED_FREIGHT_TYPES = new Set(["road_freight", "sea_freight", "rail_fr
 function isFreightCostType(type) {
   return PROTECTED_FREIGHT_TYPES.has(type);
 }
+// v6.18.17 (D10): map a leg's transport mode to its freight cost type, so a multimodal
+// shipment gets one freight line per leg (road_freight for the road leg, sea_freight for
+// the sea leg, etc.) instead of a single lumped line.
+function freightTypeForMode(mode) {
+  return mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight";
+}
+function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier) {
+  return (legs || []).map((leg, idx) => {
+    const amt = parseNum(leg.costAmount, 0);
+    const cur = leg.costCurrency || fallbackCurrency || "PLN";
+    const fx = resolveFxRate(leg.costFxRate, cur);
+    return {
+      id: idx + 1,
+      type: freightTypeForMode(leg.mode),
+      supplierId: leg.carrierId || leg.forwarderId || fallbackSupplier || null,
+      amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
+      invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
+      notes: `${leg.mode} leg`,
+    };
+  });
+}
 
 const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
 // v6.18.4 (P0-4): static snapshot + live counterparty addresses, deduped, so a
@@ -542,8 +563,10 @@ function providerIdsForShipment(shipment) {
 function providerLegs(shipment, providerId) {
   const pid = String(providerId || "");
   const legs = (shipment.legs || []).filter(leg => String(leg.carrierId || "") === pid || String(leg.forwarderId || "") === pid);
-  if (legs.length) return legs;
-  return (shipment.legs || []).slice(0, 1);
+  // v6.18.17 (E12): do NOT fall back to the first leg — a provider's transport order must
+  // reflect only its OWN leg(s). Returning leg 1 for a provider not on it is the multimodal
+  // bug where the second-leg forwarder's order showed the first leg's loading/unloading.
+  return legs;
 }
 
 function providerCosts(shipment, providerId) {
@@ -753,6 +776,8 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
       soRef: soRefForPO,
       lotRef: lot,
       product: it.product || "Goods",
+      variety: it.variety || "",
+      cnCode: it.cnCode || "",
       origin: it.origin || po.supplier?.country || "",
       quality: it.quality || "I",
       size: it.size || "",
@@ -769,8 +794,6 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || (mode === "Sea" || mode === "Multimodal" ? "USD" : "PLN");
   const fxRate = resolveFxRate(opts.fxRate, currency);
-  const freightType = mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight";
-  const baseCost = { id: 1, type: freightType, supplierId: carrierId || forwarderId || null, amount, currency, fxRate, amountPLN: Math.round(amount * fxRate * 100) / 100, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Expected logistics cost" };
 
   const roadLeg: any = { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: destinationLocationId, toCustom: destinationCustom, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Generated from ${po.number}` };
   // v6.3.0 leg defaults: Multimodal starts with TWO legs (road pre-carriage + sea
@@ -796,6 +819,8 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
       notes: `${mode} leg for ${po.number}`,
     }];
   }
+
+  const costsFromLegs = freightCostsFromLegs(legs, currency, carrierId || forwarderId);
 
   return {
     id,
@@ -829,7 +854,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
     notes: `Created from ${po.number}. Total goods ${fmtNum(totalKg)} kg.`,
     legs,
     goods,
-    costs: [baseCost],
+    costs: costsFromLegs,
     documents: [
       { id: 1, type: "Transport order", ref: "", status: "Required", date: "", notes: "Generate and send to provider" },
       { id: 2, type: mode === "Air" ? "AWB" : mode === "Sea" || mode === "Multimodal" ? "BL" : "CMR", ref: "", status: "Required", date: "", notes: "Required before closing" },
@@ -865,6 +890,8 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
       soRef: so.number,
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product || "Goods",
+      variety: it.variety || "",
+      cnCode: it.cnCode || "",
       origin: it.origin || "",
       quality: it.quality || "I",
       size: it.size || "",
@@ -878,6 +905,12 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || "PLN";
   const fxRate = resolveFxRate(opts.fxRate, currency);
+  const soLegs = mode === "Multimodal" ? [
+      { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, toLocationId: null, carrierId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.loadingDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Pre-carriage for ${so.number}` },
+      { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, toLocationId: destinationLocationId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${so.number}` },
+    ] : [
+      { id: 1, mode, status: "Booked", fromLocationId: originLocationId, toLocationId: destinationLocationId, carrierId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", awbNumber: "", shippingLine: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Delivery for ${so.number}` },
+    ];
   return {
     id,
     number,
@@ -906,16 +939,9 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
     confirmationSentAt: null,
     billingStatus: "Not ready",
     notes: `Created from ${so.number}. Delivery to ${so.client?.name || "client"}.`,
-    legs: mode === "Multimodal" ? [
-      { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, toLocationId: null, carrierId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.loadingDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Pre-carriage for ${so.number}` },
-      { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, toLocationId: destinationLocationId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${so.number}` },
-    ] : [
-      { id: 1, mode, status: "Booked", fromLocationId: originLocationId, toLocationId: destinationLocationId, carrierId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", awbNumber: "", shippingLine: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Delivery for ${so.number}` },
-    ],
+    legs: soLegs,
     goods,
-    costs: [
-      { id: 1, type: "road_freight", supplierId: carrierId, amount, currency, fxRate, amountPLN: Math.round(amount * fxRate * 100) / 100, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Expected road freight" },
-    ],
+    costs: freightCostsFromLegs(soLegs, currency, carrierId || forwarderId),
     documents: [
       { id: 1, type: "Transport order", ref: "", status: "Required", date: "", notes: "Generate and send to carrier" },
       { id: 2, type: "CMR", ref: "", status: "Required", date: "", notes: "Original CMR required for billing" },
@@ -1037,8 +1063,8 @@ function ShipmentListRow({ sh, active, onClick, contacts }: any) {
   // on screen. A small amber dot flags missing documents.
   const missingDocs = (sh.documents || []).filter(d => ["Required", "Missing"].includes(d.status)).length;
   return <div onClick={onClick} title={`${PURPOSE_LABELS[sh.purpose] || sh.purpose} · ${providerName(sh.carrierId || sh.forwarderId, contacts)} · ${sh.loadingDate || "-"} → ${sh.expectedDeliveryDate || "-"}${missingDocs ? ` · ${missingDocs} document(s) missing` : ""}`}
-    style={{ padding: "9px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: active ? "#F9FAFB" : "#fff", borderLeft: active ? "4px solid #111" : "4px solid transparent", display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-    <div style={{ fontSize: 12.5, fontWeight: 800, color: "#111", whiteSpace: "nowrap" }}>{sh.number}</div>
+    style={{ padding: "9px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: sh.status === "Cancelled" ? "#FEF2F2" : active ? "#F9FAFB" : "#fff", borderLeft: sh.status === "Cancelled" ? "4px solid #DC2626" : active ? "4px solid #111" : "4px solid transparent", display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+    <div style={{ fontSize: 12.5, fontWeight: 800, color: sh.status === "Cancelled" ? "#B91C1C" : "#111", whiteSpace: "nowrap" }}>{sh.number}</div>
     <ModeBadge mode={sh.mode} />
     <StatusBadge status={sh.status} />
     {missingDocs > 0 && <span title={`${missingDocs} document(s) missing`} style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0, marginLeft: "auto" }} />}
@@ -1173,7 +1199,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           <SectionTitle>Source</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "160px 1fr 160px 160px", gap: 12 }}>
             <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(""); }}><option value="PO">From PO</option><option value="SO">From SO</option><option value="Manual">Manual</option></Sel></div>
-            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{(pos || []).map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{(orders || []).map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
+            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{(pos || []).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{(orders || []).filter((o: any) => o.status !== "Draft" && o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
             <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={e => sf("currency", e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
           </div>
@@ -1378,7 +1404,12 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
   function addCost() {
     // New manual lines default to a non-freight type ("other") so they're freely
     // deletable; freight lines are reserved for the per-leg freight created by the builder.
-    setDraft(prev => ({ ...prev, costs: [...(prev.costs || []), { id: nextId(), type: "other", supplierId: prev.carrierId || prev.forwarderId || 1001, amount: 0, currency: "PLN", fxRate: 1, amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] }));
+    // v6.18.17 (D11): default the currency to the shipment's working currency (taken from an
+    // existing cost line, else the first leg) instead of always PLN, with the matching FX.
+    setDraft(prev => {
+      const baseCur = (prev.costs && prev.costs[0] && prev.costs[0].currency) || ((prev.legs || [])[0] || {}).costCurrency || "PLN";
+      return { ...prev, costs: [...(prev.costs || []), { id: nextId(), type: "other", supplierId: prev.carrierId || prev.forwarderId || 1001, amount: 0, currency: baseCur, fxRate: resolveFxRate(null, baseCur), amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] };
+    });
   }
   function removeCost(idx) {
     const c = (draft.costs || [])[idx];
@@ -1458,7 +1489,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
         <Card>
           <SectionTitle>Header</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-            <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
+            <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)} disabled={draft.status === "Cancelled"} title={draft.status === "Cancelled" ? "This shipment is cancelled — read-only and can't be reactivated." : ""}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             <div><Lbl>Expected loading date</Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the whole shipment (PO loading date). In-between dates are set per leg below." /></div>
             <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="End of the whole shipment (SO delivery date)." /></div>
@@ -1576,7 +1607,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
                 <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Transport units for this leg · trucks / containers / AWB</div>
                 <SmallButton kind="green" onClick={() => addVehicle(i)}>+ Add unit</SmallButton>
               </div>
-              {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => { const uMode = u.mode || leg.mode; return <div key={u.id || ui} style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#FCFCFD" }}>
+              {(transportUnitsForLeg(leg).length ? transportUnitsForLeg(leg) : [blankTransportUnit(leg.mode)]).map((u, ui) => { const uMode = u.mode || leg.mode; return <div key={`leg${i}-u${ui}`} style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", marginBottom: 10, background: "#FCFCFD" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: "#334155" }}>Unit #{ui + 1}</div>
                   <SmallButton onClick={() => removeVehicle(i, ui)}>Remove</SmallButton>
@@ -1616,7 +1647,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
           <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>Adjust quantities and pallets here — e.g. if you entered pallets on the SO after creating this shipment, update them here so the transport order shows the right figure.</div>
           {(draft.goods || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No goods lines on this shipment.</div>}
           {(draft.goods || []).map((g, i) => <div key={g.id || i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 0.8fr 1.4fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
-            <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.size ? ` · ${g.size}` : ""}</div></div>
+            <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
             <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => updateGood(i, "qtyKg", parseNum(e.target.value))} /></div>
             <div><Lbl>Pallets</Lbl><Inp type="number" value={g.pallets || ""} onChange={e => updateGood(i, "pallets", parseNum(e.target.value))} placeholder="0" /></div>
             <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>
@@ -1924,7 +1955,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
       <table style={{ marginTop: 3, borderCollapse: "collapse", width: "100%" }}>
         <thead><tr>{["Product / Produkt", "Origin / Pochodzenie", "Packaging / Opakowanie", "Kg netto", "Pallets / Palety", "PO/SO/Lot"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
         <tbody>{scopedGoods.map((g, i) => <tr key={i}>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3, fontWeight: 700 }}>{g.product}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3, fontWeight: 700 }}>{g.product}{g.variety ? " — " + g.variety : ""}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.origin || "-"}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.packaging || "-"}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td>
@@ -1978,7 +2009,7 @@ function TransportOrderPrintModal({ shipment, contacts, orders = [], onSaveTerms
     <div style={{ width: 980, maxHeight: "94vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
       <div style={{ padding: "12px 18px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><strong>Transport order confirmation</strong><span style={{ color: "#888", marginLeft: 8, fontSize: 12 }}>One clean order per provider — pick the provider and the legs it covers.</span></div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Sel value={providerId} onChange={e => changeProvider(e.target.value)} style={{ minWidth: 300, maxWidth: 460 }}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel><SmallButton onClick={() => printHtmlNode("transport-order-print", `${shipment.number}-${providerId}`)} kind="dark" disabled={!legIds.length}>Print / PDF</SmallButton>{onEmail && <SmallButton onClick={() => onEmail(providerId)} kind="blue">✉ Email</SmallButton>}<SmallButton onClick={onMarkSent} kind="green">Mark sent</SmallButton><SmallButton onClick={onClose}>Close</SmallButton></div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}><Sel value={providerId} onChange={e => changeProvider(e.target.value)} style={{ minWidth: 300, maxWidth: 460 }}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel><SmallButton onClick={() => printHtmlNode("transport-order-print", `${shipment.number} — ${(providerById(providerId, contacts) || {}).name || providerId}`)} kind="dark" disabled={!legIds.length}>Print / PDF</SmallButton>{onEmail && <SmallButton onClick={() => onEmail(providerId)} kind="blue">✉ Email</SmallButton>}<SmallButton onClick={onMarkSent} kind="green">Mark sent</SmallButton><SmallButton onClick={onClose}>Close</SmallButton></div>
       </div>
       <div style={{ padding: "10px 18px", borderBottom: "1px solid #F1F5F9", background: "#FAFAFA", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: "#64748B" }}>LEGS ON THIS ORDER:</span>
@@ -2017,7 +2048,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
   const provider: any = providerById(providerId, contacts) || {};
   const providerLegList: any[] = providerLegs(shipment, providerId);
-  const firstProviderLeg: any = providerLegList[0] || (shipment.legs || [])[0] || {};
+  const firstProviderLeg: any = providerLegList[0] || {};
   const lastProviderLeg: any = providerLegList[providerLegList.length - 1] || firstProviderLeg;
   // v6.16 (#7): show the freight in the currency chosen for this provider's leg(s),
   // not the system PLN default. Mixed currencies are listed per currency.
@@ -2028,7 +2059,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
     const entries = Object.entries(byCur).filter(([, v]) => v > 0);
     return entries.length ? entries.map(([cur, v]) => fmtMoney(v, cur)).join(" + ") : fmtMoney(shipmentCostPLN(shipment), "PLN");
   })();
-  const makeBody = () => `Dear ${provider.contact || provider.name || "Carrier / Forwarder"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipment.originLocationId, firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(lastProviderLeg.toLocationId || shipment.destinationLocationId, lastProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${formatDMY(firstProviderLeg.plannedPickupDate || shipment.loadingDate) || "TBA"}\nFreight: ${freightText}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`;
+  const makeBody = () => `Dear ${provider.name || provider.contact || "Carrier / Forwarder"},\n\nPlease find attached our bilingual transport order ${shipment.transportOrderNo || shipment.number}.\n\nLoading: ${locationTextFromFields(firstProviderLeg.fromLocationId || shipment.originLocationId, firstProviderLeg.fromCustom || shipment.originCustom)}\nDelivery: ${locationTextFromFields(lastProviderLeg.toLocationId || shipment.destinationLocationId, lastProviderLeg.toCustom || shipment.destinationCustom)}\nDate: ${formatDMY(firstProviderLeg.plannedPickupDate || shipment.loadingDate) || "TBA"}\nFreight: ${freightText}\n\nPlease confirm receipt and send truck / driver / container details when available.\n\nBest regards,\nMARIANNA`;
   const [subject, setSubject] = useState(`Transport Order ${shipment.transportOrderNo || shipment.number} / Zlecenie transportowe — ${COMPANY.name}`);
   const [body, setBody] = useState(makeBody());
   // v6.16 (#6): for multimodal there are several providers — when the user switches
@@ -2055,7 +2086,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
         <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} legIds={providerLegList.map((l: any) => String(l.id))} orders={orders} customTerms={shipment.customOrderTerms || ""} /></div></div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", borderTop: "1px solid #F3F4F6", paddingTop: 14 }}>
           <SmallButton onClick={onClose}>Cancel</SmallButton>
-          <SmallButton onClick={() => printHtmlNode("transport-order-email-doc", shipment.number)} kind="blue">① Save PDF</SmallButton>
+          <SmallButton onClick={() => printHtmlNode("transport-order-email-doc", `${shipment.number} — ${(providerById(providerId, contacts) || {}).name || providerId}`)} kind="blue">① Save PDF</SmallButton>
           <button onClick={openMailClient} disabled={!recipient} title={!recipient ? "Carrier / forwarder email missing in Contacts" : ""} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: recipient ? "#16A34A" : "#D1D5DB", color: "#fff", fontWeight: 700, cursor: recipient ? "pointer" : "not-allowed" }}>② Open email draft →</button>
         </div>
       </div>
@@ -2078,7 +2109,9 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}>{r}</span>)}{soPills.map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}>{r}</span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <SmallButton kind="blue" onClick={onEdit}>✎ Edit</SmallButton>
+          {shipment.status === "Cancelled"
+            ? <span style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
+            : <SmallButton kind="blue" onClick={onEdit}>✎ Edit</SmallButton>}
           <SmallButton onClick={onPrint} kind="dark">Transport order</SmallButton>
           <SmallButton onClick={() => onQuickStatus("Confirmed")}>Confirm</SmallButton>
           <SmallButton onClick={() => onQuickStatus("Loaded")} kind="amber">Loaded</SmallButton>
@@ -2133,7 +2166,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
 
     <Card>
       <SectionTitle>Goods</SectionTitle>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}><thead><tr style={{ color: "#888", textAlign: "left", borderBottom: "1px solid #E5E7EB" }}><th style={th}>Product</th><th style={th}>Origin</th><th style={th}>Quality / size</th><th style={th}>Packaging</th><th style={th}>PO / SO / Lot</th><th style={{ ...th, textAlign: "right" }}>Qty kg</th><th style={{ ...th, textAlign: "right" }}>Pallets</th></tr></thead><tbody>{(shipment.goods || []).map(g => <tr key={g.id} style={{ borderBottom: "1px solid #F1F5F9" }}><td style={td}><strong>{g.product}</strong><div style={{ color: "#888", fontSize: 11 }}>{g.description}</div></td><td style={td}>{g.origin || "-"}</td><td style={td}>{g.quality || "-"} / {g.size || "-"}</td><td style={td}>{g.packaging || "-"}</td><td style={td}><div>{g.poRef || "-"}</div><div>{g.soRef || soPills.join(", ") || "-"}</div><div>{g.lotRef || "-"}</div></td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.pallets)}</td></tr>)}</tbody></table>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}><thead><tr style={{ color: "#888", textAlign: "left", borderBottom: "1px solid #E5E7EB" }}><th style={th}>Product</th><th style={th}>Origin</th><th style={th}>Quality / size</th><th style={th}>Packaging</th><th style={th}>PO / SO / Lot</th><th style={{ ...th, textAlign: "right" }}>Qty kg</th><th style={{ ...th, textAlign: "right" }}>Pallets</th></tr></thead><tbody>{(shipment.goods || []).map(g => <tr key={g.id} style={{ borderBottom: "1px solid #F1F5F9" }}><td style={td}><strong>{g.product}{g.variety ? " — " + g.variety : ""}</strong><div style={{ color: "#888", fontSize: 11 }}>{g.description}</div></td><td style={td}>{g.origin || "-"}</td><td style={td}>{g.quality || "-"} / {g.size || "-"}</td><td style={td}>{g.packaging || "-"}</td><td style={td}><div>{g.poRef || "-"}</div><div>{g.soRef || soPills.join(", ") || "-"}</div><div>{g.lotRef || "-"}</div></td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.pallets)}</td></tr>)}</tbody></table>
     </Card>
 
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>

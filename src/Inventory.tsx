@@ -785,7 +785,7 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
   let receivedKg = 0, physicalKg = 0, damagedKg = 0, claimedKg = 0;
   let locationId = lot.baseLocationId ?? lot.locationId;
   let status = lot.expectedKg && movements.length === 0 ? "Expected" : (lot.status || "Expected");
-  const ordered = [...movements].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0));
+  const ordered = [...movements].filter(m => !m.voided).sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0));
   let sawIn = false, sawShipOut = false;
   ordered.forEach(m => {
     const q = parseNum(m.qtyKg);
@@ -891,7 +891,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
       <div style={{ background: "#fff", borderRadius: 14, width: 540, maxWidth: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", margin: "auto" }}>
         <div style={{ padding: "20px 24px", borderBottom: "1px solid #EBEBEB" }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? (mode === "quality" ? "Edit quality issue" : "Edit movement") : (mode === "quality" ? "Record quality issue" : "Record movement")}</div>
-          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product}{lot.variety ? " — " + lot.variety : ""} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
         </div>
         <div style={{ padding: 24 }}>
           {mode === "movement" ? (
@@ -1100,7 +1100,7 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
       <div style={{ width: 540, maxHeight: "88vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <strong>🔍 Record inspection</strong>
-          <span style={{ fontSize: 12, color: "#888" }}>{lot.number} · {lot.product}</span>
+          <span style={{ fontSize: 12, color: "#888" }}>{lot.number} · {lot.product}{lot.variety ? " — " + lot.variety : ""}</span>
         </div>
         <div style={{ padding: 20, display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
@@ -1275,7 +1275,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 800 }}>CONSIGNMENT SETTLEMENT / ROZLICZENIE SPRZEDAŻY KOMISOWEJ</div>
-                <div style={{ color: "#555", marginTop: 2 }}>Lot / Partia: <strong>{lot.number}</strong> · {lot.product} · {po ? `PO ${po.number}` : ""} · Date / Data: {localTodayISO()}</div>
+                <div style={{ color: "#555", marginTop: 2 }}>Lot / Partia: <strong>{lot.number}</strong> · {lot.product}{lot.variety ? " — " + lot.variety : ""} · {po ? `PO ${po.number}` : ""} · Date / Data: {localTodayISO()}</div>
               </div>
               <div style={{ textAlign: "right", color: "#555" }}>
                 <div style={{ fontWeight: 700 }}>MARIANNA</div>
@@ -1433,7 +1433,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onCustoms, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1475,7 +1475,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 <VarianceBadge expected={lot.expectedKg} actual={lot.receivedKg} />
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{lot.number}</div>
-              <div style={{ fontSize: 14, color: "#444" }}>{lot.product} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
+              <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
               <div style={{ marginTop: 10 }}><FlowBadge flow={lot.flow} /></div>
             </div>
             <div style={{ textAlign: "right" }}>
@@ -1685,23 +1685,26 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                       const fromLoc = locById(m.fromId);
                       const toLoc = locById(m.toId);
                       const isMove = m.fromId !== m.toId;
+                      const isVoided = !!m.voided;
+                      const canVoid = !isVoided && ["TRANSFER", "DAMAGE", "CLAIM", "RECLASS"].includes(m.type); // manual events only; IN/SHIP_OUT/REVERSAL are system-driven
                       return (
-                        <div key={i} style={{ display: "flex", gap: 14, paddingBottom: 14, position: "relative" }}>
-                          <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff", border: `2px solid ${mt.color}`, color: mt.color, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, zIndex: 1 }}>{mt.icon}</div>
+                        <div key={i} style={{ display: "flex", gap: 14, paddingBottom: 14, position: "relative", opacity: isVoided ? 0.6 : 1 }}>
+                          <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff", border: `2px solid ${isVoided ? "#DC2626" : mt.color}`, color: isVoided ? "#DC2626" : mt.color, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, zIndex: 1 }}>{isVoided ? "✕" : mt.icon}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                              <div style={{ fontSize: 12.5 }}>
-                                <span style={{ fontWeight: 600, color: mt.color }}>{mt.label}</span>
-                                <span style={{ color: "#444", marginLeft: 6 }}>· {fmtNum(m.qtyKg)} kg</span>
-                                {isMove && <span style={{ color: "#666", marginLeft: 6 }}>· {fromLoc?.name} → {toLoc?.name}</span>}
+                              <div style={{ fontSize: 12.5, textDecoration: isVoided ? "line-through" : "none", color: isVoided ? "#B91C1C" : undefined }}>
+                                <span style={{ fontWeight: 600, color: isVoided ? "#B91C1C" : mt.color }}>{mt.label}</span>
+                                <span style={{ color: isVoided ? "#B91C1C" : "#444", marginLeft: 6 }}>· {fmtNum(m.qtyKg)} kg</span>
+                                {isMove && <span style={{ color: isVoided ? "#B91C1C" : "#666", marginLeft: 6 }}>· {fromLoc?.name} → {toLoc?.name}</span>}
+                                {isVoided && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#B91C1C", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 5, padding: "1px 6px" }}>VOIDED</span>}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
                                 <span style={{ fontSize: 11, color: "#AAA" }}>{formatDMY(m.date)}</span>
-                                {onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #2563EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>}
-                                {onDeleteMovement && <button onClick={() => onDeleteMovement(m.id)} title="Delete movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #FECACA", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#DC2626" }}>✕</button>}
+                                {!isVoided && onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #2563EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>}
+                                {canVoid && onVoidMovement && <button onClick={() => onVoidMovement(m.id)} title="Void this entry — kept in the record but removed from stock" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #FECACA", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#DC2626", fontWeight: 600 }}>Void</button>}
                               </div>
                             </div>
-                            {m.note && <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{m.note}</div>}
+                            {m.note && <div style={{ fontSize: 11.5, color: "#888", marginTop: 2, textDecoration: isVoided ? "line-through" : "none" }}>{m.note}</div>}
                           </div>
                         </div>
                       );
@@ -1944,6 +1947,19 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
     }));
   }
+  // v6.18.17 (C): void a wrongly-entered MANUAL movement/reclass/claim. The entry is
+  // kept in the lot's history (shown red, read-only) for the record, but excluded from
+  // the stock recompute. System events (IN / SHIP_OUT / REVERSAL) can't be voided here —
+  // they're driven by the PO / shipment / return and would desync the lot.
+  function voidMovement(movId) {
+    if (!window.confirm("Void this entry? It stays in the history (marked voided, in red) but no longer affects stock. This can't be undone.")) return;
+    setLots(prev => prev.map(l => {
+      if (l.id !== selected.id) return l;
+      const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      const movements = (l.movements || []).map(m => m.id === movId ? { ...m, voided: true, voidedAt: localTodayISO() } : m);
+      return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
+    }));
+  }
 
   function saveCustoms(kind, data) {
     setLots(prev => prev.map(l => {
@@ -2069,6 +2085,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           onQualityIssue={() => { setEditingMovement(null); setMovementMode("quality"); setShowMovement(true); }}
           onEditMovement={(m: any) => { setEditingMovement(m); setMovementMode(["DAMAGE", "RECLASS"].includes(m.type) ? "quality" : "movement"); setShowMovement(true); }}
           onDeleteMovement={deleteMovement}
+          onVoidMovement={voidMovement}
           onInspect={() => setShowInspection(true)}
           onReturn={() => setShowReturn(true)}
           onDelete={deleteLot}

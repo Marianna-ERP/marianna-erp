@@ -33,3 +33,9 @@ picked from one controlled list of **Item → Variety**.
 > Run `npm install && npm run verify` locally before deploying. Note: the add-new prompt
 > uses the browser's input box for now (consistent with the other quick prompts); it can
 > become an in-app modal when we do the alert/confirm→modal pass.
+
+## Build fix (re-issued)
+The first v6.18.16 zip failed the Vercel build on an ESLint rule (`import/first`) because
+the `ItemVarietyPicker` import sat mid-file in PurchaseOrders.tsx. `tsc` accepts that, but
+the production build's ESLint doesn't. The import is moved to the top with the others — no
+behaviour change. This re-issued zip replaces the previous v6.18.16.

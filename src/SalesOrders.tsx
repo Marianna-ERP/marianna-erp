@@ -740,6 +740,8 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
       sourceLineId: null,
       // Auto-fill spec fields from the lot for convenience
       product: lot.product,
+      variety: lot.variety || "",
+      cnCode: lot.cnCode || "",
       origin: lot.origin,
       size: lot.size,
       quality: lot.quality,
@@ -752,6 +754,8 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
       sourceRef: poLine._po.number,
       sourceLineId: poLine.id,
       product: poLine.product,
+      variety: poLine.variety || "",
+      cnCode: poLine.cnCode || "",
       origin: poLine.origin,
       size: poLine.size,
       quality: poLine.quality,
@@ -1634,7 +1638,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
               <div style={{ order: -1 }}><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}
+                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)} disabled={order.status === "Cancelled"}
+                  title={order.status === "Cancelled" ? "This SO is cancelled — read-only and can't be reactivated." : ""}
                   style={{ borderLeft: `4px solid ${(SO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (SO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
                   {Object.keys(SO_STATUSES).map(s => {
                     // Draft and Cancelled are always available; everything else requires all lines to be
@@ -1934,13 +1939,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   )}
                   <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.9fr 0.8fr 0.9fr 1.1fr 1fr 1fr 1.3fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
-                      <Lbl>Item / Variety</Lbl>
-                      <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />
+                      <Lbl>Item / Variety {it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl>
+                      {it.sourceType && it.sourceRef
+                        ? <div style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F9FAFB", color: "#374151", minHeight: 18 }} title="Inherited from the linked source — clear the source link to change the product">{it.product || "—"}{it.variety ? ` — ${it.variety}` : ""}</div>
+                        : <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />}
                     </div>
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
-                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice" /></div>
+                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
                     <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" /></div>
                     <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
                     <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
@@ -2041,7 +2048,9 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
               </button>
             );
           })()}
-          <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>
+          {order.status === "Cancelled"
+            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
+            : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -2703,10 +2712,10 @@ export default function SalesOrders({
             const rowAvail = computeLineAvailability(o.items, orders, o.id);
             const rowOverageCount = rowAvail.filter(a => a.hasOverage).length;
             return (
-              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
+              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: o.status === "Cancelled" ? "#FEF2F2" : "#fff", color: o.status === "Cancelled" ? "#B91C1C" : undefined, cursor: "pointer" }}
                 onClick={() => openDetail(o)}
-                onMouseEnter={e => e.currentTarget.style.background = "#FAFAFA"}
-                onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                onMouseEnter={e => e.currentTarget.style.background = o.status === "Cancelled" ? "#FEE2E2" : "#FAFAFA"}
+                onMouseLeave={e => e.currentTarget.style.background = o.status === "Cancelled" ? "#FEF2F2" : "#fff"}>
                 <div>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
                   {rowOverageCount > 0 && (

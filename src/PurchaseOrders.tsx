@@ -1007,7 +1007,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
   // change at all (including revert-to-Draft and Cancel). It can only be removed by
   // unlinking every downstream document first, then deleting.
   const poNum = order.number;
-  const hasLinkedSO = (allSOs || []).some((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+  const hasLinkedSO = (allSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
   const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
   const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
   const hasDependents = hasLinkedSO || hasShipment || lotReceivedOrMoved;
@@ -1101,7 +1101,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               <div>
                 <Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)}
+                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)} disabled={hasDependents || order.status === "Cancelled"}
+                  title={order.status === "Cancelled" ? "This PO is cancelled — kept for the record, read-only, and can't be reactivated." : hasDependents ? "Locked — a Sales Order, shipment or inventory depends on this PO. Unlink everything first." : ""}
                   style={{ borderLeft: `4px solid ${(PO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (PO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
                   {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
                 </Sel>
@@ -1306,11 +1307,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr 0.7fr", gap: 8, marginTop: 8 }}>
-                    <div><Lbl>Coloration / Variety</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr 0.7fr 0.9fr", gap: 8, marginTop: 8 }}>
+                    <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" /></div>
                     <div><Lbl>Boxes</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
                     <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
+                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode ?? ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 0808 10" title="Customs tariff code for this item — carried to the SO and shipment" /></div>
                   </div>
                 </div>
               );
@@ -1358,7 +1360,9 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
               <button onClick={isDraft ? undefined : onEmail} disabled={isDraft} title={tip} style={draftStyle}>✉ Email</button>
             </>;
           })()}
-          <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>
+          {order.status === "Cancelled"
+            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
+            : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -1678,6 +1682,8 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
         number: already.number,
         patch: {
           product: it.product || "Goods",
+          variety: it.variety || "",
+          cnCode: it.cnCode || "",
           quality: it.quality || "I",
           size: it.size || "",
           origin: it.origin || order.supplier?.country || "",
@@ -1710,6 +1716,8 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
       id: nextId(),
       number: lotNumber,
       product: it.product || "Goods",
+      variety: it.variety || "",
+      cnCode: it.cnCode || "",
       quality: it.quality || "I",
       size: it.size || "",
       origin: it.origin || order.supplier?.country || "",
@@ -1965,7 +1973,7 @@ ${blockNote}`.trim(),
   function deleteOrder() {
     // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
     const poNum = selected.number;
-    const hasLinkedSO = (extSOs || []).some((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+    const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
     const hasShipment = (extShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
     const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
     if (hasLinkedSO || hasShipment || lotReceivedOrMoved) {
@@ -2125,7 +2133,7 @@ ${blockNote}`.trim(),
             const totalPLN = plnTotal(o);
             const isLoadingOverdue = activeStatuses.has(o.status) && o.loadingDate && new Date(o.loadingDate) < todayStart;
             return (
-              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 200px 130px 120px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
+              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 200px 130px 120px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: o.status === "Cancelled" ? "#FEF2F2" : "#fff", color: o.status === "Cancelled" ? "#B91C1C" : undefined, cursor: "pointer" }}
                 onClick={() => { setSelected(o); setView("detail"); }}
                 onMouseEnter={e => e.currentTarget.style.background = "#FAFAFA"}
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
