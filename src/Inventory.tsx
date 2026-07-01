@@ -1862,10 +1862,12 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 
   // v6.18.21 (audit P1): the product filter is derived from the lots actually in
   // inventory (catalog-picked on the PO) instead of a hardcoded list that drifted.
-  const productOptions = useMemo(
-    () => Array.from(new Set((lots || []).map((l: any) => l.product).filter(Boolean))).sort(),
-    [lots]
-  );
+  // Explicit string[] so the JSX key type is satisfied under the strict CRA build.
+  const productOptions = useMemo<string[]>(() => {
+    const set = new Set<string>();
+    (lots || []).forEach((l: any) => { if (l && l.product) set.add(String(l.product)); });
+    return Array.from(set).sort();
+  }, [lots]);
 
   // ── mutations ───────────────────────────────────────────────────────
   function recordMovement({ id, type, qtyKg, fromId, toId, note, date, soRef, detectedAt, claimValue, claimCurrency, partyName }: any) {
