@@ -318,11 +318,6 @@ const FLOW_GROUPS = [
 
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"]; // Polish convention (Klasa I/IB/II/Industrial)
 
-const PRODUCTS = [
-  "Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper",
-  "Tomato Round", "Tomato Cherry", "Cucumber", "Courgette",
-  "Aubergine", "Carrot", "Papryka Kapia", "Papryka Żółta", "Papryka Czerwona",
-];
 
 // Movement types — physical operations only.
 // SO reservations are NOT movements (they're a calculated overlay from SO state).
@@ -1858,12 +1853,19 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       if (filterQuality !== "All" && l.quality !== filterQuality) return false;
       if (q) {
         const soList = soRefsFor(l, liveSOs, shipments).map(s => s.number).join(" ");
-        const hay = `${l.number} ${l.product} ${l.poRef || ""} ${soList} ${loc?.name || ""}`.toLowerCase();
+        const hay = `${l.number} ${l.product} ${l.variety || ""} ${l.poRef || ""} ${soList} ${loc?.name || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
   }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality]);
+
+  // v6.18.21 (audit P1): the product filter is derived from the lots actually in
+  // inventory (catalog-picked on the PO) instead of a hardcoded list that drifted.
+  const productOptions = useMemo(
+    () => Array.from(new Set((lots || []).map((l: any) => l.product).filter(Boolean))).sort(),
+    [lots]
+  );
 
   // ── mutations ───────────────────────────────────────────────────────
   function recordMovement({ id, type, qtyKg, fromId, toId, note, date, soRef, detectedAt, claimValue, claimCurrency, partyName }: any) {
@@ -2028,17 +2030,16 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     if (hasPhysical) blockers.push("• This lot has received goods / recorded movements (real stock history).");
 
     if (blockers.length) {
-      const proceed = window.confirm(
-        `⚠ Lot ${lotNo} is still referenced and deleting it will break those links:\n\n` +
+      window.alert(
+        `Lot ${lotNo} can't be deleted — it's still referenced:\n\n` +
         `${blockers.join("\n")}\n\n` +
-        `Deleting now leaves dangling references that distort COGS and reports. ` +
-        `The safer action is to leave it (or cancel the dependent documents first).\n\n` +
-        `Press OK ONLY if you understand the references will be broken, or Cancel to keep it.`
+        `Deleting it would leave dangling references that distort COGS and reports. ` +
+        `Cancel the dependent Sales Order(s)/Shipment(s) first, or void its movements, ` +
+        `then an empty, unreferenced lot can be removed.`
       );
-      if (!proceed) return;
-    } else {
-      if (!window.confirm(`Delete lot ${lotNo}? This permanently removes it from inventory.`)) return;
+      return;
     }
+    if (!window.confirm(`Delete lot ${lotNo}? This permanently removes it from inventory.`)) return;
 
     setLots(prev => prev.filter(l => l.id !== selected.id));
     setSelectedId(null);
@@ -2145,7 +2146,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             {["All", ...Object.keys(LOCATION_TYPES)].map(t => <option key={t} value={t}>{t === "All" ? "All locations" : `${locType(t).icon} ${locType(t).label}`}</option>)}
           </select>
           <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} title="Filter by product" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 180 }}>
-            {["All", ...PRODUCTS].map(p => <option key={p} value={p}>{p === "All" ? "All products" : p}</option>)}
+            {["All", ...productOptions].map(p => <option key={p} value={p}>{p === "All" ? "All products" : p}</option>)}
           </select>
           <select value={filterQuality} onChange={e => setFilterQuality(e.target.value)} title="Filter by quality" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 140 }}>
             {["All", ...QUALITY_GRADES].map(q => <option key={q} value={q}>{q === "All" ? "All grades" : `Kl. ${q}`}</option>)}
@@ -2176,7 +2177,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                   <div style={{ marginTop: 3 }}><VarianceBadge expected={l.expectedKg} actual={l.receivedKg} /></div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{l.product}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
                   <div style={{ fontSize: 11, color: "#AAA" }}>{l.size || "—"} · {l.origin || "—"} · {l.packaging}</div>
                 </div>
                 <div><QualityBadge quality={l.quality} /></div>

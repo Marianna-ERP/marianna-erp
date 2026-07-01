@@ -183,6 +183,49 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState("");
   const tariffWarehouses = (contacts || []).filter((c: any) => tariffHasRates(c.warehouseTariff));
+  // v6.18.20: keep the raw sheet + the (auto-detected, user-overridable) column map so the
+  // invoice-no / date column can be re-pointed if Fakturownia labels them unexpectedly.
+  const [aoa, setAoa] = useState<any[][]>([]);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [cols, setCols] = useState<any>({ no: -1, seller: -1, date: -1, net: -1, gross: -1, cur: -1, desc: -1 });
+
+  function buildRows(grid: any[][], cmap: any) {
+    const existingInvNos = new Set((operationalCosts || []).map((c: any) => String(c.invoiceNo || "").trim().toLowerCase()).filter(Boolean));
+    const num = (v: any) => parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")) || 0;
+    return grid.slice(1).filter(r => (r || []).some(x => String(x || "").trim() !== "")).map((r: any[], i: number) => {
+      const invoiceNo = cmap.no >= 0 ? String(r[cmap.no] || "").trim() : "";
+      const seller = cmap.seller >= 0 ? String(r[cmap.seller] || "").trim() : "";
+      const rawDate = cmap.date >= 0 ? String(r[cmap.date] || "").trim() : "";
+      // Accept ISO (yyyy-mm-dd) and d/m/yyyy or d.m.yyyy, with 1- or 2-digit day/month.
+      const iso = rawDate.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+      const dmy = rawDate.match(/(\d{1,2})[./](\d{1,2})[./](\d{4})/);
+      const date = iso ? `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`
+        : dmy ? `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}` : "";
+      const net = cmap.net >= 0 ? num(r[cmap.net]) : 0;
+      const gross = cmap.gross >= 0 ? num(r[cmap.gross]) : 0;
+      const amount = net || gross;
+      const currency = cmap.cur >= 0 ? (String(r[cmap.cur] || "PLN").trim().toUpperCase() || "PLN") : "PLN";
+      const desc = cmap.desc >= 0 ? String(r[cmap.desc] || "").trim() : "";
+      const whMatch = tariffWarehouses.find((w: any) => seller && (String(w.name || "").toLowerCase().includes(seller.toLowerCase().slice(0, 12)) || seller.toLowerCase().includes(String(w.name || "").toLowerCase().slice(0, 12))));
+      const dup = invoiceNo && existingInvNos.has(invoiceNo.toLowerCase());
+      return {
+        id: i, include: !dup && amount > 0, dup,
+        invoiceNo, seller, date, amount, currency,
+        fxRate: defaultFxRate(currency),
+        description: desc || `${seller} ${invoiceNo}`.trim(),
+        route: whMatch ? "warehouse" : "cost",
+        warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
+        category: guessCostCategory(`${seller} ${desc}`),
+        allocationMethod: "by_revenue",
+      };
+    });
+  }
+
+  function setCol(key: string, idx: number) {
+    const next = { ...cols, [key]: idx };
+    setCols(next);
+    if (aoa.length) setRows(buildRows(aoa, next));
+  }
 
   function handleFile(e: any) {
     const file = e.target.files?.[0];
@@ -191,47 +234,25 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const wb = XLSX.read(reader.result as ArrayBuffer, { type: "array" });
+        const wb = XLSX.read(reader.result as ArrayBuffer, { type: "array", cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const aoa: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
-        if (!aoa.length) { setError("File appears empty."); return; }
-        const headers = (aoa[0] || []).map((x: any) => String(x || ""));
-        const cNo = findInvoiceNoCol(headers);
-        const cSeller = findCol(headers, "sprzedawca", "kontrahent", "seller", "dostawca", "supplier", "nazwa");
-        const cDate = findCol(headers, "data wystaw", "issue date", "issue_date", "data sprzeda", "sell date", "data faktury", "data");
-        const cNet = findCol(headers, "netto", "net");
-        const cGross = findCol(headers, "brutto", "gross");
-        const cCur = findCol(headers, "walut", "currency");
-        const cDesc = findCol(headers, "opis", "description", "tytu", "produkt", "kategoria");
-        if (cNo < 0 && cSeller < 0) { setError("Could not recognize columns — expected headers like Numer/Number, Sprzedawca/Seller, Netto/Net. Export the cost register from Fakturownia as XLS/CSV and try again."); return; }
-        const existingInvNos = new Set((operationalCosts || []).map((c: any) => String(c.invoiceNo || "").trim().toLowerCase()).filter(Boolean));
-        const parsed = aoa.slice(1).filter(r => (r || []).some(x => String(x || "").trim() !== "")).map((r: any[], i: number) => {
-          const invoiceNo = cNo >= 0 ? String(r[cNo] || "").trim() : "";
-          const seller = cSeller >= 0 ? String(r[cSeller] || "").trim() : "";
-          const rawDate = cDate >= 0 ? String(r[cDate] || "").trim() : "";
-          const dm = rawDate.match(/(\d{4})-(\d{2})-(\d{2})/) || rawDate.match(/(\d{2})[./](\d{2})[./](\d{4})/);
-          const date = dm ? (dm[1].length === 4 ? `${dm[1]}-${dm[2]}-${dm[3]}` : `${dm[3]}-${dm[2]}-${dm[1]}`) : "";
-          const num = (v: any) => parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")) || 0;
-          const net = cNet >= 0 ? num(r[cNet]) : 0;
-          const gross = cGross >= 0 ? num(r[cGross]) : 0;
-          const amount = net || gross;
-          const currency = cCur >= 0 ? (String(r[cCur] || "PLN").trim().toUpperCase() || "PLN") : "PLN";
-          const desc = cDesc >= 0 ? String(r[cDesc] || "").trim() : "";
-          const whMatch = tariffWarehouses.find((w: any) => seller && String(w.name || "").toLowerCase().includes(seller.toLowerCase().slice(0, 12)) || seller.toLowerCase().includes(String(w.name || "").toLowerCase().slice(0, 12)));
-          const dup = invoiceNo && existingInvNos.has(invoiceNo.toLowerCase());
-          return {
-            id: i, include: !dup && amount > 0, dup,
-            invoiceNo, seller, date, amount, currency,
-            fxRate: defaultFxRate(currency),
-            description: desc || `${seller} ${invoiceNo}`.trim(),
-            route: whMatch ? "warehouse" : "cost",
-            warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
-            category: guessCostCategory(`${seller} ${desc}`),
-            allocationMethod: "by_revenue",
-          };
-        });
-        if (!parsed.length) setError("No data rows found under the header.");
-        setRows(parsed);
+        const grid: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: "yyyy-mm-dd" });
+        if (!grid.length) { setError("File appears empty."); return; }
+        const hdr = (grid[0] || []).map((x: any) => String(x || ""));
+        const detected = {
+          no: findInvoiceNoCol(hdr),
+          seller: findCol(hdr, "sprzedawca", "kontrahent", "seller", "dostawca", "supplier", "nazwa"),
+          date: findCol(hdr, "data wystaw", "issue date", "issue_date", "data sprzeda", "sell date", "data faktury", "data"),
+          net: findCol(hdr, "netto", "net"),
+          gross: findCol(hdr, "brutto", "gross"),
+          cur: findCol(hdr, "walut", "currency"),
+          desc: findCol(hdr, "opis", "description", "tytu", "produkt", "kategoria"),
+        };
+        if (detected.no < 0 && detected.seller < 0) { setError("Could not recognize columns — expected headers like Numer/Number, Sprzedawca/Seller, Netto/Net. Export the cost register from Fakturownia as XLS/CSV and try again."); return; }
+        setAoa(grid); setHeaders(hdr); setCols(detected);
+        const built = buildRows(grid, detected);
+        if (!built.length) setError("No data rows found under the header.");
+        setRows(built);
       } catch (err: any) {
         setError("Could not parse the file: " + (err?.message || String(err)));
       }
@@ -323,6 +344,24 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
           </label>
           {fileName && <span style={{ fontSize: 12, color: "#666", marginLeft: 10 }}>{fileName} · {rows.length} row(s)</span>}
           {error && <div style={{ marginTop: 10, padding: "8px 12px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 7, fontSize: 12, color: "#991B1B" }}>{error}</div>}
+          {headers.length > 0 && (
+            <div style={{ marginTop: 10, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", padding: "8px 12px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>Columns</span>
+              <label style={{ fontSize: 11, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>Invoice no.
+                <select value={cols.no} onChange={e => setCol("no", parseInt(e.target.value, 10))} style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #CBD5E1", borderRadius: 5, background: "#fff" }}>
+                  <option value={-1}>— none —</option>
+                  {headers.map((h, i) => <option key={i} value={i}>{h || `Column ${i + 1}`}</option>)}
+                </select>
+              </label>
+              <label style={{ fontSize: 11, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>Issue date
+                <select value={cols.date} onChange={e => setCol("date", parseInt(e.target.value, 10))} style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #CBD5E1", borderRadius: 5, background: "#fff" }}>
+                  <option value={-1}>— none —</option>
+                  {headers.map((h, i) => <option key={i} value={i}>{h || `Column ${i + 1}`}</option>)}
+                </select>
+              </label>
+              <span style={{ fontSize: 10.5, color: "#94A3B8" }}>Auto-detected from the file — change either if a column is wrong or blank.</span>
+            </div>
+          )}
           {rows.length > 0 && (
             <div style={{ marginTop: 12, overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>

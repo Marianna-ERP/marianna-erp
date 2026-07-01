@@ -534,7 +534,10 @@ function shipmentSORefs(shipment, orders = []) {
     const sourcesPO = (o.items || []).some((it: any) => it.sourceType === "PO" && (shipment.poRefs || []).includes(it.sourceRef));
     if (sourcesPO && o.number) set.add(String(o.number));
   });
-  return Array.from(set);
+  // v6.18.18 (#7): a cancelled SO must not linger in a shipment's linked records, even if
+  // its number was stored on soRefs / goods before it was cancelled.
+  const cancelled = new Set((orders || []).filter((o: any) => o && o.status === "Cancelled").map((o: any) => String(o.number)));
+  return Array.from(set).filter(n => !cancelled.has(String(n)));
 }
 
 function providerRoleForLeg(leg, providerId) {
@@ -746,7 +749,7 @@ function buildShipmentFromSO(so, opts, shipments, lots) { return withStandardDoc
 function buildManualShipment(opts, shipments) { return withStandardDocs(buildManualShipment__raw(opts, shipments)); }
 
 function buildShipmentFromPO__raw(po, opts, shipments, lots) {
-  const id = Date.now();
+  const id = nextId();
   const number = nextShipmentNumber(shipments);
   const isExport = String(po.flow || "").startsWith("EXP");
   const mode = opts.mode || (po.requiresSea ? "Multimodal" : "Road");
@@ -785,7 +788,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
       qtyKg: parseNum(it.qty),
       grossKg: parseNum(it.grossKg) || 0,
       pallets: parseNum(it.pallets) || 0,   // do NOT auto-guess pallets — leave 0 until entered
-      description: `${it.product || "Goods"} ${it.packaging || ""}`.trim(),
+      description: `${it.product || "Goods"}${it.variety ? " " + it.variety : ""} ${it.packaging || ""}`.trim(),
     };
   });
   const totalKg = goods.reduce((s, g) => s + parseNum(g.qtyKg), 0);
@@ -864,7 +867,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
 }
 
 function buildShipmentFromSO__raw(so, opts, shipments, lots) {
-  const id = Date.now();
+  const id = nextId();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
   // No carrier chosen (e.g. EXW sale where the client arranges transport) → leave the
@@ -899,7 +902,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
       qtyKg: parseNum(it.qty),
       grossKg: Math.round(parseNum(it.qty) * 1.06),
       pallets: palletCount,
-      description: `${it.product || "Goods"} ${it.packaging || ""}`.trim(),
+      description: `${it.product || "Goods"}${it.variety ? " " + it.variety : ""} ${it.packaging || ""}`.trim(),
     };
   });
   const amount = parseNum(opts.amount, 0);
@@ -951,7 +954,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
 }
 
 function buildManualShipment__raw(opts, shipments) {
-  const id = Date.now();
+  const id = nextId();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : 1001;
@@ -1253,7 +1256,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
                       // If user re-selected everything, collapse back to "all" (empty array).
                       setSelectedItemIds(next.length === all.length ? [] : next);
                     }} />
-                    <span><strong>{it.product || "Product"}</strong>{it.size ? ` · ${it.size}` : ""}{it.packaging ? ` · ${it.packaging}` : ""} · {fmtNum(parseNum(it.qty))} kg</span>
+                    <span><strong>{it.product || "Product"}{it.variety ? " — " + it.variety : ""}</strong>{it.size ? ` · ${it.size}` : ""}{it.packaging ? ` · ${it.packaging}` : ""} · {fmtNum(parseNum(it.qty))} kg</span>
                   </label>
                 );
               })}
@@ -1344,7 +1347,7 @@ function syncCustomsCostLine(sh: any) {
   if (c.applies && amt > 0) {
     const fx = parseNum(c.fxRate) || 1;
     costs.push({
-      id: Date.now(), type: "customs", supplierId: sh.brokerId || null,
+      id: nextId(), type: "customs", supplierId: sh.brokerId || null,
       amount: amt, currency: c.currency || "PLN", fxRate: fx,
       amountPLN: Math.round(amt * fx * 100) / 100,
       invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
@@ -1413,8 +1416,12 @@ function EditShipmentModal({ shipment, contacts, lots = [], onSave, onCancel }: 
   }
   function removeCost(idx) {
     const c = (draft.costs || [])[idx];
-    if (c && isFreightCostType(c.type)) {
-      window.alert("Freight lines (road / sea / air / rail freight) can't be deleted here — a shipment must keep its freight cost. Change the amount to 0 if it doesn't apply, or edit the type.");
+    // Freight lines are normally protected — a shipment must keep its freight cost.
+    // Exception (v6.18.19): a DAP/DDP purchase ("Bought DAP/DDP" ticked) means the
+    // supplier arranges and pays transport, so no freight belongs to us — the line can
+    // be erased. This matches the UI, which already shows the ✕ instead of the lock then.
+    if (c && isFreightCostType(c.type) && !draft.supplierManagedTransport) {
+      window.alert("Freight lines (road / sea / air / rail freight) can't be deleted here — a shipment must keep its freight cost. Change the amount to 0 if it doesn't apply, or edit the type.\n\nIf the supplier arranges and pays transport, tick \u201cBought DAP/DDP\u201d above and this line can be removed.");
       return;
     }
     if (!window.confirm("Delete this cost line?")) return;
@@ -2448,7 +2455,7 @@ export default function Shipments({
       <div style={{ maxWidth: 1460, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
           <div><div style={{ fontSize: 23, fontWeight: 850, letterSpacing: "-0.4px" }}>Shipments / Logistics</div><div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>Road, sea and multimodal transport tracking, carrier confirmation, BL/container data, freight costs and costing allocation.</div></div>
-          <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={exportJson}>Export JSON</SmallButton><SmallButton onClick={() => onNavigate("contacts")}>Open contacts</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
+          <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
           <Kpi label="OPEN SHIPMENTS" value={kpis.open} sub="not closed / not cancelled" />

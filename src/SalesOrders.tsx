@@ -799,7 +799,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
                   <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#0369A1" }}>{lot.number}</div>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}{(lot as any).variety ? " — " + (lot as any).variety : ""}</div>
                     <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}</div>
                     {live.reservations.length > 0 && (
                       <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
@@ -843,7 +843,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                     }}>{line._po.status}</span>
                   </div>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{line.product}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{line.product}{(line as any).variety ? " — " + (line as any).variety : ""}</div>
                     <div style={{ fontSize: 11, color: "#888" }}>{line.size} · {line.origin} · {line.packaging}</div>
                     <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>Supplier: {line._po.supplierName} · ETA {line._po.expectedDelivery}{line._po.requiresSea ? " ⚓" : ""}</div>
                     {live.reservations.length > 0 && (

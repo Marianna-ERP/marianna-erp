@@ -79,7 +79,7 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     // don't reappear as open after the switch.
     const legacyPaid = isSales && settled.has(`SINV:${inv.number}`);
     const isPaid = inv.paymentStatus === "Paid"
-      || (gross > 0 && n(inv.paidAmount) >= gross)
+      || (gross > 0 && n(inv.paidAmount) * (n(inv.fxRate) || 1) >= gross - 0.01)
       || settled.has(ref) || legacyPaid
       || fktPaid[String(inv.number)] === true;
     items.push({

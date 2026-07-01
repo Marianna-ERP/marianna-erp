@@ -2131,7 +2131,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
             </div>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{c.name}</div>
-              <div style={{ fontSize: 11, color: "#AAA" }}>{c.nip || "—"}</div>
+              <div style={{ fontSize: 11, color: "#AAA" }}>{c.nip || c.vatEuId || "—"}</div>
             </div>
             <div>
               <div style={{ fontSize: 13, color: "#333" }}>{primary?.name || <span style={{ color: "#CCC", fontStyle: "italic" }}>no contact</span>}</div>

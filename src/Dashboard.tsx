@@ -312,7 +312,7 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
               <div key={l.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 100px 80px", gap: 10, padding: "8px 0", borderBottom: "1px solid #F9FAFB", alignItems: "center" }}>
                 <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, color: "#2563EB", fontWeight: 600 }}>{l.number}</div>
                 <div>
-                  <div style={{ fontSize: 12, color: "#444", fontWeight: 500 }}>{l.product}</div>
+                  <div style={{ fontSize: 12, color: "#444", fontWeight: 500 }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
                   <div style={{ fontSize: 10, color: "#AAA" }}>{l.size || "—"} · {l.origin || "—"}</div>
                 </div>
                 <div style={{ fontSize: 11, color: "#888" }}>{l.status}</div>

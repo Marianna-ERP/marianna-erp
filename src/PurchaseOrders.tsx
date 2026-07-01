@@ -2035,7 +2035,7 @@ ${blockNote}`.trim(),
         <OrderDetail
           order={selected}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
-          computedSOs={(extSOs || []).filter((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
+          computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}
           onDelete={deleteOrder}
