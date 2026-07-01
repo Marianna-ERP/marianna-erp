@@ -108,11 +108,16 @@ function _adaptLotsFromInventory(invLots) {
   return (invLots || []).map(l => ({
     number: l.number,
     product: l.product,
+    variety: l.variety || "",
+    cnCode: l.cnCode || "",
+    poRef: l.poRef || "",
     quality: l.quality,
     size: l.size,
     origin: l.origin,
     warehouse: l.warehouse || "—",
     availableKg: l.physicalKg ?? l.receivedKg ?? 0,
+    physicalKg: l.physicalKg ?? 0,
+    receivedKg: l.receivedKg ?? 0,
     packaging: l.packaging,
   }));
 }
@@ -559,6 +564,15 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
     return Math.max(0, line.available - (committedFromPO[k] || 0));
   }
 
+  // v6.18.24: POs whose goods are already received into a lot (physical/received > 0) must not
+  // also be counted as incoming "other PO supply" — that double-counts (the goods are now in
+  // stock and counted via the lots). Expected (not-yet-received) POs still count as incoming.
+  const receivedPOProduct = new Set(
+    (LOTS || [])
+      .filter((l: any) => l.poRef && ((l.physicalKg ?? 0) > 0 || (l.receivedKg ?? 0) > 0))
+      .map((l: any) => `${l.poRef}::${(l.product || "").toLowerCase().trim()}`)
+  );
+
   return (soItems || []).map(it => {
     const lineQty = parseFloat(it.qty) || 0;
     const product = (it.product || "").toLowerCase().trim();
@@ -603,6 +617,9 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
       (po.items || []).forEach(line => {
         if ((line.product || "").toLowerCase().trim() !== product) return;
         if (it.sourceType === "PO" && it.sourceRef === po.number && (it.sourceLineId ?? 1) === line.id) return;
+        // Skip a PO line whose goods are already received into a lot for this product —
+        // they're counted as stock, not as separate incoming supply.
+        if (receivedPOProduct.has(`${po.number}::${(line.product || "").toLowerCase().trim()}`)) return;
         otherPOKg += poLineRemaining(po.number, line.id);
       });
     });
@@ -2314,6 +2331,16 @@ export default function SalesOrders({
   // In standalone mode (no extInvLots / extPOs), LOTS and PO_REFS retain their seed values.
   if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots);
   if (extPOs)    PO_REFS = _adaptPOsFromModule(extPOs);
+  // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields.
+  // Backfill them from the originating PO line so sourcing "from stock" is as complete as
+  // "from PO" (both the picker row and the inherited SO line then show Item — Variety + CN/HS).
+  LOTS = (LOTS || []).map((lot: any) => {
+    if ((lot.variety && lot.cnCode) || !lot.poRef) return lot;
+    const po: any = (PO_REFS || []).find((p: any) => p.number === lot.poRef);
+    const line: any = po && (po.items || []).find((it: any) => String(it.product || "").toLowerCase() === String(lot.product || "").toLowerCase());
+    if (!line) return lot;
+    return { ...lot, variety: lot.variety || line.variety || "", cnCode: lot.cnCode || line.cnCode || "" };
+  });
   const clients = useMemo(() => clientsFromContacts(extContacts), [extContacts]);
 
   const [view, setView] = useState("list"); // list | form | detail
