@@ -159,21 +159,54 @@ function findCol(headers: string[], ...keys: string[]): number {
 // (accounting no., position no., order no.). Plain substring matching on "numer"
 // grabbed the wrong one and left the real invoice number blank. This prefers the
 // genuine invoice-number headers and skips the lookalikes.
-function findInvoiceNoCol(headers: string[]): number {
+function findInvoiceNoCol(headers: string[], rows?: any[][]): number {
   const H = headers.map(h => String(h || "").toLowerCase().trim());
   const bad = (h: string) => /(ksi[ęe]g|konta|pozycj|zam[óo]w|ewidenc|rachunk|korekt|proform|wewn)/.test(h);
   const norm = (s: string) => s.replace(/\s+/g, " ").trim();
-  // 1) exact / near-exact header names
-  const exact = ["numer faktury", "nr faktury", "numer dokumentu", "nr dokumentu", "numer obcy", "nr obcy", "invoice number", "invoice no", "invoice no.", "numer", "nr", "number"];
-  for (const k of exact) {
-    const i = H.findIndex(h => !bad(h) && norm(h) === k);
-    if (i >= 0) return i;
+
+  // Score how "invoice-number-like" a column's sample values are. A real invoice number
+  // (e.g. FV/79/06/2026, 123/2026, INV-0007) has separators or letters+digits; a row-counter
+  // column ("No." holding 1, 2, 3…) is a plain integer sequence and scores negative. This is
+  // what disambiguates Fakturownia's TWO "No." columns (row counter vs actual invoice number).
+  const score = (col: number): number => {
+    if (!rows || col < 0) return 0;
+    let s = 0, seen = 0;
+    for (let r = 0; r < rows.length && seen < 25; r++) {
+      const v = String((rows[r] || [])[col] ?? "").trim();
+      if (!v) continue;
+      seen++;
+      if (/[/\-]/.test(v) && /\d/.test(v)) s += 2;          // separator + digit  → FV/79/06/2026
+      else if (/[a-z]/i.test(v) && /\d/.test(v)) s += 2;     // letters + digits   → INV0007
+      else if (/^\d+([.,]0+)?$/.test(v)) s -= 1;             // plain integer      → row counter
+    }
+    return seen ? s / seen : 0;
+  };
+
+  const nameHit = (h: string) => !bad(h) && (
+    ["numer faktury", "nr faktury", "numer dokumentu", "nr dokumentu", "numer obcy", "nr obcy",
+     "invoice number", "invoice no", "invoice no.", "numer", "nr", "number", "no", "no."].includes(norm(h))
+    || /numer faktury|nr faktury|numer dokumentu|numer obcy|invoice|faktur/.test(h)
+  );
+
+  // Header-matching candidates; if more than one (e.g. two "No." columns), pick the most
+  // invoice-like by value shape.
+  const candidates: number[] = [];
+  H.forEach((h, i) => { if (nameHit(h)) candidates.push(i); });
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1) {
+    candidates.sort((a, b) => score(b) - score(a));
+    return candidates[0];
   }
-  // 2) substring fallback, still skipping the lookalike columns
-  const subs = ["numer faktury", "nr faktury", "numer dokumentu", "numer obcy", "invoice", "faktur", "numer", "number"];
-  for (const k of subs) {
-    const i = H.findIndex(h => !bad(h) && h.includes(k));
-    if (i >= 0) return i;
+
+  // No header matched at all → scan every column for invoice-like values.
+  if (rows && rows.length) {
+    let best = -1, bestScore = 0.5; // require a clear signal
+    for (let c = 0; c < headers.length; c++) {
+      if (bad(H[c] || "")) continue;
+      const sc = score(c);
+      if (sc > bestScore) { bestScore = sc; best = c; }
+    }
+    if (best >= 0) return best;
   }
   return -1;
 }
@@ -227,6 +260,16 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
     if (aoa.length) setRows(buildRows(aoa, next));
   }
 
+  // First non-empty value in a column — shown in the picker so duplicate headers
+  // (e.g. Fakturownia's two "No." columns) can be told apart by a sample value.
+  const colSample = (i: number): string => {
+    for (let r = 1; r < Math.min(aoa.length, 15); r++) {
+      const v = String((aoa[r] || [])[i] ?? "").trim();
+      if (v) return v.length > 22 ? v.slice(0, 22) + "\u2026" : v;
+    }
+    return "";
+  };
+
   function handleFile(e: any) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -240,7 +283,7 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
         if (!grid.length) { setError("File appears empty."); return; }
         const hdr = (grid[0] || []).map((x: any) => String(x || ""));
         const detected = {
-          no: findInvoiceNoCol(hdr),
+          no: findInvoiceNoCol(hdr, grid.slice(1)),
           seller: findCol(hdr, "sprzedawca", "kontrahent", "seller", "dostawca", "supplier", "nazwa"),
           date: findCol(hdr, "data wystaw", "issue date", "issue_date", "data sprzeda", "sell date", "data faktury", "data"),
           net: findCol(hdr, "netto", "net"),
@@ -350,13 +393,13 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
               <label style={{ fontSize: 11, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>Invoice no.
                 <select value={cols.no} onChange={e => setCol("no", parseInt(e.target.value, 10))} style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #CBD5E1", borderRadius: 5, background: "#fff" }}>
                   <option value={-1}>— none —</option>
-                  {headers.map((h, i) => <option key={i} value={i}>{h || `Column ${i + 1}`}</option>)}
+                  {headers.map((h, i) => { const smp = colSample(i); return <option key={i} value={i}>{(h || `Column ${i + 1}`) + (smp ? ` — e.g. ${smp}` : "")}</option>; })}
                 </select>
               </label>
               <label style={{ fontSize: 11, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>Issue date
                 <select value={cols.date} onChange={e => setCol("date", parseInt(e.target.value, 10))} style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #CBD5E1", borderRadius: 5, background: "#fff" }}>
                   <option value={-1}>— none —</option>
-                  {headers.map((h, i) => <option key={i} value={i}>{h || `Column ${i + 1}`}</option>)}
+                  {headers.map((h, i) => { const smp = colSample(i); return <option key={i} value={i}>{(h || `Column ${i + 1}`) + (smp ? ` — e.g. ${smp}` : "")}</option>; })}
                 </select>
               </label>
               <span style={{ fontSize: 10.5, color: "#94A3B8" }}>Auto-detected from the file — change either if a column is wrong or blank.</span>
