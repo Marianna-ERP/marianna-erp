@@ -1,6 +1,6 @@
 {
   "name": "freshtrade-erp",
-  "version": "6.18.25",
+  "version": "6.20.1",
   "private": true,
   "dependencies": {
     "react": "^18.2.0",
@@ -12,7 +12,8 @@
     "build": "react-scripts build",
     "build:vercel": "CI=false react-scripts build",
     "typecheck": "tsc --noEmit",
-    "verify": "tsc --noEmit && CI=true react-scripts build"
+    "verify": "tsc --noEmit && CI=true react-scripts build",
+    "test:engines": "tsc -p tests/tsconfig.json && node tests/run-engines.cjs"
   },
   "devDependencies": {
     "@types/react": "^18.2.0",

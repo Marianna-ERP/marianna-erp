@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from "react";
+import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
+import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
@@ -338,10 +340,8 @@ function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); 
 // ─── SO STUB ────────────────────────────────────────────────────────────────
 // Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically
 // in this standalone module. Replaced with live SO state on integration.
-// "Reserving" = SO status in RESERVING_SO_STATUSES (Confirmed and beyond, but not Cancelled, not Draft).
-const RESERVING_SO_STATUSES = new Set([
-  "Confirmed", "Reserved", "Loading", "Shipped", "Delivered", "Invoiced", "Closed",
-]);
+// Reserving semantics: SO_PRE_DISPATCH_STATUSES in ./types, applied by salesOrders.domain (B0-2 resolved:
+// the old 7-status set here was dead code — availability always used the 3-status pre-dispatch set).
 
 function getSOsStub() {
   return [
@@ -363,9 +363,8 @@ function getSOsStub() {
 }
 const SOS = getSOsStub();
 
-function productsMatch(a, b) {
-  return (a || "").toLowerCase().trim() === (b || "").toLowerCase().trim();
-}
+const productsMatch = domainProductsMatch; // Batch 1
+const _soClientName = soClientName; // Batch 1
 
 // Returns: { liveAvailable, totalReserved, reservations: [{ soNumber, soId, status, clientName, qty }] }
 // for a given lot, considering reservations from all SOs in RESERVING_SO_STATUSES
@@ -376,46 +375,13 @@ function productsMatch(a, b) {
 // Once an SO is Shipped+, the goods have physically left → physicalKg already dropped →
 // that SO's reservation should NOT also subtract. We handle this by only counting
 // reservations from SOs in Confirmed/Reserved/Loading (i.e. NOT yet physically dispatched).
-const PRE_DISPATCH_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
 
 // Normalize an SO from either the standalone stub shape ({clientName}) or the real SO module
 // shape ({client: {name, ...}}). Returns flat clientName for display.
-function _soClientName(o) {
-  if (o.clientName) return o.clientName;
-  if (o.client && o.client.name) return o.client.name;
-  return "—";
-}
 
 function lotReservations(lot, sourceSOs) {
-  // Default to the module-scope SOS (standalone fallback); accept live SOs from shell.
-  const list = sourceSOs ?? SOS;
-  const reservations = [];
-  let totalReserved = 0;
-  list.forEach(o => {
-    // Only Confirmed/Reserved/Loading count against the current physical pool.
-    // Shipped+ SOs already had their kg physically subtracted via SHIP_OUT movements.
-    if (!PRE_DISPATCH_STATUSES.has(o.status)) return;
-    (o.items || []).forEach(it => {
-      const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
-      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product);
-      if (!matchesStock && !matchesPOBackedLot) return;
-      if (!productsMatch(it.product, lot.product)) return;
-      const q = parseFloat(it.qty) || 0;
-      if (q <= 0) return;
-      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, clientName: _soClientName(o), qty: q, sourceType: it.sourceType });
-      totalReserved += q;
-    });
-  });
-  const directBasis = lot.directFlow ? (parseFloat(lot.expectedKg) || 0) : 0;
-  const physical = lot.physicalKg ?? lot.receivedKg ?? 0;
-  const availabilityBasis = lot.directFlow ? Math.max(directBasis, physical) : physical;
-  return {
-    physicalKg: physical,
-    availabilityBasis,
-    liveAvailable: Math.max(0, availabilityBasis - totalReserved),
-    totalReserved,
-    reservations,
-  };
+  // Engine: salesOrders.domain (Batch 1). G1: no SOS stub fallback — live SOs only.
+  return lotReservationsForStock(lot, sourceSOs ?? []);
 }
 
 // Returns array of SO references this lot has ever been linked to
@@ -777,44 +743,7 @@ function valueInStock(lot) {
 // lot stays consistent no matter what changed. (Replay-from-zero is valid because
 // every quantity change is represented by a movement.)
 function recomputeLotFromMovements(lot: any, movements: any[]) {
-  let receivedKg = 0, physicalKg = 0, damagedKg = 0, claimedKg = 0;
-  let locationId = lot.baseLocationId ?? lot.locationId;
-  let status = lot.expectedKg && movements.length === 0 ? "Expected" : (lot.status || "Expected");
-  const ordered = [...movements].filter(m => !m.voided).sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0));
-  let sawIn = false, sawShipOut = false;
-  ordered.forEach(m => {
-    const q = parseNum(m.qtyKg);
-    switch (m.type) {
-      case "IN": receivedKg += q; physicalKg += q; locationId = m.toId; sawIn = true; break;
-      case "TRANSFER": locationId = m.toId; break;
-      // v6.18.10 (#3): a ship-out reduces stock but does NOT move the lot's location —
-      // the remaining kg are still in our warehouse. (Previously it stamped the lot's
-      // location as the client, so a partial ship made the remainder look "at client".)
-      case "SHIP_OUT": physicalKg = Math.max(0, physicalKg - q); sawShipOut = true; break;
-      case "REVERSAL": physicalKg += q; if (m.toId) locationId = m.toId; break;
-      case "DAMAGE": physicalKg = Math.max(0, physicalKg - q); damagedKg += q; break;
-      // v6.18.10 (#5): a CLAIM is a client-side defect on goods we already shipped —
-      // it does NOT touch our warehouse stock; it drives a credit note instead.
-      case "CLAIM": claimedKg += q; break;
-      case "RECLASS": break;
-      default: break;
-    }
-  });
-  // Derive status from the final physical state + location.
-  // v6.3.0 fix: locById returns the shared (rich) taxonomy — the legacy OWN/PORT/CLIENT
-  // strings this logic was written against now live in legacyType.
-  const loc = locById(locationId);
-  const legacyLocType = (loc as any)?.legacyType || loc?.type;
-  if (sawShipOut && physicalKg === 0) status = "Shipped Out";
-  else if (sawIn || physicalKg > 0) {
-    if (legacyLocType === "OWN") status = "In Stock";
-    else if (legacyLocType === "PORT") status = "Customs";
-    else if (legacyLocType === "CLIENT") status = "Shipped Out";
-    else status = "In Transit";
-  } else if (movements.length === 0 && lot.expectedKg) {
-    status = "Expected";
-  }
-  return { ...lot, movements: ordered, receivedKg, physicalKg, damagedKg, claimedKg, locationId, status };
+  return domainRecomputeLot(lot, movements, locById); // engine: inventory.domain (Batch 1)
 }
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────

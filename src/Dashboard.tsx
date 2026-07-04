@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import { SO_PRE_DISPATCH_STATUSES as PRE_DISPATCH_STATUSES } from "./types";
 import { aggregateNetMargins } from "./operationalCosts";
 import { localTodayISO, localMonthISO } from "./dates";
 
@@ -10,8 +11,7 @@ import { localTodayISO, localMonthISO } from "./dates";
 //
 // "onNavigate(moduleKey)" lets dashboard buttons jump to a module ("Open PO" etc.)
 
-const RESERVING_SO_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
-const PRE_DISPATCH_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
+// PRE_DISPATCH set imported from ./types (Batch 0).
 
 function fmtNum(n) {
   if (n === undefined || n === null || isNaN(n)) return "—";

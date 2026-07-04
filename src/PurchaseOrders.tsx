@@ -1026,7 +1026,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
     }
     sf("status", newStatus);
   };
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
   const showOtherTerms = order.paymentTerms === "Other";
@@ -1963,7 +1963,7 @@ ${blockNote}`.trim(),
       buyIncoterm: "", flow: "",
       supplier: null, destinationLocationId: null, destinationText: "", requiresSea: false,
       currency: "PLN", fxRate: 1, fxLockedAt: null,
-      items: [{ id: nextId(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
+      items: [{ id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
       notes: "",
       linkedShipments: [], linkedLots: [], linkedInvoices: [], variance: null,
     });

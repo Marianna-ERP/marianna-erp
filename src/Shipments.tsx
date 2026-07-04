@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
@@ -2348,29 +2349,16 @@ export default function Shipments({
   }
 
   function allocateCosts(sh) {
-    const lotRefs = uniq([...(sh.lotRefs || []), ...(sh.goods || []).map(g => g.lotRef)]);
-    if (!lotRefs.length) {
+    // Batch 1b: pure engine with REPLACE-BY-SOURCE — re-allocating after a cost
+    // edit/delete replaces this shipment's prior lot lines instead of appending
+    // (fixes the stale-allocation audit finding). Tested in tests/run-engines.cjs.
+    if (!engineShipmentLotRefs(sh).length) {
       setToast("No lot references on this shipment. Add a lotRef first, then allocate costs.");
       return;
     }
-    const goodsByLot: any = {};
-    (sh.goods || []).forEach(g => {
-      if (!g.lotRef) return;
-      goodsByLot[g.lotRef] = (goodsByLot[g.lotRef] || 0) + parseNum(g.qtyKg);
-    });
-    const totalKg: any = (Object.values(goodsByLot) as any[]).reduce((s: any, v: any) => s + parseNum(v), 0) || lotRefs.length;
-    setLots(prev => prev.map(lot => {
-      if (!lotRefs.includes(lot.number)) return lot;
-      const lotKg = goodsByLot[lot.number] || (totalKg / lotRefs.length);
-      const factor = totalKg ? lotKg / totalKg : 1 / lotRefs.length;
-      const existingSources = new Set((lot.costs || []).map(c => c.source));
-      const additions = (sh.costs || []).map(c => {
-        const pln = Math.round(parseNum(c.amountPLN) * factor * 100) / 100;
-        const source = `${sh.number}/${c.id}`;
-        if (existingSources.has(source)) return null;
-        return { type: costInventoryType(c.type), label: `${costTypeLabel(c.type)} (${sh.number})`, source, amount: pln, currency: "PLN", pln };
-      }).filter(Boolean);
-      return { ...lot, costs: [...(lot.costs || []), ...additions] };
+    setLots(prev => allocateShipmentCostsToLots(sh, prev, {
+      inventoryType: costInventoryType,
+      label: costTypeLabel,
     }));
     updateShipment(sh.id, s => ({ ...s, billingStatus: "Cost allocated" }));
     setToast(`${sh.number} logistics costs allocated to inventory lot costing.`);
@@ -2438,17 +2426,6 @@ export default function Shipments({
     setToast(`${sh.number} inventory movement applied where matching lot refs exist.`);
   }
 
-  function exportJson() {
-    const blob = new Blob([JSON.stringify(shipments, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "marianna_shipments.json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000); // revoke after the download starts
-  }
 
   return <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#FAFAFA" }}>
     <div style={{ padding: "22px 28px 12px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>

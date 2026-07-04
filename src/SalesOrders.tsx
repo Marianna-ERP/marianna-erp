@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from "react";
+import { SO_STATUSES, SO_PRE_DISPATCH_STATUSES as RESERVING_SO_STATUSES } from "./types";
+import { normalizeProduct, productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { nextId } from "./ids";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
@@ -54,38 +56,16 @@ function tradingPartnerFromCounterparty(counterparty) {
 
 function clientsFromContacts(contacts) {
   const mapped = getCounterpartiesByType(contacts || [], "Client").map(tradingPartnerFromCounterparty);
-  return mapped.length ? mapped : CLIENTS;
+  return mapped; // Batch 0 (G1): no stub-client fallback — empty contacts = empty pickers
 }
 
 // ─── PO REFS STUB ─────────────────────────────────────────────────────────
 // Mirrors the PO export shape — replaced with live PO state on integration.
 // Each entry: { number, status, supplier, currency, fxRate, requiresSea, expectedDelivery, items }
 // where items[].id is referenced by sourceLineId on SO lines.
-function getPOsStub() {
-  return [
-    { number: "PO-2026-0117", status: "Shipped", supplierName: "AgriTrade MA", country: "Morocco", expectedDelivery: "2026-06-02", requiresSea: true,
-      items: [{ id: 1, product: "Papryka Kapia", origin: "Morocco", quality: "I", size: "M", qty: 12000, available: 12000, unit: "Kg", packaging: "5 kg carton" }] },
-    { number: "PO-2026-0118", status: "Arrived", supplierName: "AgriTrade MA", country: "Morocco", expectedDelivery: "2026-05-18", requiresSea: true,
-      items: [{ id: 1, product: "Carrot", origin: "Morocco", quality: "I", size: "60-100", qty: 24000, available: 16000, unit: "Kg", packaging: "10 kg mesh bag" }] },
-    { number: "PO-2026-0121", status: "Confirmed", supplierName: "FreshFarm ES", country: "Spain", expectedDelivery: "2026-06-05", requiresSea: false,
-      items: [{ id: 1, product: "Red Bell Pepper", origin: "Spain", quality: "I", size: "L", qty: 8000, available: 8000, unit: "Kg", packaging: "5 kg carton" }] },
-    { number: "PO-2026-0125", status: "Draft", supplierName: "FreshFarm ES", country: "Spain", expectedDelivery: "2026-06-20", requiresSea: false,
-      items: [{ id: 1, product: "Yellow Bell Pepper", origin: "Spain", quality: "I", size: "L", qty: 6000, available: 6000, unit: "Kg", packaging: "5 kg carton" }] },
-  ];
-}
 
 // ─── STOCK LOTS STUB ──────────────────────────────────────────────────────
 // Mirrors the Inventory module's lot export — replaced on integration.
-function getLotsStub() {
-  return [
-    { number: "LOT-2026-0086", product: "Papryka Kapia",      quality: "I",  size: "M",     origin: "Jordania", warehouse: "WH-01 Poznań",     availableKg: 8500,  packaging: "5 kg carton" },
-    { number: "LOT-2026-0091", product: "Golden Delicious",   quality: "I",  size: "70-80", origin: "Poland",   warehouse: "WH-01 Poznań",     availableKg: 12400, packaging: "13 kg wooden box" },
-    { number: "LOT-2026-0088", product: "Carrot",             quality: "I",  size: "60-100",origin: "Morocco",  warehouse: "WH-01 Poznań",     availableKg: 6800,  packaging: "10 kg mesh bag" },
-    { number: "LOT-2026-0095", product: "Red Bell Pepper",    quality: "I",  size: "L",     origin: "Jordania", warehouse: "WH-02 Warszawa",   availableKg: 2300,  packaging: "5 kg carton" },
-    { number: "LOT-2026-0098", product: "Tomato Cherry",      quality: "IB", size: "M",     origin: "Spain",    warehouse: "WH-02 Warszawa",   availableKg: 950,   packaging: "500g punnet" },
-    { number: "LOT-2026-0099", product: "Yellow Bell Pepper", quality: "I",  size: "L",     origin: "Jordania", warehouse: "WH-02 Warszawa",   availableKg: 4200,  packaging: "5 kg carton" },
-  ];
-}
 
 // Module-scope mutable data source.
 // In standalone mode, defaults to the stubs above.
@@ -96,8 +76,8 @@ function getLotsStub() {
 // We're using `let` here intentionally — these are NOT React state, they're just references to whatever
 // state the parent owns. Treating them as `const` would force us to plumb props through ~14 call sites in
 // 4 different functions. The render-time assignment pattern is safe given React's synchronous render model.
-let LOTS = getLotsStub();
-let PO_REFS = getPOsStub();
+let LOTS: any[] = [];      // Batch 0 (G1): no stub fallback — live props only
+let PO_REFS: any[] = [];   // Batch 0 (G1): no stub fallback — live props only
 
 // Convert the lots into the Inventory→SalesOrders interface shape.
 // Inventory stores: { number, product, quality, size, origin, warehouse, physicalKg, ... }
@@ -158,17 +138,7 @@ function destinationDisplay(order) {
 }
 
 // ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
-const SO_STATUSES: Record<string, any> = {
-  Draft:       { bg: "#F3F4F6", color: "#6B7280", order: 0, desc: "Being prepared — can edit freely" },
-  Confirmed:   { bg: "#DBEAFE", color: "#2563EB", order: 1, desc: "Agreed with client, prices locked" },
-  Reserved:    { bg: "#E0F2FE", color: "#0369A1", order: 2, desc: "Stock allocated / PO confirmed" },
-  Loading:     { bg: "#FEF3C7", color: "#D97706", order: 3, desc: "Goods being prepared / loaded" },
-  Shipped:     { bg: "#EDE9FE", color: "#7C3AED", order: 4, desc: "Handed to carrier, en route" },
-  Delivered:   { bg: "#DCFCE7", color: "#16A34A", order: 5, desc: "Client confirmed receipt" },
-  Invoiced:    { bg: "#D1FAE5", color: "#059669", order: 6, desc: "Sales invoice (SINV) issued" },
-  Closed:      { bg: "#F3F4F6", color: "#374151", order: 7, desc: "Paid and complete" },
-  Cancelled:   { bg: "#FEE2E2", color: "#DC2626", order: -1, desc: "Cancelled" },
-};
+// SO_STATUSES: canonical definition moved to ./types (Batch 0).
 
 // Incoterms typical for sales (we're the seller, client is buyer)
 const INCOTERMS_SELL = [
@@ -397,10 +367,6 @@ function validateSourcing(items) {
   };
 }
 
-function isPOUsableForConfirmedSO(po: any) {
-  if (!po) return false;
-  return po.status !== "Draft" && po.status !== "Cancelled";
-}
 
 function validatePOReadinessForSO(items: any[]) {
   const blocked: any[] = [];
@@ -423,62 +389,19 @@ function validatePOReadinessForSO(items: any[]) {
 // the stock should be represented by physical SHIP_OUT movements in Inventory, not
 // by a still-open reservation. This keeps Sales Orders aligned with Inventory and
 // prevents double-subtracting shipped quantities in integration mode.
-const RESERVING_SO_STATUSES = new Set([
-  "Confirmed", "Reserved", "Loading",
-]);
+// RESERVING_SO_STATUSES: canonical set imported from ./types (Batch 0).
 
-function productsMatch(a, b) {
-  return (a || "").toLowerCase().trim() === (b || "").toLowerCase().trim();
-}
+// productsMatch/normalizeProduct: imported from ./salesOrders.domain (Batch 1).
 
 // Returns: { liveAvailable, reservations: [{ soNumber, soId, status, qty }] }
 // for a given lot, considering reservations from all SOs except `excludeOrderId`.
 function lotReservations(lot, allOrders, excludeOrderId) {
-  const reservations = [];
-  let totalReserved = 0;
-  (allOrders || []).forEach(o => {
-    if (o.id === excludeOrderId) return;
-    if (!RESERVING_SO_STATUSES.has(o.status)) return; // Drafts and Cancelled don't reserve
-    (o.items || []).forEach(it => {
-      if (it.sourceType !== "STOCK") return;
-      if (it.sourceRef !== lot.number) return;
-      if (!productsMatch(it.product, lot.product)) return; // wrong-product picks don't reserve
-      const q = parseFloat(it.qty) || 0;
-      if (q <= 0) return;
-      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
-      totalReserved += q;
-    });
-  });
-  return {
-    liveAvailable: Math.max(0, lot.availableKg - totalReserved),
-    totalReserved,
-    reservations,
-  };
+  return lotReservationsForPicker(lot, allOrders, excludeOrderId); // engine: salesOrders.domain (Batch 1)
 }
 
 // Same idea for a PO line — reservations from non-Draft, non-Cancelled SOs.
 function poLineReservations(po, poLine, allOrders, excludeOrderId) {
-  const reservations = [];
-  let totalReserved = 0;
-  (allOrders || []).forEach(o => {
-    if (o.id === excludeOrderId) return;
-    if (!RESERVING_SO_STATUSES.has(o.status)) return;
-    (o.items || []).forEach(it => {
-      if (it.sourceType !== "PO") return;
-      if (it.sourceRef !== po.number) return;
-      if ((it.sourceLineId ?? 1) !== poLine.id) return;
-      if (!productsMatch(it.product, poLine.product)) return;
-      const q = parseFloat(it.qty) || 0;
-      if (q <= 0) return;
-      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
-      totalReserved += q;
-    });
-  });
-  return {
-    liveAvailable: Math.max(0, poLine.available - totalReserved),
-    totalReserved,
-    reservations,
-  };
+  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId); // engine (Batch 1)
 }
 
 // Availability check — for each line, compute how much of its demanded qty is
@@ -513,134 +436,8 @@ function sameSoDuplicateSources(soItems) {
 }
 
 function computeLineAvailability(soItems, allOrders, currentOrderId) {
-  // Build a map of how much each lot / PO line has been reserved by OTHER reserving SOs.
-  // "Reserving" = status in RESERVING_SO_STATUSES (Confirmed and beyond, but not Cancelled).
-  // Don't count this SO's own draws (currentOrderId).
-  //
-  // IMPORTANT: only count a reservation if the SO line's product MATCHES the lot's
-  // (or PO line's) actual product. If a previous SO line was incorrectly tagged to
-  // a lot whose product is different (data error), that draw should not eat into
-  // this lot's pool. Otherwise unrelated products would block each other.
-  const committedFromStock = {}; // lot number -> kg
-  const committedFromPO    = {}; // `${poNumber}::${poLineId}` -> kg
-
-  (allOrders || []).forEach(o => {
-    if (o.id === currentOrderId) return;
-    if (!RESERVING_SO_STATUSES.has(o.status)) return; // Drafts/Cancelled don't reserve
-    (o.items || []).forEach(it => {
-      if (!it.sourceType || !it.sourceRef) return;
-      const q = parseFloat(it.qty) || 0;
-      if (q <= 0) return;
-      if (it.sourceType === "STOCK") {
-        const lot = LOTS.find(l => l.number === it.sourceRef);
-        if (!lot) return;
-        // Only count if this line's product is actually what's in the lot
-        if (!productsMatch(it.product, lot.product)) return;
-        committedFromStock[it.sourceRef] = (committedFromStock[it.sourceRef] || 0) + q;
-      } else if (it.sourceType === "PO") {
-        const po = PO_REFS.find(p => p.number === it.sourceRef);
-        if (!po || !isPOUsableForConfirmedSO(po)) return;
-        const poLine = po.items.find(l => l.id === (it.sourceLineId ?? 1));
-        if (!poLine) return;
-        // Same product-match guard for POs
-        if (!productsMatch(it.product, poLine.product)) return;
-        const k = `${it.sourceRef}::${it.sourceLineId ?? 1}`;
-        committedFromPO[k] = (committedFromPO[k] || 0) + q;
-      }
-    });
-  });
-
-  function lotRemaining(lotNumber) {
-    const lot = LOTS.find(l => l.number === lotNumber);
-    if (!lot) return 0;
-    return Math.max(0, lot.availableKg - (committedFromStock[lot.number] || 0));
-  }
-  function poLineRemaining(poNumber, lineId) {
-    const po = PO_REFS.find(p => p.number === poNumber);
-    if (!po || !isPOUsableForConfirmedSO(po)) return 0;
-    const line = po.items.find(l => l.id === (lineId ?? 1));
-    if (!line) return 0;
-    const k = `${po.number}::${line.id}`;
-    return Math.max(0, line.available - (committedFromPO[k] || 0));
-  }
-
-  // v6.18.24: POs whose goods are already received into a lot (physical/received > 0) must not
-  // also be counted as incoming "other PO supply" — that double-counts (the goods are now in
-  // stock and counted via the lots). Expected (not-yet-received) POs still count as incoming.
-  const receivedPOProduct = new Set(
-    (LOTS || [])
-      .filter((l: any) => l.poRef && ((l.physicalKg ?? 0) > 0 || (l.receivedKg ?? 0) > 0))
-      .map((l: any) => `${l.poRef}::${(l.product || "").toLowerCase().trim()}`)
-  );
-
-  return (soItems || []).map(it => {
-    const lineQty = parseFloat(it.qty) || 0;
-    const product = (it.product || "").toLowerCase().trim();
-
-    // Primary source — what this line actually points at.
-    // Two new sanity checks: the source must exist AND its product must match this line's product.
-    // If product mismatches, primaryAvailable is 0 (we treat it as not really sourced) — the user
-    // probably picked the wrong source for this product.
-    let primaryAvailable = 0;
-    let primaryProductMismatch = false;
-    if (it.sourceType === "STOCK" && it.sourceRef) {
-      const lot = LOTS.find(l => l.number === it.sourceRef);
-      if (lot) {
-        if (productsMatch(it.product, lot.product)) {
-          primaryAvailable = lotRemaining(it.sourceRef);
-        } else {
-          primaryProductMismatch = true;
-        }
-      }
-    } else if (it.sourceType === "PO" && it.sourceRef) {
-      const po = PO_REFS.find(p => p.number === it.sourceRef);
-      if (po && isPOUsableForConfirmedSO(po)) {
-        const poLine = po.items.find(l => l.id === (it.sourceLineId ?? 1));
-        if (poLine) {
-          if (productsMatch(it.product, poLine.product)) {
-            primaryAvailable = poLineRemaining(it.sourceRef, it.sourceLineId);
-          } else {
-            primaryProductMismatch = true;
-          }
-        }
-      }
-    }
-
-    // Other sources for the same product (case-insensitive match), excluding the primary
-    let otherStockKg = 0, otherPOKg = 0;
-    LOTS.forEach(lot => {
-      if ((lot.product || "").toLowerCase().trim() !== product) return;
-      if (it.sourceType === "STOCK" && it.sourceRef === lot.number) return;
-      otherStockKg += lotRemaining(lot.number);
-    });
-    PO_REFS.forEach(po => {
-      (po.items || []).forEach(line => {
-        if ((line.product || "").toLowerCase().trim() !== product) return;
-        if (it.sourceType === "PO" && it.sourceRef === po.number && (it.sourceLineId ?? 1) === line.id) return;
-        // Skip a PO line whose goods are already received into a lot for this product —
-        // they're counted as stock, not as separate incoming supply.
-        if (receivedPOProduct.has(`${po.number}::${(line.product || "").toLowerCase().trim()}`)) return;
-        otherPOKg += poLineRemaining(po.number, line.id);
-      });
-    });
-
-    const otherSourcesAvailable = otherStockKg + otherPOKg;
-    const combinedAvailable = primaryAvailable + otherSourcesAvailable;
-    const primaryShortfallAmount = Math.max(0, lineQty - primaryAvailable);
-
-    return {
-      lineQty,
-      primaryAvailable: Math.round(primaryAvailable * 100) / 100,
-      otherStockKg: Math.round(otherStockKg * 100) / 100,
-      otherPOKg: Math.round(otherPOKg * 100) / 100,
-      otherSourcesAvailable: Math.round(otherSourcesAvailable * 100) / 100,
-      combinedAvailable: Math.round(combinedAvailable * 100) / 100,
-      overage: Math.round(primaryShortfallAmount * 100) / 100,
-      hasOverage: primaryShortfallAmount > 0.01,
-      primaryShortfall: primaryShortfallAmount > 0.01,
-      primaryProductMismatch, // true if the picked source's product doesn't match this line's product
-    };
-  });
+  // Engine extracted to salesOrders.domain (Batch 1) — LOTS/PO_REFS passed explicitly.
+  return domainComputeLineAvailability(soItems, allOrders, currentOrderId, LOTS, PO_REFS);
 }
 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
@@ -1382,7 +1179,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   })();
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (i, k, v) => setOrder(o => ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
   const removeItem = (i) => setOrder(o => ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
@@ -1471,7 +1268,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   // Per-line availability check — does each line have enough stock/PO supply to fulfill it?
   // Aggregates across all matching sources (primary source + any other lot/PO with same product).
   // HARD BLOCK on non-Draft statuses (same as sourcing): can't promise to a client what we can't supply.
-  const availability = computeLineAvailability(order.items, allOrders, order.id);
+  // Batch 1 (G3): memoized — recompute only when the lines or other orders change,
+  // not on every keystroke in unrelated fields.
+  const availability = useMemo(() => computeLineAvailability(order.items, allOrders, order.id), [order.items, allOrders, order.id]);
   const overageCount = availability.filter(a => a.hasOverage).length;
   const availabilityBlock = overageCount > 0 && nonDraftStatuses.includes(order.status);
 
@@ -2415,7 +2214,7 @@ export default function SalesOrders({
       destinationLocationId: null,
       destinationText: "",
       currency: "PLN", fxRate: 1, fxLockedAt: null,
-      items: [{ id: nextId(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
+      items: [{ id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
       notes: "",
       linkedInvoices: [], linkedShipments: [],
     });
