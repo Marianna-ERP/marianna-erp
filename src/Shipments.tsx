@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { postShipmentToLots, derivePurpose, responsibilityForPOShipment, appendSourceGoods } from "./shipments.domain";
+import { postShipmentToLots, derivePurpose, responsibilityForPOShipment, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms } from "./shipments.domain";
 import { printHtmlNode } from "./documentService";
 import { SmallButton } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs } from "./costAllocation";
@@ -1354,7 +1354,12 @@ function syncCustomsCostLine(sh: any) {
 }
 
 function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [], onSave, onCancel }: any) {
-  const [draft, setDraft] = useState(() => withStandardDocs(JSON.parse(JSON.stringify(shipment))));
+  const [draft, setDraft] = useState(() => {
+    const d = withStandardDocs(JSON.parse(JSON.stringify(shipment)));
+    d.customs = normalizeCustoms(d.customs || d.customsClearance); // BP-27 string→object migration on open
+    return d;
+  });
+  const setCustoms = (patch: any) => setDraft((prev: any) => ({ ...prev, customs: { ...(prev.customs || {}), ...patch } }));
   const roadProviders = logisticsProviders(contacts, "Road");
   const seaProviders = logisticsProviders(contacts, "Sea");
   const customsProviders = logisticsProviders(contacts, "Customs");
@@ -2138,12 +2143,13 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
             ? <span style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
             : <SmallButton kind="blue" onClick={onEdit}>✎ Edit</SmallButton>}
           <SmallButton onClick={onPrint} kind="dark">Transport order</SmallButton>
-          <SmallButton onClick={() => onQuickStatus("Confirmed")}>Confirm</SmallButton>
-          <SmallButton onClick={() => onQuickStatus("Loaded")} kind="amber">Loaded</SmallButton>
-          <SmallButton onClick={() => onQuickStatus("Arrived")} kind="amber">Arrived</SmallButton>
-          <SmallButton onClick={() => onQuickStatus("Delivered")} kind="green">Delivered</SmallButton>
-          <SmallButton onClick={() => onQuickStatus("Closed")} kind="dark">Closed</SmallButton>
-          <SmallButton onClick={() => onQuickStatus("Cancelled")}>Cancel</SmallButton>
+          {/* BP-22: only the NEXT logical action, not every status at once. */}
+          {(() => {
+            const na = nextShipmentAction(shipment);
+            return na ? <SmallButton onClick={() => onQuickStatus(na.to)} kind={na.kind}>{na.label}</SmallButton> : null;
+          })()}
+          {!["Closed", "Cancelled"].includes(canonicalStatus(shipment.status)) &&
+            <SmallButton onClick={() => onQuickStatus("Cancelled")}>Cancel</SmallButton>}
         </div>
       </div>
     </Card>

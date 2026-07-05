@@ -368,6 +368,45 @@ T("posting a two-SO groupage delivery ships both lots against their own SOs", ()
   assert.equal(out[1].movements[0].soRef, "SO-2");
 });
 
+// ── Batch 3d: lifecycle next-action + customs migration ──
+const { nextShipmentAction, canonicalStatus, normalizeCustoms } = require("./build/shipments.domain.js");
+
+console.log("── lifecycle: single next action (BP-22) ──");
+T("legacy statuses map to canonical", () => {
+  assert.equal(canonicalStatus("Confirmed"), "Booked");
+  assert.equal(canonicalStatus("Arrived"), "Loaded");
+  assert.equal(canonicalStatus("In Transit"), "Loaded");
+});
+T("next action follows the chain", () => {
+  assert.equal(nextShipmentAction({ status:"Draft" }).to, "Booked");
+  assert.equal(nextShipmentAction({ status:"Booked" }).to, "Loaded");
+  assert.equal(nextShipmentAction({ status:"Loaded" }).to, "Delivered");
+  assert.equal(nextShipmentAction({ status:"Delivered" }).to, "Closed");
+  assert.equal(nextShipmentAction({ status:"Confirmed" }).to, "Loaded"); // legacy → Booked → next
+});
+T("closed / cancelled have no next action", () => {
+  assert.equal(nextShipmentAction({ status:"Closed" }), null);
+  assert.equal(nextShipmentAction({ status:"Cancelled" }), null);
+});
+
+console.log("── customs: string → object migration (BP-27) ──");
+T("legacy 'not required' string → applies:false, cleared", () => {
+  const c = normalizeCustoms("Not required - EU road");
+  assert.equal(c.applies, false); assert.equal(c.status, "cleared"); assert.equal(c.role, "not_required");
+});
+T("legacy broker string → applies:true, pending, place preserved", () => {
+  const c = normalizeCustoms("CustomsPro / Gdansk");
+  assert.equal(c.applies, true); assert.equal(c.status, "pending"); assert.equal(c.place, "CustomsPro / Gdansk");
+  assert.equal(c._migratedFrom, "CustomsPro / Gdansk");
+});
+T("already-structured customs passes through untouched", () => {
+  const obj = { applies:true, role:"our_broker", status:"cleared", place:"X" };
+  assert.strictEqual(normalizeCustoms(obj), obj);
+});
+T("T1 detected from legacy text", () => {
+  assert.equal(normalizeCustoms("T1 transit + local broker").t1Transit, true);
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

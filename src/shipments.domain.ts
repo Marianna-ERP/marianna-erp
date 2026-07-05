@@ -222,3 +222,46 @@ export function appendSourceGoods(sh: any, kind: "PO" | "SO", doc: any, lots: an
     lotRefs: uniq([...(sh.lotRefs || []), ...newGoods.map((g: any) => g.lotRef)]),
   };
 }
+
+// ── Shipment lifecycle (BP-22) ──────────────────────────────────────────────
+// Canonical simplified statuses. Legacy statuses map on read so old data and the
+// full-editor dropdown keep working during the transition.
+export const SHIPMENT_LIFECYCLE = ["Draft", "Booked", "Loaded", "Delivered", "Closed"];
+
+export function canonicalStatus(s: any): string {
+  const v = String(s || "").trim();
+  if (v === "Confirmed") return "Booked";
+  if (v === "Arrived" || v === "In Transit") return "Loaded";
+  if (v === "Planned") return "Draft";
+  return v || "Draft";
+}
+
+/** The single next logical action for a shipment (BP-22) — not all buttons at once. */
+export function nextShipmentAction(sh: any): { label: string; to: string; kind: string } | null {
+  const s = canonicalStatus(sh?.status);
+  if (s === "Cancelled" || s === "Closed") return null;
+  switch (s) {
+    case "Draft":     return { label: "Confirm booking", to: "Booked",    kind: "dark" };
+    case "Booked":    return { label: "Mark loaded",     to: "Loaded",    kind: "amber" };
+    case "Loaded":    return { label: "Mark delivered",  to: "Delivered", kind: "green" };
+    case "Delivered": return { label: "Close shipment",  to: "Closed",    kind: "dark" };
+    default:          return { label: "Confirm booking", to: "Booked",    kind: "dark" };
+  }
+}
+
+// ── Customs (BP-27): structured object with string→object migration ─────────
+export function normalizeCustoms(raw: any): any {
+  if (raw && typeof raw === "object") return raw;
+  const text = String(raw || "").trim();
+  const notReq = /not required|n\/a|none/i.test(text) || text === "";
+  return {
+    applies: !notReq,
+    role: notReq ? "not_required" : "",      // our_broker | forwarder_abroad | t1_local_broker | not_required
+    place: notReq ? "" : text,               // free text preserved from the legacy string
+    status: notReq ? "cleared" : "pending",  // pending | in_progress | cleared
+    t1Transit: /t1/i.test(text),
+    brokerId: null,
+    cost: null, currency: "PLN", fxRate: 1,
+    _migratedFrom: typeof raw === "string" ? raw : undefined,
+  };
+}
