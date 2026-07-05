@@ -11,7 +11,7 @@
 // window.confirm/alert (audit P2-6). Adoption is progressive: Inventory
 // converts in this batch as the pattern; every rebuilt screen adopts it.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback } from "react";
 
 export function Card({ children, style = {} }: any) {
   return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
