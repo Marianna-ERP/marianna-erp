@@ -15,6 +15,7 @@
     "../src/inventory.domain.ts",
     "../src/salesOrders.domain.ts",
     "../src/costAllocation.ts",
-    "../src/ledger.ts"
+    "../src/ledger.ts",
+    "../src/shipments.domain.ts"
   ]
 }

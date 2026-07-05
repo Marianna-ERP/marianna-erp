@@ -1,0 +1,100 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// ui.tsx — shared UI kit (Consolidation Batch 2, R2)
+//
+// Canonical versions of the primitives that were byte-identical across modules
+// (verified by diff before unification — no visual change). Modules whose local
+// variant had drifted visually keep it for now and converge during their own
+// screen-rebuild batch (Shipments→B3, PO/SO→B4, Finance/Invoices→B5); the
+// divergences are logged in the tracker.
+//
+// Also home of ConfirmDialog / useConfirm — the in-app replacement for
+// window.confirm/alert (audit P2-6). Adoption is progressive: Inventory
+// converts in this batch as the pattern; every rebuilt screen adopts it.
+// ─────────────────────────────────────────────────────────────────────────────
+import { useState, useRef, useCallback } from "react";
+
+export function Card({ children, style = {} }: any) {
+  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
+}
+
+export function Lbl({ children }: any) {
+  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
+}
+
+export function SectionTitle({ children, right = null }: any) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{children}</div>
+      {right}
+    </div>
+  );
+}
+
+export function SmallButton({ children, onClick, kind = "default", disabled = false, title = "" }: any) {
+  const dark = kind === "dark";
+  const green = kind === "green";
+  const amber = kind === "amber";
+  const red = kind === "red";
+  const blue = kind === "blue";
+  const bg = disabled ? "#F3F4F6" : dark ? "#111" : green ? "#16A34A" : amber ? "#D97706" : red ? "#DC2626" : "#fff";
+  const color = disabled ? "#AAA" : dark || green || amber || red ? "#fff" : blue ? "#2563EB" : "#444";
+  const border = dark || green || amber || red ? "none" : blue ? "1px solid #2563EB" : "1px solid #E5E7EB";
+  return <button disabled={disabled} title={title} onClick={onClick} style={{ padding: "7px 11px", borderRadius: 7, border, background: bg, color, fontSize: 12, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{children}</button>;
+}
+
+// ── In-app dialogs (P2-6) ────────────────────────────────────────────────────
+
+function DialogShell({ tone, title, message, buttons }: any) {
+  const accent = tone === "danger" ? "#DC2626" : tone === "warn" ? "#D97706" : "#2563EB";
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "#fff", borderRadius: 14, maxWidth: 460, width: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.25)", overflow: "hidden" }}>
+        <div style={{ padding: "16px 20px 4px", display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: accent, flexShrink: 0 }} />
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#111" }}>{title}</div>
+        </div>
+        <div style={{ padding: "8px 20px 16px", fontSize: 12.5, color: "#444", lineHeight: 1.55, whiteSpace: "pre-line" }}>{message}</div>
+        <div style={{ padding: "12px 20px", background: "#F8FAFC", display: "flex", justifyContent: "flex-end", gap: 8 }}>{buttons}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Promise-based in-app confirm/alert.
+ *   const { confirm, alert, dialogNode } = useConfirm();
+ *   if (!(await confirm({ title, message, confirmLabel, tone }))) return;
+ * Render {dialogNode} once at the module root.
+ */
+export function useConfirm() {
+  const [dlg, setDlg] = useState<any>(null);
+  const resolver = useRef<any>(null);
+
+  const close = useCallback((result: boolean) => {
+    setDlg(null);
+    if (resolver.current) { resolver.current(result); resolver.current = null; }
+  }, []);
+
+  const confirm = useCallback((opts: any) => new Promise<boolean>(res => {
+    resolver.current = res;
+    setDlg({ kind: "confirm", tone: opts.tone || "warn", title: opts.title || "Please confirm", message: opts.message || "", confirmLabel: opts.confirmLabel || "Confirm", cancelLabel: opts.cancelLabel || "Cancel" });
+  }), []);
+
+  const alert = useCallback((opts: any) => new Promise<boolean>(res => {
+    resolver.current = res;
+    setDlg({ kind: "alert", tone: opts.tone || "info", title: opts.title || "Notice", message: opts.message || "", confirmLabel: opts.okLabel || "OK" });
+  }), []);
+
+  const dialogNode = dlg ? (
+    <DialogShell tone={dlg.tone} title={dlg.title} message={dlg.message} buttons={
+      dlg.kind === "confirm" ? (<>
+        <SmallButton onClick={() => close(false)}>{dlg.cancelLabel}</SmallButton>
+        <SmallButton kind={dlg.tone === "danger" ? "red" : "dark"} onClick={() => close(true)}>{dlg.confirmLabel}</SmallButton>
+      </>) : (
+        <SmallButton kind="dark" onClick={() => close(true)}>{dlg.confirmLabel}</SmallButton>
+      )
+    } />
+  ) : null;
+
+  return { confirm, alert, dialogNode };
+}

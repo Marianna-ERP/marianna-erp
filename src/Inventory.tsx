@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from "react";
+import { fmtNum } from "./format";
+import { Card, Lbl, useConfirm } from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
@@ -646,12 +648,6 @@ function Sel({ value, onChange = () => {}, children, style = {} }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <select value={value || ""} onChange={onChange} style={{ ...base, ...style }}>{children}</select>;
 }
-function Lbl({ children }: any) {
-  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
-}
-function Card({ children, style = {} }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
-}
 function SectionTitle({ children }: any) {
   return <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 14 }}>{children}</div>;
 }
@@ -710,10 +706,6 @@ function VarianceBadge({ expected, actual }: any) {
   );
 }
 
-function fmtNum(n) {
-  if (n === undefined || n === null || isNaN(n)) return "—";
-  return Number(n).toLocaleString("pl-PL");
-}
 function parseNum(v, fallback = 0) {
   const n = parseFloat(v);
   return isNaN(n) ? fallback : n;
@@ -1734,6 +1726,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
 export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState(INIT_LOTS);
   const lots = extLots ?? localLots;
@@ -1871,8 +1864,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     setShowReturn(false);
   }
 
-  function deleteMovement(movId) {
-    if (!window.confirm("Delete this movement? Stock will be recalculated.")) return;
+  async function deleteMovement(movId) {
+    if (!(await uiConfirm({ tone: "danger", title: "Delete movement", message: "Stock will be recalculated.", confirmLabel: "Delete" }))) return;
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
@@ -1884,8 +1877,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   // kept in the lot's history (shown red, read-only) for the record, but excluded from
   // the stock recompute. System events (IN / SHIP_OUT / REVERSAL) can't be voided here —
   // they're driven by the PO / shipment / return and would desync the lot.
-  function voidMovement(movId) {
-    if (!window.confirm("Void this entry? It stays in the history (marked voided, in red) but no longer affects stock. This can't be undone.")) return;
+  async function voidMovement(movId) {
+    if (!(await uiConfirm({ tone: "danger", title: "Void this entry?", message: "It stays in the history (marked voided, in red) but no longer affects stock. This can't be undone.", confirmLabel: "Void" }))) return;
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
@@ -1933,7 +1926,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     setShowInspection(false);
   }
 
-  function deleteLot() {
+  async function deleteLot() {
     if (!selected) return;
     const lotNo = selected.number;
 
@@ -1961,16 +1954,14 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     if (hasPhysical) blockers.push("• This lot has received goods / recorded movements (real stock history).");
 
     if (blockers.length) {
-      window.alert(
-        `Lot ${lotNo} can't be deleted — it's still referenced:\n\n` +
-        `${blockers.join("\n")}\n\n` +
-        `Deleting it would leave dangling references that distort COGS and reports. ` +
-        `Cancel the dependent Sales Order(s)/Shipment(s) first, or void its movements, ` +
-        `then an empty, unreferenced lot can be removed.`
-      );
+      await uiAlert({
+        tone: "warn",
+        title: `Lot ${lotNo} can't be deleted`,
+        message: `It's still referenced:\n\n${blockers.join("\n")}\n\nDeleting it would leave dangling references that distort COGS and reports. Cancel the dependent Sales Order(s)/Shipment(s) first, or void its movements, then an empty, unreferenced lot can be removed.`,
+      });
       return;
     }
-    if (!window.confirm(`Delete lot ${lotNo}? This permanently removes it from inventory.`)) return;
+    if (!(await uiConfirm({ tone: "danger", title: `Delete lot ${lotNo}?`, message: "This permanently removes it from inventory.", confirmLabel: "Delete lot" }))) return;
 
     setLots(prev => prev.filter(l => l.id !== selected.id));
     setSelectedId(null);
@@ -2034,6 +2025,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   // ── list view ───────────────────────────────────────────────────────
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>
+      {dialogNode}
       {/* Top bar */}
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Inventory Lots</div>

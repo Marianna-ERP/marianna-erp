@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef } from "react";
+import { Lbl } from "./ui";
 import { nextId } from "./ids";
 import { locationsByLegacyType, contactAddresses, warehouseCpLocId, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
@@ -395,9 +396,6 @@ function Inp({ value, onChange, type, placeholder, style, inputMode }: any) {
 function Sel({ value, onChange, children, style }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <select value={value || ""} onChange={onChange} style={{ ...base, ...style }}>{children}</select>;
-}
-function Lbl({ children }: any) {
-  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
 }
 function TypeBadge({ type }: any) {
   const s = TYPE_COLORS[type] || TYPE_COLORS["Other"];

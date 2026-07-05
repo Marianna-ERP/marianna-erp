@@ -1,4 +1,7 @@
 import React, { useState, useMemo } from "react";
+import { buildCollectionShipment } from "./shipments.domain";
+import { localTodayISO as domainToday } from "./dates";
+import { Card, Lbl, SectionTitle } from "./ui";
 import { SO_STATUSES, SO_PRE_DISPATCH_STATUSES as RESERVING_SO_STATUSES } from "./types";
 import { normalizeProduct, productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { nextId } from "./ids";
@@ -91,6 +94,8 @@ function _adaptLotsFromInventory(invLots) {
     variety: l.variety || "",
     cnCode: l.cnCode || "",
     poRef: l.poRef || "",
+    status: l.status || "",
+    arrivalDate: l.arrivalDate || "",
     quality: l.quality,
     size: l.size,
     origin: l.origin,
@@ -449,20 +454,6 @@ function Sel({ value, onChange = () => {}, children, style = {}, disabled = fals
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <select value={value ?? ""} onChange={onChange} disabled={disabled} style={{ ...base, ...style }}>{children}</select>;
 }
-function Lbl({ children }: any) {
-  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
-}
-function Card({ children, style = {} }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
-}
-function SectionTitle({ children, right = null }: any) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{children}</div>
-      {right}
-    </div>
-  );
-}
 function StatusBadge({ status }: any) {
   const s = SO_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
   return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{status}</span>;
@@ -611,10 +602,13 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 110px 120px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#0369A1"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
-                  <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#0369A1" }}>{lot.number}</div>
+                  <div>
+                    <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#0369A1" }}>{lot.number}</div>
+                    {(lot as any).status && <span style={{ display: "inline-block", marginTop: 3, fontSize: 9.5, fontWeight: 700, padding: "1px 7px", borderRadius: 5, background: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }}>{(lot as any).status}</span>}
+                  </div>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}{(lot as any).variety ? " — " + (lot as any).variety : ""}</div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}{(lot as any).arrivalDate ? ` · arrived ${formatDMY((lot as any).arrivalDate)}` : ""}</div>
                     {live.reservations.length > 0 && (
                       <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}
@@ -622,7 +616,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                     )}
                   </div>
                   <div><QualityBadge quality={lot.quality} /></div>
-                  <div style={{ fontSize: 11, color: "#666" }}>{lot.warehouse}</div>
+                  <div style={{ fontSize: 11, color: "#666" }}>{lot.warehouse}{lot.poRef ? <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>from {lot.poRef}</div> : null}</div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#16A34A" }}>{fmtNum(live.liveAvailable)} kg</div>
                     <div style={{ fontSize: 10, color: "#888" }}>live available</div>
@@ -1803,7 +1797,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // P/L visibility rule:
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
@@ -1864,6 +1858,10 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
               </button>
             );
           })()}
+          {order.sellIncoterm === "EXW" && !["Cancelled", "Draft"].includes(order.status) && onRecordCollection && (
+            <button onClick={onRecordCollection} title="EXW: the client collects — records the pickup and creates a minimal collection shipment (no transport order, no freight on our side)."
+              style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0369A1", background: "#F0F9FF", color: "#0369A1", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🚚 Record client collection</button>
+          )}
           {order.status === "Cancelled"
             ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
             : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
@@ -2074,11 +2072,38 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ────────────────────────────────────────────
+
+function CollectionModal({ so, onClose, onSave }: any) {
+  const [date, setDate] = useState(localTodayISO());
+  const [truckPlate, setTruckPlate] = useState("");
+  const [driverName, setDriverName] = useState("");
+  const [notes, setNotes] = useState("");
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 8000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 440, maxWidth: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.25)", padding: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>Record client collection — {so.number}</div>
+        <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>EXW: the client collects the goods. This creates a minimal collection shipment (no transport order, no freight on our side) and, on Delivered, ships the sourced lots out of inventory.</div>
+        <Lbl>Collection date</Lbl>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <Lbl>Client truck plate (optional)</Lbl>
+        <input value={truckPlate} onChange={e => setTruckPlate(e.target.value)} placeholder="e.g. WZ 12345" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <Lbl>Driver (optional)</Lbl>
+        <input value={driverName} onChange={e => setDriverName(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <Lbl>Note (optional)</Lbl>
+        <input value={notes} onChange={e => setNotes(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 14, fontFamily: "inherit" }} />
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+          <button onClick={() => onSave({ date, truckPlate, driverName, notes })} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Create collection record</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SalesOrders({
   orders: extOrders, setOrders: extSetOrders,
-  invLots: extInvLots, setLots: extSetLots, allPOs: extPOs,
+  invLots: extInvLots, setLots: extSetLots, allPOs: extPOs, shipments: extShipments = [], setShipments: extSetShipments = null,
   contacts: extContacts,
-  shipments: extShipments = [],
   operationalCosts: extOperationalCosts = [],
   userRole = "General Manager",
   userName = "",
@@ -2364,6 +2389,18 @@ export default function SalesOrders({
     setSelected(o);
     setView("detail");
   }
+  // Batch 3b (decision 2): EXW client collection — one click creates the minimal
+  // collection shipment (purpose OUTBOUND, responsibility Client, no legs/TO/freight).
+  const [collectionFor, setCollectionFor] = useState<any>(null);
+  function recordCollection(info) {
+    if (!extSetShipments) { window.alert("Shipments store not available."); return; }
+    const built = buildCollectionShipment(collectionFor, extInvLots || [], extShipments, info, { todayISO: domainToday, nextId });
+    if (!built.goods.length) { window.alert("No sourced lines found — source the SO lines from stock or a PO first, then record the collection."); return; }
+    extSetShipments(prev => [built, ...(prev || [])]);
+    setOrders(prev => prev.map(o => o.id === collectionFor.id ? { ...o, linkedShipments: Array.from(new Set([...(o.linkedShipments || []), built.number])) } : o));
+    setCollectionFor(null);
+  }
+
   function deleteOrder() {
     if (!window.confirm(`Cancel SO ${selected.number}? Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.`)) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
@@ -2472,6 +2509,7 @@ export default function SalesOrders({
           }}
           onIssueInvoice={() => setInvoiceOrder(selected)}
           onDelete={deleteOrder}
+          onRecordCollection={() => setCollectionFor(selected)}
         />
       </>
     );
@@ -2576,6 +2614,10 @@ export default function SalesOrders({
           {filtered.length} of {orders.length} sales orders · Click any row to open
         </div>
       </div>
+      {collectionFor && (
+        <CollectionModal so={collectionFor} onClose={() => setCollectionFor(null)} onSave={recordCollection} />
+      )}
+
     </div>
   );
 }

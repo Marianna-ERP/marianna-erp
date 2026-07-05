@@ -1,4 +1,5 @@
 import React, { useState, useRef, useMemo } from "react";
+import { Card, Lbl, SectionTitle } from "./ui";
 import { nextId, nextIds } from "./ids";
 import { FX_RATES, defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
@@ -409,20 +410,6 @@ function Inp({ value, onChange = () => {}, type = "text", placeholder = "", styl
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <select value={value || ""} onChange={onChange} disabled={disabled} style={{ ...base, ...style }}>{children}</select>;
-}
-function Lbl({ children }: any) {
-  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
-}
-function Card({ children, style = {} }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
-}
-function SectionTitle({ children, right = null }: any) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{children}</div>
-      {right}
-    </div>
-  );
 }
 function StatusBadge({ status }: any) {
   const s = PO_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };

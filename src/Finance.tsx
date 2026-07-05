@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { computeSOMargin } from "./marginCalculations";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { MarginMode } from "./marginCalculations";
@@ -981,6 +982,8 @@ export default function Finance({
               <SectionTitle>OVERALL · ALL ACTIVE SALES ORDERS</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 14 }}>
                 <StatBlock label="REVENUE" value={fmtPLN(totalAgg.totalRevenuePLN)} sub={`${totalAgg.orderCount} order${totalAgg.orderCount === 1 ? "" : "s"}`} />
+                {/* v6.20.2 note (Batch 3 pending): direct transport costs are being reworked under
+                    the cost-ownership model. */}
                 <StatBlock label="COGS" value={fmtPLN(totalAgg.totalCOGSPLN)} valueColor="#7C3AED" sub="product / landed cost" />
                 <StatBlock label="DIRECT COSTS" value={fmtPLN(totalAgg.totalDirectPLN)} valueColor="#F59E0B" sub="shipments / logistics" />
                 <StatBlock label="CONTRIBUTION" value={fmtPLN(totalAgg.totalContributionPLN)} valueColor={totalAgg.totalContributionPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgContributionPct)} />
@@ -1014,6 +1017,39 @@ export default function Finance({
                 {byProduct.length === 0 ? <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No data yet.</div> : byProduct.map(g => <BarRow key={g.key} label={g.key} value={g.agg.totalNetMarginPLN} maxValue={maxProductNet} marginPct={g.agg.avgNetMarginPct} sub={`${g.agg.orderCount} SO · ${fmtPLNcompact(g.agg.totalRevenuePLN)} revenue · overhead ${fmtPLNcompact(g.agg.totalOverheadPLN)}`} />)}
               </Card>
             </div>
+
+            <Card style={{ marginBottom: 18 }}>
+              <SectionTitle>P/L BY SALES ORDER</SectionTitle>
+              <div style={{ fontSize: 10.5, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "7px 10px", marginTop: 10 }}>
+                ⚠ Direct transport costs are being reworked (cost ownership — rebuild Batch 3). Until then: an SO linked to a shipment only through its goods rows may <b>under-state</b> freight, and freight already allocated into a lot's landed cost may be <b>counted twice</b> when the shipment is also linked to the SO.
+              </div>
+              {(() => {
+                const rows = (orders || [])
+                  .filter(committedFilter)
+                  .map((o: any) => ({ o, m: computeSOMargin(o, lots, pos, shipments, mode) }))
+                  .sort((a: any, b: any) => (b.m.marginPLN || 0) - (a.m.marginPLN || 0));
+                if (!rows.length) return <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No committed sales orders yet.</div>;
+                return (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 110px 110px 120px 70px", gap: 8, padding: "6px 8px", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase" }}>
+                      <div>SO</div><div>Client</div><div>Status</div><div style={{ textAlign: "right" }}>Revenue</div><div style={{ textAlign: "right" }}>COGS</div><div style={{ textAlign: "right" }}>Direct</div><div style={{ textAlign: "right" }}>Net margin</div><div style={{ textAlign: "right" }}>%</div>
+                    </div>
+                    {rows.map(({ o, m }: any) => (
+                      <div key={o.id} style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 110px 110px 120px 70px", gap: 8, padding: "8px 8px", fontSize: 12, borderTop: "1px solid #F1F5F9", alignItems: "center" }}>
+                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#0369A1" }}>{o.number}</div>
+                        <div style={{ color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.client?.name || "—"}</div>
+                        <div style={{ fontSize: 11, color: "#64748B" }}>{o.status}</div>
+                        <div style={{ textAlign: "right" }}>{fmtPLNcompact(m.revenuePLN)}</div>
+                        <div style={{ textAlign: "right", color: "#64748B" }}>{fmtPLNcompact(m.cogsPLN)}</div>
+                        <div style={{ textAlign: "right", color: "#64748B" }}>{fmtPLNcompact(m.directCostsPLN)}</div>
+                        <div style={{ textAlign: "right", fontWeight: 700, color: (m.marginPLN || 0) >= 0 ? "#16A34A" : "#DC2626" }}>{fmtPLNcompact(m.marginPLN)}</div>
+                        <div style={{ textAlign: "right", color: "#94A3B8" }}>{m.marginPct}%</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </Card>
 
             <Card>
               <SectionTitle>MONTHLY NET P/L — LAST 6 MONTHS</SectionTitle>

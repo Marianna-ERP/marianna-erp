@@ -1,4 +1,6 @@
 import React, { useMemo } from "react";
+import { fmtNum } from "./format";
+import { Card } from "./ui";
 import { SO_PRE_DISPATCH_STATUSES as PRE_DISPATCH_STATUSES } from "./types";
 import { aggregateNetMargins } from "./operationalCosts";
 import { localTodayISO, localMonthISO } from "./dates";
@@ -13,18 +15,11 @@ import { localTodayISO, localMonthISO } from "./dates";
 
 // PRE_DISPATCH set imported from ./types (Batch 0).
 
-function fmtNum(n) {
-  if (n === undefined || n === null || isNaN(n)) return "—";
-  return Number(n).toLocaleString("pl-PL");
-}
 function fmtMoney(n, cur = "PLN") {
   if (n === undefined || n === null || isNaN(n)) return "—";
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ${cur}`;
 }
 
-function Card({ children, style = {} }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
-}
 
 function MiniBar({ items }: any) {
   const total = items.reduce((s, it) => s + (it.val || 0), 0);

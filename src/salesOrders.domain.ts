@@ -160,12 +160,17 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
     return Math.max(0, line.available - (committedFromPO[k] || 0));
   }
 
-  // v6.18.24: a PO already received into a lot must not also count as incoming supply.
-  const receivedPOProduct = new Set(
-    LOTS
-      .filter((l: any) => l.poRef && ((l.physicalKg ?? 0) > 0 || (l.receivedKg ?? 0) > 0))
-      .map((l: any) => `${l.poRef}::${normalizeProduct(l.product)}`)
-  );
+  // Decision 1 (Batch 3a, precise partial receipt): kg already received into lots
+  // is subtracted from that PO line's incoming supply — the received part counts
+  // via the lot, the genuine remainder still counts as incoming. A fully received
+  // PO therefore contributes 0 (same as the old v6.18.24 exclusion); a PO arriving
+  // across multiple trucks contributes exactly what is still on the way.
+  const receivedKgByPOProduct: Record<string, number> = {};
+  LOTS.forEach((l: any) => {
+    if (!l.poRef) return;
+    const k = `${l.poRef}::${normalizeProduct(l.product)}`;
+    receivedKgByPOProduct[k] = (receivedKgByPOProduct[k] || 0) + Math.max(0, (l.receivedKg ?? 0));
+  });
 
   return (soItems || []).map((it: any) => {
     const lineQty = parseFloat(it.qty) || 0;
@@ -200,8 +205,8 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
       (po.items || []).forEach((line: any) => {
         if (normalizeProduct(line.product) !== product) return;
         if (it.sourceType === "PO" && it.sourceRef === po.number && (it.sourceLineId ?? 1) === line.id) return;
-        if (receivedPOProduct.has(`${po.number}::${normalizeProduct(line.product)}`)) return;
-        otherPOKg += poLineRemaining(po.number, line.id);
+        const received = receivedKgByPOProduct[`${po.number}::${normalizeProduct(line.product)}`] || 0;
+        otherPOKg += Math.max(0, poLineRemaining(po.number, line.id) - received);
       });
     });
 

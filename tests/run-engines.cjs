@@ -203,6 +203,171 @@ T("PIN current behaviour: financeNotes do NOT change totals yet (flips in Batch 
   assert.equal(base.receivableOpenPLN, withNote.receivableOpenPLN);
 });
 
+// ── Batch 3a: shipment posting engine + decisions 1 & 2 ──
+const { postShipmentToLots, derivePurpose, responsibilityForPOShipment } = require("./build/shipments.domain.js");
+let _id = 5000; const deps = { todayISO: () => "2026-07-05", nextId: () => ++_id };
+
+console.log("── shipments.domain: purpose + posting ──");
+T("derivePurpose: legacy mapping preserved", () => {
+  assert.equal(derivePurpose({ purpose:"SO_DELIVERY" }), "OUTBOUND");
+  assert.equal(derivePurpose({ purpose:"PO_IMPORT" }), "INBOUND");
+  assert.equal(derivePurpose({ soRefs:["SO-1"] }), "OUTBOUND");
+  assert.equal(derivePurpose({ purpose:"OUTBOUND" }), "OUTBOUND");
+});
+const inbound = { number:"SHP-10", purpose:"INBOUND", goods:[{lotRef:"LOT-X",qtyKg:1000}], destinationLocationId:1 };
+const lotX = { number:"LOT-X", product:"Peppers", physicalKg:0, receivedKg:0, movements:[], locationId:9 };
+T("INBOUND receipt: IN movement, received+physical, In Stock", () => {
+  const { lots } = postShipmentToLots(inbound, [lotX], deps);
+  const l = lots[0];
+  assert.equal(l.physicalKg, 1000); assert.equal(l.receivedKg, 1000); assert.equal(l.status, "In Stock");
+  assert.equal(l.movements.length, 1); assert.equal(l.movements[0].type, "IN");
+});
+T("OUTBOUND: SHIP_OUT with goods-level soRef", () => {
+  const out = { number:"SHP-11", purpose:"OUTBOUND", soRefs:["SO-9"], goods:[{lotRef:"LOT-X",qtyKg:400,soRef:"SO-9"}] };
+  const stocked = { ...lotX, physicalKg:1000, receivedKg:1000 };
+  const { lots } = postShipmentToLots(out, [stocked], deps);
+  assert.equal(lots[0].physicalKg, 600);
+  assert.equal(lots[0].movements[0].type, "SHIP_OUT");
+  assert.equal(lots[0].movements[0].soRef, "SO-9");
+});
+T("direct lot: PASS-THROUGH PAIR — received counted, physical net 0 (decision 2)", () => {
+  const direct = { ...lotX, directFlow: true };
+  const sh = { number:"SHP-12", purpose:"INBOUND", soRefs:["SO-7"], goods:[{lotRef:"LOT-X",qtyKg:1000,soRef:"SO-7"}], destinationLocationId:2 };
+  const { lots } = postShipmentToLots(sh, [direct], deps);
+  const l = lots[0];
+  assert.equal(l.receivedKg, 1000);
+  assert.equal(l.physicalKg, 0);
+  assert.equal(l.movements.length, 2);
+  assert.equal(l.movements[0].type, "IN");
+  assert.equal(l.movements[1].type, "SHIP_OUT");
+  assert.equal(l.movements[1].soRef, "SO-7");
+  assert.equal(l.status, "Delivered (direct)");
+});
+T("idempotent: second apply is a no-op", () => {
+  const once = postShipmentToLots(inbound, [lotX], deps).lots;
+  const twice = postShipmentToLots(inbound, once, deps).lots;
+  assert.equal(twice[0].movements.length, 1);
+  assert.strictEqual(twice[0], once[0]);
+});
+T("TRANSFER purpose moves stock without changing quantities", () => {
+  const stocked = { ...lotX, physicalKg:1000, receivedKg:1000, locationId:1 };
+  const sh = { number:"SHP-13", purpose:"TRANSFER", goods:[{lotRef:"LOT-X",qtyKg:1000}], destinationLocationId:3 };
+  const { lots } = postShipmentToLots(sh, [stocked], deps);
+  assert.equal(lots[0].physicalKg, 1000); assert.equal(lots[0].locationId, 3);
+  assert.equal(lots[0].movements[0].type, "TRANSFER");
+});
+T("responsibilityForPOShipment: DAP/DDP → Supplier (kills the hardcoded Marianna)", () => {
+  assert.equal(responsibilityForPOShipment({ buyIncoterm:"DDP" }, false), "Supplier");
+  assert.equal(responsibilityForPOShipment({ buyIncoterm:"DAP" }, false), "Supplier");
+  assert.equal(responsibilityForPOShipment({ buyIncoterm:"EXW" }, false), "Marianna");
+  assert.equal(responsibilityForPOShipment({ buyIncoterm:"EXW" }, true), "Supplier");
+});
+
+console.log("── decision 1: precise partial receipt ──");
+T("partially received PO: only the remainder counts as incoming", () => {
+  const partLot = { number:"LOT-P", product:"Peppers", availableKg:8000, poRef:"PO-9", physicalKg:8000, receivedKg:8000 };
+  const po9 = { number:"PO-9", status:"Confirmed", items:[{id:1,product:"Peppers",available:14300}] };
+  const items = [{ id:1, product:"Peppers", qty:10000, sourceType:"STOCK", sourceRef:"LOT-P" }];
+  const [a] = computeLineAvailability(items, [], 1, [partLot], [po9]);
+  assert.equal(a.primaryAvailable, 8000);
+  assert.equal(a.otherPOKg, 6300);           // 14300 − 8000 still on the way
+  assert.equal(a.combinedAvailable, 14300);  // no double-count, no under-count
+});
+T("fully received PO still contributes 0 (T-22 preserved)", () => {
+  const fullLot = { number:"LOT-F", product:"Peppers", availableKg:4300, poRef:"PO-8", physicalKg:4300, receivedKg:14300 };
+  const po8 = { number:"PO-8", status:"Confirmed", items:[{id:1,product:"Peppers",available:14300}] };
+  const items = [{ id:1, product:"Peppers", qty:10000, sourceType:"STOCK", sourceRef:"LOT-F" }];
+  const [a] = computeLineAvailability(items, [], 1, [fullLot], [po8]);
+  assert.equal(a.otherPOKg, 0);
+  assert.equal(a.combinedAvailable, 4300);
+});
+
+// ── Batch 3b: EXW collection builder + OUTBOUND pass-through ──
+const { buildCollectionShipment, nextShipmentNumberPure } = require("./build/shipments.domain.js");
+
+console.log("── EXW collection (decision 2, Batch 3b) ──");
+const exwSO = { id: 5, number: "SO-2026-0009", client: { name: "Fresh Client GmbH" },
+  items: [{ id: 1, product: "Peppers", variety: "Red California", qty: 5000, packaging: "5 kg carton", sourceType: "STOCK", sourceRef: "LOT-W" }] };
+const whLot = { number: "LOT-W", product: "Peppers", poRef: "PO-4", locationId: 1, physicalKg: 8000, receivedKg: 8000, movements: [] };
+
+T("buildCollectionShipment: minimal record — OUTBOUND, Client responsibility, no legs/costs", () => {
+  const sh = buildCollectionShipment(exwSO, [whLot], [], { date: "2026-07-05", truckPlate: "WZ 123", driverName: "Jan" }, deps);
+  assert.equal(sh.purpose, "OUTBOUND");
+  assert.equal(sh.costResponsibility, "Client");
+  assert.equal(sh.legs.length, 0);
+  assert.equal(sh.costs.length, 0);
+  assert.equal(sh.goods.length, 1);
+  assert.equal(sh.goods[0].lotRef, "LOT-W");
+  assert.equal(sh.goods[0].soRef, "SO-2026-0009");
+  assert.equal(sh.originLocationId, 1);   // origin = where the lot sits
+  assert.equal(sh.collection.truckPlate, "WZ 123");
+});
+T("collection numbering follows the SHP-YYYY-NNNN sequence", () => {
+  const n = nextShipmentNumberPure([{ number: "SHP-2026-0007" }, { number: "SHP-2025-0099" }], 2026);
+  assert.equal(n, "SHP-2026-0008");
+});
+T("collecting a DIRECT lot at the producer posts the pass-through pair (OUTBOUND)", () => {
+  const producerLot = { number: "LOT-D", product: "Peppers", poRef: "PO-6", locationId: 44, directFlow: true, physicalKg: 0, receivedKg: 0, movements: [] };
+  const dirSO = { id: 6, number: "SO-2026-0010", client: { name: "X" }, items: [{ id: 1, product: "Peppers", qty: 3000, sourceType: "PO", sourceRef: "PO-6" }] };
+  const sh = buildCollectionShipment(dirSO, [producerLot], [], { date: "2026-07-05" }, deps);
+  assert.equal(sh.goods[0].lotRef, "LOT-D");
+  const { lots } = postShipmentToLots(sh, [producerLot], deps);
+  const l = lots[0];
+  assert.equal(l.receivedKg, 3000);          // ownership counted at handover
+  assert.equal(l.physicalKg, 0);             // never our warehouse stock
+  assert.equal(l.movements.length, 2);
+  assert.equal(l.movements[0].type, "IN");
+  assert.equal(l.movements[1].type, "SHIP_OUT");
+  assert.equal(l.movements[1].soRef, "SO-2026-0010");
+});
+T("collection of stocked lot ships out normally on apply", () => {
+  const sh = buildCollectionShipment(exwSO, [whLot], [], { date: "2026-07-05" }, deps);
+  const { lots } = postShipmentToLots(sh, [whLot], deps);
+  assert.equal(lots[0].physicalKg, 3000);   // 8000 − 5000
+  assert.equal(lots[0].movements[0].type, "SHIP_OUT");
+});
+
+// ── Batch 3c: multi-source groupage (BP-53) ──
+const { appendSourceGoods } = require("./build/shipments.domain.js");
+
+console.log("── groupage: appendSourceGoods ──");
+T("appending a second PO merges goods + refs and resolves lots", () => {
+  const sh = { number:"SHP-20", purpose:"INBOUND", poRefs:["PO-1"], soRefs:[], lotRefs:["LOT-1"],
+    goods:[{ id:1, poRef:"PO-1", soRef:"", lotRef:"LOT-1", product:"Peppers", qtyKg:8000 }] };
+  const po2 = { number:"PO-2", status:"Confirmed", items:[{ id:1, product:"Apples", variety:"Gala", qty:5000, pallets:10 }] };
+  const lots = [{ number:"LOT-2", poRef:"PO-2", product:"Apples", locationId:3 }];
+  const out = appendSourceGoods(sh, "PO", po2, lots, deps);
+  assert.equal(out.goods.length, 2);
+  assert.equal(out.goods[1].poRef, "PO-2");
+  assert.equal(out.goods[1].lotRef, "LOT-2");
+  assert.deepEqual(out.poRefs, ["PO-1","PO-2"]);
+  assert.deepEqual(out.lotRefs, ["LOT-1","LOT-2"]);
+});
+T("appending an SO carries the soRef per goods line (sales groupage)", () => {
+  const sh = { number:"SHP-21", purpose:"OUTBOUND", poRefs:[], soRefs:["SO-1"], lotRefs:["LOT-1"],
+    goods:[{ id:1, poRef:"", soRef:"SO-1", lotRef:"LOT-1", product:"Peppers", qtyKg:4000 }] };
+  const so2 = { number:"SO-2", status:"Confirmed", items:[{ id:1, product:"Peppers", qty:3000, sourceType:"STOCK", sourceRef:"LOT-9" }] };
+  const lots = [{ number:"LOT-9", product:"Peppers", locationId:1 }];
+  const out = appendSourceGoods(sh, "SO", so2, lots, deps);
+  assert.equal(out.goods.length, 2);
+  assert.equal(out.goods[1].soRef, "SO-2");
+  assert.equal(out.goods[1].lotRef, "LOT-9");
+  assert.deepEqual(out.soRefs, ["SO-1","SO-2"]);
+});
+T("posting a two-SO groupage delivery ships both lots against their own SOs", () => {
+  const lots = [
+    { number:"LOT-1", product:"Peppers", physicalKg:5000, receivedKg:5000, movements:[], locationId:1 },
+    { number:"LOT-9", product:"Peppers", physicalKg:4000, receivedKg:4000, movements:[], locationId:1 },
+  ];
+  const sh = { number:"SHP-22", purpose:"OUTBOUND", soRefs:["SO-1","SO-2"],
+    goods:[{ lotRef:"LOT-1", qtyKg:4000, soRef:"SO-1" }, { lotRef:"LOT-9", qtyKg:3000, soRef:"SO-2" }] };
+  const { lots: out } = postShipmentToLots(sh, lots, deps);
+  assert.equal(out[0].physicalKg, 1000);
+  assert.equal(out[0].movements[0].soRef, "SO-1");
+  assert.equal(out[1].physicalKg, 1000);
+  assert.equal(out[1].movements[0].soRef, "SO-2");
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
