@@ -693,7 +693,20 @@ function logisticsProviders(contacts = [], service = "") {
 function providerById(id, contacts = []) {
   if (!id && id !== 0) return null;
   if (String(id) === TBD_CARRIER_ID) return { id: TBD_CARRIER_ID, name: "TBD carrier — to be assigned", type: "Carrier", address: "", nip: "", isTBD: true };
-  return logisticsProviders(contacts).find(p => String(p.id) === String(id)) || FALLBACK_PROVIDERS.find(p => String(p.id) === String(id)) || null;
+  const live = logisticsProviders(contacts);
+  const fromContacts = live.find(p => String(p.id) === String(id));
+  if (fromContacts) return fromContacts;
+  // Legacy fallback record (seed scaffolding). Real data lives in Contacts, so if a
+  // same-named counterparty exists there, prefer it — this is what lets a user FIX a
+  // missing carrier email in Contacts and have the transport order pick it up
+  // (previously a fallback id with email:"" could never be corrected).
+  const fb = FALLBACK_PROVIDERS.find(p => String(p.id) === String(id));
+  if (fb) {
+    const liveMatch = live.find(p => (p.name || "").trim().toLowerCase() === (fb.name || "").trim().toLowerCase());
+    if (liveMatch) return liveMatch;
+    return fb;
+  }
+  return null;
 }
 
 function providerName(id, contacts = []) {
@@ -1497,14 +1510,20 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             <span style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}>SOURCES:</span>
             {[...(draft.poRefs || []), ...(draft.soRefs || [])].map((r: any) => <span key={r} style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: "#F1F5F9", color: "#334155" }}>{r}</span>)}
             <span style={{ fontSize: 10.5, color: "#94A3B8" }}>· {(draft.goods || []).length} goods row(s), {(draft.goods || []).reduce((t: number, g: any) => t + (parseFloat(g.qtyKg) || 0), 0).toLocaleString("pl-PL")} kg</span>
-            <Sel value="" onChange={e => { const po = pos.find((p: any) => p.number === e.target.value); if (po) setDraft(prev => appendSourceGoods(prev, "PO", po, lots, { todayISO: localTodayISO, nextId })); }} style={{ fontSize: 10.5, padding: "3px 6px", maxWidth: 170 }}>
-              <option value="">+ add goods from PO…</option>
-              {pos.filter((p: any) => !["Draft", "Cancelled"].includes(p.status) && !(draft.poRefs || []).includes(p.number)).map((p: any) => <option key={p.number} value={p.number}>{p.number}</option>)}
-            </Sel>
-            <Sel value="" onChange={e => { const so = orders.find((o: any) => o.number === e.target.value); if (so) setDraft(prev => appendSourceGoods(prev, "SO", so, lots, { todayISO: localTodayISO, nextId })); }} style={{ fontSize: 10.5, padding: "3px 6px", maxWidth: 170 }}>
-              <option value="">+ add goods from SO…</option>
-              {orders.filter((o: any) => !["Draft", "Cancelled"].includes(o.status) && !(draft.soRefs || []).includes(o.number)).map((o: any) => <option key={o.number} value={o.number}>{o.number}</option>)}
-            </Sel>
+          </div>
+          {/* Groupage add-source bar (BP-53) — one prominent line so linking more cargo is easy. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 9, padding: "8px 10px" }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: "#1D4ED8" }}>➕ Add more cargo (groupage):</span>
+            <select value="" onChange={e => { const po = pos.find((p: any) => p.number === e.target.value); if (po) setDraft(prev => appendSourceGoods(prev, "PO", po, lots, { todayISO: localTodayISO, nextId })); e.target.value = ""; }}
+              style={{ fontSize: 12, fontWeight: 700, padding: "7px 10px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#1D4ED8", cursor: "pointer", minWidth: 190 }}>
+              <option value="">＋ Link another PO…</option>
+              {pos.filter((p: any) => !["Draft", "Cancelled"].includes(p.status) && !(draft.poRefs || []).includes(p.number)).map((p: any) => <option key={p.number} value={p.number}>{p.number} — {p.supplier?.name || ""}</option>)}
+            </select>
+            <select value="" onChange={e => { const so = orders.find((o: any) => o.number === e.target.value); if (so) setDraft(prev => appendSourceGoods(prev, "SO", so, lots, { todayISO: localTodayISO, nextId })); e.target.value = ""; }}
+              style={{ fontSize: 12, fontWeight: 700, padding: "7px 10px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#1D4ED8", cursor: "pointer", minWidth: 190 }}>
+              <option value="">＋ Link another SO…</option>
+              {orders.filter((o: any) => !["Draft", "Cancelled"].includes(o.status) && !(draft.soRefs || []).includes(o.number)).map((o: any) => <option key={o.number} value={o.number}>{o.number} — {o.client?.name || ""}</option>)}
+            </select>
           </div>
         </div>
         <button onClick={onCancel} style={{ border: "none", background: "transparent", fontSize: 22, color: "#888", cursor: "pointer" }}>x</button>
@@ -2110,7 +2129,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
       </div>
       <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
         <div style={{ padding: "10px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12, color: "#92400E" }}>Until the backend email service is built, this follows the same two-step workflow as PO/SO email: save the document as PDF, then open your mail client.</div>
-        <div><Lbl>Provider</Lbl><Sel value={providerId} onChange={e => setProviderId(e.target.value)}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel></div><div><Lbl>TO</Lbl><Inp value={recipient || "(carrier / forwarder email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
+        <div><Lbl>Provider</Lbl><Sel value={providerId} onChange={e => setProviderId(e.target.value)}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel></div><div><Lbl>TO</Lbl><Inp value={recipient || "(no email — set it on this carrier in Contacts, or reselect the carrier above)"} disabled style={{ background: "#F9FAFB", color: recipient ? "#111" : "#B45309" }} /></div>
         <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
         <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
         <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} legIds={providerLegList.map((l: any) => String(l.id))} orders={orders} customTerms={shipment.customOrderTerms || ""} /></div></div>
