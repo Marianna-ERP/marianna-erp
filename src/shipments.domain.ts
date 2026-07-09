@@ -214,11 +214,19 @@ export function appendSourceGoods(sh: any, kind: "PO" | "SO", doc: any, lots: an
     };
   });
   const uniq = (a: any[]) => Array.from(new Set(a.filter(Boolean)));
+  const poRefs = uniq([...(sh.poRefs || []), ...newGoods.map((g: any) => g.poRef)]);
+  const soRefs = uniq([...(sh.soRefs || []), ...newGoods.map((g: any) => g.soRef)]);
+  // FB-7: rebuild the notes summary from ALL linked refs, not just the first PO.
+  const refList = [...poRefs, ...soRefs].join(", ");
+  const baseNote = String(sh.notes || "").replace(/\s*\(groupage:[^)]*\)\s*$/i, "").trim();
+  const notes = poRefs.length + soRefs.length > 1
+    ? `${baseNote}${baseNote ? " " : ""}(groupage: ${refList})`
+    : sh.notes;
   return {
     ...sh,
+    notes,
     goods: [...(sh.goods || []), ...newGoods],
-    poRefs: uniq([...(sh.poRefs || []), ...newGoods.map((g: any) => g.poRef)]),
-    soRefs: uniq([...(sh.soRefs || []), ...newGoods.map((g: any) => g.soRef)]),
+    poRefs, soRefs,
     lotRefs: uniq([...(sh.lotRefs || []), ...newGoods.map((g: any) => g.lotRef)]),
   };
 }

@@ -504,6 +504,34 @@ T("unknown flow degrades without throwing", () => {
   assert.equal(reconcilePOFlow({ flow:"NONSENSE" }).flow, "NONSENSE");
 });
 
+// ── Test round 2 fixes: FB-7 groupage notes + BP-56 handover wording ──
+const { handoverTextForIncoterm, handoverPointForIncoterm } = require("./build/tradeFlow.domain.js");
+
+console.log("── FB-7: groupage notes name all sources ──");
+T("appending a 2nd PO puts BOTH refs in the notes", () => {
+  const sh = { number:"SHP-30", notes:"Pre-carriage for PO-1", poRefs:["PO-1"], soRefs:[], lotRefs:["LOT-1"], goods:[{ poRef:"PO-1", lotRef:"LOT-1", product:"X", qtyKg:1000 }] };
+  const po2 = { number:"PO-2", status:"Confirmed", items:[{ id:1, product:"Y", qty:2000 }] };
+  const out = appendSourceGoods(sh, "PO", po2, [{ number:"LOT-2", poRef:"PO-2", product:"Y" }], deps);
+  assert.ok(out.notes.includes("PO-1") && out.notes.includes("PO-2"), "both refs in notes: " + out.notes);
+  assert.deepEqual(out.poRefs, ["PO-1","PO-2"]);
+});
+
+console.log("── BP-56: handover derived from incoterm ──");
+T("CIF handover text mentions port of discharge", () => {
+  assert.match(handoverTextForIncoterm("CIF","IMPORT"), /discharge/i);
+});
+T("EXW handover text mentions collect at origin", () => {
+  assert.match(handoverTextForIncoterm("EXW","IMPORT"), /origin|collect/i);
+});
+T("handover POINT derived per incoterm", () => {
+  assert.equal(handoverPointForIncoterm("CIF"), "dest_port");
+  assert.equal(handoverPointForIncoterm("EXW"), "supplier");
+  assert.equal(handoverPointForIncoterm("DDP"), "our_wh");
+});
+T("empty incoterm → prompt text, no throw", () => {
+  assert.match(handoverTextForIncoterm("",""), /select/i);
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

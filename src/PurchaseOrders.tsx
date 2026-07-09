@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo } from "react";
-import { structToFlow, flowToStruct, reconcilePOFlow, TRADE_MOVEMENTS, HANDOVER_POINTS, CARGO_PLANS, isDirectCargoPlan } from "./tradeFlow.domain";
+import { structToFlow, flowToStruct, reconcilePOFlow, TRADE_MOVEMENTS, HANDOVER_POINTS, CARGO_PLANS, isDirectCargoPlan, handoverTextForIncoterm, handoverPointForIncoterm } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle } from "./ui";
 import { nextId, nextIds } from "./ids";
 import { FX_RATES, defaultFxRate } from "./fx";
@@ -1157,21 +1157,28 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     </Sel>
                   </div>
                   <div>
-                    <Lbl>Purchase handover point</Lbl>
-                    <Sel disabled={isLocked} value={order.handoverPoint || (order.flow ? (flowToStruct(order.flow)?.handoverPoint || "") : "")} onChange={e => {
-                      setOrder(o => { const next = { ...o, handoverPoint: e.target.value }; return { ...next, flow: structToFlow(next) || o.flow }; });
-                    }}>
-                      <option value="">— select —</option>
-                      {HANDOVER_POINTS.map(h => <option key={h.code} value={h.code}>{h.label}</option>)}
-                    </Sel>
+                    <Lbl>Handover point <span style={{ color: "#BBB", fontWeight: 400 }}>· from incoterm</span></Lbl>
+                    {/* BP-56/FB-4: derived from the purchase incoterm, not typed. */}
+                    <div style={{ padding: "9px 11px", border: "1px dashed #E0E7FF", borderRadius: 8, background: "#FBFCFF", fontSize: 11.5, color: order.buyIncoterm ? "#4338CA" : "#9CA3AF", lineHeight: 1.4, minHeight: 38 }}>
+                      {handoverTextForIncoterm(order.buyIncoterm, order.tradeMovement)}
+                    </div>
                   </div>
-                  <div style={{ gridColumn: "1 / -1" }}>
-                    <Lbl>Cargo plan after purchase</Lbl>
+                  <div>
+                    <Lbl>Default disposition <span style={{ color: "#BBB", fontWeight: 400 }}>· optional</span></Lbl>
+                    {/* BP-56: the PO does NOT own disposition — each sale decides its own.
+                        This is only a default hint; usually "to our warehouse". */}
                     <Sel disabled={isLocked} value={order.cargoPlan || (order.flow ? (flowToStruct(order.flow)?.cargoPlan || "") : "")} onChange={e => {
                       setOrder(o => { const next = { ...o, cargoPlan: e.target.value }; return { ...next, flow: structToFlow(next) || o.flow, directFlow: e.target.value === "DIRECT_TO_CLIENT" }; });
                     }}>
-                      <option value="">— select —</option>
+                      <option value="">To our warehouse (default)</option>
                       {CARGO_PLANS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </Sel>
+                  </div>
+                  <div>
+                    <Lbl>Destination <span style={{ color: "#BBB", fontWeight: 400 }}>· complementary</span></Lbl>
+                    <Sel disabled={isLocked} value={order.destinationLocationId ?? ""} onChange={e => sf("destinationLocationId", e.target.value ? Number(e.target.value) : null)}>
+                      <option value="">— our warehouse / TBD —</option>
+                      {LOCATIONS.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}
                     </Sel>
                   </div>
                 </div>
@@ -1205,7 +1212,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Purchase Incoterm</Lbl>
-                <Sel value={order.buyIncoterm || ""} onChange={e => sf("buyIncoterm", e.target.value)} disabled={isLocked}>
+                <Sel value={order.buyIncoterm || ""} onChange={e => { const inc = e.target.value; setOrder(o => { const hp = handoverPointForIncoterm(inc); const next = { ...o, buyIncoterm: inc, handoverPoint: hp || o.handoverPoint, purchaseIncoterm: inc }; return { ...next, flow: structToFlow(next) || o.flow }; }); }} disabled={isLocked}>
                   <option value="">— select —</option>
                   {INCOTERMS_BUY.map(i => <option key={i.code} value={i.code}>{i.code}{compatibleIncoterms.includes(i.code) ? "" : " ⚠"}</option>)}
                 </Sel>
@@ -1694,8 +1701,17 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 
   (order.items || []).forEach((it, idx) => {
     const already = existingForPO.find(l => {
+      // poLineId is authoritative: a lot matches its PO line by id. This prevents a
+      // second line of the SAME product from colliding with the first line's lot
+      // (the old name-fallback bug: two same-product lines → one lot, new line lost).
       if (String(l.poLineId || "") && String(l.poLineId) === String(it.id)) return true;
-      return String(l.product || "").trim().toLowerCase() === String(it.product || "").trim().toLowerCase();
+      if (String(l.poLineId || "")) return false; // has a (different) poLineId → not this line
+      // Legacy lot with NO poLineId: fall back to product-name match, but only if no other
+      // line already owns it and this is the first same-named line (idx-guarded).
+      const nameMatch = String(l.product || "").trim().toLowerCase() === String(it.product || "").trim().toLowerCase();
+      if (!nameMatch) return false;
+      const firstSameNamedIdx = (order.items || []).findIndex(x => String(x.product || "").trim().toLowerCase() === String(it.product || "").trim().toLowerCase());
+      return firstSameNamedIdx === idx;
     });
 
     const qty = parseFloat(it.qty) || 0;

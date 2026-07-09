@@ -1966,11 +1966,18 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
         <FieldPrint en="Carrier / contractor" pl="Zleceniobiorca" value={`${provider.name || "TBA"}\n${provider.address || ""}\nNIP ${provider.nip || "-"}`} />
         <FieldPrint en="Transport units" pl="Liczba pojazdow / jednostek" value={`${units.length || 1} unit(s) / pojazd(y)`} />
         {(() => {
-          const tourStops = providerScopedLegs.flatMap((l: any) => l.stops || []);
-          if (!tourStops.length) return (<>
+          const extraStops = providerScopedLegs.flatMap((l: any) => l.stops || []);
+          if (!extraStops.length) return (<>
             <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={loadingPlace} />
             <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={unloadingPlace} />
           </>);
+          // FB-8: stops are ADDITIVE — the base loading/unloading stay and the extra
+          // stops are inserted into the tour, so the first load/unload never disappear.
+          const tourStops = [
+            { id: "base-load", kind: "loading", custom: loadingPlace, plannedAt: "", notes: "base loading" },
+            ...extraStops,
+            { id: "base-unload", kind: "unloading", custom: unloadingPlace, plannedAt: "", notes: "base unloading" },
+          ];
           return (
             <div style={{ gridColumn: "1 / -1", border: "1px solid #ccc", padding: "4px 6px" }}>
               <div style={{ fontWeight: 800 }}>Route stops / Punkty trasy</div>

@@ -64,8 +64,8 @@ export function isDirectCargoPlan(s: any): boolean {
 }
 
 export const TRADE_MOVEMENTS = [
-  { code: "IMPORT", label: "Import — we buy (origin overseas / EU)" },
-  { code: "EXPORT", label: "Export — we sell (origin in PL / EU)" },
+  { code: "IMPORT", label: "Import" },
+  { code: "EXPORT", label: "Export" },
 ];
 export const HANDOVER_POINTS = [
   { code: "supplier",    label: "Supplier site (we take over at the producer)" },
@@ -92,4 +92,32 @@ export function reconcilePOFlow(po: any): any {
   const s = flowToStruct(po.flow);
   if (s) return { ...po, ...s, directFlow: s.cargoPlan === "DIRECT_TO_CLIENT" };
   return po;
+}
+
+// BP-56 / FB-4: incoterm-specific handover wording (derived, shown read-only).
+export function handoverTextForIncoterm(incoterm: string, tradeMovement: string): string {
+  const t = String(incoterm || "").toUpperCase();
+  const map: Record<string, string> = {
+    EXW: "Supplier premises — we collect at origin (all transport on us).",
+    FCA: "Handed to our carrier at the named origin point.",
+    FOB: "On board at the port of loading — sea freight onward on us.",
+    CFR: "Seller pays freight to destination port; risk passes at loading.",
+    CIF: "Port of discharge — seller covers freight + insurance to that port.",
+    DAP: "Named destination — delivered unloaded; import duties on us.",
+    DDP: "Delivered to destination, duties paid by the supplier.",
+    DAT: "Delivered at terminal / named place, unloaded.",
+  };
+  return map[t] || (t ? `${t} — handover per incoterm.` : "Select a purchase incoterm to see the handover point.");
+}
+
+// Derive the physical handover point code from the incoterm (BP-56).
+export function handoverPointForIncoterm(incoterm: string): string {
+  const t = String(incoterm || "").toUpperCase();
+  if (t === "EXW") return "supplier";
+  if (t === "FCA") return "supplier";
+  if (t === "FOB" || t === "CFR") return "origin_port";
+  if (t === "CIF") return "dest_port";
+  if (t === "DAP" || t === "DAT") return "client";
+  if (t === "DDP") return "our_wh";
+  return "";
 }

@@ -1429,8 +1429,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             <SectionTitle>ORDER DETAILS</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               <div>
-                <Lbl>SO number {!order.id && <span style={{ color: "#16A34A", fontWeight: 500 }}>· auto-generated</span>}</Lbl>
-                <Lbl>SO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number</span></Lbl>
+                <Lbl>SO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
                 {/* BP-18: controlled document id — display/copy only. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, fontWeight: 700, color: "#334155" }}>
                   <span>{order.number || "SO-2026-…"}</span>
