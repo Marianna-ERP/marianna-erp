@@ -407,6 +407,103 @@ T("T1 detected from legacy text", () => {
   assert.equal(normalizeCustoms("T1 transit + local broker").t1Transit, true);
 });
 
+// ── Batch 4a: computed document links (BP-3 / BP-49) ──
+const { computedPOLinks, computedSOLinks, poSalesLink } = require("./build/documents.domain.js");
+
+console.log("── computed links: PO ──");
+const po = { number:"PO-1", items:[{ id:1, product:"Peppers", qty:10000 }] };
+const shipments = [
+  { number:"SHP-1", poRefs:["PO-1"], goods:[] },
+  { number:"SHP-2", poRefs:[], goods:[{ poRef:"PO-1" }] },      // goods-level link
+  { number:"SHP-3", poRefs:["PO-9"], goods:[] },                 // unrelated
+];
+const lots = [{ number:"LOT-1", poRef:"PO-1" }, { number:"LOT-2", poRef:"PO-9" }];
+const orders = [{ number:"SO-5", status:"Confirmed", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:4000, product:"Peppers" }] }];
+const invoices = [{ number:"PINV-1", poRef:"PO-1" }, { number:"PINV-2", poRef:"PO-2" }];
+
+T("PO shipments computed from header + goods refs", () => {
+  const l = computedPOLinks(po, { shipments, lots, invoices, orders });
+  assert.deepEqual(l.linkedShipments.sort(), ["SHP-1","SHP-2"]);
+  assert.deepEqual(l.linkedLots, ["LOT-1"]);
+  assert.deepEqual(l.linkedInvoices, ["PINV-1"]);
+  assert.deepEqual(l.linkedSalesOrders, ["SO-5"]);
+});
+
+console.log("── computed links: SO ──");
+T("SO shipments + stock lot computed", () => {
+  const so = { number:"SO-5", items:[{ sourceType:"STOCK", sourceRef:"LOT-1" }] };
+  const shps = [{ number:"SHP-7", soRefs:["SO-5"], goods:[] }, { number:"SHP-8", soRefs:[], goods:[{ soRef:"SO-5" }] }];
+  const l = computedSOLinks(so, { shipments: shps, invoices: [], lots: [] });
+  assert.deepEqual(l.linkedShipments.sort(), ["SHP-7","SHP-8"]);
+  assert.deepEqual(l.linkedLots, ["LOT-1"]);
+});
+
+console.log("── PO sales link (BP-3) ──");
+T("unsold PO", () => { assert.equal(poSalesLink(po, []).state, "Unsold"); });
+T("partially sold (40%)", () => {
+  const r = poSalesLink(po, orders);
+  assert.equal(r.state, "Partial"); assert.equal(r.pct, 40);  // single SO, 4000/10000
+});
+T("fully sold", () => {
+  const full = [{ number:"SO-5", status:"Confirmed", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:10000, product:"Peppers" }] }];
+  assert.equal(poSalesLink(po, full).state, "Fully");
+});
+T("multiple orders", () => {
+  const multi = [
+    { number:"SO-5", status:"Confirmed", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:3000, product:"Peppers" }] },
+    { number:"SO-6", status:"Confirmed", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:2000, product:"Peppers" }] },
+  ];
+  const r = poSalesLink(po, multi);
+  assert.equal(r.state, "Multiple"); assert.equal(r.linkedSOs.length, 2);
+});
+T("cancelled SO doesn't count as sold", () => {
+  const canc = [{ number:"SO-9", status:"Cancelled", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:10000, product:"Peppers" }] }];
+  assert.equal(poSalesLink(po, canc).state, "Unsold");
+});
+
+// ── Batch 4b: trade-flow shim (BP-1 / BP-12) ──
+const { flowToStruct, structToFlow, reconcilePOFlow, isDirectCargoPlan } = require("./build/tradeFlow.domain.js");
+
+console.log("── trade flow: struct ⇄ legacy key ──");
+const ALL_FLOWS = ["EXP_EXWS","EXP_FOB","EXP_CIF","EXP_DDP_EU","EXP_DDP_XEU","IMP_EXWS_WH","IMP_EXWS_DIR","IMP_CIF_WH","IMP_CIF_DIR","IMP_DDP_WH","IMP_DDP_DIR"];
+T("every legacy flow decomposes to structured fields", () => {
+  ALL_FLOWS.forEach(f => {
+    const s = flowToStruct(f);
+    assert.ok(s, `${f} has struct`);
+    assert.ok(["EXPORT","IMPORT"].includes(s.tradeMovement), `${f} movement`);
+  });
+});
+T("round-trip flow → struct → flow is stable for import flows", () => {
+  ["IMP_EXWS_WH","IMP_EXWS_DIR","IMP_CIF_WH","IMP_CIF_DIR","IMP_DDP_WH","IMP_DDP_DIR"].forEach(f => {
+    assert.equal(structToFlow(flowToStruct(f)), f, `${f} round-trips`);
+  });
+});
+T("direct cargo plan flags directFlow", () => {
+  assert.equal(isDirectCargoPlan(flowToStruct("IMP_CIF_DIR")), true);
+  assert.equal(isDirectCargoPlan(flowToStruct("IMP_CIF_WH")), false);
+});
+T("reconcile: structured fields present → flow derived, directFlow set", () => {
+  const po = reconcilePOFlow({ tradeMovement:"IMPORT", purchaseIncoterm:"CIF", handoverPoint:"dest_port", cargoPlan:"DIRECT_TO_CLIENT" });
+  assert.equal(po.flow, "IMP_CIF_DIR");
+  assert.equal(po.directFlow, true);
+});
+T("reconcile: legacy flow only → structured fields backfilled", () => {
+  const po = reconcilePOFlow({ flow:"IMP_DDP_WH" });
+  assert.equal(po.tradeMovement, "IMPORT");
+  assert.equal(po.purchaseIncoterm, "DDP");
+  assert.equal(po.cargoPlan, "OUR_WAREHOUSE");
+});
+T("export client pickup maps to EXP_EXWS", () => {
+  assert.equal(structToFlow({ tradeMovement:"EXPORT", cargoPlan:"CLIENT_PICKUP" }), "EXP_EXWS");
+});
+T("DAP purchase treated like DDP for warehouse plan", () => {
+  assert.equal(structToFlow({ tradeMovement:"IMPORT", purchaseIncoterm:"DAP", cargoPlan:"OUR_WAREHOUSE" }), "IMP_DDP_WH");
+});
+T("unknown flow degrades without throwing", () => {
+  assert.equal(flowToStruct("NONSENSE"), null);
+  assert.equal(reconcilePOFlow({ flow:"NONSENSE" }).flow, "NONSENSE");
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

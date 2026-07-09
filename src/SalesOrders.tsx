@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
 import { Card, Lbl, SectionTitle } from "./ui";
@@ -1429,7 +1430,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               <div>
                 <Lbl>SO number {!order.id && <span style={{ color: "#16A34A", fontWeight: 500 }}>· auto-generated</span>}</Lbl>
-                <Inp value={order.number} onChange={e => sf("number", e.target.value)} placeholder="SO-2026-NNNN" />
+                <Lbl>SO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number</span></Lbl>
+                {/* BP-18: controlled document id — display/copy only. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                  <span>{order.number || "SO-2026-…"}</span>
+                  <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy SO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
+                </div>
               </div>
               <div>
                 <Lbl>Order date</Lbl>
@@ -1443,8 +1449,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 </Sel>
               </div>
               <div>
-                <Lbl>Actual delivery {order.actualDeliveryDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" disabled={order.status !== "Delivered"} title={order.status !== "Delivered" ? "Available once the status is set to Delivered." : "When the goods actually reached the client."} />
+                <Lbl>Actual delivery</Lbl>
+                {/* BP-17: not typed here — comes from the linked Shipment delivery event
+                    (or the dispatch/collection event for EXW). Read-only. */}
+                <div style={{ padding: "9px 11px", border: "1px dashed #E5E7EB", borderRadius: 8, background: "#FAFAFA", fontSize: 12.5, color: order.actualDeliveryDate ? "#334155" : "#9CA3AF" }}>
+                  {order.actualDeliveryDate ? `${order.actualDeliveryDate} · from shipment` : ((order.linkedShipments?.length || 0) ? "Pending shipment delivery" : "No linked shipment")}
+                </div>
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
               <div style={{ order: -1 }}><Lbl>Status</Lbl>
@@ -1798,6 +1808,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
 function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+  // BP-49: linked records are COMPUTED from the documents that reference this SO,
+  // not read from stored arrays (which drift).
+  const computedLinks = computedSOLinks(order, { shipments, invoices: [], lots });
   // P/L visibility rule:
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
@@ -2042,21 +2055,21 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                 </Card>
               )}
 
-              {(order.linkedInvoices?.length > 0 || order.linkedShipments?.length > 0) && (
+              {(computedLinks.linkedInvoices?.length > 0 || computedLinks.linkedShipments?.length > 0) && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>LINKED RECORDS</SectionTitle>
-                  {order.linkedInvoices?.length > 0 && (
+                  {computedLinks.linkedInvoices?.length > 0 && (
                     <div style={{ marginBottom: 8 }}>
                       <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SALES INVOICES</div>
-                      {order.linkedInvoices.map(inv => (
+                      {computedLinks.linkedInvoices.map(inv => (
                         <div key={inv} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div>
                       ))}
                     </div>
                   )}
-                  {order.linkedShipments?.length > 0 && (
+                  {computedLinks.linkedShipments?.length > 0 && (
                     <div>
                       <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SHIPMENTS</div>
-                      {order.linkedShipments.map(s => (
+                      {computedLinks.linkedShipments.map(s => (
                         <div key={s} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#F3E8FF", border: "1px solid #DDD6FE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace" }}>{s}</div>
                       ))}
                     </div>

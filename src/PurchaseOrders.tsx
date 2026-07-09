@@ -1,4 +1,5 @@
 import React, { useState, useRef, useMemo } from "react";
+import { structToFlow, flowToStruct, reconcilePOFlow, TRADE_MOVEMENTS, HANDOVER_POINTS, CARGO_PLANS, isDirectCargoPlan } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle } from "./ui";
 import { nextId, nextIds } from "./ids";
 import { FX_RATES, defaultFxRate } from "./fx";
@@ -1095,8 +1096,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 </Sel>
               </div>
               <div>
-                <Lbl>PO number {!order.id && <span style={{ color: "#16A34A", fontWeight: 500 }}>· auto-generated</span>}</Lbl>
-                <Inp value={order.number} onChange={e => sf("number", e.target.value)} placeholder="PO-2026-NNNN" />
+                <Lbl>PO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
+                {/* BP-6: number is a controlled document id — display/copy only, never edited. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                  <span>{order.number || "PO-2026-…"}</span>
+                  <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy PO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
+                </div>
               </div>
               <div>
                 <Lbl>Order date</Lbl>
@@ -1115,8 +1120,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 </Sel>
               </div>
               <div>
-                <Lbl>Actual availability {order.actualAvailabilityDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualAvailabilityDate || ""} onChange={e => sf("actualAvailabilityDate", e.target.value || null)} type="date" max={localTodayISO()} title="When the goods actually became available at our side (customs-cleared / received). Leave blank until it happens." />
+                <Lbl>Actual availability</Lbl>
+                {/* BP-9: no longer typed here — the real date comes from the Shipment arrival /
+                    Inventory receipt event. Shown read-only when known. */}
+                <div style={{ padding: "9px 11px", border: "1px dashed #E5E7EB", borderRadius: 8, background: "#FAFAFA", fontSize: 12.5, color: order.actualAvailabilityDate ? "#334155" : "#9CA3AF" }}>
+                  {order.actualAvailabilityDate ? `${order.actualAvailabilityDate} · from arrival/receipt` : "From shipment arrival / inventory receipt"}
+                </div>
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once it arrives</div>
               </div>
               <div style={{ gridColumn: "span 3" }}>
@@ -1133,14 +1142,51 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>FLOW · PURCHASE INCOTERM · DESTINATION</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+              {/* BP-1: plain-language trade structure. These drive the internal flow key
+                  (BP-12 shim) so Shipments/Inventory keep working unchanged. */}
+              <div style={{ gridColumn: "1 / -1", border: "1px solid #E0E7FF", background: "#F5F7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#4338CA", letterSpacing: "0.04em", marginBottom: 8 }}>TRADE STRUCTURE</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <Lbl>Trade movement</Lbl>
+                    <Sel disabled={isLocked} value={order.tradeMovement || (order.flow ? (flowToStruct(order.flow)?.tradeMovement || "") : "")} onChange={e => {
+                      setOrder(o => { const next = { ...o, tradeMovement: e.target.value }; return { ...next, flow: structToFlow(next) || o.flow, directFlow: isDirectCargoPlan(next) }; });
+                    }}>
+                      <option value="">— select —</option>
+                      {TRADE_MOVEMENTS.map(m => <option key={m.code} value={m.code}>{m.label}</option>)}
+                    </Sel>
+                  </div>
+                  <div>
+                    <Lbl>Purchase handover point</Lbl>
+                    <Sel disabled={isLocked} value={order.handoverPoint || (order.flow ? (flowToStruct(order.flow)?.handoverPoint || "") : "")} onChange={e => {
+                      setOrder(o => { const next = { ...o, handoverPoint: e.target.value }; return { ...next, flow: structToFlow(next) || o.flow }; });
+                    }}>
+                      <option value="">— select —</option>
+                      {HANDOVER_POINTS.map(h => <option key={h.code} value={h.code}>{h.label}</option>)}
+                    </Sel>
+                  </div>
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <Lbl>Cargo plan after purchase</Lbl>
+                    <Sel disabled={isLocked} value={order.cargoPlan || (order.flow ? (flowToStruct(order.flow)?.cargoPlan || "") : "")} onChange={e => {
+                      setOrder(o => { const next = { ...o, cargoPlan: e.target.value }; return { ...next, flow: structToFlow(next) || o.flow, directFlow: e.target.value === "DIRECT_TO_CLIENT" }; });
+                    }}>
+                      <option value="">— select —</option>
+                      {CARGO_PLANS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </Sel>
+                  </div>
+                </div>
+                {order.flow && <div style={{ fontSize: 10.5, color: "#6366F1", marginTop: 8 }}>→ Internal flow: <b>{FLOW_TYPES[order.flow]?.short || order.flow}</b> {isDirectCargoPlan(order) || order.directFlow ? "· direct (never our warehouse)" : ""}</div>}
+              </div>
               <div>
-                <Lbl>Flow type</Lbl>
+                <Lbl>Flow type <span style={{ color: "#BBB", fontWeight: 400 }}>· advanced / derived</span></Lbl>
                 <Sel disabled={isLocked} value={order.flow || ""} onChange={e => {
                   const nextFlow = e.target.value;
+                  const st = flowToStruct(nextFlow) || {};
                   setOrder(o => ({
                     ...o,
                     flow: nextFlow,
-                    // Auto-fill requiresSea from the flow's default — but ONLY if it hasn't been explicitly set yet
+                    ...st, // BP-12: keep the structured fields in sync when flow is set directly
+                    directFlow: st.cargoPlan === "DIRECT_TO_CLIENT",
                     requiresSea: (o.requiresSea === undefined || o.requiresSea === null)
                       ? (FLOW_TYPES[nextFlow]?.defaultRequiresSea || false)
                       : o.requiresSea,
