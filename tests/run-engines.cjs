@@ -680,6 +680,57 @@ T("unmark refuses when paid by REAL payments (returns null)", () => {
   assert.equal(unmarkLedgerPaid(inv), null);
 });
 
+// ── Batch 6a: Producer Claim (BP-55b) — pinned to the real Claim Request Form ──
+const { computeClaim, nextClaimNumber, buildClaimNote, lineEUR } = require("./build/claim.domain.js");
+
+console.log("── producer claim (BP-55b) ──");
+const FORM_LINES = [
+  { label: "Product — Golden 65-70-80", invoiceNo: "351/12/2025", amount: 50064.30, currency: "PLN", rate: 4.2131 },
+  { label: "Transport to port of loading", party: "Agromałek", invoiceNo: "FS I/106/2025", amount: 1800, currency: "EUR" },
+  { label: "Container cost", party: "Conbulk", invoiceNo: "3339-2025", amount: 1800, currency: "EUR" },
+  { label: "Customs + transport at destination", amount: 128659.00, currency: "EGP", rate: 55.625 },
+  { label: "Sorting", amount: 0, currency: "EGP", rate: 55.625 },
+];
+T("CRM 20260201 vector: totals match the paper form exactly", () => {
+  const c = computeClaim({ costLines: FORM_LINES, defectPct: 42, soldInMarket: true, recoveredAmount: 72000, recoveredCurrency: "EGP", recoveredRate: 55.625 });
+  assert.equal(c.lines[0].eur, 11883.01);       // 50,064.30 PLN @ 4.2131
+  assert.equal(c.lines[3].eur, 2312.97);        // 128,659 EGP @ 55.625
+  assert.equal(c.totalCostEUR, 17795.98);       // cost at client's warehouse
+  assert.equal(c.defectValueEUR, 7474.31);      // 42% skin defects
+  assert.equal(c.recoveredEUR, 1294.38);        // 72,000 EGP recovered
+  assert.equal(c.creditNoteEUR, 6179.93);       // requested credit note
+});
+T("not sold in market → nothing recovered, full defect value claimed", () => {
+  const c = computeClaim({ costLines: FORM_LINES, defectPct: 42, soldInMarket: false, recoveredAmount: 72000, recoveredRate: 55.625 });
+  assert.equal(c.recoveredEUR, 0);
+  assert.equal(c.creditNoteEUR, 7474.31);
+});
+T("recovery larger than defect value floors the claim at 0", () => {
+  const c = computeClaim({ costLines: [{ label: "P", amount: 1000, currency: "EUR" }], defectPct: 10, recoveredAmount: 500, recoveredCurrency: "EUR" });
+  assert.equal(c.defectValueEUR, 100);
+  assert.equal(c.creditNoteEUR, 0);
+});
+T("claim-level fallback rates apply when a line has none", () => {
+  assert.equal(lineEUR({ label: "x", amount: 425, currency: "PLN" }, { plnPerEur: 4.25 }), 100);
+});
+T("CLM numbering scans lot.claims per year", () => {
+  const lots = [{ claims: [{ number: "CLM-2026-0002" }] }, { claims: [{ number: "CLM-2025-0009" }] }, {}];
+  assert.equal(nextClaimNumber(lots, 2026), "CLM-2026-0003");
+  assert.equal(nextClaimNumber([], 2026), "CLM-2026-0001");
+});
+T("claim note: incoming CREDIT vs producer, EUR with PLN conversion, reduces payables", () => {
+  const comp = computeClaim({ costLines: FORM_LINES, defectPct: 42, soldInMarket: true, recoveredAmount: 72000, recoveredCurrency: "EGP", recoveredRate: 55.625 });
+  const note = buildClaimNote({ number: "LOT-7", poRef: "P0515" }, { supplier: { name: "Konkret" } },
+    { number: "CLM-2026-0001", defectType: "Skin defects", defectPct: 42, date: "2026-02-14" }, comp, 4.25, { nextId: pnext, todayISO: () => "2026-02-14" });
+  assert.equal(note.noteType, "CREDIT");
+  assert.equal(note.direction, "incoming");
+  assert.equal(note.partyName, "Konkret");
+  assert.equal(note.amount, 6179.93);
+  assert.equal(note.amountPLN, 26264.7);        // 6,179.93 × 4.25
+  const adj = notesTotalsAdjustment([note]);
+  assert.equal(adj.payableAdjPLN, -26264.7);    // we owe the producer LESS
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

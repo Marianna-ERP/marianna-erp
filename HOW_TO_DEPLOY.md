@@ -78,9 +78,9 @@ Go to vercel.com → your project → Settings → Build & Development Settings:
 | Output Directory | `build` |
 | Install Command | leave blank (auto `npm install`) |
 | **Root Directory** | leave BLANK if files are at repo root. If you insist on keeping them in a subfolder, type that folder's name here. |
-| Node.js Version | 24.x (also pinned in package.json) |
+| Node.js Version | 20.x (also pinned in package.json) |
 
-Settings → General → Node.js Version → **24.x**.
+Settings → General → Node.js Version → **20.x**.
 
 ---
 
@@ -93,7 +93,7 @@ they are now baked in, so you never need ChatGPT to add them again:
    Without `CI=false`, Vercel treats harmless warnings (unused variables etc.)
    as fatal errors and the build dies. This file fixes that permanently.
 
-2. **`package.json`** with `"engines": { "node": "24.x" }` — pins the Node version.
+2. **`package.json`** with `"engines": { "node": "20.x" }` — pins the Node version.
 
 3. **`.npmrc`** — quiets npm noise that can confuse the build log.
 
