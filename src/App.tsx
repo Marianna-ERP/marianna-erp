@@ -11,14 +11,18 @@ import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
 import { convertSettledRefsToEvents } from "./payments.domain";
-
-// Batch 5: migrate older-version stored data forward BEFORE any hook reads it.
-runMigrationsIfNeeded();
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import { primeIdsFrom } from "./ids";
 import Invoices from "./Invoices";
 import { migrateLegacyInvoices } from "./invoicing";
+
+// Batch 5: migrate older-version stored data forward BEFORE any hook reads it
+// (module scope — runs before the App component's hooks read the stores).
+// NOTE (v6.26.1): this call must sit AFTER all imports — CRA's eslint
+// `import/first` rule fails the build otherwise. That exact mistake broke the
+// v6.26.0 deploy; the release gate now runs the real CRA build to catch it.
+runMigrationsIfNeeded();
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
