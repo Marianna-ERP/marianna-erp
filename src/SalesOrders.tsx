@@ -1443,9 +1443,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               <div>
                 <Lbl>Expected delivery date</Lbl>
                 <Inp value={order.deliveryDate} onChange={e => sf("deliveryDate", e.target.value)} type="date" title="When the goods are expected to reach the agreed point" />
-                <Sel value={order.promisedDateMeans || "Delivery to client"} onChange={e => sf("promisedDateMeans", e.target.value)} style={{ marginTop: 4, fontSize: 11, padding: "5px 8px" }}>
-                  {["Delivery to client", "Pickup-ready at our side", "Handover at relay", "Loading at supplier", "Arrival at destination port"].map(m => <option key={m} value={m}>means: {m}</option>)}
-                </Sel>
+                {/* FB-14: redundant 'means' dropdown removed. */}
               </div>
               <div>
                 <Lbl>Actual delivery</Lbl>
@@ -1547,12 +1545,22 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 )}
               </div>
               <div>
-                <Lbl>Destination</Lbl>
+                <Lbl>Destination <span style={{ color: "#BBB", fontWeight: 400 }}>· follows sell incoterm</span></Lbl>
                 <div style={{ fontSize: 10.5, color: order.sellIncoterm ? "#2563EB" : "#888", margin: "2px 0 6px", lineHeight: 1.4 }}>{incotermDestinationHint}</div>
+                {(() => {
+                  // FB-11: the destination options adapt to the sell incoterm — the term decides
+                  // where WE deliver, so we surface the right place type first.
+                  const ic = String(order.sellIncoterm || "").toUpperCase();
+                  const portLed = ["CIF", "CFR", "FOB", "FCA"].includes(ic);
+                  const clientLed = ["DAP", "DDP"].includes(ic);
+                  const whLed = ic === "EXW";
+                  return (
                 <Sel value={destMode} onChange={e => setDestMode(e.target.value)}>
-                  <option value="client">Client's registered address</option>
-                  <option value="other">Other address (specify below)</option>
+                  <option value="client">Client's registered address{clientLed ? " (recommended)" : ""}</option>
+                  <option value="other">{portLed ? "Port / named place (recommended)" : whLed ? "Our warehouse (EXW pickup)" : "Other address (specify below)"}</option>
                 </Sel>
+                  );
+                })()}
                 {destMode === "client" ? (
                   <div style={{ marginTop: 8, padding: "9px 11px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#FAFAFA", fontSize: 12, color: "#444", lineHeight: 1.45 }}>
                     {order.client ? (
@@ -1565,18 +1573,22 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   </div>
                 ) : (
                   <>
-                    <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
-                      <option value="">— select a known place —</option>
-                      <optgroup label="🎯 Client Site / DC">
-                        {liveLocations.filter((l: any) => l.type === "CLIENT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                      </optgroup>
-                      <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
-                        {liveLocations.filter((l: any) => l.type === "PORT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                      </optgroup>
-                      <optgroup label="🏢 Our Warehouse (EXW pickup)">
-                        {liveLocations.filter((l: any) => l.type === "OWN").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                      </optgroup>
-                    </Sel>
+                    {(() => {
+                      const ic = String(order.sellIncoterm || "").toUpperCase();
+                      const portGroup = (<optgroup key="port" label="⚓ Port / terminal (FOB/CFR/CIF)">{liveLocations.filter((l: any) => l.type === "PORT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
+                      const clientGroup = (<optgroup key="client" label="🎯 Client Site / DC">{liveLocations.filter((l: any) => l.type === "CLIENT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
+                      const whGroup = (<optgroup key="wh" label="🏢 Our Warehouse (EXW pickup)">{liveLocations.filter((l: any) => l.type === "OWN").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
+                      // FB-11: lead with the incoterm-relevant place type.
+                      const order2 = ["CIF","CFR","FOB","FCA"].includes(ic) ? [portGroup, clientGroup, whGroup]
+                        : ic === "EXW" ? [whGroup, clientGroup, portGroup]
+                        : [clientGroup, portGroup, whGroup];
+                      return (
+                        <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
+                          <option value="">— select a known place —</option>
+                          {order2}
+                        </Sel>
+                      );
+                    })()}
                     <Inp
                       value={order.destinationText || ""}
                       onChange={e => sf("destinationText", e.target.value)}
@@ -1633,7 +1645,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
           {/* Line items */}
           <Card style={{ marginBottom: 16 }}>
-            <SectionTitle right={<button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>+ Add line</button>}>LINE ITEMS ({order.items.length})</SectionTitle>
+            <SectionTitle right={<div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => { const idx = order.items.length; addItem(); setTimeout(() => setSourceFor(idx), 0); }} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#0369A1", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }} title="Add a line sourced from a PO or stock — product, variety, packaging, origin, size and quality are copied automatically; you set only price, quantity and pallets.">+ Add from PO / stock</button>
+              <button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }} title="Add an empty line to fill in manually">+ Blank line</button>
+            </div>}>LINE ITEMS ({order.items.length})</SectionTitle>
             <datalist id="so-product-suggestions">
               {productSuggestions.map(p => <option key={p} value={p} />)}
             </datalist>

@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
 import { fmtNum } from "./format";
 import { Card, Lbl, useConfirm } from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
@@ -1150,7 +1151,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
       <div style={{ width: 860, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Consignment settlement · {lot.number}</div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>Consignment settlement {st?.number ? <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 6, padding: "1px 8px", marginRight: 6 }}>{st.number}</span> : null}· {lot.number}</div>
             <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{po ? `${po.number} · ${po.supplier?.name || "producer"}` : "No PO link"} · status: <strong>{status}</strong>{producer && seasonPct !== null && <> · season rate {seasonPct}%</>}</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -1725,7 +1726,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState(INIT_LOTS);
@@ -1985,6 +1986,23 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {settlementLot && <SettlementModal lot={lots.find(l => l.id === settlementLot.id) || settlementLot} orders={liveSOs} contacts={extContacts} pos={extPOs}
           onCancel={() => setSettlementLot(null)}
           onSave={(settlement, close) => {
+            // Batch 5c (BP-38/31): a closed settlement is a NUMBERED DOCUMENT.
+            if (close && !settlement.number) {
+              settlement = { ...settlement, number: nextSettlementNumber(lots, new Date().getFullYear()) };
+            }
+            // Auto-draft the commission invoice into the Invoices registry (idempotent:
+            // skip if an invoice already links to this settlement number).
+            if (close && extSetInvoices) {
+              const setNo = settlement.number;
+              const lotForDraft = lots.find(l => l.id === settlementLot.id) || settlementLot;
+              const po = (extPOs || []).find((p: any) => p.number === lotForDraft.poRef) || null;
+              extSetInvoices((prev: any[]) => {
+                const exists = (prev || []).some((inv: any) => (inv.links || []).some((lk: any) => lk.type === "SET" && lk.number === setNo));
+                if (exists) return prev;
+                const draft = buildCommissionInvoiceDraft(lotForDraft, settlement, po, { nextId, todayISO: localTodayISO });
+                return [draft, ...(prev || [])];
+              });
+            }
             setLots(prev => prev.map(l => {
               if (l.id !== settlementLot.id) return l;
               let next = { ...l, settlement };

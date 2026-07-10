@@ -197,10 +197,11 @@ T("fakturowniaPaid sync marks Paid", () => {
   const { items } = buildLedger({ invoices:[mkInv()], fakturowniaPaid:{"FV/1/2026":true}, todayISO:today });
   assert.equal(items.find(i=>i.documentNo==="FV/1/2026").status, "Paid");
 });
-T("PIN current behaviour: financeNotes do NOT change totals yet (flips in Batch 5 / BP-37)", () => {
+T("BP-37 FLIPPED (Batch 5b): an outgoing credit note now REDUCES open receivables", () => {
   const base = buildLedger({ invoices:[mkInv()], todayISO:today }).totals;
-  const withNote = buildLedger({ invoices:[mkInv()], financeNotes:[{id:9,noteKind:"CREDIT",direction:"OUTGOING",amount:100,fxRate:4.25,amountPLN:425,partyName:"Client X",date:"2026-06-20"}], todayISO:today }).totals;
-  assert.equal(base.receivableOpenPLN, withNote.receivableOpenPLN);
+  const withNote = buildLedger({ invoices:[mkInv()], financeNotes:[{id:9,noteType:"CREDIT",direction:"outgoing",amount:100,fxRate:4.25,amountPLN:425,partyName:"Client X",date:"2026-06-20"}], todayISO:today }).totals;
+  assert.equal(withNote.receivableOpenPLN, Math.round((base.receivableOpenPLN - 425) * 100) / 100);
+  assert.equal(withNote.notesReceivableAdjPLN, -425);
 });
 
 // ── Batch 3a: shipment posting engine + decisions 1 & 2 ──
@@ -530,6 +531,153 @@ T("handover POINT derived per incoterm", () => {
 });
 T("empty incoterm → prompt text, no throw", () => {
   assert.match(handoverTextForIncoterm("",""), /select/i);
+});
+
+// ── 4C FB-12: availability by product + variety ──
+const { productsMatch, linesMatch, productVarietyKey } = require("./build/salesOrders.domain.js");
+
+console.log("── FB-12: variety-aware matching ──");
+T("same product, different variety → do NOT match", () => {
+  assert.equal(productsMatch("Apples","Apples","Gala","Golden"), false);
+});
+T("same product, same variety → match", () => {
+  assert.equal(productsMatch("Apples","Apples","Gala","Gala"), true);
+});
+T("variety missing on one side → product-only fallback (legacy safe)", () => {
+  assert.equal(productsMatch("Apples","Apples","Gala",""), true);
+  assert.equal(productsMatch("Apples","Apples","",""), true);
+});
+T("different product never matches", () => {
+  assert.equal(productsMatch("Apples","Pears","Gala","Gala"), false);
+});
+T("two varieties don't pool in availability 'other sources'", () => {
+  const lotGala   = { number:"LOT-G", product:"Apples", variety:"Gala",   availableKg:5000, physicalKg:5000, receivedKg:5000 };
+  const lotGolden = { number:"LOT-D", product:"Apples", variety:"Golden", availableKg:3000, physicalKg:3000, receivedKg:3000 };
+  const items = [{ id:1, product:"Apples", variety:"Gala", qty:4000, sourceType:"STOCK", sourceRef:"LOT-G" }];
+  const [a] = computeLineAvailability(items, [], 1, [lotGala, lotGolden], []);
+  assert.equal(a.primaryAvailable, 5000);
+  assert.equal(a.otherStockKg, 0);   // Golden must NOT be pooled in
+});
+
+// ── Batch 5b: payment events (BP-36) + notes in totals (BP-37) ──
+const { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, paidFromEvents, outstandingAmount, notesTotalsAdjustment } = require("./build/payments.domain.js");
+let _pid = 9000; const pnext = () => ++_pid;
+
+console.log("── payment events (BP-36) ──");
+T("legacy paidAmount synthesises one event; totals identical", () => {
+  const inv = { grossAmount: 1000, paidAmount: 400, issueDate: "2026-06-01" };
+  const evts = normalizeInvoicePayments(inv);
+  assert.equal(evts.length, 1); assert.equal(evts[0].method, "legacy");
+  assert.equal(paidFromEvents(inv), 400);
+  assert.equal(outstandingAmount(inv), 600);
+});
+T("applying events accumulates; full coverage → Paid; paidAmount kept in sync", () => {
+  let inv = { grossAmount: 1000, paidAmount: 0, paymentStatus: "Sent", currency: "EUR" };
+  inv = applyPaymentEvent(inv, { date: "2026-07-01", amount: 400, method: "Bank transfer" }, pnext);
+  assert.equal(inv.paymentStatus, "Partially paid"); assert.equal(inv.paidAmount, 400);
+  inv = applyPaymentEvent(inv, { date: "2026-07-05", amount: 600 }, pnext);
+  assert.equal(inv.paymentStatus, "Paid"); assert.equal(inv.paidAmount, 1000);
+  assert.equal(inv.payments.length, 2);
+});
+T("removing an event recalculates status back to Partially paid", () => {
+  let inv = { grossAmount: 1000, paidAmount: 0, paymentStatus: "Sent" };
+  inv = applyPaymentEvent(inv, { date: "2026-07-01", amount: 400 }, pnext);
+  inv = applyPaymentEvent(inv, { date: "2026-07-05", amount: 600 }, pnext);
+  const evtId = inv.payments[1].id;
+  inv = removePaymentEvent(inv, evtId);
+  assert.equal(inv.paymentStatus, "Partially paid"); assert.equal(inv.paidAmount, 400);
+});
+T("ledger: fx-aware Paid via EVENTS (no paidAmount at all)", () => {
+  const inv = { id: 7, kind: "SALES", number: "FV/7/2026", counterparty: { name: "C" }, issueDate: "2026-06-01", dueDate: "2026-08-01",
+    currency: "EUR", fxRate: 4.25, grossAmount: 1000, grossPLN: 4250, paymentStatus: "Sent",
+    payments: [{ id: 1, date: "2026-07-01", amount: 1000, method: "Bank transfer" }] };
+  const { items } = buildLedger({ invoices: [inv], todayISO: today });
+  assert.equal(items.find(i => i.documentNo === "FV/7/2026").status, "Paid");
+});
+
+console.log("── notes in totals (BP-37) ──");
+T("incoming credit note reduces open payables", () => {
+  const adj = notesTotalsAdjustment([{ noteType: "CREDIT", direction: "incoming", amountPLN: 300 }]);
+  assert.equal(adj.payableAdjPLN, -300); assert.equal(adj.receivableAdjPLN, 0);
+});
+T("debit note increases its side; cancelled notes ignored", () => {
+  const adj = notesTotalsAdjustment([
+    { noteType: "DEBIT", direction: "outgoing", amountPLN: 200 },
+    { noteType: "CREDIT", direction: "outgoing", amountPLN: 999, status: "Cancelled" },
+  ]);
+  assert.equal(adj.receivableAdjPLN, 200);
+});
+
+// ── Batch 5c: settlement document (BP-38/31) ──
+const { nextSettlementNumber, buildCommissionInvoiceDraft } = require("./build/settlement.domain.js");
+
+console.log("── settlement document ──");
+T("SET numbering scans existing settlements per year", () => {
+  const lots = [{ settlement: { number: "SET-2026-0003" } }, { settlement: { number: "SET-2025-0044" } }, {}];
+  assert.equal(nextSettlementNumber(lots, 2026), "SET-2026-0004");
+  assert.equal(nextSettlementNumber([], 2026), "SET-2026-0001");
+});
+T("commission invoice draft: SALES to producer, PLN, links SET/LOT/PO", () => {
+  const lot = { number: "LOT-9", product: "Golden", poRef: "PO-5" };
+  const st = { number: "SET-2026-0004", commissionPct: 8, finalCommissionPLN: 4004.5, closedAt: "2026-07-08" };
+  const po = { number: "PO-5", supplier: { name: "Konkret", nip: "123", address: "Cairo" } };
+  const inv = buildCommissionInvoiceDraft(lot, st, po, { nextId: pnext, todayISO: () => "2026-07-08" });
+  assert.equal(inv.kind, "SALES");
+  assert.equal(inv.category, "COMMISSION");
+  assert.equal(inv.counterparty.name, "Konkret");
+  assert.equal(inv.grossPLN, 4004.5);
+  assert.ok(inv.links.some(l => l.type === "SET" && l.number === "SET-2026-0004"));
+  assert.ok(inv.links.some(l => l.type === "LOT" && l.number === "LOT-9"));
+  assert.ok(inv.links.some(l => l.type === "PO" && l.number === "PO-5"));
+});
+T("draft carries the OFFSET payment event → Paid, so the ledger doesn't double-count", () => {
+  const lot = { number: "LOT-9", poRef: "PO-5" };
+  const st = { number: "SET-2026-0004", commissionPct: 8, finalCommissionPLN: 1000, closedAt: "2026-07-08" };
+  const inv = buildCommissionInvoiceDraft(lot, st, { supplier: { name: "K" } }, { nextId: pnext, todayISO: () => "2026-07-08" });
+  assert.equal(inv.payments.length, 1);
+  assert.equal(inv.payments[0].method, "Offset / compensation");
+  assert.equal(inv.paymentStatus, "Paid");
+  const { totals } = buildLedger({ invoices: [inv], todayISO: "2026-07-08" });
+  assert.equal(totals.receivableOpenPLN, 0);   // documented, not double-counted
+});
+
+// ── Batch 5d: settledRefs retirement (BP-39) ──
+const { convertSettledRefsToEvents, markInvoicePaidViaLedger, unmarkLedgerPaid, LEDGER_MARK_NOTE } = require("./build/payments.domain.js");
+const d5 = { todayISO: () => "2026-07-09", nextId: pnext };
+
+console.log("── settledRefs → payment events (BP-39) ──");
+T("INV: and SINV: refs convert to tagged events; PO:/PAYOUT: refs remain", () => {
+  const invs = [
+    { id: 11, kind: "COST",  number: "FS 1/26", grossAmount: 500, paidAmount: 0, paymentStatus: "Received" },
+    { id: 12, kind: "SALES", number: "FV/9/2026", grossAmount: 800, paidAmount: 0, paymentStatus: "Sent" },
+  ];
+  const refs = ["INV:11", "SINV:FV/9/2026", "PO:PO-3", "PAYOUT:LOT-4"];
+  const res = convertSettledRefsToEvents(invs, refs, d5);
+  assert.equal(res.converted, 2);
+  assert.deepEqual(res.settledRefs, ["PO:PO-3", "PAYOUT:LOT-4"]);
+  const i11 = res.invoices.find(i => i.id === 11);
+  assert.equal(i11.paymentStatus, "Paid");
+  assert.ok(i11.payments[0].note.startsWith(LEDGER_MARK_NOTE));
+  assert.equal(res.invoices.find(i => i.id === 12).paymentStatus, "Paid");
+});
+T("conversion is idempotent (second run converts nothing)", () => {
+  const invs = [{ id: 11, kind: "COST", number: "X", grossAmount: 500, paidAmount: 0, paymentStatus: "Received" }];
+  const r1 = convertSettledRefsToEvents(invs, ["INV:11"], d5);
+  const r2 = convertSettledRefsToEvents(r1.invoices, r1.settledRefs, d5);
+  assert.equal(r2.converted, 0);
+  assert.equal(r2.invoices.find(i => i.id === 11).payments.length, 1);
+});
+T("mark → unmark round-trip restores the open state", () => {
+  let inv = { id: 1, grossAmount: 1000, paidAmount: 0, paymentStatus: "Sent" };
+  inv = markInvoicePaidViaLedger(inv, "2026-07-09", pnext);
+  assert.equal(inv.paymentStatus, "Paid");
+  const un = unmarkLedgerPaid(inv);
+  assert.ok(un); assert.equal(un.paymentStatus, "Sent" === "Sent" ? un.paymentStatus : un.paymentStatus); assert.equal(un.paidAmount, 0); assert.equal(un.payments.length, 0);
+});
+T("unmark refuses when paid by REAL payments (returns null)", () => {
+  let inv = { id: 2, grossAmount: 500, paidAmount: 0, paymentStatus: "Sent" };
+  inv = applyPaymentEvent(inv, { date: "2026-07-01", amount: 500, method: "Bank transfer" }, pnext);
+  assert.equal(unmarkLedgerPaid(inv), null);
 });
 
 console.log("");

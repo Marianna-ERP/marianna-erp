@@ -16,8 +16,23 @@ import { SO_PRE_DISPATCH_STATUSES } from "./types";
 export function normalizeProduct(p: any): string {
   return (p || "").toLowerCase().trim();
 }
-export function productsMatch(a: any, b: any): boolean {
-  return normalizeProduct(a) === normalizeProduct(b);
+// FB-12: two lines match only if the product AND (when both specify a variety)
+// the variety agree. If either side has no variety, fall back to product-only
+// (backward-compatible with legacy data that lacks variety).
+export function productsMatch(a: any, b: any, varA?: any, varB?: any): boolean {
+  if (normalizeProduct(a) !== normalizeProduct(b)) return false;
+  const va = normalizeProduct(varA), vb = normalizeProduct(varB);
+  if (va && vb) return va === vb;
+  return true;
+}
+/** Variety-aware match between two line-like objects ({product, variety}). */
+export function linesMatch(x: any, y: any): boolean {
+  return productsMatch(x?.product, y?.product, x?.variety, y?.variety);
+}
+export function productVarietyKey(x: any): string {
+  const p = normalizeProduct(x?.product);
+  const v = normalizeProduct(x?.variety);
+  return v ? `${p}|${v}` : p;
 }
 export function soClientName(o: any): string {
   if (o?.clientName) return o.clientName;
@@ -41,7 +56,7 @@ export function lotReservationsForPicker(lot: any, allOrders: any[], excludeOrde
     (o.items || []).forEach((it: any) => {
       if (it.sourceType !== "STOCK") return;
       if (it.sourceRef !== lot.number) return;
-      if (!productsMatch(it.product, lot.product)) return;
+      if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
       const q = parseFloat(it.qty) || 0;
       if (q <= 0) return;
       reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
@@ -64,9 +79,9 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[]): any {
     if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
     (o.items || []).forEach((it: any) => {
       const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
-      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product);
+      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product, it.variety, lot.variety);
       if (!matchesStock && !matchesPOBackedLot) return;
-      if (!productsMatch(it.product, lot.product)) return;
+      if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
       const q = parseFloat(it.qty) || 0;
       if (q <= 0) return;
       reservations.push({ soNumber: o.number, soId: o.id, status: o.status, clientName: soClientName(o), qty: q, sourceType: it.sourceType });
@@ -96,7 +111,7 @@ export function poLineReservations(po: any, poLine: any, allOrders: any[], exclu
       if (it.sourceType !== "PO") return;
       if (it.sourceRef !== po.number) return;
       if ((it.sourceLineId ?? 1) !== poLine.id) return;
-      if (!productsMatch(it.product, poLine.product)) return;
+      if (!productsMatch(it.product, poLine.product, it.variety, poLine.variety)) return;
       const q = parseFloat(it.qty) || 0;
       if (q <= 0) return;
       reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
@@ -132,14 +147,14 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
       if (it.sourceType === "STOCK") {
         const lot = LOTS.find(l => l.number === it.sourceRef);
         if (!lot) return;
-        if (!productsMatch(it.product, lot.product)) return;
+        if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
         committedFromStock[it.sourceRef] = (committedFromStock[it.sourceRef] || 0) + q;
       } else if (it.sourceType === "PO") {
         const po = PO_REFS.find(p => p.number === it.sourceRef);
         if (!po || !isPOUsableForConfirmedSO(po)) return;
         const poLine = po.items.find((l: any) => l.id === (it.sourceLineId ?? 1));
         if (!poLine) return;
-        if (!productsMatch(it.product, poLine.product)) return;
+        if (!productsMatch(it.product, poLine.product, it.variety, poLine.variety)) return;
         const k = `${it.sourceRef}::${it.sourceLineId ?? 1}`;
         committedFromPO[k] = (committedFromPO[k] || 0) + q;
       }
@@ -168,13 +183,14 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
   const receivedKgByPOProduct: Record<string, number> = {};
   LOTS.forEach((l: any) => {
     if (!l.poRef) return;
-    const k = `${l.poRef}::${normalizeProduct(l.product)}`;
+    const k = `${l.poRef}::${productVarietyKey(l)}`;  // FB-12: keyed by product+variety
     receivedKgByPOProduct[k] = (receivedKgByPOProduct[k] || 0) + Math.max(0, (l.receivedKg ?? 0));
   });
 
   return (soItems || []).map((it: any) => {
     const lineQty = parseFloat(it.qty) || 0;
     const product = normalizeProduct(it.product);
+    const lineKey = productVarietyKey(it); // FB-12
 
     let primaryAvailable = 0;
     let primaryProductMismatch = false;
@@ -197,15 +213,15 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
 
     let otherStockKg = 0, otherPOKg = 0;
     LOTS.forEach(lot => {
-      if (normalizeProduct(lot.product) !== product) return;
+      if (productVarietyKey(lot) !== lineKey) return;  // FB-12: product+variety
       if (it.sourceType === "STOCK" && it.sourceRef === lot.number) return;
       otherStockKg += lotRemaining(lot.number);
     });
     PO_REFS.forEach(po => {
       (po.items || []).forEach((line: any) => {
-        if (normalizeProduct(line.product) !== product) return;
+        if (productVarietyKey(line) !== lineKey) return;  // FB-12: product+variety
         if (it.sourceType === "PO" && it.sourceRef === po.number && (it.sourceLineId ?? 1) === line.id) return;
-        const received = receivedKgByPOProduct[`${po.number}::${normalizeProduct(line.product)}`] || 0;
+        const received = receivedKgByPOProduct[`${po.number}::${productVarietyKey(line)}`] || 0;
         otherPOKg += Math.max(0, poLineRemaining(po.number, line.id) - received);
       });
     });

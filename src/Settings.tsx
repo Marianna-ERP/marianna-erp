@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta } from "./useLocalStoredState";
+import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows } from "./productCatalog";
@@ -294,6 +294,27 @@ export default function Settings({
             Manage the local-only data stored in your browser. Storage schema: v{STORAGE_VERSION}.
           </div>
         </div>
+
+        {/* Batch 5: storage usage — the one number that predicts the localStorage failure mode. */}
+        {(() => {
+          const u = storageUsage();
+          const warn = u.pct >= 70;
+          return (
+            <div style={{ marginBottom: 16, padding: "12px 16px", borderRadius: 10, border: `1px solid ${warn ? "#FDE68A" : "#E5E7EB"}`, background: warn ? "#FFFBEB" : "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#444" }}>Browser storage used</div>
+                <div style={{ fontSize: 12, fontWeight: 800, color: warn ? "#B45309" : "#16A34A" }}>{u.totalKB.toLocaleString()} KB / ~{(u.budgetKB / 1024).toFixed(0)} MB ({u.pct}%)</div>
+              </div>
+              <div style={{ height: 8, borderRadius: 4, background: "#F1F5F9", overflow: "hidden" }}>
+                <div style={{ width: `${u.pct}%`, height: "100%", background: warn ? "#D97706" : "#16A34A" }} />
+              </div>
+              <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 6 }}>
+                Largest: {u.perKey.slice(0, 4).map(k => `${k.key} ${k.kb} KB`).join(" · ") || "—"}
+                {warn ? " — consider deleting old local backups below to free space." : ""}
+              </div>
+            </div>
+          );
+        })()}
 
         {message && (
           <div style={{

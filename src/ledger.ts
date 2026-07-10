@@ -1,3 +1,4 @@
+import { paidFromEvents, notesTotalsAdjustment } from "./payments.domain";
 // ─── v6.9: RECEIVABLES & PAYABLES AGGREGATION ───────────────────────────────
 // Pulls every "money owed" item the system already tracks into one ledger:
 //   RECEIVABLE (money in)  ← sales invoices issued from SOs
@@ -25,6 +26,8 @@ export interface LedgerItem {
 }
 
 export interface LedgerTotals {
+  notesReceivableAdjPLN?: number; // BP-37: signed adjustment applied from credit/debit notes
+  notesPayableAdjPLN?: number;
   receivableOpenPLN: number;
   receivableOverduePLN: number;
   payableOpenPLN: number;
@@ -78,8 +81,10 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     // Also honour the legacy SINV: mark-paid ref so previously-cleared sales invoices
     // don't reappear as open after the switch.
     const legacyPaid = isSales && settled.has(`SINV:${inv.number}`);
+    // Batch 5b (BP-36): payments are EVENTS — paidFromEvents sums them, and
+    // synthesises one event from a legacy paidAmount, so old data reads the same.
     const isPaid = inv.paymentStatus === "Paid"
-      || (gross > 0 && n(inv.paidAmount) * (n(inv.fxRate) || 1) >= gross - 0.01)
+      || (gross > 0 && paidFromEvents(inv) * (n(inv.fxRate) || 1) >= gross - 0.01)
       || settled.has(ref) || legacyPaid
       || fktPaid[String(inv.number)] === true;
     items.push({
@@ -139,13 +144,20 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     });
   });
 
+  // Batch 5b (BP-37): credit/debit notes now ENTER the totals. A credit note we
+  // issued reduces open receivables; a supplier's credit note reduces open payables;
+  // debit notes increase their side. (This flip was deliberately test-pinned in the
+  // old behaviour so it lands as an explicit change, not a drift.)
+  const notesAdj = notesTotalsAdjustment(inp.financeNotes || []);
   const totals: LedgerTotals = {
-    receivableOpenPLN: r2(items.filter(i => i.direction === "receivable" && i.status !== "Paid").reduce((s, i) => s + i.amountPLN, 0)),
+    receivableOpenPLN: r2(Math.max(0, items.filter(i => i.direction === "receivable" && i.status !== "Paid").reduce((s, i) => s + i.amountPLN, 0) + notesAdj.receivableAdjPLN)),
     receivableOverduePLN: r2(items.filter(i => i.direction === "receivable" && i.status === "Overdue").reduce((s, i) => s + i.amountPLN, 0)),
-    payableOpenPLN: r2(items.filter(i => i.direction === "payable" && i.status !== "Paid").reduce((s, i) => s + i.amountPLN, 0)),
+    payableOpenPLN: r2(Math.max(0, items.filter(i => i.direction === "payable" && i.status !== "Paid").reduce((s, i) => s + i.amountPLN, 0) + notesAdj.payableAdjPLN)),
     payableOverduePLN: r2(items.filter(i => i.direction === "payable" && i.status === "Overdue").reduce((s, i) => s + i.amountPLN, 0)),
+    notesReceivableAdjPLN: notesAdj.receivableAdjPLN,
+    notesPayableAdjPLN: notesAdj.payableAdjPLN,
     netPositionPLN: 0,
-  };
+  } as LedgerTotals;
   totals.netPositionPLN = r2(totals.receivableOpenPLN - totals.payableOpenPLN);
   return { items, totals };
 }

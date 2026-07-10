@@ -1114,10 +1114,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Expected delivery date</Lbl>
-                <Inp value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed point" />
-                <Sel value={order.promisedDateMeans || "Arrival at our warehouse"} onChange={e => sf("promisedDateMeans", e.target.value)} style={{ marginTop: 4, fontSize: 11, padding: "5px 8px" }}>
-                  {["Pickup from supplier", "Arrival at port", "Arrival at our warehouse", "Arrival at client"].map(m => <option key={m} value={m}>means: {m}</option>)}
-                </Sel>
+                <Inp value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed handover point" />
+                {/* FB-14: 'means' dropdown removed — the handover point (derived from the incoterm) already says where. */}
               </div>
               <div>
                 <Lbl>Actual availability</Lbl>
@@ -1175,7 +1173,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     </Sel>
                   </div>
                   <div>
-                    <Lbl>Destination <span style={{ color: "#BBB", fontWeight: 400 }}>· complementary</span></Lbl>
+                    <Lbl>Pickup point <span style={{ color: "#BBB", fontWeight: 400 }}>· where we take over</span></Lbl>
+                    {/* FB-10: ONE destination on the PO = the physical point where we collect the
+                        cargo (tied to the handover point derived from the incoterm). */}
                     <Sel disabled={isLocked} value={order.destinationLocationId ?? ""} onChange={e => sf("destinationLocationId", e.target.value ? Number(e.target.value) : null)}>
                       <option value="">— our warehouse / TBD —</option>
                       {LOCATIONS.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}

@@ -9,7 +9,11 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { SHELL_SEED } from "./shell_seed";
-import { useLocalStoredState } from "./useLocalStoredState";
+import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
+import { convertSettledRefsToEvents } from "./payments.domain";
+
+// Batch 5: migrate older-version stored data forward BEFORE any hook reads it.
+runMigrationsIfNeeded();
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import { primeIdsFrom } from "./ids";
@@ -204,6 +208,20 @@ export default function App() {
   const [activeModule, setActiveModule] = useState("dashboard");
   // One-time reminder for testers to export/back up their data (localStorage only).
   const [backupReminderDismissed, setBackupReminderDismissed] = useLocalStoredState("backupReminderDismissed", false);
+  const storageHealthState = useStorageHealth(); // Batch 5: surface failed writes
+
+  // Batch 5d (BP-39): one-time conversion — legacy "mark paid" flags on invoices
+  // become tagged payment events. Idempotent: converted refs are removed.
+  const settledConversionDone = React.useRef(false);
+  React.useEffect(() => {
+    if (settledConversionDone.current) return;
+    settledConversionDone.current = true;
+    const invRefs = (settledRefs || []).filter((r: string) => String(r).startsWith("INV:") || String(r).startsWith("SINV:"));
+    if (!invRefs.length) return;
+    const res = convertSettledRefsToEvents(invoices, settledRefs, { todayISO: () => new Date().toISOString().slice(0, 10), nextId: () => Date.now() + Math.floor(Math.random() * 1000) });
+    if (res.converted > 0) { setInvoices(res.invoices); setSettledRefs(res.settledRefs); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function reloadFromStorage() {
     window.location.reload();
@@ -214,13 +232,13 @@ export default function App() {
       case "dashboard":
         return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} creditNotes={creditNotes} setCreditNotes={setCreditNotes} invoices={invoices} financeNotes={financeNotes} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} creditNotes={creditNotes} setCreditNotes={setCreditNotes} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} />;
       case "pos":
         return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "lots":
-        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />;
+        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />;
       case "orders":
         return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "shipments":
@@ -242,6 +260,15 @@ export default function App() {
           onNavigate={setActiveModule}
         />
       } />
+      {storageHealthState.failing && (
+        <div style={{ background: "#FEF2F2", borderBottom: "2px solid #DC2626", padding: "10px 18px", display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 16 }}>🛑</span>
+          <div style={{ fontSize: 12.5, color: "#991B1B", lineHeight: 1.45 }}>
+            <strong>Saving to browser storage is FAILING</strong> (key "{storageHealthState.failedKey}": {storageHealthState.lastError || "storage full or disabled"}).
+            Your latest changes exist only in this tab and will be LOST on refresh — go to <strong>Settings → Export</strong> now, then free space (delete old backups) and reload.
+          </div>
+        </div>
+      )}
       {!backupReminderDismissed && (
         <div style={{ background: "#FEF3C7", borderBottom: "1px solid #FDE68A", padding: "10px 28px", display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: "#92400E", flexShrink: 0 }}>
           <span style={{ fontSize: 15 }}>💾</span>

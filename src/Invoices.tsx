@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate } from "./fx";
 import { readFakturowniaConfig, createInvoice } from "./fakturownia";
@@ -41,6 +42,38 @@ function StatusBadge({ s }: { s: PaymentStatus }) { const m = STATUS_META[s] || 
 function DirPill({ inv }: { inv: Invoice }) { const r = invoiceDirection(inv) === "receivable"; return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: r ? "#16A34A" : "#DC2626", fontWeight: 600 }}><span style={{ fontSize: 13 }}>{r ? "↑" : "↓"}</span>{r ? "Receivable" : "Payable"}</span>; }
 
 // ════════════════════════════════════════════════════════════════════════════
+
+function PaymentEventModal({ inv, onClose, onSave }: any) {
+  const remaining = outstandingAmount(inv);
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState(String(remaining || ""));
+  const [method, setMethod] = useState("Bank transfer");
+  const [note, setNote] = useState("");
+  const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" } as any;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 8000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 400, maxWidth: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.25)", padding: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>Record payment — {inv.number}</div>
+        <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>Outstanding: <b>{remaining.toFixed(2)} {inv.currency}</b>. Each payment is a dated event — partial payments simply add more events.</div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Payment date</div>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inp} />
+        <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Amount ({inv.currency})</div>
+        <input type="number" value={amount} onChange={e => setAmount(e.target.value)} style={inp} />
+        <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Method</div>
+        <select value={method} onChange={e => setMethod(e.target.value)} style={inp}>
+          {PAYMENT_METHODS.map((m: string) => <option key={m}>{m}</option>)}
+        </select>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Note (optional)</div>
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. bank ref, partial 1/2" style={inp} />
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+          <button onClick={onClose} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+          <button onClick={() => onSave({ date, amount, method, note })} disabled={!(parseFloat(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseFloat(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseFloat(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Invoices(props: any) {
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [] } = props;
   const [view, setView] = useState<"list" | "form" | "detail" | "note">("list");
@@ -119,17 +152,18 @@ export default function Invoices(props: any) {
   function markStatus(inv: Invoice, status: PaymentStatus) {
     setInvoices((prev: Invoice[]) => prev.map(p => p.id === inv.id ? { ...p, paymentStatus: status, locked: status === "Sent" ? true : p.locked } : p));
   }
-  function recordPayment(inv: Invoice) {
-    const remaining = inv.grossAmount - inv.paidAmount;
-    const amtStr = window.prompt(`Record payment for ${inv.number} (${inv.currency}). Remaining ${money(remaining, inv.currency)}:`, remaining.toFixed(2));
-    if (amtStr == null) return;
-    const amt = parseFloat(amtStr) || 0;
-    setInvoices((prev: Invoice[]) => prev.map(p => {
-      if (p.id !== inv.id) return p;
-      const paid = (p.paidAmount || 0) + amt;
-      const status: PaymentStatus = paid >= p.grossAmount - 0.01 ? "Paid" : paid > 0 ? "Partially paid" : p.paymentStatus;
-      return { ...p, paidAmount: paid, paymentStatus: status };
-    }));
+  // Batch 5b (BP-36): payments are dated EVENTS — the modal below replaces the
+  // old prompt + single mutable paidAmount.
+  const [paymentFor, setPaymentFor] = useState<Invoice | null>(null);
+  function recordPayment(inv: Invoice) { setPaymentFor(inv); }
+  function savePaymentEvent(evt: { date: string; amount: any; method: string; note: string }) {
+    if (!paymentFor) return;
+    setInvoices((prev: Invoice[]) => prev.map(p => p.id === paymentFor.id ? applyPaymentEvent(p, evt, nextId) : p));
+    setPaymentFor(null);
+  }
+  function deletePaymentEvent(inv: Invoice, evtId: any) {
+    if (!window.confirm("Remove this payment event? The invoice's paid amount and status will be recalculated.")) return;
+    setInvoices((prev: Invoice[]) => prev.map(p => p.id === inv.id ? removePaymentEvent(p, evtId) : p));
   }
   async function sendToFakturownia(inv: Invoice) {
     if (inv.kind !== "SALES") { window.alert("Only sales invoices are pushed to Fakturownia."); return; }
@@ -189,19 +223,23 @@ export default function Invoices(props: any) {
   // ════════════════ ROUTES ════════════════
   if (view === "form" && form) return <InvoiceForm form={form} setForm={setForm} onSave={saveForm} onCancel={() => { setView("list"); setForm(null); }} contacts={contacts} orders={orders} pos={pos} shipments={shipments} lots={lots} />;
   if (view === "note" && noteForm) return <NoteForm form={noteForm} setForm={setNoteForm} onSave={saveNote} onCancel={() => { setView(selected ? "detail" : "list"); setNoteForm(null); }} contacts={contacts} invoices={invoices} orders={orders} pos={pos} shipments={shipments} />;
-  if (view === "detail" && selected) return (
+  if (view === "detail" && selected) return (<>
     <InvoiceDetail
       inv={selected} notes={notes}
       onBack={() => { setView("list"); setSelId(null); }}
       onEdit={() => editInvoice(selected)}
       onPayment={() => recordPayment(selected)}
+      onDeletePayment={(evtId: any) => deletePaymentEvent(selected, evtId)}
       onMarkStatus={(s: PaymentStatus) => markStatus(selected, s)}
       onSend={() => sendToFakturownia(selected)}
       onCopyPayload={() => copyPayload(selected)}
       onNote={() => newNote(selected)}
       pushState={pushState && pushState.id === selected.id ? pushState : null}
     />
-  );
+    {paymentFor && (
+      <PaymentEventModal inv={paymentFor} onClose={() => setPaymentFor(null)} onSave={savePaymentEvent} />
+    )}
+  </>);
 
   // ════════════════ LIST ════════════════
   return (
@@ -287,7 +325,7 @@ export default function Invoices(props: any) {
 }
 
 // ════════════════ DETAIL ════════════════
-function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState }: any) {
+function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null }: any) {
   const locked = isLocked(inv);
   const relatedNotes = (notes || []).filter((nt: FinanceNote) => (inv.creditNoteIds || []).includes(nt.id) || nt.invoiceId === inv.id);
   const netAdjust = relatedNotes.reduce((s: number, nt: FinanceNote) => s + noteSignedPLN(nt), 0);
@@ -299,6 +337,24 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
+          {(() => {
+            const evts = normalizeInvoicePayments(inv);
+            if (!evts.length) return null;
+            return (
+              <div style={{ marginTop: 10, border: "1px solid #E5E7EB", borderRadius: 9, padding: "8px 12px", background: "#FAFAFA" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 6 }}>PAYMENTS ({evts.length}) — {money(evts.reduce((t: number, p: any) => t + (parseFloat(p.amount) || 0), 0), inv.currency)} of {money(inv.grossAmount, inv.currency)}</div>
+                {evts.map((p: any) => (
+                  <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "3px 0", borderTop: "1px solid #F1F5F9" }}>
+                    <span style={{ fontFamily: "ui-monospace, Menlo, monospace", color: "#64748B", minWidth: 82 }}>{p.date || "—"}</span>
+                    <span style={{ fontWeight: 700 }}>{money(p.amount, inv.currency)}</span>
+                    <span style={{ color: "#64748B" }}>{p.method}</span>
+                    {p.note && <span style={{ color: "#94A3B8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{p.note}</span>}
+                    {onDeletePayment && <button onClick={() => onDeletePayment(p.id)} title="Remove payment event" style={{ marginLeft: "auto", border: "none", background: "transparent", color: "#DC2626", cursor: "pointer", fontSize: 13 }}>✕</button>}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           {inv.kind === "SALES" && inv.paymentStatus === "Issued" && <button onClick={onSend} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#0284C7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>→ Send to Fakturownia</button>}
           {inv.kind === "SALES" && inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark Issued</button>}
           <button onClick={onNote} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>↩ Credit/Debit note</button>

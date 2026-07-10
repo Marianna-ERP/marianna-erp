@@ -1378,6 +1378,14 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
   const customsProviders = logisticsProviders(contacts, "Customs");
   function sf(k, v) { setDraft(prev => ({ ...prev, [k]: v })); }
   function updateLeg(idx, k, v) {
+    // FB-16: a later leg can't load before the previous leg delivers.
+    if (k === "plannedPickupDate" && idx > 0) {
+      const prevDel = String((draft.legs || [])[idx - 1]?.plannedDeliveryDate || "").slice(0, 10);
+      if (prevDel && v && String(v).slice(0, 10) < prevDel) {
+        // FB-16: silently clamp — a later leg can't load before the previous delivers.
+        v = prevDel;
+      }
+    }
     setDraft(prev => ({ ...prev, legs: (prev.legs || []).map((l, i) => i === idx ? { ...l, [k]: v } : l) }));
   }
   // v6.3.0: set a leg's From/To in one update, and auto-chain — when leg N's "To"
@@ -1628,7 +1636,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                 onChange={({ locationId, custom }) => updateLegLocation(i, "from", locationId, custom)} />
               <LegLocationSelect label="Unloading" contacts={contacts} mode={leg.mode} locationId={leg.toLocationId} custom={leg.toCustom}
                 onChange={({ locationId, custom }) => updateLegLocation(i, "to", locationId, custom)} />
-              <div><Lbl>Pickup</Lbl><Inp type="date" value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} />
+              <div><Lbl>Pickup</Lbl><Inp type="date" min={i > 0 ? String((draft.legs || [])[i - 1]?.plannedDeliveryDate || "").slice(0, 10) : undefined} value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} />
                 <Inp value={leg.plannedPickupTime || ""} onChange={e => updateLeg(i, "plannedPickupTime", e.target.value)} placeholder="time, e.g. 08:00–14:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Loading time or time window — printed on the transport order" /></div>
               <div><Lbl>Delivery</Lbl><Inp type="date" value={String(leg.plannedDeliveryDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedDeliveryDate", e.target.value)} />
                 <Inp value={leg.plannedDeliveryTime || ""} onChange={e => updateLeg(i, "plannedDeliveryTime", e.target.value)} placeholder="time, e.g. by 12:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Unloading time or time window — printed on the transport order" /></div>

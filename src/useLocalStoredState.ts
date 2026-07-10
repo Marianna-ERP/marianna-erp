@@ -38,13 +38,93 @@ function readFromStorage<T>(name: string, fallback: T): T {
   }
 }
 
+// ── Storage health (Batch 5 opening slice) ──────────────────────────────────
+// A failed write (quota full, storage disabled) must NOT be silent: the user
+// could keep working for an hour with nothing persisting. Any write failure
+// flips a global flag that App surfaces as a persistent warning banner.
+export const storageHealth: { failing: boolean; lastError: string; failedKey: string; failedAt: string; listeners: Array<() => void> } = {
+  failing: false, lastError: "", failedKey: "", failedAt: "", listeners: [],
+};
+function notifyHealth() { storageHealth.listeners.forEach(fn => { try { fn(); } catch {} }); }
+
 function writeToStorage<T>(name: string, value: T): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
     window.localStorage.setItem(storageKey(name), JSON.stringify(value));
-  } catch (err) {
+    if (storageHealth.failing) { storageHealth.failing = false; storageHealth.lastError = ""; notifyHealth(); }
+  } catch (err: any) {
     console.warn(`[localStorage] Could not write "${name}":`, err);
+    storageHealth.failing = true;
+    storageHealth.lastError = String(err?.message || err);
+    storageHealth.failedKey = name;
+    storageHealth.failedAt = new Date().toISOString();
+    notifyHealth();
   }
+}
+
+/** Subscribe-to-health hook for the App banner. */
+export function useStorageHealth(): { failing: boolean; lastError: string; failedKey: string } {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const fn = () => force(x => x + 1);
+    storageHealth.listeners.push(fn);
+    return () => { const i = storageHealth.listeners.indexOf(fn); if (i >= 0) storageHealth.listeners.splice(i, 1); };
+  }, []);
+  return { failing: storageHealth.failing, lastError: storageHealth.lastError, failedKey: storageHealth.failedKey };
+}
+
+// ── Storage usage (Settings panel) ───────────────────────────────────────────
+export function storageUsage(): { perKey: Array<{ key: string; kb: number }>; totalKB: number; budgetKB: number; pct: number } {
+  const perKey: Array<{ key: string; kb: number }> = [];
+  let total = 0;
+  if (typeof window !== "undefined" && window.localStorage) {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (!k || !k.startsWith(NAMESPACE + ":")) continue;
+      const v = window.localStorage.getItem(k) || "";
+      const kb = Math.round(((k.length + v.length) * 2) / 1024); // UTF-16 ≈ 2 bytes/char
+      perKey.push({ key: k.replace(`${NAMESPACE}:v${STORAGE_VERSION}:`, ""), kb });
+      total += kb;
+    }
+  }
+  perKey.sort((a, b) => b.kb - a.kb);
+  const budgetKB = 5 * 1024; // conservative common browser budget
+  return { perKey, totalKB: total, budgetKB, pct: Math.min(100, Math.round((total / budgetKB) * 100)) };
+}
+
+// ── Migration runner (skeleton — Batch 5) ────────────────────────────────────
+// The old strategy on STORAGE_VERSION bump was "ignore old keys, fresh seed",
+// which silently ABANDONS user data. From now on a bump runs migrations:
+// each entry upgrades all stores from version N-1 to N. On app load, if the
+// current-version keys are absent but an older version's exist, we migrate
+// forward and keep the old keys untouched as a safety copy.
+export const MIGRATIONS: Record<number, (all: Record<string, any>) => Record<string, any>> = {
+  // 2: (all) => ({ ...all, invoices: (all.invoices || []).map(addPaymentEvents) }),
+};
+
+export function runMigrationsIfNeeded(): { migrated: boolean; from?: number } {
+  if (typeof window === "undefined" || !window.localStorage) return { migrated: false };
+  try {
+    const probe = window.localStorage.getItem(storageKey(DATA_KEYS[0]));
+    if (probe !== null) return { migrated: false }; // current version already populated
+    for (let v = STORAGE_VERSION - 1; v >= 1; v--) {
+      const oldKey = `${NAMESPACE}:v${v}:${DATA_KEYS[0]}`;
+      if (window.localStorage.getItem(oldKey) === null) continue;
+      let all: Record<string, any> = {};
+      DATA_KEYS.forEach(k => {
+        const raw = window.localStorage.getItem(`${NAMESPACE}:v${v}:${k}`);
+        if (raw !== null) { try { all[k] = JSON.parse(raw); } catch {} }
+      });
+      for (let step = v + 1; step <= STORAGE_VERSION; step++) {
+        const fn = MIGRATIONS[step];
+        if (fn) all = fn(all);
+      }
+      Object.entries(all).forEach(([k, val]) => writeToStorage(k, val));
+      console.info(`[storage] Migrated data v${v} → v${STORAGE_VERSION} (old keys kept as safety copy).`);
+      return { migrated: true, from: v };
+    }
+  } catch (err) { console.warn("[storage] Migration check failed:", err); }
+  return { migrated: false };
 }
 
 export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T | ((prev: T) => T)) => void] {

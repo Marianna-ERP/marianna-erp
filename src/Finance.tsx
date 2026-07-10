@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { computeSOMargin } from "./marginCalculations";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
@@ -460,13 +461,30 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
 
 
 // ─── v6.9: RECEIVABLES & PAYABLES VIEW ──────────────────────────────────────
-function LedgerView({ orders = [], lots = [], pos = [], invoices = [], financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
+function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
   const today = localTodayISO();
   const { items, totals } = buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs, todayISO: today });
 
   function togglePaid(ref: string) {
+    // Batch 5d (BP-39): for INVOICES, "mark paid" writes a tagged payment EVENT on
+    // the invoice (the flag store is retired for them). PO/PAYOUT commitment rows
+    // keep the flag — they have no invoice record to carry events.
+    if (String(ref).startsWith("INV:") && setInvoices) {
+      const id = String(ref).slice(4);
+      const inv = (invoices || []).find((x: any) => String(x.id) === id);
+      if (!inv) return;
+      const isPaidNow = inv.paymentStatus === "Paid";
+      if (!isPaidNow) {
+        setInvoices((prev: any[]) => prev.map((x: any) => String(x.id) === id ? markInvoicePaidViaLedger(x, today, () => Date.now() + Math.floor(Math.random() * 1000)) : x));
+      } else {
+        const un = unmarkLedgerPaid(inv);
+        if (un === null) { window.alert("This invoice is paid by recorded payments — edit them in the Invoices module."); return; }
+        setInvoices((prev: any[]) => prev.map((x: any) => String(x.id) === id ? un : x));
+      }
+      return;
+    }
     if (!setSettledRefs) return;
     setSettledRefs((prev: string[]) => (prev || []).includes(ref) ? prev.filter(r => r !== ref) : [...(prev || []), ref]);
   }
@@ -818,6 +836,7 @@ export default function Finance({
   creditNotes = [],
   setCreditNotes,
   invoices = [],
+  setInvoices = null,
   financeNotes = [],
 }: {
   orders?: any[];
@@ -835,6 +854,7 @@ export default function Finance({
   creditNotes?: any[];
   setCreditNotes?: any;
   invoices?: any[];
+  setInvoices?: any;
   financeNotes?: any[];
 }) {
   const [mode, setMode] = useState<MarginMode>("forecast");
@@ -973,7 +993,7 @@ export default function Finance({
         {tab === "creditNotes" ? (
           <CreditNotesView creditNotes={creditNotes} setCreditNotes={setCreditNotes} contacts={contacts} pos={pos} orders={orders} shipments={shipments} />
         ) : tab === "ledger" ? (
-          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
+          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
         ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />
         ) : tab === "pl" ? (
@@ -1079,6 +1099,7 @@ export default function Finance({
                   <Field label="Amount PLN"><Inp type="number" value={form.amountPLN} onChange={(e: any) => setForm({ ...form, amountPLN: safe(e.target.value) })} /></Field>
                   <Field label="Allocation method"><Sel value={form.allocationMethod} onChange={(e: any) => setForm({ ...form, allocationMethod: e.target.value as any })}>{ALLOCATION_METHODS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}</Sel></Field>
                   <Field label="Status"><Sel value={form.status} onChange={(e: any) => setForm({ ...form, status: e.target.value as any })}>{["Budget", "Expected", "Received", "Posted", "Paid"].map(s => <option key={s} value={s}>{s}</option>)}</Sel></Field>
+                  <Field label="Cost invoice no. (actual)"><Inp value={(form as any).invoiceRef || ""} onChange={(e: any) => setForm({ ...form, invoiceRef: e.target.value } as any)} placeholder="e.g. FS 106/2026 — links this line to the real invoice" /></Field>
                 </div>
                 <div style={{ marginTop: 10 }}>
                   <Field label="Notes"><Inp value={form.notes || ""} onChange={(e: any) => setForm({ ...form, notes: e.target.value })} placeholder="Internal note" /></Field>
@@ -1088,13 +1109,13 @@ export default function Finance({
                   <Button onClick={() => setForm(newCostTemplate())}>Clear</Button>
                 </div>
                 <div style={{ marginTop: 12, fontSize: 11, color: "#888", lineHeight: 1.45 }}>
-                  Forecast counts Budget / Expected / Received / Posted / Paid. Actual counts only Received / Posted / Paid. Direct delivery petrol should normally be entered as a Shipment cost, not as overhead.
+                  These lines are the overhead BUDGET / PLAN. Forecast counts every status; ACTUAL counts a line once it's linked to a real cost invoice (invoice no. above) — or, for unlinked legacy lines, once its status is Received / Posted / Paid. The invoice itself lives in the Invoices module (the money-document registry); direct delivery petrol belongs on the Shipment, not here.
                 </div>
               </Card>
 
               <div style={{ order: 1 }}>
                 <Card style={{ marginBottom: 14 }}>
-                  <SectionTitle>OPERATIONAL COSTS SUMMARY</SectionTitle>
+                  <SectionTitle>OVERHEAD BUDGET / PLAN — SUMMARY</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
                     <StatBlock label="TOTAL COSTS" value={fmtPLN(totalOperationalCostPLN)} sub={`${(operationalCosts || []).length} entries`} />
                     <StatBlock label="FORECAST ALLOCATED" value={fmtPLN(aggregateNetMargins(orders, lots, pos, shipments, "forecast", committedFilter, operationalCosts, orders).totalOverheadPLN)} valueColor="#64748B" sub="budget + expected + booked" />
