@@ -11,14 +11,14 @@ import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
 import { convertSettledRefsToEvents } from "./payments.domain";
-
-// Batch 5: migrate older-version stored data forward BEFORE any hook reads it.
-runMigrationsIfNeeded();
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import { primeIdsFrom } from "./ids";
 import Invoices from "./Invoices";
 import { migrateLegacyInvoices } from "./invoicing";
+
+// Batch 5: migrate older-version stored data forward BEFORE any hook reads it.
+runMigrationsIfNeeded();
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
