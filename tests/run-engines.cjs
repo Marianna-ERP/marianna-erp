@@ -731,6 +731,79 @@ T("claim note: incoming CREDIT vs producer, EUR with PLN conversion, reduces pay
   assert.equal(adj.payableAdjPLN, -26264.7);    // we owe the producer LESS
 });
 
+// ── Batch 6b: movement matrix + Phase B (BP-56 final / BP-57) ──
+const { movementFromEnds, isEUCountry, handoverSentence, namedPlacePoolForIncoterm, dispositionFromSO, poDirectFromSOs, composePOFlow } = require("./build/tradeFlow.domain.js");
+
+console.log("── 4-class movement matrix ──");
+T("matrix: all four cells", () => {
+  assert.equal(movementFromEnds(false, true), "IMPORT");      // Egypt → Gdańsk
+  assert.equal(movementFromEnds(true, false), "EXPORT");      // Lublin → Alexandria
+  assert.equal(movementFromEnds(true, true), "INTRA_EU");     // Lublin → Hamburg
+  assert.equal(movementFromEnds(false, false), "CROSS_TRADE");// Egypt → Jeddah, never touches EU
+});
+T("EU membership incl. 'Polska'", () => {
+  assert.equal(isEUCountry("Poland"), true);
+  assert.equal(isEUCountry("Polska"), true);
+  assert.equal(isEUCountry("Egypt"), false);
+});
+T("handover sentence carries the named place", () => {
+  assert.match(handoverSentence("CIF", "Alexandria"), /Alexandria/);
+  assert.match(handoverSentence("CIF", "Alexandria"), /discharge/i);
+});
+T("named-place pool follows the incoterm", () => {
+  assert.deepEqual(namedPlacePoolForIncoterm("CIF").types, ["PORT"]);
+  assert.deepEqual(namedPlacePoolForIncoterm("EXW").types, ["SUPPLIER"]);
+});
+
+console.log("── Phase B: sale owns disposition (BP-57) ──");
+T("dispositionFromSO per sell incoterm", () => {
+  assert.equal(dispositionFromSO({ sellIncoterm: "DDP" }), "DIRECT_TO_CLIENT");
+  assert.equal(dispositionFromSO({ sellIncoterm: "CIF" }), "TO_PORT");
+  assert.equal(dispositionFromSO({ sellIncoterm: "EXW" }), "CLIENT_PICKUP");
+  assert.equal(dispositionFromSO({ sellIncoterm: "" }), "OUR_WAREHOUSE");
+});
+T("PO becomes direct when a governing active SO sends goods onward", () => {
+  const po = { number: "PO-1", buyIncoterm: "CIF" };
+  const soDAP = { number: "SO-1", status: "Confirmed", sellIncoterm: "DAP", items: [{ sourceType: "PO", sourceRef: "PO-1" }] };
+  assert.equal(poDirectFromSOs(po, [soDAP]), true);
+  assert.equal(poDirectFromSOs(po, [{ ...soDAP, status: "Cancelled" }]), false);
+  assert.equal(poDirectFromSOs(po, [{ ...soDAP, status: "Draft" }]), false);
+  assert.equal(poDirectFromSOs(po, []), false);
+});
+T("composePOFlow: CIF buy + DAP sale → IMP_CIF_DIR; no sale → IMP_CIF_WH", () => {
+  const po = { number: "PO-1", buyIncoterm: "CIF", tradeMovement: "IMPORT" };
+  const soDAP = { number: "SO-1", status: "Confirmed", sellIncoterm: "DAP", items: [{ sourceType: "PO", sourceRef: "PO-1" }] };
+  assert.deepEqual(composePOFlow(po, [soDAP]), { flow: "IMP_CIF_DIR", directFlow: true });
+  assert.deepEqual(composePOFlow(po, []), { flow: "IMP_CIF_WH", directFlow: false });
+});
+T("cross-trade rides the direct branch (never our warehouse)", () => {
+  const po = { number: "PO-2", buyIncoterm: "CIF", tradeMovement: "CROSS_TRADE" };
+  const r = composePOFlow(po, []);
+  assert.equal(r.directFlow, true);
+  assert.equal(r.flow, "IMP_CIF_DIR");
+});
+
+// ── Batch 6c: quality semantics pinned (BP-33) ──
+const locByIdStub = () => null; // recomputeLotFromMovements already required above
+
+console.log("── quality movement semantics ──");
+T("CLAIM is client-side: claimedKg accumulates, physical stock UNCHANGED", () => {
+  const lot = recomputeLotFromMovements({ number: "LOT-Q" }, [
+    { id: 1, date: "2026-07-01", type: "IN", qtyKg: 10000, toId: 1 },
+    { id: 2, date: "2026-07-05", type: "CLAIM", qtyKg: 4200, note: "Producer claim CLM-2026-0001 — Skin defects 42%" },
+  ], locByIdStub);
+  assert.equal(lot.physicalKg, 10000);   // no warehouse effect
+  assert.equal(lot.claimedKg, 4200);
+});
+T("DAMAGE reduces physical stock and accumulates damagedKg", () => {
+  const lot = recomputeLotFromMovements({ number: "LOT-D" }, [
+    { id: 1, date: "2026-07-01", type: "IN", qtyKg: 10000, toId: 1 },
+    { id: 2, date: "2026-07-03", type: "DAMAGE", qtyKg: 500 },
+  ], locByIdStub);
+  assert.equal(lot.physicalKg, 9500);
+  assert.equal(lot.damagedKg, 500);
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -121,3 +121,92 @@ export function handoverPointForIncoterm(incoterm: string): string {
   if (t === "DDP") return "our_wh";
   return "";
 }
+
+// ═══ Batch 6b: PURCHASE TERMS collapse + 4-class movement + Phase B core ═══
+
+// EU membership for the movement matrix (customs perspective, EU-27).
+const EU_COUNTRIES = new Set(["austria","belgium","bulgaria","croatia","cyprus","czechia","czech republic","denmark","estonia","finland","france","germany","greece","hungary","ireland","italy","latvia","lithuania","luxembourg","malta","netherlands","poland","polska","portugal","romania","slovakia","slovenia","spain","sweden"]);
+export function isEUCountry(country: any): boolean {
+  return EU_COUNTRIES.has(String(country || "").trim().toLowerCase());
+}
+
+// The movement matrix (BP-56 final): origin × named place, from the EU-customs view.
+//   origin ∉ EU, place ∈ EU  → IMPORT       (goods enter EU customs)
+//   origin ∈ EU, place ∉ EU  → EXPORT       (goods leave EU customs)
+//   origin ∈ EU, place ∈ EU  → INTRA_EU     (no customs border)
+//   origin ∉ EU, place ∉ EU  → CROSS_TRADE  (goods never touch the EU)
+export function movementFromEnds(originInEU: boolean, placeInEU: boolean): string {
+  if (!originInEU && placeInEU) return "IMPORT";
+  if (originInEU && !placeInEU) return "EXPORT";
+  if (originInEU && placeInEU) return "INTRA_EU";
+  return "CROSS_TRADE";
+}
+export const MOVEMENT_LABELS: Record<string, { label: string; color: string; hint: string }> = {
+  IMPORT:      { label: "Import",      color: "#1D4ED8", hint: "Goods enter EU customs" },
+  EXPORT:      { label: "Export",      color: "#15803D", hint: "Goods leave EU customs" },
+  INTRA_EU:    { label: "Intra-EU",    color: "#7C3AED", hint: "No customs border" },
+  CROSS_TRADE: { label: "Cross-trade", color: "#B45309", hint: "Goods never touch the EU — no EU customs at all" },
+};
+
+/** Which location types the named place should offer, per incoterm. */
+export function namedPlacePoolForIncoterm(incoterm: string): { types: string[]; label: string } {
+  const t = String(incoterm || "").toUpperCase();
+  if (t === "EXW" || t === "FCA") return { types: ["SUPPLIER"], label: "Named place — supplier site / origin point" };
+  if (t === "FOB" || t === "CFR") return { types: ["PORT"], label: "Named place — port of loading" };
+  if (t === "CIF") return { types: ["PORT"], label: "Named place — port of discharge" };
+  if (t === "DAP" || t === "DAT") return { types: ["CLIENT", "OWN"], label: "Named place — place of delivery" };
+  if (t === "DDP") return { types: ["OWN", "CLIENT"], label: "Named place — delivered to" };
+  return { types: ["SUPPLIER", "PORT", "OWN", "CLIENT"], label: "Named place" };
+}
+
+/** One contractual sentence: responsibilities + the named place, in words. */
+export function handoverSentence(incoterm: string, placeName: string): string {
+  const t = String(incoterm || "").toUpperCase();
+  const p = placeName ? ` — ${placeName}` : "";
+  const map: Record<string, string> = {
+    EXW: `We collect at the supplier's premises${p}; all transport and export formalities on us.`,
+    FCA: `Handed to our carrier at the named origin point${p}; main carriage on us.`,
+    FOB: `Loaded on board at the port of loading${p}; sea freight onward on us.`,
+    CFR: `Seller pays freight to the destination port${p}; risk passes to us at loading.`,
+    CIF: `We take over at the port of discharge${p}; seller covers freight + insurance to that port.`,
+    DAP: `Delivered to the named place${p}, unloading and import duties on us.`,
+    DAT: `Delivered at terminal${p}, unloaded.`,
+    DDP: `Delivered to us${p} with duties paid by the supplier — no logistics on our side.`,
+  };
+  return map[t] || (t ? `${t}${p} — handover per Incoterms 2020.` : "Select the purchase incoterm — it defines who does what, and where we take over.");
+}
+
+// ── Phase B (BP-57): the SALE owns disposition ───────────────────────────────
+/** A sales order's disposition, derived from its sell terms. */
+export function dispositionFromSO(so: any): string {
+  const ic = String(so?.sellIncoterm || "").toUpperCase();
+  if (ic === "EXW") return "CLIENT_PICKUP";
+  if (ic === "DAP" || ic === "DDP" || ic === "DAT") return "DIRECT_TO_CLIENT";
+  if (ic === "CIF" || ic === "CFR" || ic === "FOB" || ic === "FCA") return "TO_PORT";
+  return "OUR_WAREHOUSE";
+}
+
+/** Phase B core: a PO is a DIRECT (never-our-warehouse) flow when a governing
+ *  active SO sources it and that sale's terms send goods straight onward. */
+export function poDirectFromSOs(po: any, orders: any[]): boolean {
+  return (orders || []).some((o: any) => {
+    if (!o || o.status === "Cancelled" || o.status === "Draft") return false;
+    const sources = (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === po.number);
+    if (!sources) return false;
+    const d = dispositionFromSO(o);
+    return d === "DIRECT_TO_CLIENT" || d === "TO_PORT" || d === "CLIENT_PICKUP";
+  });
+}
+
+/** Recompose the PO's internal flow from its terms + the sales reality (Phase B). */
+export function composePOFlow(po: any, orders: any[]): { flow: string; directFlow: boolean } {
+  const direct = poDirectFromSOs(po, orders);
+  const movement = po.tradeMovement || "IMPORT";
+  const st = {
+    tradeMovement: movement === "EXPORT" ? "EXPORT" : "IMPORT", // legacy keys are binary; INTRA_EU/CROSS_TRADE ride the import branch
+    purchaseIncoterm: po.buyIncoterm || po.purchaseIncoterm || "EXW",
+    cargoPlan: (direct || movement === "CROSS_TRADE") ? "DIRECT_TO_CLIENT" : "OUR_WAREHOUSE",
+    handoverPoint: po.handoverPoint,
+  };
+  return { flow: structToFlow(st) || po.flow || "", directFlow: st.cargoPlan === "DIRECT_TO_CLIENT" };
+}

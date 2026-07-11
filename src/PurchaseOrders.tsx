@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo } from "react";
-import { structToFlow, flowToStruct, reconcilePOFlow, TRADE_MOVEMENTS, HANDOVER_POINTS, CARGO_PLANS, isDirectCargoPlan, handoverTextForIncoterm, handoverPointForIncoterm } from "./tradeFlow.domain";
+import { structToFlow, flowToStruct, reconcilePOFlow, isDirectCargoPlan, handoverTextForIncoterm, handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle } from "./ui";
 import { nextId, nextIds } from "./ids";
 import { FX_RATES, defaultFxRate } from "./fx";
@@ -812,6 +812,12 @@ function PrintModal({ order, onClose }: any) {
         <div style={{ padding: 24, overflowY: "auto", background: "#ECECEC" }}>
           {/* On-screen preview sized to mimic an A4 sheet */}
           <div id="po-print-doc" style={{ background: "#fff", padding: "8mm", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", width: "186mm", margin: "0 auto", boxSizing: "content-box" }}>
+          {order.buyIncoterm && (
+            <div style={{ border: "1.5px solid #111", padding: "6px 10px", margin: "6px 0 10px", fontSize: 12.5 }}>
+              <b>Terms / Warunki: {order.buyIncoterm} {order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || ""} (Incoterms 2020)</b>
+              <div style={{ fontSize: 11, marginTop: 2 }}>{handoverSentence(order.buyIncoterm, order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "")}</div>
+            </div>
+          )}
             <PODoc order={order} />
           </div>
         </div>
@@ -983,6 +989,16 @@ function LifecycleTimeline({ status }: any) {
 }
 
 // ─── ORDER FORM ─────────────────────────────────────────────────────────────
+
+// Batch 6b hard gate: a PO leaving Draft — or being printed/emailed to the
+// producer — must carry its purchase terms. "CIF" without "CIF Alexandria" is
+// only half the contract, so the incoterm and its named place gate together.
+function poTermsMissing(o: any): string | null {
+  if (!o?.buyIncoterm) return "the purchase incoterm";
+  if (!(o?.destinationLocationId || (o?.destinationText || "").trim())) return `the named place for ${o.buyIncoterm}`;
+  return null;
+}
+
 function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
@@ -1140,85 +1156,61 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>FLOW · PURCHASE INCOTERM · DESTINATION</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
-              {/* BP-1: plain-language trade structure. These drive the internal flow key
-                  (BP-12 shim) so Shipments/Inventory keep working unchanged. */}
+              {/* ═══ Batch 6b (BP-56 final): PURCHASE TERMS — the contract, not the machinery.
+                  Incoterm + named place are THE inputs; movement + handover derive; the
+                  internal flow key is composed by the shim (composePOFlow at save). */}
               <div style={{ gridColumn: "1 / -1", border: "1px solid #E0E7FF", background: "#F5F7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 4 }}>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#4338CA", letterSpacing: "0.04em", marginBottom: 8 }}>TRADE STRUCTURE</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#4338CA", letterSpacing: "0.04em", marginBottom: 8 }}>PURCHASE TERMS <span style={{ fontWeight: 500, color: "#818CF8" }}>· required to confirm / print / send</span></div>
+                <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
                   <div>
-                    <Lbl>Trade movement</Lbl>
-                    <Sel disabled={isLocked} value={order.tradeMovement || (order.flow ? (flowToStruct(order.flow)?.tradeMovement || "") : "")} onChange={e => {
-                      setOrder(o => { const next = { ...o, tradeMovement: e.target.value }; return { ...next, flow: structToFlow(next) || o.flow, directFlow: isDirectCargoPlan(next) }; });
-                    }}>
+                    <Lbl>Purchase incoterm *</Lbl>
+                    <Sel value={order.buyIncoterm || ""} onChange={e => { const inc = e.target.value; setOrder(o => { const hp = handoverPointForIncoterm(inc); return { ...o, buyIncoterm: inc, purchaseIncoterm: inc, handoverPoint: hp || o.handoverPoint }; }); }} disabled={isLocked}>
                       <option value="">— select —</option>
-                      {TRADE_MOVEMENTS.map(m => <option key={m.code} value={m.code}>{m.label}</option>)}
+                      {INCOTERMS_BUY.map(i => <option key={i.code} value={i.code}>{i.code}</option>)}
                     </Sel>
                   </div>
                   <div>
-                    <Lbl>Handover point <span style={{ color: "#BBB", fontWeight: 400 }}>· from incoterm</span></Lbl>
-                    {/* BP-56/FB-4: derived from the purchase incoterm, not typed. */}
-                    <div style={{ padding: "9px 11px", border: "1px dashed #E0E7FF", borderRadius: 8, background: "#FBFCFF", fontSize: 11.5, color: order.buyIncoterm ? "#4338CA" : "#9CA3AF", lineHeight: 1.4, minHeight: 38 }}>
-                      {handoverTextForIncoterm(order.buyIncoterm, order.tradeMovement)}
-                    </div>
-                  </div>
-                  <div>
-                    <Lbl>Default disposition <span style={{ color: "#BBB", fontWeight: 400 }}>· optional</span></Lbl>
-                    {/* BP-56: the PO does NOT own disposition — each sale decides its own.
-                        This is only a default hint; usually "to our warehouse". */}
-                    <Sel disabled={isLocked} value={order.cargoPlan || (order.flow ? (flowToStruct(order.flow)?.cargoPlan || "") : "")} onChange={e => {
-                      setOrder(o => { const next = { ...o, cargoPlan: e.target.value }; return { ...next, flow: structToFlow(next) || o.flow, directFlow: e.target.value === "DIRECT_TO_CLIENT" }; });
-                    }}>
-                      <option value="">To our warehouse (default)</option>
-                      {CARGO_PLANS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
-                    </Sel>
-                  </div>
-                  <div>
-                    <Lbl>Pickup point <span style={{ color: "#BBB", fontWeight: 400 }}>· where we take over</span></Lbl>
-                    {/* FB-10: ONE destination on the PO = the physical point where we collect the
-                        cargo (tied to the handover point derived from the incoterm). */}
-                    <Sel disabled={isLocked} value={order.destinationLocationId ?? ""} onChange={e => sf("destinationLocationId", e.target.value ? Number(e.target.value) : null)}>
-                      <option value="">— our warehouse / TBD —</option>
-                      {LOCATIONS.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}
-                    </Sel>
+                    {(() => {
+                      const pool = namedPlacePoolForIncoterm(order.buyIncoterm);
+                      const opts = LOCATIONS.filter((l: any) => pool.types.includes(l.type));
+                      const rest = LOCATIONS.filter((l: any) => !pool.types.includes(l.type));
+                      return (<>
+                        <Lbl>{pool.label} *</Lbl>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                          <Sel disabled={isLocked} value={order.destinationLocationId ?? ""} onChange={e => sf("destinationLocationId", e.target.value ? Number(e.target.value) : null)}>
+                            <option value="">— select the named place —</option>
+                            {opts.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}
+                            {rest.length > 0 && <optgroup label="Other places">{rest.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}</optgroup>}
+                          </Sel>
+                          <Inp disabled={isLocked} value={order.destinationText || ""} onChange={e => sf("destinationText", e.target.value)} placeholder="…or type it (e.g. Alexandria)" />
+                        </div>
+                      </>);
+                    })()}
                   </div>
                 </div>
-                {order.flow && <div style={{ fontSize: 10.5, color: "#6366F1", marginTop: 8 }}>→ Internal flow: <b>{FLOW_TYPES[order.flow]?.short || order.flow}</b> {isDirectCargoPlan(order) || order.directFlow ? "· direct (never our warehouse)" : ""}</div>}
-              </div>
-              <div>
-                <Lbl>Flow type <span style={{ color: "#BBB", fontWeight: 400 }}>· advanced / derived</span></Lbl>
-                <Sel disabled={isLocked} value={order.flow || ""} onChange={e => {
-                  const nextFlow = e.target.value;
-                  const st = flowToStruct(nextFlow) || {};
-                  setOrder(o => ({
-                    ...o,
-                    flow: nextFlow,
-                    ...st, // BP-12: keep the structured fields in sync when flow is set directly
-                    directFlow: st.cargoPlan === "DIRECT_TO_CLIENT",
-                    requiresSea: (o.requiresSea === undefined || o.requiresSea === null)
-                      ? (FLOW_TYPES[nextFlow]?.defaultRequiresSea || false)
-                      : o.requiresSea,
-                  }));
-                }}>
-                  <option value="">— select —</option>
-                  {FLOW_GROUPS.map(g => (
-                    <optgroup key={g.id} label={`${g.label} ─────────`}>
-                      {Object.entries(FLOW_TYPES).filter(([, f]) => f.group === g.id).map(([k, f]) => (
-                        <option key={k} value={k}>{f.emoji} {f.short}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </Sel>
-                {order.flow && <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>{FLOW_TYPES[order.flow].desc}</div>}
-              </div>
-              <div>
-                <Lbl>Purchase Incoterm</Lbl>
-                <Sel value={order.buyIncoterm || ""} onChange={e => { const inc = e.target.value; setOrder(o => { const hp = handoverPointForIncoterm(inc); const next = { ...o, buyIncoterm: inc, handoverPoint: hp || o.handoverPoint, purchaseIncoterm: inc }; return { ...next, flow: structToFlow(next) || o.flow }; }); }} disabled={isLocked}>
-                  <option value="">— select —</option>
-                  {INCOTERMS_BUY.map(i => <option key={i.code} value={i.code}>{i.code}{compatibleIncoterms.includes(i.code) ? "" : " ⚠"}</option>)}
-                </Sel>
-                {incotermWarning && (
-                  <div style={{ fontSize: 10.5, color: "#D97706", marginTop: 4 }}>⚠ {order.buyIncoterm} is unusual for {FLOW_TYPES[order.flow].short}. Typical: {compatibleIncoterms.join(", ")}.</div>
-                )}
+                {(() => {
+                  // Derived line: 4-class movement badge (click to flip) + the contractual sentence.
+                  const placeName = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
+                  const placeLoc = LOCATIONS.find((l: any) => l.id === order.destinationLocationId);
+                  const placeInEU = order.destinationText ? true : (placeLoc ? placeLoc.type !== "PORT" || isEUCountry("Poland") : true);
+                  const originCountry = order.supplier?.country || (order.items || [])[0]?.origin || "";
+                  const autoMove = movementFromEnds(isEUCountry(originCountry) , placeInEU);
+                  const move = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? order.tradeMovement : autoMove;
+                  const mv = MOVEMENT_LABELS[move] || MOVEMENT_LABELS.IMPORT;
+                  const cycle = ["IMPORT", "EXPORT", "INTRA_EU", "CROSS_TRADE"];
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF" }}>
+                      <button type="button" disabled={isLocked} title={`${mv.hint}. Click to change if the automatic classification is wrong.`}
+                        onClick={() => sf("tradeMovement", cycle[(cycle.indexOf(move) + 1) % cycle.length])}
+                        style={{ border: `1px solid ${mv.color}`, color: mv.color, background: "#fff", borderRadius: 999, padding: "3px 12px", fontSize: 11, fontWeight: 800, cursor: isLocked ? "default" : "pointer", whiteSpace: "nowrap" }}>
+                        {mv.label}
+                      </button>
+                      <div style={{ fontSize: 11.5, color: order.buyIncoterm ? "#4338CA" : "#9CA3AF", lineHeight: 1.45 }}>
+                        {handoverSentence(order.buyIncoterm, placeName)}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div>
                 <Lbl>Destination {order.flow && <span style={{ color: "#BBB", fontWeight: 400 }}>· typical: {LOCATION_TYPES[FLOW_DESTINATION_TYPE[order.flow]]?.label}</span>}</Lbl>
@@ -1906,6 +1898,16 @@ ${blockNote}`.trim(),
 
   // mutations
   function saveOrder(o) {
+    // Batch 6b: hard confirm-gate — no PO past Draft without its terms.
+    const termsMissing = poTermsMissing(o);
+    if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
+      alert(`This PO cannot be ${o.status === "Confirmed" ? "confirmed" : "saved as " + o.status} without ${termsMissing}. The purchase terms are the contract — the producer must see them.`);
+      return;
+    }
+    // BP-57 Phase B: the internal flow is composed from the terms + the SALES
+    // reality — a governing SO that sends goods onward makes this PO direct.
+    if (o.buyIncoterm) o = { ...o, ...composePOFlow(o, extSOs) };
+
     // Guard: prevent duplicate PO numbers (in case the user manually edited it)
     const previous = orders.find(p => p.id === o.id);
     const becomesCancelled = o.status === "Cancelled" && (!previous || previous.status !== "Cancelled");
@@ -2062,6 +2064,7 @@ ${blockNote}`.trim(),
               alert("Cannot print or share a draft PO. Confirm the order first.");
               return;
             }
+            { const _m = poTermsMissing(form); if (_m) { alert(`Cannot print this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
             setPrintOrder(form);
           }}
           onEmail={() => {
@@ -2069,6 +2072,7 @@ ${blockNote}`.trim(),
               alert("Cannot email a draft PO to the supplier. Confirm the order first.");
               return;
             }
+            { const _m = poTermsMissing(form); if (_m) { alert(`Cannot email this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
             setEmailOrder(form);
           }}
         />
@@ -2093,6 +2097,7 @@ ${blockNote}`.trim(),
               alert("Cannot print or share a draft PO. Confirm the order first.");
               return;
             }
+            { const _m = poTermsMissing(selected); if (_m) { alert(`Cannot print this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
             setPrintOrder(selected);
           }}
           onEmail={() => {
@@ -2100,6 +2105,7 @@ ${blockNote}`.trim(),
               alert("Cannot email a draft PO to the supplier. Confirm the order first.");
               return;
             }
+            { const _m = poTermsMissing(selected); if (_m) { alert(`Cannot email this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
             setEmailOrder(selected);
           }}
         />

@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { handoverSentence } from "./tradeFlow.domain";
 import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
@@ -934,6 +935,12 @@ function PrintModal({ order, onClose }: any) {
         </div>
         <div style={{ padding: 24, overflowY: "auto", background: "#ECECEC" }}>
           <div id="so-print-doc" style={{ background: "#fff", padding: "8mm", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", width: "186mm", margin: "0 auto", boxSizing: "content-box" }}>
+          {order.sellIncoterm && (
+            <div style={{ border: "1.5px solid #111", padding: "6px 10px", margin: "6px 0 10px", fontSize: 12.5 }}>
+              <b>Terms / Warunki: {order.sellIncoterm} {order.destinationText || ((order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client")) === "client" ? (order.client?.address || "") : "")} (Incoterms 2020)</b>
+              <div style={{ fontSize: 11, marginTop: 2 }}>{handoverSentence(order.sellIncoterm, order.destinationText || ((order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client")) === "client" ? (order.client?.name || "client") : ""))}</div>
+            </div>
+          )}
             <SODoc order={order} />
           </div>
         </div>
@@ -1163,6 +1170,21 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
 
 
 // ─── ORDER FORM ───────────────────────────────────────────────────────────
+
+// Batch 6b hard gate (SO side): the sale's contract to the CLIENT — sell
+// incoterm + a resolved destination — gates confirm/print/email. This is also
+// the foundation Phase B stands on: disposition derives from these terms.
+function soTermsMissing(o: any): string | null {
+  if (!o?.sellIncoterm) return "the sell incoterm";
+  const mode = o.destinationMode || ((o.destinationLocationId || o.destinationText) ? "other" : "client");
+  if (mode === "client") {
+    if (!(o.client?.address || "").trim()) return "the client's registered address (or pick another destination)";
+    return null;
+  }
+  if (!(o.destinationLocationId || (o.destinationText || "").trim())) return `the destination for ${o.sellIncoterm}`;
+  return null;
+}
+
 function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
   // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
   // this session shows in the destination picker without a browser refresh.
@@ -2318,6 +2340,13 @@ export default function SalesOrders({
   }
 
   function saveOrder(o) {
+    // Batch 6b: hard confirm-gate — no SO past Draft without its sell terms.
+    const termsMissing = soTermsMissing(o);
+    if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
+      alert(`This SO cannot move to ${o.status} without ${termsMissing}. "CIF" without "CIF Jeddah" is only half the contract.`);
+      return;
+    }
+
     // Duplicate number guard
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
     if (dup) { alert(`SO number ${o.number} already exists.`); return; }
@@ -2486,6 +2515,7 @@ export default function SalesOrders({
               alert("Cannot print or share a draft SO. Confirm the order first.");
               return;
             }
+            { const _m = soTermsMissing(form); if (_m) { alert(`Cannot print this SO without ${_m} — the client must see the delivery terms.`); return; } }
             setPrintOrder(form);
           }}
           onEmail={() => {
@@ -2493,6 +2523,7 @@ export default function SalesOrders({
               alert("Cannot email a draft SO. Confirm the order first.");
               return;
             }
+            { const _m = soTermsMissing(form); if (_m) { alert(`Cannot email this SO without ${_m} — the client must see the delivery terms.`); return; } }
             setEmailOrder(form);
           }}
         />
@@ -2525,6 +2556,7 @@ export default function SalesOrders({
               alert("Cannot print or share a draft SO. Confirm the order first.");
               return;
             }
+            { const _m = soTermsMissing(selected); if (_m) { alert(`Cannot print this SO without ${_m} — the client must see the delivery terms.`); return; } }
             setPrintOrder(selected);
           }}
           onEmail={() => {
@@ -2532,6 +2564,7 @@ export default function SalesOrders({
               alert("Cannot email a draft SO. Confirm the order first.");
               return;
             }
+            { const _m = soTermsMissing(selected); if (_m) { alert(`Cannot email this SO without ${_m} — the client must see the delivery terms.`); return; } }
             setEmailOrder(selected);
           }}
           onIssueInvoice={() => setInvoiceOrder(selected)}
