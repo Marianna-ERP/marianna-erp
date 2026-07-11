@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useRef } from "react";
-import { locationsByLegacyType, warehouseLocationOptions, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
+import { Lbl } from "./ui";
+import { nextId } from "./ids";
+import { locationsByLegacyType, contactAddresses, warehouseCpLocId, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -395,9 +397,6 @@ function Sel({ value, onChange, children, style }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <select value={value || ""} onChange={onChange} style={{ ...base, ...style }}>{children}</select>;
 }
-function Lbl({ children }: any) {
-  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
-}
 function TypeBadge({ type }: any) {
   const s = TYPE_COLORS[type] || TYPE_COLORS["Other"];
   return (
@@ -490,16 +489,24 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any
     const next = cur.includes(String(id)) ? cur.filter(x => x !== String(id)) : [...cur, String(id)];
     return { ...f, warehouseTariff: { ...(f.warehouseTariff || {}), locationIds: next } };
   });
-  // v6.10 (#7/#8): operated-location candidates = built-in warehouse locations +
-  // every warehouse counterparty's address(es), not just the two seed warehouses.
-  const warehouseLocations = warehouseLocationOptions(contacts || []);
+  // v6.18.3 (#1): a warehouse operates at ITS OWN address(es) — we bill from its
+  // main legal address regardless of which of its sites holds the goods. So the
+  // operating-location candidates are this warehouse's own addresses (main + extra),
+  // not the global list of every warehouse (which wrongly showed WH-01/WH-02).
+  const warehouseLocations = form.id
+    ? contactAddresses(form).map(({ address, index }: any) => ({
+        id: warehouseCpLocId(form.id, index),
+        name: index === 0 ? `${form.name || "Main address"} (main)` : `${form.name || "Site"} — ${address || `address ${index + 1}`}`,
+        address,
+      }))
+    : [];
   // v6.10 (#8): a warehouse company can have more than one delivery address.
   const addExtraAddress = () => setForm(f => ({ ...f, extraAddresses: [...(f.extraAddresses || []), ""] }));
   const setExtraAddress = (i, v) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).map((a, idx) => idx === i ? v : a) }));
   const removeExtraAddress = (i) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).filter((_, idx) => idx !== i) }));
   // v6.6: seasonal commission rates (consignment sales)
   const setCommissionRate = (i, k, v) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).map((r, idx) => idx === i ? { ...r, [k]: v } : r) }));
-  const addCommissionRate = () => setForm(f => ({ ...f, commissionRates: [...(f.commissionRates || []), { id: Date.now(), season: "", validFrom: "", pct: "" }] }));
+  const addCommissionRate = () => setForm(f => ({ ...f, commissionRates: [...(f.commissionRates || []), { id: nextId(), season: "", validFrom: "", pct: "" }] }));
   const removeCommissionRate = (i) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).filter((_, idx) => idx !== i) }));
   const toggleService = (s) => setForm(f => ({ ...f, services: (f.services || []).includes(s) ? f.services.filter(x => x !== s) : [...(f.services || []), s] }));
   const toggleAdditionalType = (t) => setForm(f => ({ ...f, additionalTypes: (f.additionalTypes || []).includes(t) ? f.additionalTypes.filter(x => x !== t) : [...(f.additionalTypes || []), t] }));
@@ -658,7 +665,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any
                     </button>
                   );
                 })}
-                {!warehouseLocations.length && <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>No warehouse locations yet — add them in Settings → Locations &amp; ports.</span>}
+                {!warehouseLocations.length && <span style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>{form.id ? "This warehouse has no address yet — add one above and it becomes its operating location." : "Save this warehouse first; its address then becomes its operating location. Add more addresses below for extra sites."}</span>}
               </div>
               <div style={{ marginTop: 12 }}>
                 <Lbl>Additional delivery addresses <span style={{ color: "#AAA", fontWeight: 400 }}>(if this warehouse has more than one site we can send cargo to)</span></Lbl>
@@ -1019,7 +1026,7 @@ function defaultCurrencyByCountry(country) {
 }
 
 // Parse a Fakturownia row into our counterparty shape
-function parseFakturowniaRow(row, existingNips, existingNames) {
+function parseFakturowniaRow(row, existingCounterparties) {
   const taxId = parseTaxId(row["TAX ID"]);
   const hasNip = !!(taxId.nip || taxId.vatEuId);
   const isCompany = row["Company"] === true || row["Company"] === "true" || row["Company"] === "True";
@@ -1038,11 +1045,16 @@ function parseFakturowniaRow(row, existingNips, existingNames) {
       ? { id: 1, name: "—", role: "Other", email, phone: String(phone).trim(), isPrimary: true, notes: "Contact person name unknown" }
       : null;
 
-  // Dedup detection — match by NIP first, then by exact name
+  // Dedup detection — use the SAME fuzzy matcher as the merge tool (tax-digit
+  // match + legal-suffix-stripped name containment), so the import flags the same
+  // duplicates the merge screen would, instead of a narrower exact-match rule.
+  const dupMatches = findCounterpartyDuplicates(
+    { name, nip: taxId.nip, vatEuId: taxId.vatEuId },
+    existingCounterparties || [],
+    null
+  );
   let duplicateOf = null;
-  if (taxId.nip && existingNips.has(taxId.nip.replace(/\s/g, ""))) duplicateOf = "nip";
-  else if (taxId.vatEuId && existingNips.has(taxId.vatEuId.replace(/\s/g, ""))) duplicateOf = "vatEuId";
-  else if (existingNames.has(name.toLowerCase())) duplicateOf = "name";
+  if (dupMatches.length) duplicateOf = dupMatches[0].reason === "tax" ? "nip" : "name";
 
   return {
     // Importer-only fields (not persisted)
@@ -1074,7 +1086,88 @@ function parseFakturowniaRow(row, existingNips, existingNames) {
   };
 }
 
-function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
+// ─── CSV IMPORT (our own export format — round-trips contacts.csv) ───────────
+// Minimal RFC-4180 parser: handles quoted fields, escaped quotes ("") and
+// embedded commas / newlines.
+function splitCsvText(text: string): string[][] {
+  const s = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const rows: string[][] = []; let row: string[] = []; let field = ""; let inQ = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inQ) {
+      if (ch === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += ch;
+    } else {
+      if (ch === '"') inQ = true;
+      else if (ch === ",") { row.push(field); field = ""; }
+      else if (ch === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+      else field += ch;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length && !(r.length === 1 && r[0].trim() === ""));
+}
+
+// Parse a CSV produced by our own "Export CSV" (one row per contact person, so
+// several rows can share a company). Groups rows back into counterparties and
+// flags duplicates with the same fuzzy matcher the merge tool uses.
+function parseOwnCsv(text: string, existingCounterparties: any[]) {
+  const rows = splitCsvText(text);
+  if (rows.length < 2) return [];
+  const header = rows[0].map(h => String(h || "").trim().toLowerCase());
+  const col = (name: string) => header.indexOf(name.toLowerCase());
+  const idx = {
+    type: col("Type"), addt: col("Also acts as"), company: col("Company"), country: col("Country"),
+    nip: col("NIP"), vat: col("EU VAT"), address: col("Address"), currency: col("Currency"),
+    terms: col("Payment Terms"), services: col("Services"), pname: col("Person Name"),
+    prole: col("Role"), pemail: col("Email"), pphone: col("Phone"), pprimary: col("Primary"), notes: col("Notes"),
+  };
+  if (idx.company < 0) throw new Error("This CSV doesn't look like a contacts export — the 'Company' column is missing.");
+  const get = (r: string[], i: number) => (i >= 0 && i < r.length ? String(r[i] ?? "").trim() : "");
+  const splitList = (v: string) => String(v || "").split(";").map(x => x.trim()).filter(Boolean);
+  const groups = new Map<string, string[][]>();
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const company = get(r, idx.company);
+    if (!company) continue;
+    const key = `${company.toLowerCase()}||${get(r, idx.country).toLowerCase()}||${get(r, idx.nip).toLowerCase()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+  const out: any[] = [];
+  groups.forEach(grp => {
+    const r0 = grp[0];
+    const name = get(r0, idx.company);
+    const country = get(r0, idx.country);
+    const nip = get(r0, idx.nip);
+    const vatEuId = get(r0, idx.vat);
+    const contacts: any[] = [];
+    grp.forEach(r => {
+      const pn = get(r, idx.pname), pe = get(r, idx.pemail), pp = get(r, idx.pphone);
+      if (pn || pe || pp) contacts.push({
+        id: contacts.length + 1, name: pn || "—", role: get(r, idx.prole) || "Other",
+        email: pe, phone: pp, isPrimary: /^(yes|true|1)$/i.test(get(r, idx.pprimary)) || contacts.length === 0, notes: "",
+      });
+    });
+    const dupMatches = findCounterpartyDuplicates({ name, nip, vatEuId }, existingCounterparties || [], null);
+    const duplicateOf = dupMatches.length ? (dupMatches[0].reason === "tax" ? "nip" : "name") : null;
+    out.push({
+      _row: name, _selected: !duplicateOf, _duplicate: duplicateOf,
+      type: get(r0, idx.type) || "Other",
+      additionalTypes: splitList(get(r0, idx.addt)),
+      name, country, address: get(r0, idx.address), nip, vatEuId,
+      defaultCurrency: get(r0, idx.currency) || defaultCurrencyByCountry(country),
+      paymentTerms: get(r0, idx.terms) || "30 days from invoice date", paymentTermsOther: "",
+      services: splitList(get(r0, idx.services)),
+      finance: { bankName: "", accountNumber: "", swift: "" },
+      notes: get(r0, idx.notes), contacts,
+    });
+  });
+  return out;
+}
+
+function ImportModal({ existingCounterparties, onCancel, onImport, source = "fakturownia" }: any) {
+  const isCsv = source === "csv";
   const [stage, setStage] = useState("upload"); // upload | parsing | review
   const [filename, setFilename] = useState("");
   const [parsedRows, setParsedRows] = useState<any[]>([]); // array of parsed counterparty candidates
@@ -1087,6 +1180,22 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
     if (!file) return;
     setFilename(file.name);
     setStage("parsing");
+    if (isCsv) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const parsed = parseOwnCsv(String(e.target?.result || ""), existingCounterparties);
+          if (!parsed.length) throw new Error("No contact rows found in the file.");
+          setParsedRows(parsed);
+          setStage("review");
+        } catch (err) {
+          alert("Could not parse CSV: " + (err instanceof Error ? err.message : String(err)));
+          setStage("upload");
+        }
+      };
+      reader.readAsText(file);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -1100,17 +1209,9 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
         const sheet = workbook.Sheets[sheetName];
         const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
-        // Build existing-record indices for dedup
-        const existingNips = new Set();
-        existingCounterparties.forEach(c => {
-          if (c.nip) existingNips.add(c.nip.replace(/\s/g, ""));
-          if (c.vatEuId) existingNips.add(c.vatEuId.replace(/\s/g, ""));
-        });
-        const existingNames = new Set(existingCounterparties.map(c => (c.name || "").toLowerCase()));
-
         const parsed = rows
           .filter(r => r["Client"] && String(r["Client"]).trim() && String(r["Client"]).trim() !== "-")
-          .map(r => parseFakturowniaRow(r, existingNips, existingNames));
+          .map(r => parseFakturowniaRow(r, existingCounterparties));
         setParsedRows(parsed);
         setStage("review");
       } catch (err) {
@@ -1166,9 +1267,9 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
         {/* Header */}
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Import contacts from Fakturownia</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>{isCsv ? "Import contacts from CSV" : "Import contacts from Fakturownia"}</div>
             <div style={{ fontSize: 12, color: "#999", marginTop: 2 }}>
-              {stage === "upload" && "Drop the kontrahenci export (.xls / .xlsx / .csv)"}
+              {stage === "upload" && (isCsv ? "Drop a contacts CSV (same columns as Export CSV)" : "Drop the kontrahenci export (.xls / .xlsx / .csv)")}
               {stage === "parsing" && "Parsing the file…"}
               {stage === "review" && `${parsedRows.length} records parsed — review and assign types, then import`}
             </div>
@@ -1187,12 +1288,14 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
               style={{ border: "2px dashed #E5E7EB", borderRadius: 12, padding: "60px 40px", textAlign: "center", background: "#FAFAFA", cursor: "pointer", transition: "all 0.15s", width: "100%", maxWidth: 520 }}
             >
               <div style={{ fontSize: 44, marginBottom: 12 }}>📊</div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: "#111", marginBottom: 6 }}>Drop the Fakturownia export here</div>
-              <div style={{ fontSize: 12.5, color: "#888" }}>Supports .xls / .xlsx / .csv · max ~10 MB</div>
-              <input ref={fileInputRef} type="file" accept=".xls,.xlsx,.csv" style={{ display: "none" }} onChange={e => handleFile(e.target.files?.[0])} />
+              <div style={{ fontSize: 15, fontWeight: 600, color: "#111", marginBottom: 6 }}>{isCsv ? "Drop a contacts CSV here" : "Drop the Fakturownia export here"}</div>
+              <div style={{ fontSize: 12.5, color: "#888" }}>{isCsv ? "A .csv with the same columns as Export CSV · max ~10 MB" : "Supports .xls / .xlsx / .csv · max ~10 MB"}</div>
+              <input ref={fileInputRef} type="file" accept={isCsv ? ".csv" : ".xls,.xlsx,.csv"} style={{ display: "none" }} onChange={e => handleFile(e.target.files?.[0])} />
             </div>
             <div style={{ marginTop: 18, padding: "12px 16px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, maxWidth: 520, fontSize: 12, color: "#92400E" }}>
-              <strong>Tip:</strong> in Fakturownia, go to <em>Kontrahenci → Eksport → XLS</em>. The columns we expect are <code>ID, Client, TAX ID, City, Country, Company, E-mail, Bank, Account Number</code> and a few more — the standard export already includes them.
+              {isCsv
+                ? <><strong>Tip:</strong> use a file with the same columns as <em>Export CSV</em> (<code>Type, Company, Country, NIP, EU VAT, Address, Currency, Payment Terms, Services, Person Name, Role, Email, Phone, Primary, Notes</code>). Several rows with the same company are merged into one contact with multiple people. Likely duplicates are flagged so you can skip them.</>
+                : <><strong>Tip:</strong> in Fakturownia, go to <em>Kontrahenci → Eksport → XLS</em>. The columns we expect are <code>ID, Client, TAX ID, City, Country, Company, E-mail, Bank, Account Number</code> and a few more — the standard export already includes them.</>}
             </div>
           </div>
         )}
@@ -1222,22 +1325,6 @@ function ImportModal({ existingCounterparties, onCancel, onImport }: any) {
                 ))}
               </div>
             </div>
-
-            {/* Duplicate resolution — choose how to handle the whole import */}
-            {duplicateCount > 0 && (
-              <div style={{ padding: "10px 24px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 11.5, color: "#92400E", fontWeight: 600 }}>Duplicates found — how to handle?</span>
-                <button onClick={() => setParsedRows(rows => rows.map(r => ({ ...r, _selected: true })))}
-                  style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#92400E", cursor: "pointer", fontWeight: 600 }}>
-                  Import all (incl. duplicates)
-                </button>
-                <button onClick={() => setParsedRows(rows => rows.map(r => ({ ...r, _selected: !r._duplicate })))}
-                  style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#92400E", cursor: "pointer", fontWeight: 600 }}>
-                  Keep originals (skip duplicates)
-                </button>
-                <span style={{ fontSize: 11, color: "#B45309" }}>…or tick/untick individual rows below to choose.</span>
-              </div>
-            )}
 
             {/* Filters + bulk actions */}
             <div style={{ padding: "10px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1460,7 +1547,7 @@ function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
     const people = [...(keep.contacts || [])];
     (incoming.contacts || []).forEach(p => {
       const dup = people.find(x => String(x.name || "").trim().toLowerCase() === String(p.name || "").trim().toLowerCase() && String(x.email || "").trim().toLowerCase() === String(p.email || "").trim().toLowerCase());
-      if (!dup) people.push({ ...p, id: Math.max(0, ...people.map(x => x.id || 0)) + 1, isPrimary: false });
+      if (!dup) people.push({ ...p, id: nextId(), isPrimary: false });
     });
     merged.contacts = people;
     merged.linkedDocs = Array.from(new Set([...(keep.linkedDocs || []), ...(incoming.linkedDocs || [])]));
@@ -1600,6 +1687,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   const [modal, setModal] = useState(null); // null | "new" | counterparty-to-edit
   const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
   const [showImport, setShowImport] = useState(false);
+  const [importSource, setImportSource] = useState("fakturownia"); // "fakturownia" | "csv"
   const [importResult, setImportResult] = useState(null); // toast { count } | null
   // v6.3.0 duplicate handling
   const [dupReview, setDupReview] = useState(null);   // { candidate, matches } | null
@@ -1681,7 +1769,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   function commitCounterparty(c) {
     setCounterparties(prev => {
       if (c.id) return prev.map(p => p.id === c.id ? { ...p, ...c } : p);
-      const newC = { ...c, id: Date.now(), contacts: [], linkedDocs: [] };
+      const newC = { ...c, id: nextId(), contacts: [], linkedDocs: [] };
       setSelectedId(newC.id);
       return [...prev, newC];
     });
@@ -1723,7 +1811,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
       if (person.id) {
         nextContacts = c.contacts.map(p => p.id === person.id ? { ...p, ...person } : p);
       } else {
-        const newId = Math.max(0, ...c.contacts.map(p => p.id || 0)) + 1;
+        const newId = nextId();
         const isFirstPrimary = c.contacts.length === 0;
         nextContacts = [...c.contacts, { ...person, id: newId, isPrimary: person.isPrimary || isFirstPrimary }];
       }
@@ -1760,11 +1848,10 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   }
 
   function handleImport(toImport) {
-    // Assign fresh IDs and merge into state
-    const maxId = counterparties.reduce((m, c) => Math.max(m, c.id || 0), 0);
-    const newRecords = toImport.map((r, i) => ({
+    // Assign fresh, never-reused IDs and merge into state.
+    const newRecords = toImport.map((r) => ({
       ...r,
-      id: maxId + i + 1,
+      id: nextId(),
       linkedDocs: [],
     }));
     setCounterparties(prev => [...prev, ...newRecords]);
@@ -1829,7 +1916,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
         />
       )}
       {emailTarget && <EmailModal counterparty={emailTarget.counterparty} person={emailTarget.person} onClose={() => setEmailTarget(null)} />}
-      {showImport && <ImportModal existingCounterparties={counterparties} onCancel={() => setShowImport(false)} onImport={handleImport} />}
+      {showImport && <ImportModal existingCounterparties={counterparties} source={importSource} onCancel={() => setShowImport(false)} onImport={handleImport} />}
       {importResult && (
         <div style={{ position: "fixed", bottom: 24, right: 24, background: "#16A34A", color: "#fff", padding: "14px 20px", borderRadius: 10, boxShadow: "0 6px 24px rgba(0,0,0,0.18)", fontSize: 13, fontWeight: 600, zIndex: 200 }}>
           ✓ Imported {importResult.count} counterparty record{importResult.count !== 1 ? "s" : ""}
@@ -1853,7 +1940,8 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
             </button>
           ))}
         </div>
-        <button onClick={() => setShowImport(true)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
+        <button onClick={() => { setImportSource("fakturownia"); setShowImport(true); }} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
+        <button onClick={() => { setImportSource("csv"); setShowImport(true); }} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import CSV</button>
         <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ Export CSV</button>
         <button onClick={scanForDuplicates} title="Scan all counterparties for suspected duplicates (same tax ID or similar name)" style={{ background: "#fff", color: "#2563EB", border: "1px solid #BFDBFE", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>⧉ Find duplicates</button>
         <button onClick={() => setModal("new")} style={{ background: "#16A34A", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
@@ -1955,8 +2043,8 @@ function LogisticsPointsView({ points = [], setPoints }: any) {
     if (!String(form.name || "").trim()) { window.alert("Enter a name for the location."); return; }
     const list = [...(points || [])];
     if (form.id == null) {
-      const nextId = Math.max(0, ...list.map((p: any) => Number(p.id) || 0)) + 1;
-      list.push({ ...form, id: nextId, name: form.name.trim() });
+      const newPointId = nextId();
+      list.push({ ...form, id: newPointId, name: form.name.trim() });
     } else {
       const i = list.findIndex((p: any) => p.id === form.id);
       if (i >= 0) list[i] = { ...form, name: form.name.trim() };
@@ -2041,7 +2129,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
             </div>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{c.name}</div>
-              <div style={{ fontSize: 11, color: "#AAA" }}>{c.nip || "—"}</div>
+              <div style={{ fontSize: 11, color: "#AAA" }}>{c.nip || c.vatEuId || "—"}</div>
             </div>
             <div>
               <div style={{ fontSize: 13, color: "#333" }}>{primary?.name || <span style={{ color: "#CCC", fontStyle: "italic" }}>no contact</span>}</div>

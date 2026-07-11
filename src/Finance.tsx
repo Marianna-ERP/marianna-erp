@@ -1,4 +1,8 @@
 import React, { useMemo, useState } from "react";
+import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
+import { computeSOMargin } from "./marginCalculations";
+import { nextId } from "./ids";
+import { defaultFxRate } from "./fx";
 import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO } from "./dates";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
@@ -105,7 +109,7 @@ function newCostTemplate(): OperationalCost {
   const now = new Date();
   const period = localMonthISO();
   return {
-    id: Date.now(),
+    id: nextId(),
     period,
     date: localTodayISO(),
     category: "salary",
@@ -157,21 +161,54 @@ function findCol(headers: string[], ...keys: string[]): number {
 // (accounting no., position no., order no.). Plain substring matching on "numer"
 // grabbed the wrong one and left the real invoice number blank. This prefers the
 // genuine invoice-number headers and skips the lookalikes.
-function findInvoiceNoCol(headers: string[]): number {
+function findInvoiceNoCol(headers: string[], rows?: any[][]): number {
   const H = headers.map(h => String(h || "").toLowerCase().trim());
   const bad = (h: string) => /(ksi[ęe]g|konta|pozycj|zam[óo]w|ewidenc|rachunk|korekt|proform|wewn)/.test(h);
   const norm = (s: string) => s.replace(/\s+/g, " ").trim();
-  // 1) exact / near-exact header names
-  const exact = ["numer faktury", "nr faktury", "numer dokumentu", "nr dokumentu", "numer obcy", "nr obcy", "invoice number", "invoice no", "invoice no.", "numer", "nr", "number"];
-  for (const k of exact) {
-    const i = H.findIndex(h => !bad(h) && norm(h) === k);
-    if (i >= 0) return i;
+
+  // Score how "invoice-number-like" a column's sample values are. A real invoice number
+  // (e.g. FV/79/06/2026, 123/2026, INV-0007) has separators or letters+digits; a row-counter
+  // column ("No." holding 1, 2, 3…) is a plain integer sequence and scores negative. This is
+  // what disambiguates Fakturownia's TWO "No." columns (row counter vs actual invoice number).
+  const score = (col: number): number => {
+    if (!rows || col < 0) return 0;
+    let s = 0, seen = 0;
+    for (let r = 0; r < rows.length && seen < 25; r++) {
+      const v = String((rows[r] || [])[col] ?? "").trim();
+      if (!v) continue;
+      seen++;
+      if (/[/\-]/.test(v) && /\d/.test(v)) s += 2;          // separator + digit  → FV/79/06/2026
+      else if (/[a-z]/i.test(v) && /\d/.test(v)) s += 2;     // letters + digits   → INV0007
+      else if (/^\d+([.,]0+)?$/.test(v)) s -= 1;             // plain integer      → row counter
+    }
+    return seen ? s / seen : 0;
+  };
+
+  const nameHit = (h: string) => !bad(h) && (
+    ["numer faktury", "nr faktury", "numer dokumentu", "nr dokumentu", "numer obcy", "nr obcy",
+     "invoice number", "invoice no", "invoice no.", "numer", "nr", "number", "no", "no."].includes(norm(h))
+    || /numer faktury|nr faktury|numer dokumentu|numer obcy|invoice|faktur/.test(h)
+  );
+
+  // Header-matching candidates; if more than one (e.g. two "No." columns), pick the most
+  // invoice-like by value shape.
+  const candidates: number[] = [];
+  H.forEach((h, i) => { if (nameHit(h)) candidates.push(i); });
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1) {
+    candidates.sort((a, b) => score(b) - score(a));
+    return candidates[0];
   }
-  // 2) substring fallback, still skipping the lookalike columns
-  const subs = ["numer faktury", "nr faktury", "numer dokumentu", "numer obcy", "invoice", "faktur", "numer", "number"];
-  for (const k of subs) {
-    const i = H.findIndex(h => !bad(h) && h.includes(k));
-    if (i >= 0) return i;
+
+  // No header matched at all → scan every column for invoice-like values.
+  if (rows && rows.length) {
+    let best = -1, bestScore = 0.5; // require a clear signal
+    for (let c = 0; c < headers.length; c++) {
+      if (bad(H[c] || "")) continue;
+      const sc = score(c);
+      if (sc > bestScore) { bestScore = sc; best = c; }
+    }
+    if (best >= 0) return best;
   }
   return -1;
 }
@@ -181,6 +218,59 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState("");
   const tariffWarehouses = (contacts || []).filter((c: any) => tariffHasRates(c.warehouseTariff));
+  // v6.18.20: keep the raw sheet + the (auto-detected, user-overridable) column map so the
+  // invoice-no / date column can be re-pointed if Fakturownia labels them unexpectedly.
+  const [aoa, setAoa] = useState<any[][]>([]);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [cols, setCols] = useState<any>({ no: -1, seller: -1, date: -1, net: -1, gross: -1, cur: -1, desc: -1 });
+
+  function buildRows(grid: any[][], cmap: any) {
+    const existingInvNos = new Set((operationalCosts || []).map((c: any) => String(c.invoiceNo || "").trim().toLowerCase()).filter(Boolean));
+    const num = (v: any) => parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")) || 0;
+    return grid.slice(1).filter(r => (r || []).some(x => String(x || "").trim() !== "")).map((r: any[], i: number) => {
+      const invoiceNo = cmap.no >= 0 ? String(r[cmap.no] || "").trim() : "";
+      const seller = cmap.seller >= 0 ? String(r[cmap.seller] || "").trim() : "";
+      const rawDate = cmap.date >= 0 ? String(r[cmap.date] || "").trim() : "";
+      // Accept ISO (yyyy-mm-dd) and d/m/yyyy or d.m.yyyy, with 1- or 2-digit day/month.
+      const iso = rawDate.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+      const dmy = rawDate.match(/(\d{1,2})[./](\d{1,2})[./](\d{4})/);
+      const date = iso ? `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`
+        : dmy ? `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}` : "";
+      const net = cmap.net >= 0 ? num(r[cmap.net]) : 0;
+      const gross = cmap.gross >= 0 ? num(r[cmap.gross]) : 0;
+      const amount = net || gross;
+      const currency = cmap.cur >= 0 ? (String(r[cmap.cur] || "PLN").trim().toUpperCase() || "PLN") : "PLN";
+      const desc = cmap.desc >= 0 ? String(r[cmap.desc] || "").trim() : "";
+      const whMatch = tariffWarehouses.find((w: any) => seller && (String(w.name || "").toLowerCase().includes(seller.toLowerCase().slice(0, 12)) || seller.toLowerCase().includes(String(w.name || "").toLowerCase().slice(0, 12))));
+      const dup = invoiceNo && existingInvNos.has(invoiceNo.toLowerCase());
+      return {
+        id: i, include: !dup && amount > 0, dup,
+        invoiceNo, seller, date, amount, currency,
+        fxRate: defaultFxRate(currency),
+        description: desc || `${seller} ${invoiceNo}`.trim(),
+        route: whMatch ? "warehouse" : "cost",
+        warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
+        category: guessCostCategory(`${seller} ${desc}`),
+        allocationMethod: "by_revenue",
+      };
+    });
+  }
+
+  function setCol(key: string, idx: number) {
+    const next = { ...cols, [key]: idx };
+    setCols(next);
+    if (aoa.length) setRows(buildRows(aoa, next));
+  }
+
+  // First non-empty value in a column — shown in the picker so duplicate headers
+  // (e.g. Fakturownia's two "No." columns) can be told apart by a sample value.
+  const colSample = (i: number): string => {
+    for (let r = 1; r < Math.min(aoa.length, 15); r++) {
+      const v = String((aoa[r] || [])[i] ?? "").trim();
+      if (v) return v.length > 22 ? v.slice(0, 22) + "\u2026" : v;
+    }
+    return "";
+  };
 
   function handleFile(e: any) {
     const file = e.target.files?.[0];
@@ -189,47 +279,25 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const wb = XLSX.read(reader.result as ArrayBuffer, { type: "array" });
+        const wb = XLSX.read(reader.result as ArrayBuffer, { type: "array", cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const aoa: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
-        if (!aoa.length) { setError("File appears empty."); return; }
-        const headers = (aoa[0] || []).map((x: any) => String(x || ""));
-        const cNo = findInvoiceNoCol(headers);
-        const cSeller = findCol(headers, "sprzedawca", "kontrahent", "seller", "dostawca", "supplier", "nazwa");
-        const cDate = findCol(headers, "data wystaw", "issue date", "issue_date", "data sprzeda", "sell date", "data faktury", "data");
-        const cNet = findCol(headers, "netto", "net");
-        const cGross = findCol(headers, "brutto", "gross");
-        const cCur = findCol(headers, "walut", "currency");
-        const cDesc = findCol(headers, "opis", "description", "tytu", "produkt", "kategoria");
-        if (cNo < 0 && cSeller < 0) { setError("Could not recognize columns — expected headers like Numer/Number, Sprzedawca/Seller, Netto/Net. Export the cost register from Fakturownia as XLS/CSV and try again."); return; }
-        const existingInvNos = new Set((operationalCosts || []).map((c: any) => String(c.invoiceNo || "").trim().toLowerCase()).filter(Boolean));
-        const parsed = aoa.slice(1).filter(r => (r || []).some(x => String(x || "").trim() !== "")).map((r: any[], i: number) => {
-          const invoiceNo = cNo >= 0 ? String(r[cNo] || "").trim() : "";
-          const seller = cSeller >= 0 ? String(r[cSeller] || "").trim() : "";
-          const rawDate = cDate >= 0 ? String(r[cDate] || "").trim() : "";
-          const dm = rawDate.match(/(\d{4})-(\d{2})-(\d{2})/) || rawDate.match(/(\d{2})[./](\d{2})[./](\d{4})/);
-          const date = dm ? (dm[1].length === 4 ? `${dm[1]}-${dm[2]}-${dm[3]}` : `${dm[3]}-${dm[2]}-${dm[1]}`) : "";
-          const num = (v: any) => parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")) || 0;
-          const net = cNet >= 0 ? num(r[cNet]) : 0;
-          const gross = cGross >= 0 ? num(r[cGross]) : 0;
-          const amount = net || gross;
-          const currency = cCur >= 0 ? (String(r[cCur] || "PLN").trim().toUpperCase() || "PLN") : "PLN";
-          const desc = cDesc >= 0 ? String(r[cDesc] || "").trim() : "";
-          const whMatch = tariffWarehouses.find((w: any) => seller && String(w.name || "").toLowerCase().includes(seller.toLowerCase().slice(0, 12)) || seller.toLowerCase().includes(String(w.name || "").toLowerCase().slice(0, 12)));
-          const dup = invoiceNo && existingInvNos.has(invoiceNo.toLowerCase());
-          return {
-            id: i, include: !dup && amount > 0, dup,
-            invoiceNo, seller, date, amount, currency,
-            fxRate: currency === "PLN" ? 1 : currency === "EUR" ? 4.25 : 3.9,
-            description: desc || `${seller} ${invoiceNo}`.trim(),
-            route: whMatch ? "warehouse" : "cost",
-            warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
-            category: guessCostCategory(`${seller} ${desc}`),
-            allocationMethod: "by_revenue",
-          };
-        });
-        if (!parsed.length) setError("No data rows found under the header.");
-        setRows(parsed);
+        const grid: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: "yyyy-mm-dd" });
+        if (!grid.length) { setError("File appears empty."); return; }
+        const hdr = (grid[0] || []).map((x: any) => String(x || ""));
+        const detected = {
+          no: findInvoiceNoCol(hdr, grid.slice(1)),
+          seller: findCol(hdr, "sprzedawca", "kontrahent", "seller", "dostawca", "supplier", "nazwa"),
+          date: findCol(hdr, "data wystaw", "issue date", "issue_date", "data sprzeda", "sell date", "data faktury", "data"),
+          net: findCol(hdr, "netto", "net"),
+          gross: findCol(hdr, "brutto", "gross"),
+          cur: findCol(hdr, "walut", "currency"),
+          desc: findCol(hdr, "opis", "description", "tytu", "produkt", "kategoria"),
+        };
+        if (detected.no < 0 && detected.seller < 0) { setError("Could not recognize columns — expected headers like Numer/Number, Sprzedawca/Seller, Netto/Net. Export the cost register from Fakturownia as XLS/CSV and try again."); return; }
+        setAoa(grid); setHeaders(hdr); setCols(detected);
+        const built = buildRows(grid, detected);
+        if (!built.length) setError("No data rows found under the header.");
+        setRows(built);
       } catch (err: any) {
         setError("Could not parse the file: " + (err?.message || String(err)));
       }
@@ -267,7 +335,7 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
         id: i, include: !dup && (m.netTotal || m.grossTotal) > 0, dup,
         invoiceNo: m.number, seller: m.sellerName, date: m.issueDate || m.sellDate,
         amount: m.netTotal || m.grossTotal, currency: m.currency,
-        fxRate: m.currency === "PLN" ? 1 : m.currency === "EUR" ? 4.25 : 3.9,
+        fxRate: defaultFxRate(m.currency),
         description: m.description || `${m.sellerName} ${m.number}`.trim(),
         route: whMatch ? "warehouse" : "cost",
         warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
@@ -284,9 +352,9 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
       const amountPLN = Math.round(r.amount * (parseFloat(r.fxRate) || 1) * 100) / 100;
       if (r.route === "warehouse" && r.warehouseId) {
         const wh = tariffWarehouses.find((w: any) => String(w.id) === String(r.warehouseId));
-        whInvoices.push({ id: Date.now() + i, warehouseId: r.warehouseId, warehouseName: wh?.name || r.seller, period: String(r.date || localTodayISO()).slice(0, 7), invoiceNo: r.invoiceNo, date: r.date || localTodayISO(), amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
+        whInvoices.push({ id: nextId(), warehouseId: r.warehouseId, warehouseName: wh?.name || r.seller, period: String(r.date || localTodayISO()).slice(0, 7), invoiceNo: r.invoiceNo, date: r.date || localTodayISO(), amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
       } else {
-        costs.push({ id: Date.now() + i, period: String(r.date || localTodayISO()).slice(0, 7), date: r.date || localTodayISO(), category: r.category, description: r.description, supplierName: r.seller, invoiceNo: r.invoiceNo, amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, costCenter: "general", allocationMethod: r.allocationMethod, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
+        costs.push({ id: nextId(), period: String(r.date || localTodayISO()).slice(0, 7), date: r.date || localTodayISO(), category: r.category, description: r.description, supplierName: r.seller, invoiceNo: r.invoiceNo, amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, costCenter: "general", allocationMethod: r.allocationMethod, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
       }
     });
     onImport(costs, whInvoices);
@@ -321,6 +389,24 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
           </label>
           {fileName && <span style={{ fontSize: 12, color: "#666", marginLeft: 10 }}>{fileName} · {rows.length} row(s)</span>}
           {error && <div style={{ marginTop: 10, padding: "8px 12px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 7, fontSize: 12, color: "#991B1B" }}>{error}</div>}
+          {headers.length > 0 && (
+            <div style={{ marginTop: 10, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", padding: "8px 12px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>Columns</span>
+              <label style={{ fontSize: 11, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>Invoice no.
+                <select value={cols.no} onChange={e => setCol("no", parseInt(e.target.value, 10))} style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #CBD5E1", borderRadius: 5, background: "#fff" }}>
+                  <option value={-1}>— none —</option>
+                  {headers.map((h, i) => { const smp = colSample(i); return <option key={i} value={i}>{(h || `Column ${i + 1}`) + (smp ? ` — e.g. ${smp}` : "")}</option>; })}
+                </select>
+              </label>
+              <label style={{ fontSize: 11, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>Issue date
+                <select value={cols.date} onChange={e => setCol("date", parseInt(e.target.value, 10))} style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #CBD5E1", borderRadius: 5, background: "#fff" }}>
+                  <option value={-1}>— none —</option>
+                  {headers.map((h, i) => { const smp = colSample(i); return <option key={i} value={i}>{(h || `Column ${i + 1}`) + (smp ? ` — e.g. ${smp}` : "")}</option>; })}
+                </select>
+              </label>
+              <span style={{ fontSize: 10.5, color: "#94A3B8" }}>Auto-detected from the file — change either if a column is wrong or blank.</span>
+            </div>
+          )}
           {rows.length > 0 && (
             <div style={{ marginTop: 12, overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
@@ -375,13 +461,30 @@ function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onIm
 
 
 // ─── v6.9: RECEIVABLES & PAYABLES VIEW ──────────────────────────────────────
-function LedgerView({ orders = [], lots = [], pos = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
+function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
   const today = localTodayISO();
-  const { items, totals } = buildLedger({ orders, lots, pos, warehouseInvoices, operationalCosts, settledRefs, todayISO: today });
+  const { items, totals } = buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs, todayISO: today });
 
   function togglePaid(ref: string) {
+    // Batch 5d (BP-39): for INVOICES, "mark paid" writes a tagged payment EVENT on
+    // the invoice (the flag store is retired for them). PO/PAYOUT commitment rows
+    // keep the flag — they have no invoice record to carry events.
+    if (String(ref).startsWith("INV:") && setInvoices) {
+      const id = String(ref).slice(4);
+      const inv = (invoices || []).find((x: any) => String(x.id) === id);
+      if (!inv) return;
+      const isPaidNow = inv.paymentStatus === "Paid";
+      if (!isPaidNow) {
+        setInvoices((prev: any[]) => prev.map((x: any) => String(x.id) === id ? markInvoicePaidViaLedger(x, today, () => Date.now() + Math.floor(Math.random() * 1000)) : x));
+      } else {
+        const un = unmarkLedgerPaid(inv);
+        if (un === null) { window.alert("This invoice is paid by recorded payments — edit them in the Invoices module."); return; }
+        setInvoices((prev: any[]) => prev.map((x: any) => String(x.id) === id ? un : x));
+      }
+      return;
+    }
     if (!setSettledRefs) return;
     setSettledRefs((prev: string[]) => (prev || []).includes(ref) ? prev.filter(r => r !== ref) : [...(prev || []), ref]);
   }
@@ -441,7 +544,7 @@ function LedgerView({ orders = [], lots = [], pos = [], warehouseInvoices = [], 
         </table>
       </div>
       <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 8, lineHeight: 1.5 }}>
-        Receivables come from sales invoices issued on SOs; payables from producer payouts (closed consignment settlements), warehouse invoices, invoice-backed operational costs, and firm-price PO purchases. Payroll and taxes (no invoice number) are excluded. "Mark paid" is a manual flag now; once Fakturownia sales-invoice matching is connected, paid status syncs from there.
+        Receivables and invoice-based payables (sales, warehouse, freight and other cost invoices) now read from the <strong>Invoices</strong> module — the single source of truth — so anything you add, edit or pay there flows straight into this ledger and the P/L. Producer payouts (closed consignment settlements) and firm-price PO purchase commitments are still computed from inventory and the POs. Payroll and taxes (no invoice number) are excluded. "Mark paid" here is a manual flag; recording a payment on the invoice itself (Invoices module) is the cleaner way and also clears it here.
       </div>
     </>
   );
@@ -465,7 +568,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     const amount = parseFloat(inv.amount) || 0;
     if (amount <= 0 || !inv.invoiceNo.trim()) return;
     const fx = parseFloat(inv.fxRate) || 1;
-    const rec = { id: Date.now(), warehouseId: whId, warehouseName: wh?.name || "", period, invoiceNo: inv.invoiceNo.trim(), date: inv.date, amount, currency: inv.currency, fxRate: fx, amountPLN: Math.round(amount * fx * 100) / 100, status: "Received", notes: inv.notes };
+    const rec = { id: nextId(), warehouseId: whId, warehouseName: wh?.name || "", period, invoiceNo: inv.invoiceNo.trim(), date: inv.date, amount, currency: inv.currency, fxRate: fx, amountPLN: Math.round(amount * fx * 100) / 100, status: "Received", notes: inv.notes };
     setWarehouseInvoices((prev: any[]) => [...(prev || []), rec]);
     setInv({ invoiceNo: "", amount: "", currency: inv.currency, fxRate: inv.fxRate, date: today, notes: "" });
   }
@@ -478,11 +581,18 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     const allocations = result.rows.map((r: any) => ({ lotNumber: r.lotNumber, amountPLN: Math.round(invoice.amountPLN * (r.totalPLN / totalExpectedPLN) * 100) / 100 }));
     if (setLots) {
       const source = `WHINV-${invoice.id}`;
+      const byLot = new Map(allocations.map((a: any) => [String(a.lotNumber), a.amountPLN]));
       setLots((prev: any[]) => prev.map((lot: any) => {
-        const a = allocations.find(x => x.lotNumber === lot.number);
-        if (!a || a.amountPLN <= 0) return lot;
-        if ((lot.costs || []).some((c: any) => c.source === source)) return lot;
-        return { ...lot, costs: [...(lot.costs || []), { id: Date.now() + Math.random(), type: "Warehousing", label: `${invoice.warehouseName || "Warehouse"} ${period} · inv ${invoice.invoiceNo}`, pln: a.amountPLN, source }] };
+        // Replace-by-ref discipline: remove any prior line tagged to THIS invoice
+        // (so re-approving a corrected invoice re-allocates cleanly instead of
+        // stacking or going stale), then add the fresh share if this lot has one.
+        const withoutPrior = (lot.costs || []).filter((c: any) => c.source !== source);
+        const amt = byLot.get(String(lot.number));
+        if (amt && amt > 0) {
+          return { ...lot, costs: [...withoutPrior, { id: nextId(), type: "Warehousing", label: `${invoice.warehouseName || "Warehouse"} ${period} · inv ${invoice.invoiceNo}`, pln: amt, source }] };
+        }
+        // Lot no longer in the allocation set: keep it stripped of any stale line.
+        return withoutPrior.length === (lot.costs || []).length ? lot : { ...lot, costs: withoutPrior };
       }));
     }
     setWarehouseInvoices((prev: any[]) => prev.map((i: any) => i.id === invoice.id ? { ...i, status: "Approved", allocatedLots: allocations } : i));
@@ -601,7 +711,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
 const CN_CATEGORIES = ["Transport / freight", "Goods / quality", "Shipment claim", "Warehouse", "Price adjustment", "Other"];
 const CN_STATUSES = ["Draft", "Issued", "Applied", "Cancelled"];
 function blankCreditNote() {
-  return { id: Date.now(), date: localTodayISO(), direction: "outgoing", partyName: "", category: CN_CATEGORIES[0], relatedRef: "", amount: "", currency: "PLN", fxRate: "1", status: "Draft", reason: "" };
+  return { id: nextId(), date: localTodayISO(), direction: "outgoing", partyName: "", category: CN_CATEGORIES[0], relatedRef: "", amount: "", currency: "PLN", fxRate: "1", status: "Draft", reason: "" };
 }
 function CreditNotesView({ creditNotes = [], setCreditNotes, contacts = [], pos = [], orders = [], shipments = [] }: any) {
   const [form, setForm] = useState<any>(() => blankCreditNote());
@@ -725,6 +835,9 @@ export default function Finance({
   setOperationalCosts,
   creditNotes = [],
   setCreditNotes,
+  invoices = [],
+  setInvoices = null,
+  financeNotes = [],
 }: {
   orders?: any[];
   lots?: any[];
@@ -740,6 +853,9 @@ export default function Finance({
   setOperationalCosts?: any;
   creditNotes?: any[];
   setCreditNotes?: any;
+  invoices?: any[];
+  setInvoices?: any;
+  financeNotes?: any[];
 }) {
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger" | "creditNotes">("pl");
@@ -836,7 +952,7 @@ export default function Finance({
     const existingNext = (operationalCosts || []).filter((c: OperationalCost) => c.period === next);
     const copies = source
       .filter((c: OperationalCost) => !existingNext.some(e => e.description === c.description && e.category === c.category))
-      .map((c: OperationalCost, i: number) => ({ ...c, id: Date.now() + i, period: next, date: `${next}-${String(c.date || "").slice(8, 10) || "15"}`, status: "Expected" as any, invoiceNo: "", allocations: undefined, notes: `Copied from ${last}. ${c.notes || ""}`.trim() }));
+      .map((c: OperationalCost, i: number) => ({ ...c, id: nextId(), period: next, date: `${next}-${String(c.date || "").slice(8, 10) || "15"}`, status: "Expected" as any, invoiceNo: "", allocations: undefined, notes: `Copied from ${last}. ${c.notes || ""}`.trim() }));
     if (!copies.length) { alert(`All ${last} costs already exist in ${next}.`); return; }
     if (!window.confirm(`Copy ${copies.length} cost line(s) from ${last} into ${next} as "Expected"?`)) return;
     setOperationalCosts((prev: OperationalCost[]) => [...(prev || []), ...copies]);
@@ -877,7 +993,7 @@ export default function Finance({
         {tab === "creditNotes" ? (
           <CreditNotesView creditNotes={creditNotes} setCreditNotes={setCreditNotes} contacts={contacts} pos={pos} orders={orders} shipments={shipments} />
         ) : tab === "ledger" ? (
-          <LedgerView orders={orders} lots={lots} pos={pos} warehouseInvoices={warehouseInvoices} operationalCosts={operationalCosts} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
+          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
         ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />
         ) : tab === "pl" ? (
@@ -886,6 +1002,8 @@ export default function Finance({
               <SectionTitle>OVERALL · ALL ACTIVE SALES ORDERS</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 14 }}>
                 <StatBlock label="REVENUE" value={fmtPLN(totalAgg.totalRevenuePLN)} sub={`${totalAgg.orderCount} order${totalAgg.orderCount === 1 ? "" : "s"}`} />
+                {/* v6.20.2 note (Batch 3 pending): direct transport costs are being reworked under
+                    the cost-ownership model. */}
                 <StatBlock label="COGS" value={fmtPLN(totalAgg.totalCOGSPLN)} valueColor="#7C3AED" sub="product / landed cost" />
                 <StatBlock label="DIRECT COSTS" value={fmtPLN(totalAgg.totalDirectPLN)} valueColor="#F59E0B" sub="shipments / logistics" />
                 <StatBlock label="CONTRIBUTION" value={fmtPLN(totalAgg.totalContributionPLN)} valueColor={totalAgg.totalContributionPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgContributionPct)} />
@@ -920,6 +1038,39 @@ export default function Finance({
               </Card>
             </div>
 
+            <Card style={{ marginBottom: 18 }}>
+              <SectionTitle>P/L BY SALES ORDER</SectionTitle>
+              <div style={{ fontSize: 10.5, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "7px 10px", marginTop: 10 }}>
+                ⚠ Direct transport costs are being reworked (cost ownership — rebuild Batch 3). Until then: an SO linked to a shipment only through its goods rows may <b>under-state</b> freight, and freight already allocated into a lot's landed cost may be <b>counted twice</b> when the shipment is also linked to the SO.
+              </div>
+              {(() => {
+                const rows = (orders || [])
+                  .filter(committedFilter)
+                  .map((o: any) => ({ o, m: computeSOMargin(o, lots, pos, shipments, mode) }))
+                  .sort((a: any, b: any) => (b.m.marginPLN || 0) - (a.m.marginPLN || 0));
+                if (!rows.length) return <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No committed sales orders yet.</div>;
+                return (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 110px 110px 120px 70px", gap: 8, padding: "6px 8px", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase" }}>
+                      <div>SO</div><div>Client</div><div>Status</div><div style={{ textAlign: "right" }}>Revenue</div><div style={{ textAlign: "right" }}>COGS</div><div style={{ textAlign: "right" }}>Direct</div><div style={{ textAlign: "right" }}>Net margin</div><div style={{ textAlign: "right" }}>%</div>
+                    </div>
+                    {rows.map(({ o, m }: any) => (
+                      <div key={o.id} style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 110px 110px 120px 70px", gap: 8, padding: "8px 8px", fontSize: 12, borderTop: "1px solid #F1F5F9", alignItems: "center" }}>
+                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#0369A1" }}>{o.number}</div>
+                        <div style={{ color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.client?.name || "—"}</div>
+                        <div style={{ fontSize: 11, color: "#64748B" }}>{o.status}</div>
+                        <div style={{ textAlign: "right" }}>{fmtPLNcompact(m.revenuePLN)}</div>
+                        <div style={{ textAlign: "right", color: "#64748B" }}>{fmtPLNcompact(m.cogsPLN)}</div>
+                        <div style={{ textAlign: "right", color: "#64748B" }}>{fmtPLNcompact(m.directCostsPLN)}</div>
+                        <div style={{ textAlign: "right", fontWeight: 700, color: (m.marginPLN || 0) >= 0 ? "#16A34A" : "#DC2626" }}>{fmtPLNcompact(m.marginPLN)}</div>
+                        <div style={{ textAlign: "right", color: "#94A3B8" }}>{m.marginPct}%</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </Card>
+
             <Card>
               <SectionTitle>MONTHLY NET P/L — LAST 6 MONTHS</SectionTitle>
               {recentMonths.length === 0 ? <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No data yet.</div> : recentMonths.map(g => <BarRow key={g.key} label={g.key} value={g.agg.totalNetMarginPLN} maxValue={maxMonthNet} marginPct={g.agg.avgNetMarginPct} sub={`${g.agg.orderCount} SO · contribution ${fmtPLNcompact(g.agg.totalContributionPLN)} · overhead ${fmtPLNcompact(g.agg.totalOverheadPLN)}`} />)}
@@ -948,6 +1099,7 @@ export default function Finance({
                   <Field label="Amount PLN"><Inp type="number" value={form.amountPLN} onChange={(e: any) => setForm({ ...form, amountPLN: safe(e.target.value) })} /></Field>
                   <Field label="Allocation method"><Sel value={form.allocationMethod} onChange={(e: any) => setForm({ ...form, allocationMethod: e.target.value as any })}>{ALLOCATION_METHODS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}</Sel></Field>
                   <Field label="Status"><Sel value={form.status} onChange={(e: any) => setForm({ ...form, status: e.target.value as any })}>{["Budget", "Expected", "Received", "Posted", "Paid"].map(s => <option key={s} value={s}>{s}</option>)}</Sel></Field>
+                  <Field label="Cost invoice no. (actual)"><Inp value={(form as any).invoiceRef || ""} onChange={(e: any) => setForm({ ...form, invoiceRef: e.target.value } as any)} placeholder="e.g. FS 106/2026 — links this line to the real invoice" /></Field>
                 </div>
                 <div style={{ marginTop: 10 }}>
                   <Field label="Notes"><Inp value={form.notes || ""} onChange={(e: any) => setForm({ ...form, notes: e.target.value })} placeholder="Internal note" /></Field>
@@ -957,13 +1109,13 @@ export default function Finance({
                   <Button onClick={() => setForm(newCostTemplate())}>Clear</Button>
                 </div>
                 <div style={{ marginTop: 12, fontSize: 11, color: "#888", lineHeight: 1.45 }}>
-                  Forecast counts Budget / Expected / Received / Posted / Paid. Actual counts only Received / Posted / Paid. Direct delivery petrol should normally be entered as a Shipment cost, not as overhead.
+                  These lines are the overhead BUDGET / PLAN. Forecast counts every status; ACTUAL counts a line once it's linked to a real cost invoice (invoice no. above) — or, for unlinked legacy lines, once its status is Received / Posted / Paid. The invoice itself lives in the Invoices module (the money-document registry); direct delivery petrol belongs on the Shipment, not here.
                 </div>
               </Card>
 
               <div style={{ order: 1 }}>
                 <Card style={{ marginBottom: 14 }}>
-                  <SectionTitle>OPERATIONAL COSTS SUMMARY</SectionTitle>
+                  <SectionTitle>OVERHEAD BUDGET / PLAN — SUMMARY</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
                     <StatBlock label="TOTAL COSTS" value={fmtPLN(totalOperationalCostPLN)} sub={`${(operationalCosts || []).length} entries`} />
                     <StatBlock label="FORECAST ALLOCATED" value={fmtPLN(aggregateNetMargins(orders, lots, pos, shipments, "forecast", committedFilter, operationalCosts, orders).totalOverheadPLN)} valueColor="#64748B" sub="budget + expected + booked" />

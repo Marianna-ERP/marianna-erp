@@ -1,4 +1,7 @@
 import React, { useMemo } from "react";
+import { fmtNum } from "./format";
+import { Card } from "./ui";
+import { SO_PRE_DISPATCH_STATUSES as PRE_DISPATCH_STATUSES } from "./types";
 import { aggregateNetMargins } from "./operationalCosts";
 import { localTodayISO, localMonthISO } from "./dates";
 
@@ -10,21 +13,13 @@ import { localTodayISO, localMonthISO } from "./dates";
 //
 // "onNavigate(moduleKey)" lets dashboard buttons jump to a module ("Open PO" etc.)
 
-const RESERVING_SO_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
-const PRE_DISPATCH_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
+// PRE_DISPATCH set imported from ./types (Batch 0).
 
-function fmtNum(n) {
-  if (n === undefined || n === null || isNaN(n)) return "—";
-  return Number(n).toLocaleString("pl-PL");
-}
 function fmtMoney(n, cur = "PLN") {
   if (n === undefined || n === null || isNaN(n)) return "—";
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 0, maximumFractionDigits: 0 })} ${cur}`;
 }
 
-function Card({ children, style = {} }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
-}
 
 function MiniBar({ items }: any) {
   const total = items.reduce((s, it) => s + (it.val || 0), 0);
@@ -312,7 +307,7 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
               <div key={l.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 100px 80px", gap: 10, padding: "8px 0", borderBottom: "1px solid #F9FAFB", alignItems: "center" }}>
                 <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, color: "#2563EB", fontWeight: 600 }}>{l.number}</div>
                 <div>
-                  <div style={{ fontSize: 12, color: "#444", fontWeight: 500 }}>{l.product}</div>
+                  <div style={{ fontSize: 12, color: "#444", fontWeight: 500 }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
                   <div style={{ fontSize: 10, color: "#AAA" }}>{l.size || "—"} · {l.origin || "—"}</div>
                 </div>
                 <div style={{ fontSize: 11, color: "#888" }}>{l.status}</div>

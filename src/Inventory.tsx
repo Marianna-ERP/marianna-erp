@@ -1,6 +1,15 @@
 import React, { useState, useMemo } from "react";
-import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
-import { localTodayISO, localMonthISO } from "./dates";
+import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
+import { computeClaim, nextClaimNumber, buildClaimNote } from "./claim.domain";
+import { buildTraceTree } from "./trace.domain";
+import { fmtNum } from "./format";
+import { Card, Lbl, useConfirm } from "./ui";
+import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
+import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
+import { nextId } from "./ids";
+import { defaultFxRate } from "./fx";
+import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
+import { localTodayISO, localMonthISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
 
@@ -27,6 +36,14 @@ function locType(t: string) {
 // rich `type` back onto the legacy single-word `type` field that this module's
 // existing UI code expects (LOCATION_TYPES[loc.type]).
 const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
+// v6.18.4 (P0-4): snapshot + live counterparty addresses, deduped, so movement
+// pickers see a counterparty added this session without a browser refresh.
+function mergedLocations(contacts: any[]) {
+  const live = counterpartyLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+  const byId = new Map<string, any>();
+  [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
+  return [...byId.values()];
+}
 
 // Lot status lifecycle — PHYSICAL states only.
 // Reservations are NOT a lot status (they're computed from SO state — see lotReservations).
@@ -208,7 +225,7 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
   // a later transit_road = on-carriage → last road leg).
   let roadIdx = 0;
 
-  return journey.map((s: any, i: number) => {
+  const stageEvidence = journey.map((s: any, i: number) => {
     let status = "pending";
     let actualDate: string | null = s.actualDate || null;
 
@@ -259,7 +276,27 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
       default: break;
     }
     return { ...s, status, actualDate };
-  }).map((s: any, i: number, arr: any[]) => {
+  });
+
+  // v6.18.11 (#1): monotonic back-fill. Granular leg dates / customs flags often
+  // aren't entered, leaving early stages "pending" even after the goods have clearly
+  // arrived. But physical presence at a later point proves every earlier transit
+  // point happened — you can't be In Stock without having passed sea/customs/road.
+  // So find the furthest point actually reached (from movements + lot status) and
+  // mark every stage up to it done, using the planned date when no actual exists.
+  const idxOf = (kind: string) => { let r = -1; stageEvidence.forEach((s: any, i: number) => { if (s.kind === kind) r = i; }); return r; };
+  const received = !!firstInMove || lot.status === "In Stock" || parseNum(lot.physicalKg) > 0 || parseNum(lot.receivedKg) > 0;
+  const shippedOut = !!shipOutMove || ["Shipped Out", "Delivered"].includes(lot.status) || soDelivered;
+  const directDelivered = lot.status === "Delivered (direct)";
+  const atPort = !!portMove || lot.status === "Customs";
+  let reached = -1;
+  stageEvidence.forEach((s: any, i: number) => { if (s.status === "done") reached = i; });
+  if (atPort) reached = Math.max(reached, idxOf("dest_port"));
+  if (received) reached = Math.max(reached, idxOf("our_wh"));
+  if (shippedOut || directDelivered) reached = Math.max(reached, idxOf("client"), idxOf("dest_port"));
+  const backFilled = stageEvidence.map((s: any, i: number) => (i <= reached && s.status !== "done") ? { ...s, status: "done", actualDate: s.actualDate || s.plannedDate || null } : s);
+
+  return backFilled.map((s: any, i: number, arr: any[]) => {
     // The first non-done stage becomes "active" (current frontier, shown orange).
     if (s.status === "pending") {
       const anyEarlierActive = arr.slice(0, i).some((x: any) => x.status === "active");
@@ -288,11 +325,6 @@ const FLOW_GROUPS = [
 
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"]; // Polish convention (Klasa I/IB/II/Industrial)
 
-const PRODUCTS = [
-  "Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper",
-  "Tomato Round", "Tomato Cherry", "Cucumber", "Courgette",
-  "Aubergine", "Carrot", "Papryka Kapia", "Papryka Żółta", "Papryka Czerwona",
-];
 
 // Movement types — physical operations only.
 // SO reservations are NOT movements (they're a calculated overlay from SO state).
@@ -313,10 +345,8 @@ function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); 
 // ─── SO STUB ────────────────────────────────────────────────────────────────
 // Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically
 // in this standalone module. Replaced with live SO state on integration.
-// "Reserving" = SO status in RESERVING_SO_STATUSES (Confirmed and beyond, but not Cancelled, not Draft).
-const RESERVING_SO_STATUSES = new Set([
-  "Confirmed", "Reserved", "Loading", "Shipped", "Delivered", "Invoiced", "Closed",
-]);
+// Reserving semantics: SO_PRE_DISPATCH_STATUSES in ./types, applied by salesOrders.domain (B0-2 resolved:
+// the old 7-status set here was dead code — availability always used the 3-status pre-dispatch set).
 
 function getSOsStub() {
   return [
@@ -338,9 +368,8 @@ function getSOsStub() {
 }
 const SOS = getSOsStub();
 
-function productsMatch(a, b) {
-  return (a || "").toLowerCase().trim() === (b || "").toLowerCase().trim();
-}
+const productsMatch = domainProductsMatch; // Batch 1
+const _soClientName = soClientName; // Batch 1
 
 // Returns: { liveAvailable, totalReserved, reservations: [{ soNumber, soId, status, clientName, qty }] }
 // for a given lot, considering reservations from all SOs in RESERVING_SO_STATUSES
@@ -351,46 +380,13 @@ function productsMatch(a, b) {
 // Once an SO is Shipped+, the goods have physically left → physicalKg already dropped →
 // that SO's reservation should NOT also subtract. We handle this by only counting
 // reservations from SOs in Confirmed/Reserved/Loading (i.e. NOT yet physically dispatched).
-const PRE_DISPATCH_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
 
 // Normalize an SO from either the standalone stub shape ({clientName}) or the real SO module
 // shape ({client: {name, ...}}). Returns flat clientName for display.
-function _soClientName(o) {
-  if (o.clientName) return o.clientName;
-  if (o.client && o.client.name) return o.client.name;
-  return "—";
-}
 
 function lotReservations(lot, sourceSOs) {
-  // Default to the module-scope SOS (standalone fallback); accept live SOs from shell.
-  const list = sourceSOs ?? SOS;
-  const reservations = [];
-  let totalReserved = 0;
-  list.forEach(o => {
-    // Only Confirmed/Reserved/Loading count against the current physical pool.
-    // Shipped+ SOs already had their kg physically subtracted via SHIP_OUT movements.
-    if (!PRE_DISPATCH_STATUSES.has(o.status)) return;
-    (o.items || []).forEach(it => {
-      const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
-      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product);
-      if (!matchesStock && !matchesPOBackedLot) return;
-      if (!productsMatch(it.product, lot.product)) return;
-      const q = parseFloat(it.qty) || 0;
-      if (q <= 0) return;
-      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, clientName: _soClientName(o), qty: q, sourceType: it.sourceType });
-      totalReserved += q;
-    });
-  });
-  const directBasis = lot.directFlow ? (parseFloat(lot.expectedKg) || 0) : 0;
-  const physical = lot.physicalKg ?? lot.receivedKg ?? 0;
-  const availabilityBasis = lot.directFlow ? Math.max(directBasis, physical) : physical;
-  return {
-    physicalKg: physical,
-    availabilityBasis,
-    liveAvailable: Math.max(0, availabilityBasis - totalReserved),
-    totalReserved,
-    reservations,
-  };
+  // Engine: salesOrders.domain (Batch 1). G1: no SOS stub fallback — live SOs only.
+  return lotReservationsForStock(lot, sourceSOs ?? []);
 }
 
 // Returns array of SO references this lot has ever been linked to
@@ -647,19 +643,13 @@ export const INIT_LOTS = [
 ];
 
 // ─── SHARED UI ATOMS ────────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {} }: any) {
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
-  return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} style={{ ...base, ...style }} />;
+  return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} max={max} style={{ ...base, ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {} }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <select value={value || ""} onChange={onChange} style={{ ...base, ...style }}>{children}</select>;
-}
-function Lbl({ children }: any) {
-  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
-}
-function Card({ children, style = {} }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
 }
 function SectionTitle({ children }: any) {
   return <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 14 }}>{children}</div>;
@@ -719,10 +709,6 @@ function VarianceBadge({ expected, actual }: any) {
   );
 }
 
-function fmtNum(n) {
-  if (n === undefined || n === null || isNaN(n)) return "—";
-  return Number(n).toLocaleString("pl-PL");
-}
 function parseNum(v, fallback = 0) {
   const n = parseFloat(v);
   return isNaN(n) ? fallback : n;
@@ -752,42 +738,12 @@ function valueInStock(lot) {
 // lot stays consistent no matter what changed. (Replay-from-zero is valid because
 // every quantity change is represented by a movement.)
 function recomputeLotFromMovements(lot: any, movements: any[]) {
-  let receivedKg = 0, physicalKg = 0, damagedKg = 0;
-  let locationId = lot.baseLocationId ?? lot.locationId;
-  let status = lot.expectedKg && movements.length === 0 ? "Expected" : (lot.status || "Expected");
-  const ordered = [...movements].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0));
-  let sawIn = false, sawShipOut = false;
-  ordered.forEach(m => {
-    const q = parseNum(m.qtyKg);
-    switch (m.type) {
-      case "IN": receivedKg += q; physicalKg += q; locationId = m.toId; sawIn = true; break;
-      case "TRANSFER": locationId = m.toId; break;
-      case "SHIP_OUT": physicalKg = Math.max(0, physicalKg - q); locationId = m.toId || locationId; sawShipOut = true; break;
-      case "REVERSAL": physicalKg += q; break;
-      case "DAMAGE": physicalKg = Math.max(0, physicalKg - q); damagedKg += q; break;
-      case "RECLASS": break;
-      default: break;
-    }
-  });
-  // Derive status from the final physical state + location.
-  // v6.3.0 fix: locById returns the shared (rich) taxonomy — the legacy OWN/PORT/CLIENT
-  // strings this logic was written against now live in legacyType.
-  const loc = locById(locationId);
-  const legacyLocType = (loc as any)?.legacyType || loc?.type;
-  if (sawShipOut && physicalKg === 0) status = "Shipped Out";
-  else if (sawIn || physicalKg > 0) {
-    if (legacyLocType === "OWN") status = "In Stock";
-    else if (legacyLocType === "PORT") status = "Customs";
-    else if (legacyLocType === "CLIENT") status = "Shipped Out";
-    else status = "In Transit";
-  } else if (movements.length === 0 && lot.expectedKg) {
-    status = "Expected";
-  }
-  return { ...lot, movements: ordered, receivedKg, physicalKg, damagedKg, locationId, status };
+  return domainRecomputeLot(lot, movements, locById); // engine: inventory.domain (Batch 1)
 }
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
-function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", onCancel, onConfirm }: any) {
+function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", contacts = [], onCancel, onConfirm }: any) {
+  const moveLocs = mergedLocations(contacts);
   // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
   // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
   // was 0 kg, making every quantity error out). In edit mode, prefill.
@@ -796,7 +752,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   // and "quality" (Damage / Reclassify). The mode is fixed by which button opened
   // the modal (Record movement vs the red Record quality issue), so there is no
   // in-modal tab toggle anymore.
-  const QUALITY_TYPES = ["DAMAGE", "RECLASS"];
+  const QUALITY_TYPES = ["DAMAGE", "RECLASS", "CLAIM"];
   const MOVEMENT_MODE_TYPES = ["IN", "TRANSFER", "SHIP_OUT"];
   const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
   const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : (isExpectedLike ? "IN" : "TRANSFER")));
@@ -807,7 +763,19 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   const [fromId, setFromId] = useState(editing?.fromId ?? lot.locationId);
   const [toId, setToId] = useState(editing?.toId ?? lot.locationId);
   const [note, setNote] = useState(editing?.note || "");
+  const [soRef, setSoRef] = useState(editing?.soRef || "");
   const [date, setDate] = useState(editing?.date || today);
+  // v6.18.10 (#5): a quality issue detected AT THE CLIENT (after we shipped) is a
+  // client claim, not a warehouse write-off — it leaves our stock alone and drives a
+  // credit note. "Detected at" decides which path runs.
+  const CLIENT_SIDE_DETECTION = ["At the client (export delivery)", "At the client's warehouse (direct delivery)"];
+  const clientSide = mode === "quality" && CLIENT_SIDE_DETECTION.includes(detectedAt);
+  const lotShipSoRefs = Array.from(new Set((lot.movements || []).filter((m: any) => m.type === "SHIP_OUT" && m.soRef).map((m: any) => m.soRef)));
+  const clientSORefs = (lotShipSoRefs.length ? lotShipSoRefs : (liveSOs || []).map((o: any) => o.number)).filter(Boolean);
+  const [claimSoRef, setClaimSoRef] = useState(editing?.soRef || lotShipSoRefs[0] || "");
+  const [claimValue, setClaimValue] = useState(editing?.claimValue != null ? String(editing.claimValue) : "");
+  const [claimCurrency, setClaimCurrency] = useState(editing?.claimCurrency || "PLN");
+  const effectiveType = clientSide && type === "DAMAGE" ? "CLAIM" : type;
   const reservationState = lotReservations(lot, liveSOs);
   const liveAvailableKg = reservationState.liveAvailable;
   // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
@@ -829,28 +797,33 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
     SHIP_OUT: physicalBasis + selfQty,
     DAMAGE:   physicalBasis + selfQty,
     RECLASS:  physicalBasis + selfQty,
+    CLAIM:    (parseNum(lot.receivedKg) || physicalBasis) + selfQty, // can't claim more than was ever received
   };
-  const max = maxByType[type];
+  const max = maxByType[effectiveType] ?? Infinity;
   const qtyNum = parseFloat(qty) || 0;
-  const isInvalid = qtyNum <= 0 || qtyNum > max;
+  const isInvalid = qtyNum <= 0 || qtyNum > max || (clientSide && !(parseFloat(claimValue) > 0));
   const typeInfo = MOVEMENT_TYPES[type] || {};
   const showRoute = type === "TRANSFER" || type === "IN" || type === "SHIP_OUT";
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-      <div style={{ background: "#fff", borderRadius: 14, width: 540, boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "24px 16px", overflowY: "auto" }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 540, maxWidth: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", margin: "auto" }}>
         <div style={{ padding: "20px 24px", borderBottom: "1px solid #EBEBEB" }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? (mode === "quality" ? "Edit quality issue" : "Edit movement") : (mode === "quality" ? "Record quality issue" : "Record movement")}</div>
-          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product}{lot.variety ? " — " + lot.variety : ""} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
         </div>
         <div style={{ padding: 24 }}>
           {mode === "movement" ? (
             <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
               <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
             </div>
+          ) : clientSide ? (
+            <div style={{ padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5, marginBottom: 16 }}>
+              <strong>Client claim (goods already shipped).</strong> Because this defect was found at the client after delivery, it will <strong>not</strong> change your warehouse stock — those kg already left. Recording it logs a client claim against the delivery and creates a <strong>draft credit note</strong> to the client for the value below, which you can finalise in Invoices.
+            </div>
           ) : (
             <div style={{ padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11.5, color: "#991B1B", lineHeight: 1.5, marginBottom: 16 }}>
-              <strong>Quality issue.</strong> Record the result of inspecting / sorting this lot: <strong>Damage</strong> writes off rejected kg (reduces stock on hand), and <strong>Reclassify</strong> changes the quality grade (e.g. Kl. I → Kl. II) with no quantity change. Use this for post-sorting outcomes — not for normal receipts, transfers or dispatches.
+              <strong>Quality issue (goods in our hands).</strong> <strong>Damage</strong> writes off rejected kg (reduces stock on hand), and <strong>Reclassify</strong> changes the quality grade (e.g. Kl. I → Kl. II) with no quantity change. If the defect is reported by the client after you shipped, change "Detected at" to a client location — it becomes a claim that won't touch your stock.
             </div>
           )}
 
@@ -872,23 +845,46 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
             </div>
             <div>
               <Lbl>Date</Lbl>
-              <Inp value={date} onChange={e => setDate(e.target.value)} type="date" />
+              <Inp value={date} onChange={e => setDate(e.target.value)} type="date" max={localTodayISO()} />
             </div>
           </div>
 
-          {showRoute && (
+          {clientSide && (
+            <div style={{ marginBottom: 12, padding: "12px 14px", background: "#F8FAFF", border: "1px solid #DBEAFE", borderRadius: 8 }}>
+              <div style={{ marginBottom: 10 }}>
+                <Lbl>Delivery / sales order this claim is against</Lbl>
+                <Sel value={claimSoRef} onChange={e => setClaimSoRef(e.target.value)}>
+                  <option value="">— select the delivery —</option>
+                  {clientSORefs.map((r: any) => <option key={r} value={r}>{r}</option>)}
+                </Sel>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 12 }}>
+                <div>
+                  <Lbl>Agreed credit value</Lbl>
+                  <Inp value={claimValue} onChange={e => setClaimValue(e.target.value)} type="number" placeholder="0.00" />
+                </div>
+                <div>
+                  <Lbl>Currency</Lbl>
+                  <Sel value={claimCurrency} onChange={e => setClaimCurrency(e.target.value)}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel>
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "#64748B", marginTop: 8, lineHeight: 1.4 }}>The {qty || "0"} kg won't be removed from warehouse stock. A draft credit note for this value goes to the client (linked to the sales invoice if one exists); finalise it in Invoices.</div>
+            </div>
+          )}
+
+          {showRoute && !clientSide && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 24px 1fr", gap: 8, alignItems: "end", marginBottom: 12 }}>
               <div>
                 <Lbl>{type === "IN" ? "Received from" : "From"}</Lbl>
                 <Sel value={fromId} onChange={e => setFromId(parseInt(e.target.value))}>
-                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
+                  {moveLocs.map((l: any) => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
                 </Sel>
               </div>
               <div style={{ textAlign: "center", paddingBottom: 9, color: "#94A3B8", fontSize: 16 }}>→</div>
               <div>
                 <Lbl>{type === "SHIP_OUT" ? "Shipped to" : "To"}</Lbl>
                 <Sel value={toId} onChange={e => setToId(parseInt(e.target.value))}>
-                  {LOCATIONS.map(l => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
+                  {moveLocs.map((l: any) => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
                 </Sel>
               </div>
             </div>
@@ -901,6 +897,23 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
                 {QUALITY_DETECTED_AT.map(d => <option key={d}>{d}</option>)}
               </Sel>
               <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 4, lineHeight: 1.4 }}>The problem is recorded against this lot, but it's usually found later in the journey — at the port of discharge, on arrival at our warehouse, or at the client.</div>
+            </div>
+          )}
+
+          {type === "SHIP_OUT" && (
+            <div style={{ marginBottom: 14 }}>
+              <Lbl>For Sales Order <span style={{ color: "#BBB", fontWeight: 400 }}>(links this dispatch to the SO for correct P/L)</span></Lbl>
+              <select value={soRef} onChange={e => setSoRef(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", background: "#fff" }}>
+                <option value="">— none / not linked —</option>
+                {(reservationState.reservations || []).map((r: any) => (
+                  <option key={r.soNumber} value={r.soNumber}>{r.soNumber}{r.clientName ? ` · ${r.clientName}` : ""} ({r.qty.toLocaleString("pl-PL")} kg)</option>
+                ))}
+                {/* Also allow any non-cancelled SO that sources this lot, even if not currently reserving */}
+                {(liveSOs || [])
+                  .filter((o: any) => !(reservationState.reservations || []).some((r: any) => r.soNumber === o.number))
+                  .filter((o: any) => (o.items || []).some((it: any) => (it.sourceType === "STOCK" && it.sourceRef === lot.number) || (it.sourceType === "PO" && it.sourceRef === lot.poRef)))
+                  .map((o: any) => <option key={o.number} value={o.number}>{o.number}{o.client?.name ? ` · ${o.client.name}` : ""}</option>)}
+              </select>
             </div>
           )}
 
@@ -922,7 +935,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
           )}
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm({ id: editing?.id, type, qtyKg: qtyNum, fromId, toId, note, date, ...(mode === "quality" ? { detectedAt } : {}) })} disabled={isInvalid}
+            <button onClick={() => onConfirm({ id: editing?.id, type: effectiveType, qtyKg: qtyNum, fromId, toId, note, date, soRef: effectiveType === "CLAIM" ? (claimSoRef || null) : (type === "SHIP_OUT" ? (soRef || null) : (editing?.soRef ?? null)), ...(mode === "quality" ? { detectedAt } : {}), ...(effectiveType === "CLAIM" ? { claimValue: parseFloat(claimValue) || 0, claimCurrency } : {}) })} disabled={isInvalid}
               style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: isInvalid ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: isInvalid ? "not-allowed" : "pointer" }}>
               {editing ? "Save changes" : (mode === "quality" ? "Record quality issue" : "Record movement")}
             </button>
@@ -1006,12 +1019,12 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
       <div style={{ width: 540, maxHeight: "88vh", overflow: "auto", background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <strong>🔍 Record inspection</strong>
-          <span style={{ fontSize: 12, color: "#888" }}>{lot.number} · {lot.product}</span>
+          <span style={{ fontSize: 12, color: "#888" }}>{lot.number} · {lot.product}{lot.variety ? " — " + lot.variety : ""}</span>
         </div>
         <div style={{ padding: 20, display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
             <div><Lbl>When / context</Lbl><Sel value={context} onChange={e => setContext(e.target.value)}>{INSPECTION_CONTEXTS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}</Sel></div>
-            <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+            <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} /></div>
           </div>
           <div><Lbl>Outcome</Lbl><Sel value={outcome} onChange={e => setOutcome(e.target.value)}>{INSPECTION_OUTCOMES.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}</Sel></div>
           {affectsStock && (
@@ -1083,8 +1096,10 @@ function printHtmlNodeInv(nodeId, title) {
   if (!doc) { iframe.remove(); return; }
   doc.open(); doc.write(html); doc.close();
   setTimeout(() => {
+    const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the document
+    document.title = title || prevTitle;
     try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-    setTimeout(() => iframe.remove(), 1000);
+    setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
   }, 150);
 }
 
@@ -1138,7 +1153,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
       <div style={{ width: 860, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Consignment settlement · {lot.number}</div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>Consignment settlement {st?.number ? <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 6, padding: "1px 8px", marginRight: 6 }}>{st.number}</span> : null}· {lot.number}</div>
             <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{po ? `${po.number} · ${po.supplier?.name || "producer"}` : "No PO link"} · status: <strong>{status}</strong>{producer && seasonPct !== null && <> · season rate {seasonPct}%</>}</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -1179,7 +1194,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
               <div>
                 <div style={{ fontSize: 15, fontWeight: 800 }}>CONSIGNMENT SETTLEMENT / ROZLICZENIE SPRZEDAŻY KOMISOWEJ</div>
-                <div style={{ color: "#555", marginTop: 2 }}>Lot / Partia: <strong>{lot.number}</strong> · {lot.product} · {po ? `PO ${po.number}` : ""} · Date / Data: {localTodayISO()}</div>
+                <div style={{ color: "#555", marginTop: 2 }}>Lot / Partia: <strong>{lot.number}</strong> · {lot.product}{lot.variety ? " — " + lot.variety : ""} · {po ? `PO ${po.number}` : ""} · Date / Data: {localTodayISO()}</div>
               </div>
               <div style={{ textAlign: "right", color: "#555" }}>
                 <div style={{ fontWeight: 700 }}>MARIANNA</div>
@@ -1233,13 +1248,13 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
                   <button onClick={() => setExtra(prev => prev.filter((_, idx) => idx !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
                 </div>
               ))}
-              <button onClick={() => setExtra(prev => [...prev, { id: Date.now(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
+              <button onClick={() => setExtra(prev => [...prev, { id: nextId(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
             </div>
           )}
         </div>
 
         <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save draft</button>}
+          {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save</button>}
           {(status === "None" || status === "Draft") && <button onClick={() => save("Sent")} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Mark statement sent</button>}
           {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={() => { if (window.confirm(`Close settlement for ${lot.number}?\n\nProducer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`)) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
         </div>
@@ -1275,7 +1290,7 @@ function SortingModal({ lot, onCancel, onConfirm }: any) {
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Date</label>
-              <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
             </div>
           </div>
           <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Note (optional)</label>
@@ -1292,7 +1307,52 @@ function SortingModal({ lot, onCancel, onConfirm }: any) {
 }
 
 // ─── v6.5 anchor end ────────────────────────────────────────────────────────
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onDelete, onCustoms, onInspect, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement }: any) {
+function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
+  const locs = mergedLocations(contacts);
+  const ownWarehouses = locs.filter((l: any) => l.type === "OWN");
+  const lastShip = [...(lot.movements || [])].reverse().find((m: any) => m.type === "SHIP_OUT");
+  const defTo = ownWarehouses.find((w: any) => String(w.id) === String(lot.locationId))?.id || ownWarehouses[0]?.id || "";
+  const [kg, setKg] = useState("");
+  const [fromId, setFromId] = useState(String(lastShip?.toId || ""));
+  const [toId, setToId] = useState(String(defTo || ""));
+  const [cost, setCost] = useState("");
+  const [currency, setCurrency] = useState(lot.currency || "PLN");
+  const [fxRate, setFxRate] = useState((lot.currency || "PLN") === "PLN" ? "1" : "");
+  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [reason, setReason] = useState("");
+  const kgN = parseNum(kg);
+  const valid = kgN > 0 && !!toId;
+  const lblStyle: any = { fontSize: 11, fontWeight: 600, color: "#64748B", marginBottom: 4, display: "block" };
+  const inpStyle: any = { width: "100%", padding: "8px 10px", border: "1px solid #E2E8F0", borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "24px 16px", overflowY: "auto" }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: 520, maxWidth: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", margin: "auto", padding: 22 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>↩ Return to warehouse — {lot.number}</div>
+        <div style={{ fontSize: 11.5, color: "#64748B", lineHeight: 1.5, marginBottom: 16 }}>
+          A return restores stock to your warehouse and books the return transport as a shipment with its cost. It does <strong>not</strong> reopen the original sale — settle any value with the client via a quality issue / credit note.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><label style={lblStyle}>Returned kg</label><input type="number" value={kg} onChange={e => setKg(e.target.value)} style={inpStyle} placeholder="e.g. 5" /></div>
+          <div><label style={lblStyle}>Return date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={inpStyle} /></div>
+          <div><label style={lblStyle}>From (client)</label><select value={fromId} onChange={e => setFromId(e.target.value)} style={inpStyle}><option value="">—</option>{locs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+          <div><label style={lblStyle}>To (warehouse)</label><select value={toId} onChange={e => setToId(e.target.value)} style={inpStyle}><option value="">—</option>{ownWarehouses.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+          <div><label style={lblStyle}>Return transport cost</label><input type="number" value={cost} onChange={e => setCost(e.target.value)} style={inpStyle} placeholder="0" /></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div><label style={lblStyle}>Currency</label><select value={currency} onChange={e => { setCurrency(e.target.value); setFxRate(e.target.value === "PLN" ? "1" : ""); }} style={inpStyle}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
+            <div><label style={lblStyle}>FX → PLN</label><input type="number" value={fxRate} onChange={e => setFxRate(e.target.value)} style={inpStyle} /></div>
+          </div>
+        </div>
+        <div style={{ marginTop: 12 }}><label style={lblStyle}>Reason / note</label><input value={reason} onChange={e => setReason(e.target.value)} style={inpStyle} placeholder="e.g. Quality dispute — returned by client" /></div>
+        <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E2E8F0", borderRadius: 8, background: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button disabled={!valid} onClick={() => onConfirm({ kg: kgN, fromId, toId, cost: parseNum(cost), currency, fxRate: parseNum(fxRate) || 1, date, reason })} style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: valid ? "#7C3AED" : "#CBD5E1", color: "#fff", fontSize: 13, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Return to warehouse</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onCustoms, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [] }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1316,6 +1376,9 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
           <button onClick={onMove} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Record movement</button>
           <button onClick={onQualityIssue} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
+          {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
+            <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
+          )}
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -1331,7 +1394,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 <VarianceBadge expected={lot.expectedKg} actual={lot.receivedKg} />
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{lot.number}</div>
-              <div style={{ fontSize: 14, color: "#444" }}>{lot.product} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
+              <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
               <div style={{ marginTop: 10 }}><FlowBadge flow={lot.flow} /></div>
             </div>
             <div style={{ textAlign: "right" }}>
@@ -1383,6 +1446,14 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 <button onClick={() => onOpenSettlement && onOpenSettlement(lot)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#7C3AED", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                   {(lot.settlement?.status === "Closed") ? "View settlement" : "Open settlement"}
                 </button>
+                {onOpenClaim && (
+                  <button onClick={() => onOpenClaim(lot)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#B45309", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="Quantify damage on this consignment and request a credit note from the producer">
+                    {(lot.claims || []).length ? `Producer claim (${lot.claims.length})` : "Producer claim"}
+                  </button>
+                )}
+                <button onClick={() => printHtmlNodeInv("lot-trace-doc", `Trace-${lot.number}`)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #0F766E", background: "#fff", color: "#0F766E", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="One-click recall report: where this lot came from and everywhere it went — supplier, shipments, clients, invoices.">
+                  🔎 Trace / recall
+                </button>
               </div>
             </Card>
           )}
@@ -1407,7 +1478,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 </div>
                 {wh.lines.map((l, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #F9FAFB", fontSize: 12, color: "#444" }}>
-                    <span>{l.label}{l.date ? <span style={{ color: "#999", fontSize: 10.5 }}> · {l.date}</span> : null}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                    <span>{l.label}{l.date ? <span style={{ color: "#999", fontSize: 10.5 }}> · {formatDMY(l.date)}</span> : null}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
                     <span style={{ fontWeight: 600 }}>{l.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {wh.currency}</span>
                   </div>
                 ))}
@@ -1476,10 +1547,10 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                             </div>
                             <div style={{ fontSize: 11, marginTop: 2, color: done ? "#9CA3AF" : active ? "#D97706" : "#9CA3AF" }}>
                               {done
-                                ? `${s.actualDate || s.plannedDate || ""} · done`
+                                ? `${formatDMY(s.actualDate || s.plannedDate) || ""} · done`
                                 : active
-                                  ? `${s.plannedDate ? "planned " + s.plannedDate : "date TBA"} · in progress`
-                                  : `${s.plannedDate ? "planned " + s.plannedDate : "date TBA"}`}
+                                  ? `${s.plannedDate ? "planned " + formatDMY(s.plannedDate) : "date TBA"} · in progress`
+                                  : `${s.plannedDate ? "planned " + formatDMY(s.plannedDate) : "date TBA"}`}
                             </div>
                           </div>
                         </div>
@@ -1493,32 +1564,12 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
               {(() => {
                 const kinds = customsStagesForFlow(lot.flow);
                 if (kinds.length === 0) return null;
-                const customs = lot.customs || {};
-                const statusColor = (st: string) => st === "Cleared" ? { c: "#16A34A", bg: "#DCFCE7" } : st === "In progress" ? { c: "#D97706", bg: "#FEF3C7" } : st === "Held" ? { c: "#DC2626", bg: "#FEE2E2" } : { c: "#6B7280", bg: "#F3F4F6" };
                 return (
                   <Card style={{ marginBottom: 16 }}>
                     <SectionTitle>CUSTOMS</SectionTitle>
-                    {kinds.map((k) => {
-                      const c = customs[k] || {};
-                      const st = c.status || "Not started";
-                      const sc = statusColor(st);
-                      return (
-                        <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 0", borderBottom: "1px solid #F3F4F6" }}>
-                          <div>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>🛃 {k === "export" ? "Export clearance" : "Import clearance"}</div>
-                            <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>
-                              {c.declRef ? `Ref ${c.declRef}` : "No declaration ref"}{c.date ? ` · ${c.date}` : ""}
-                              {c.cost ? ` · ${fmtNum(c.cost)} ${c.currency || "PLN"}` : ""}
-                            </div>
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontSize: 10.5, fontWeight: 700, color: sc.c, background: sc.bg, padding: "2px 9px", borderRadius: 10 }}>{st}</span>
-                            <button onClick={() => onCustoms(k)} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #2563EB", background: "#fff", borderRadius: 6, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 8, fontStyle: "italic" }}>Customs cost entered here flows into the lot's cost breakdown and marks the matching journey stage.</div>
+                    <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.6 }}>
+                      Customs clearance is now managed on the <strong>shipment</strong> that carries this lot (Shipments → open the shipment → <em>Customs clearance</em>) — where it reflects the EU boundary, who clears it (your PL broker, the forwarder, or T1 + local broker) and the customs cost. The journey step above completes automatically when the goods arrive.
+                    </div>
                   </Card>
                 );
               })()}
@@ -1549,6 +1600,56 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
 
               {/* Movement history */}
               <Card style={{ marginBottom: 16 }}>
+                {(() => {
+                  // Safeguards 7a: the recall report — hidden, print-only.
+                  const t = buildTraceTree(lot, { pos: tracePOs, orders: liveSOs, shipments, invoices: traceInvoices }, localTodayISO());
+                  const cell = { border: "1px solid #999", padding: "4px 6px", fontSize: 11 } as any;
+                  const hd = { ...cell, background: "#F3F4F6", fontWeight: 700 } as any;
+                  return (
+                    <div id="lot-trace-doc" style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", color: "#111", fontFamily: "Arial, sans-serif", fontSize: 12, padding: 24 }}>
+                      <div style={{ fontSize: 17, fontWeight: 800 }}>TRACEABILITY / RECALL REPORT — {t.lot.number}</div>
+                      <div style={{ marginBottom: 10 }}>Generated / Wygenerowano: {t.generatedAt} · {t.lot.product}{t.lot.variety ? ` — ${t.lot.variety}` : ""} · received {Number(t.lot.receivedKg || 0).toLocaleString("pl-PL")} kg</div>
+                      <div style={{ fontWeight: 800, margin: "8px 0 4px" }}>ORIGIN / POCHODZENIE</div>
+                      <div>PO: <b>{t.origin.poNumber || "—"}</b> · Supplier / Dostawca: <b>{t.origin.supplier || "—"}</b>{t.origin.origin ? ` · Origin: ${t.origin.origin}` : ""}{t.origin.supplierAddress ? ` · ${t.origin.supplierAddress}` : ""}</div>
+                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>SHIPMENTS / TRANSPORTY ({t.shipments.length})</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["No.", "Direction", "Route", "Dates", "Carrier", "Status"].map(h => <th key={h} style={hd}>{h}</th>)}</tr></thead>
+                        <tbody>{t.shipments.map((s: any) => <tr key={s.number}>{[s.number, s.direction || "—", [s.from, s.to].filter(Boolean).join(" → ") || "—", s.dates || "—", s.carrier || "—", s.status || "—"].map((v: any, k: number) => <td key={String(k)} style={cell}>{v}</td>)}</tr>)}</tbody></table>
+                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>SOLD TO / SPRZEDANO ({t.sales.length})</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["SO", "Client / Klient", "Qty kg", "Destination", "Status"].map(h => <th key={h} style={hd}>{h}</th>)}</tr></thead>
+                        <tbody>{t.sales.map((s: any, k: number) => <tr key={String(k)}>{[s.soNumber, s.client, s.qtyKg.toLocaleString("pl-PL"), s.destination || "—", s.status || "—"].map((v: any, j: number) => <td key={String(j)} style={cell}>{v}</td>)}</tr>)}</tbody></table>
+                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>RELATED INVOICES / FAKTURY ({t.invoices.length})</div>
+                      <div>{t.invoices.map((v: any) => `${v.number}${v.counterparty ? ` (${v.counterparty})` : ""}`).join(" · ") || "—"}</div>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  // Batch 6c (BP-33): one place for the lot's quality story —
+                  // claims, claimed/damaged totals, quality movements.
+                  const claims = lot.claims || [];
+                  const qmoves = (lot.movements || []).filter((m: any) => ["DAMAGE", "RECLASS", "CLAIM"].includes(m.type));
+                  if (!claims.length && !qmoves.length && !(lot.claimedKg > 0) && !(lot.damagedKg > 0)) return null;
+                  const chip = (s: string) => ({ Draft: "#94A3B8", Issued: "#B45309", Accepted: "#15803D", Rejected: "#DC2626", Settled: "#4338CA" } as any)[s] || "#94A3B8";
+                  return (
+                    <div style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: claims.length ? 8 : 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 800, color: "#B45309", letterSpacing: "0.04em" }}>QUALITY & CLAIMS</div>
+                        {lot.claimedKg > 0 && <span style={{ fontSize: 10.5, color: "#B45309" }}>claimed {Number(lot.claimedKg).toLocaleString("pl-PL")} kg</span>}
+                        {lot.damagedKg > 0 && <span style={{ fontSize: 10.5, color: "#DC2626" }}>damaged {Number(lot.damagedKg).toLocaleString("pl-PL")} kg</span>}
+                        {qmoves.length > 0 && <span style={{ fontSize: 10.5, color: "#94A3B8" }}>· {qmoves.length} quality movement{qmoves.length !== 1 ? "s" : ""} in the history below</span>}
+                      </div>
+                      {claims.map((c: any) => (
+                        <div key={String(c.id)} onClick={() => onOpenClaim && onOpenClaim(lot)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 7, background: "#fff", border: "1px solid #FDE68A", marginBottom: 4, cursor: onOpenClaim ? "pointer" : "default", fontSize: 12 }}>
+                          <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 800, color: "#B45309" }}>{c.number || "draft"}</span>
+                          <span style={{ color: "#64748B" }}>{c.date}</span>
+                          <span>{c.defectType || "defect"} · {c.defectPct || 0}%{c.affectedKg ? ` · ${Number(c.affectedKg).toLocaleString("pl-PL")} kg` : ""}</span>
+                          <span style={{ marginLeft: "auto", fontWeight: 700 }}>{c.requestedCreditEUR ? `€${Number(c.requestedCreditEUR).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}` : ""}</span>
+                          {c.status === "Accepted" && c.acceptedEUR ? <span style={{ fontSize: 10.5, color: "#15803D" }}>accepted €{Number(c.acceptedEUR).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span> : null}
+                          <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: chip(c.status), borderRadius: 999, padding: "1px 8px" }}>{c.status || "Draft"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 <SectionTitle>MOVEMENT HISTORY ({lot.movements.length})</SectionTitle>
                 {lot.movements.length === 0 && (
                   <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No movements yet — this lot is still in "Expected" status.</div>
@@ -1561,23 +1662,26 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                       const fromLoc = locById(m.fromId);
                       const toLoc = locById(m.toId);
                       const isMove = m.fromId !== m.toId;
+                      const isVoided = !!m.voided;
+                      const canVoid = !isVoided && ["TRANSFER", "DAMAGE", "CLAIM", "RECLASS"].includes(m.type); // manual events only; IN/SHIP_OUT/REVERSAL are system-driven
                       return (
-                        <div key={i} style={{ display: "flex", gap: 14, paddingBottom: 14, position: "relative" }}>
-                          <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff", border: `2px solid ${mt.color}`, color: mt.color, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, zIndex: 1 }}>{mt.icon}</div>
+                        <div key={i} style={{ display: "flex", gap: 14, paddingBottom: 14, position: "relative", opacity: isVoided ? 0.6 : 1 }}>
+                          <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff", border: `2px solid ${isVoided ? "#DC2626" : mt.color}`, color: isVoided ? "#DC2626" : mt.color, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, zIndex: 1 }}>{isVoided ? "✕" : mt.icon}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                              <div style={{ fontSize: 12.5 }}>
-                                <span style={{ fontWeight: 600, color: mt.color }}>{mt.label}</span>
-                                <span style={{ color: "#444", marginLeft: 6 }}>· {fmtNum(m.qtyKg)} kg</span>
-                                {isMove && <span style={{ color: "#666", marginLeft: 6 }}>· {fromLoc?.name} → {toLoc?.name}</span>}
+                              <div style={{ fontSize: 12.5, textDecoration: isVoided ? "line-through" : "none", color: isVoided ? "#B91C1C" : undefined }}>
+                                <span style={{ fontWeight: 600, color: isVoided ? "#B91C1C" : mt.color }}>{mt.label}</span>
+                                <span style={{ color: isVoided ? "#B91C1C" : "#444", marginLeft: 6 }}>· {fmtNum(m.qtyKg)} kg</span>
+                                {isMove && <span style={{ color: isVoided ? "#B91C1C" : "#666", marginLeft: 6 }}>· {fromLoc?.name} → {toLoc?.name}</span>}
+                                {isVoided && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#B91C1C", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 5, padding: "1px 6px" }}>VOIDED</span>}
                               </div>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                                <span style={{ fontSize: 11, color: "#AAA" }}>{m.date}</span>
-                                {onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #2563EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>}
-                                {onDeleteMovement && <button onClick={() => onDeleteMovement(m.id)} title="Delete movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #FECACA", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#DC2626" }}>✕</button>}
+                                <span style={{ fontSize: 11, color: "#AAA" }}>{formatDMY(m.date)}</span>
+                                {!isVoided && onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #2563EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>}
+                                {canVoid && onVoidMovement && <button onClick={() => onVoidMovement(m.id)} title="Void this entry — kept in the record but removed from stock" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #FECACA", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#DC2626", fontWeight: 600 }}>Void</button>}
                               </div>
                             </div>
-                            {m.note && <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{m.note}</div>}
+                            {m.note && <div style={{ fontSize: 11.5, color: "#888", marginTop: 2, textDecoration: isVoided ? "line-through" : "none" }}>{m.note}</div>}
                           </div>
                         </div>
                       );
@@ -1682,7 +1786,168 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], pos: extPOs = [] }: any = {}) {
+
+// ── Batch 6a (BP-55b): Producer Claim modal — mirrors the Claim Request Form ──
+function ClaimModal({ lot, po, existing = null, onCancel, onSave }: any) {
+  const CUR = ["PLN", "EUR", "EGP"];
+  const seedLines = () => {
+    if (existing?.costLines?.length) return existing.costLines;
+    const fromCosts = (lot.costs || []).filter((c: any) => ["PLN", "EUR"].includes(c.currency)).map((c: any) => ({
+      id: nextId(), label: c.label || c.type || "Cost", party: "", invoiceNo: c.source || "", amount: c.amount, currency: c.currency, rate: "",
+    }));
+    return fromCosts.length ? fromCosts : [
+      { id: nextId(), label: `Product — ${lot.product || ""}`.trim(), party: po?.supplier?.name || "", invoiceNo: "", amount: "", currency: "PLN", rate: "" },
+      { id: nextId(), label: "Transport to port of loading", party: "", invoiceNo: "", amount: "", currency: "EUR", rate: "" },
+      { id: nextId(), label: "Container cost", party: "", invoiceNo: "", amount: "", currency: "EUR", rate: "" },
+      { id: nextId(), label: "Customs + transport at destination", party: "", invoiceNo: "", amount: "", currency: "EGP", rate: "" },
+      { id: nextId(), label: "Sorting", party: "", invoiceNo: "", amount: "", currency: "EGP", rate: "" },
+    ];
+  };
+  const [claim, setClaim] = useState(() => existing ? { ...existing } : {
+    number: "", date: localTodayISO(), containerNo: "", supplierName: po?.supplier?.name || "",
+    defectType: "", defectPct: "", soldInMarket: true, recoveredAmount: "", recoveredCurrency: "EGP", recoveredRate: "",
+    eurPlnRate: "", notes: "", status: "Draft",
+    // Batch 6c (BP-33): physical + lifecycle dimensions of the claim
+    affectedKg: "", acceptedEUR: "", resolutionNote: "", resolvedAt: null,
+  });
+  const [lines, setLines] = useState(seedLines);
+  const cf = (k: any, v: any) => setClaim((c: any) => ({ ...c, [k]: v }));
+  const lf = (id: any, k: any, v: any) => setLines((prev: any[]) => prev.map(l => l.id === id ? { ...l, [k]: v } : l));
+  const comp = computeClaim({
+    costLines: lines, defectPct: claim.defectPct, soldInMarket: !!claim.soldInMarket,
+    recoveredAmount: claim.recoveredAmount, recoveredCurrency: claim.recoveredCurrency, recoveredRate: claim.recoveredRate,
+  });
+  const eur = (v: number) => `€${(v || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 8px", fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" } as any;
+  const th = { padding: "5px 6px", fontSize: 10, color: "#94A3B8", textAlign: "left", borderBottom: "1px solid #E5E7EB", fontWeight: 700, letterSpacing: "0.03em" } as any;
+  const td = { padding: "4px 4px", verticalAlign: "middle" } as any;
+  const canIssue = comp.totalCostEUR > 0 && parseFloat(String(claim.defectPct)) > 0 && parseFloat(String(claim.eurPlnRate)) > 0;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 7000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "24px 16px", overflowY: "auto" }} onClick={onCancel}>
+      <div onClick={(e: any) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 920, maxWidth: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.3)", padding: 22, marginBottom: 40 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 800 }}>Producer claim / Reklamacja do producenta</div>
+          {claim.number ? <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 800, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "1px 8px" }}>{claim.number}</span> : <span style={{ fontSize: 11, color: "#94A3B8" }}>draft — number assigned on issue</span>}
+        </div>
+        <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>Lot <b>{lot.number}</b>{lot.poRef ? <> · PO <b>{lot.poRef}</b></> : null}{lot.product ? <> · {lot.product}</> : null} — quantify the damage, deduct market recovery, request the balance from the producer as a credit note.</div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
+          <div><Lbl>Claim date</Lbl><input type="date" value={claim.date} onChange={(e: any) => cf("date", e.target.value)} style={inp} /></div>
+          <div><Lbl>Container no.</Lbl><input value={claim.containerNo} onChange={(e: any) => cf("containerNo", e.target.value)} placeholder="e.g. SEGU9867650" style={inp} /></div>
+          <div><Lbl>Supplier / producer</Lbl><input value={claim.supplierName} onChange={(e: any) => cf("supplierName", e.target.value)} style={inp} /></div>
+          <div><Lbl>EUR→PLN rate (for the note)</Lbl><input type="number" value={claim.eurPlnRate} onChange={(e: any) => cf("eurPlnRate", e.target.value)} placeholder="e.g. 4.25" style={inp} /></div>
+        </div>
+
+        <SectionTitle>COST OF THE CONSIGNMENT AT CLIENT'S WAREHOUSE</SectionTitle>
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 6 }}>
+          <thead><tr>
+            <th style={th}>COST ITEM</th><th style={th}>PARTY</th><th style={th}>INVOICE NO.</th>
+            <th style={{ ...th, width: 110 }}>AMOUNT</th><th style={{ ...th, width: 64 }}>CUR</th>
+            <th style={{ ...th, width: 84 }} title="PLN: NBP PLN-per-EUR · EGP: EGP-per-EUR">RATE→EUR</th>
+            <th style={{ ...th, width: 96, textAlign: "right" }}>EUR</th><th style={{ ...th, width: 30 }}></th>
+          </tr></thead>
+          <tbody>
+            {comp.lines.map((l: any) => (
+              <tr key={String(l.id)} style={{ borderBottom: "1px solid #F8FAFC" }}>
+                <td style={td}><input value={l.label} onChange={(e: any) => lf(l.id, "label", e.target.value)} style={inp} /></td>
+                <td style={td}><input value={l.party || ""} onChange={(e: any) => lf(l.id, "party", e.target.value)} style={inp} /></td>
+                <td style={td}><input value={l.invoiceNo || ""} onChange={(e: any) => lf(l.id, "invoiceNo", e.target.value)} style={inp} /></td>
+                <td style={td}><input type="number" value={l.amount} onChange={(e: any) => lf(l.id, "amount", e.target.value)} style={inp} /></td>
+                <td style={td}><select value={l.currency} onChange={(e: any) => lf(l.id, "currency", e.target.value)} style={inp}>{CUR.map(c => <option key={c}>{c}</option>)}</select></td>
+                <td style={td}>{l.currency === "EUR" ? <span style={{ fontSize: 10.5, color: "#CBD5E1" }}>—</span> : <input type="number" value={l.rate || ""} onChange={(e: any) => lf(l.id, "rate", e.target.value)} placeholder={l.currency === "PLN" ? "NBP" : "EGP/€"} style={inp} />}</td>
+                <td style={{ ...td, textAlign: "right", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>{eur(l.eur)}</td>
+                <td style={td}><button onClick={() => setLines((prev: any[]) => prev.filter(x => x.id !== l.id))} style={{ border: "none", background: "transparent", color: "#DC2626", cursor: "pointer", fontSize: 13 }}>✕</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <button onClick={() => setLines((prev: any[]) => [...prev, { id: nextId(), label: "", party: "", invoiceNo: "", amount: "", currency: "EUR", rate: "" }])} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>+ Add cost line</button>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 12 }}>
+          <div style={{ border: "1px solid #FEE2E2", background: "#FEF2F2", borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, color: "#B91C1C", letterSpacing: "0.04em", marginBottom: 8 }}>DEFECT</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 84px 120px", gap: 8 }}>
+              <div><Lbl>Type of defects</Lbl><input value={claim.defectType} onChange={(e: any) => cf("defectType", e.target.value)} placeholder="e.g. Skin defects" style={inp} /></div>
+              <div><Lbl>% of consignment</Lbl><input type="number" value={claim.defectPct} onChange={(e: any) => cf("defectPct", e.target.value)} placeholder="42" style={inp} /></div>
+              <div>
+                <Lbl>Affected qty (kg)</Lbl>
+                <input type="number" value={claim.affectedKg ?? ""} onChange={(e: any) => cf("affectedKg", e.target.value)} placeholder={String(Math.round((parseFloat(claim.defectPct) || 0) / 100 * (lot.receivedKg || 0)) || "")} style={inp} />
+                {(parseFloat(claim.defectPct) > 0 && lot.receivedKg > 0 && !claim.affectedKg) && (
+                  <button type="button" onClick={() => cf("affectedKg", String(Math.round((parseFloat(claim.defectPct) || 0) / 100 * lot.receivedKg)))} style={{ fontSize: 9.5, border: "none", background: "transparent", color: "#B45309", cursor: "pointer", padding: "2px 0", fontWeight: 700 }}>use {Math.round((parseFloat(claim.defectPct) || 0) / 100 * lot.receivedKg).toLocaleString("pl-PL")} kg ({claim.defectPct}% of received)</button>
+                )}
+              </div>
+            </div>
+          </div>
+          <div style={{ border: "1px solid #DCFCE7", background: "#F0FDF4", borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, color: "#15803D", letterSpacing: "0.04em", marginBottom: 8 }}>RECOVERY — DEFECTED PRODUCT SOLD IN THE MARKET?</div>
+            <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 70px 84px", gap: 8, alignItems: "end" }}>
+              <div><Lbl>Sold?</Lbl><select value={claim.soldInMarket ? "yes" : "no"} onChange={(e: any) => cf("soldInMarket", e.target.value === "yes")} style={inp}><option value="yes">Yes</option><option value="no">No</option></select></div>
+              <div><Lbl>Recovered amount</Lbl><input type="number" disabled={!claim.soldInMarket} value={claim.recoveredAmount} onChange={(e: any) => cf("recoveredAmount", e.target.value)} style={{ ...inp, opacity: claim.soldInMarket ? 1 : 0.5 }} /></div>
+              <div><Lbl>Cur</Lbl><select disabled={!claim.soldInMarket} value={claim.recoveredCurrency} onChange={(e: any) => cf("recoveredCurrency", e.target.value)} style={{ ...inp, opacity: claim.soldInMarket ? 1 : 0.5 }}>{CUR.map(c => <option key={c}>{c}</option>)}</select></div>
+              <div><Lbl>Rate→EUR</Lbl><input type="number" disabled={!claim.soldInMarket || claim.recoveredCurrency === "EUR"} value={claim.recoveredRate} onChange={(e: any) => cf("recoveredRate", e.target.value)} style={{ ...inp, opacity: claim.soldInMarket && claim.recoveredCurrency !== "EUR" ? 1 : 0.5 }} /></div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+          {[["Total cost at client's WH", comp.totalCostEUR, "#334155"], ["Defect value", comp.defectValueEUR, "#B91C1C"], ["Recovered", comp.recoveredEUR, "#15803D"], ["REQUESTED CREDIT NOTE", comp.creditNoteEUR, "#B45309"]].map((x: any) => (
+            <div key={String(x[0])} style={{ border: "1px solid #E5E7EB", borderRadius: 10, padding: "10px 12px", background: "#FAFAFA" }}>
+              <div style={{ fontSize: 9.5, fontWeight: 800, color: "#94A3B8", letterSpacing: "0.04em" }}>{x[0]}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: x[2], fontFamily: "ui-monospace, Menlo, monospace" }}>{eur(x[1])}</div>
+            </div>
+          ))}
+        </div>
+
+        {claim.status && claim.status !== "Draft" && (
+          <div style={{ border: "1px solid #E0E7FF", background: "#F5F7FF", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, color: "#4338CA", letterSpacing: "0.04em", marginBottom: 8 }}>RESOLUTION — PRODUCER'S ANSWER</div>
+            <div style={{ display: "grid", gridTemplateColumns: "150px 130px 1fr", gap: 8 }}>
+              <div><Lbl>Status</Lbl><select value={claim.status} onChange={(e: any) => setClaim((c: any) => ({ ...c, status: e.target.value, resolvedAt: ["Accepted", "Rejected", "Settled"].includes(e.target.value) ? (c.resolvedAt || localTodayISO()) : null }))} style={inp}>
+                {["Issued", "Accepted", "Rejected", "Settled"].map((s: string) => <option key={s}>{s}</option>)}
+              </select></div>
+              <div><Lbl>Accepted (EUR)</Lbl><input type="number" value={claim.acceptedEUR ?? ""} onChange={(e: any) => cf("acceptedEUR", e.target.value)} placeholder={String(comp.creditNoteEUR || "")} style={inp} disabled={claim.status === "Rejected"} /></div>
+              <div><Lbl>Resolution note</Lbl><input value={claim.resolutionNote ?? ""} onChange={(e: any) => cf("resolutionNote", e.target.value)} placeholder="e.g. producer accepted 5,000 EUR — credit note KN 12/2026" style={inp} /></div>
+            </div>
+            {claim.acceptedEUR && parseFloat(claim.acceptedEUR) !== comp.creditNoteEUR && (
+              <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 6 }}>Accepted differs from requested ({comp.creditNoteEUR.toFixed(2)} EUR) — remember to adjust the draft credit note in the Invoices module (it owns the note).</div>
+            )}
+          </div>
+        )}
+        <div style={{ marginBottom: 12 }}><Lbl>Notes</Lbl><textarea value={claim.notes} onChange={(e: any) => cf("notes", e.target.value)} rows={2} style={{ ...inp, resize: "vertical" }} /></div>
+
+        {/* printable bilingual document */}
+        <div id="producer-claim-doc" style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", color: "#111", fontFamily: "Arial, sans-serif", fontSize: 12, padding: 24 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 2 }}>CLAIM REQUEST / WNIOSEK REKLAMACYJNY {claim.number ? `— ${claim.number}` : ""}</div>
+          <div style={{ marginBottom: 10 }}>Date / Data: {claim.date} · PO: {lot.poRef || "—"} · Container / Kontener: {claim.containerNo || "—"} · Supplier / Dostawca: {claim.supplierName || "—"} · Lot: {lot.number}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
+            <thead><tr>{["Cost item / Pozycja", "Party / Strona", "Invoice / Faktura", "Amount / Kwota", "Cur", "Rate / Kurs", "EUR"].map(h => <th key={h} style={{ border: "1px solid #999", padding: "4px 6px", fontSize: 10.5, background: "#F3F4F6", textAlign: "left" }}>{h}</th>)}</tr></thead>
+            <tbody>{comp.lines.map((l: any) => (
+              <tr key={String(l.id)}>{[l.label, l.party || "—", l.invoiceNo || "—", (parseFloat(l.amount) || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 }), l.currency, l.currency === "EUR" ? "—" : (l.rate || "—"), eur(l.eur)].map((v: any, k: number) => <td key={String(k)} style={{ border: "1px solid #999", padding: "4px 6px", fontSize: 11 }}>{v}</td>)}</tr>
+            ))}</tbody>
+          </table>
+          <div>Total cost of the consignment at client's warehouse / Koszt całkowity: <b>{eur(comp.totalCostEUR)}</b></div>
+          <div>Type of defects / Rodzaj wad: <b>{claim.defectType || "—"}</b> · {claim.defectPct || 0}% of consignment / partii</div>
+          <div>Value of defects / Wartość wad: <b>{eur(comp.defectValueEUR)}</b></div>
+          <div>Defected product sold in the market / Sprzedaż wadliwego towaru: <b>{claim.soldInMarket ? "YES / TAK" : "NO / NIE"}</b>{claim.soldInMarket ? <> · recovered / odzyskano: <b>{eur(comp.recoveredEUR)}</b></> : null}</div>
+          <div style={{ fontSize: 14, fontWeight: 800, marginTop: 8 }}>REQUESTED CREDIT NOTE / WNIOSKOWANA NOTA KREDYTOWA: {eur(comp.creditNoteEUR)}</div>
+          {claim.notes ? <div style={{ marginTop: 8 }}>Notes / Uwagi: {claim.notes}</div> : null}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <button onClick={() => printHtmlNodeInv("producer-claim-doc", `Claim-${claim.number || lot.number}`)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Print / PDF claim</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onCancel} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+            <button onClick={() => onSave({ ...claim, costLines: lines }, comp, false)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #B45309", background: "#fff", color: "#B45309", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Save</button>
+            <button disabled={!canIssue || claim.status === "Issued"} onClick={() => onSave({ ...claim, costLines: lines }, comp, true)} title={claim.status === "Issued" ? "Already issued" : !canIssue ? "Needs cost lines, a defect % and the EUR→PLN rate" : "Assigns the CLM number and drafts the incoming credit note"} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: (!canIssue || claim.status === "Issued") ? "#D1D5DB" : "#B45309", color: "#fff", fontSize: 12, fontWeight: 700, cursor: (!canIssue || claim.status === "Issued") ? "not-allowed" : "pointer" }}>{claim.status === "Issued" ? "Issued ✓" : "Issue claim"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState(INIT_LOTS);
   const lots = extLots ?? localLots;
@@ -1698,8 +1963,10 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [movementMode, setMovementMode] = useState<"movement" | "quality">("movement");
   const [sortingLot, setSortingLot] = useState(null); // v6.5: lot for the sorting-event modal
   const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
+  const [claimLot, setClaimLot] = useState(null); // Batch 6a (BP-55b): lot for the producer-claim modal
   const [editingMovement, setEditingMovement] = useState(null);
   const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
+  const [showReturn, setShowReturn] = useState(false); // v6.18.12 (#4): return-to-warehouse modal
   const [showInspection, setShowInspection] = useState(false);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all"); // all | inPossession | <specific>
@@ -1730,40 +1997,114 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       if (filterQuality !== "All" && l.quality !== filterQuality) return false;
       if (q) {
         const soList = soRefsFor(l, liveSOs, shipments).map(s => s.number).join(" ");
-        const hay = `${l.number} ${l.product} ${l.poRef || ""} ${soList} ${loc?.name || ""}`.toLowerCase();
+        const hay = `${l.number} ${l.product} ${l.variety || ""} ${l.poRef || ""} ${soList} ${loc?.name || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
   }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality]);
 
+  // v6.18.21 (audit P1): the product filter is derived from the lots actually in
+  // inventory (catalog-picked on the PO) instead of a hardcoded list that drifted.
+  // Explicit string[] so the JSX key type is satisfied under the strict CRA build.
+  const productOptions = useMemo<string[]>(() => {
+    const set = new Set<string>();
+    (lots || []).forEach((l: any) => { if (l && l.product) set.add(String(l.product)); });
+    return Array.from(set).sort();
+  }, [lots]);
+
   // ── mutations ───────────────────────────────────────────────────────
-  function recordMovement({ id, type, qtyKg, fromId, toId, note, date }: any) {
+  function recordMovement({ id, type, qtyKg, fromId, toId, note, date, soRef, detectedAt, claimValue, claimCurrency, partyName }: any) {
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       // Capture a stable base location for replay (origin before any movement).
       const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      const extra: any = {};
+      if (detectedAt) extra.detectedAt = detectedAt;
+      if (type === "CLAIM") { extra.claimValue = parseNum(claimValue); extra.claimCurrency = claimCurrency || "PLN"; }
       let movements;
       if (id != null) {
         // EDIT: replace the existing movement by id.
-        movements = (l.movements || []).map(m => m.id === id ? { ...m, type, qtyKg, fromId, toId, note, date } : m);
+        movements = (l.movements || []).map(m => m.id === id ? { ...m, type, qtyKg, fromId, toId, note, date, soRef: soRef ?? m.soRef ?? null, ...extra } : m);
       } else {
         // ADD: append a new movement.
-        movements = [...(l.movements || []), { id: Date.now(), date: date || today, type, qtyKg, fromId, toId, note }];
+        movements = [...(l.movements || []), { id: nextId(), date: date || today, type, qtyKg, fromId, toId, note, soRef: soRef ?? null, ...extra }];
       }
       // Recompute all derived quantities/status/location from the full movement list.
       return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
     }));
+    // v6.18.10 (#5): a client-side quality claim creates a DRAFT credit note to the
+    // client (linked to the sales invoice if one exists), leaving warehouse stock alone.
+    if (type === "CLAIM" && parseNum(claimValue) > 0 && extSetFinanceNotes && id == null) {
+      const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && (i.links || []).some((lk: any) => String(lk.number) === String(soRef)));
+      const so = (extOrders || []).find((o: any) => o.number === soRef);
+      const party = partyName || inv?.counterparty?.name || so?.client?.name || "Client";
+      const cur = claimCurrency || inv?.currency || so?.currency || "PLN";
+      const fx = defaultFxRate(cur);
+      const amt = parseNum(claimValue);
+      extSetFinanceNotes((prev: any[]) => [...(prev || []), {
+        id: nextId(), noteType: "CREDIT", direction: "outgoing",
+        invoiceId: inv?.id ?? null, relatedRef: soRef || selected.number, partyName: party,
+        category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
+        status: "Draft", reason: `Quality claim — ${qtyKg} kg defective on ${selected.number}${soRef ? ` (${soRef})` : ""}`,
+        date: date || today, source: `claim:lot:${selected.id}:${Date.now()}`,
+      }]);
+    }
     setShowMovement(false);
     setEditingMovement(null);
   }
 
-  function deleteMovement(movId) {
-    if (!window.confirm("Delete this movement? Stock will be recalculated.")) return;
+  // v6.18.12 (#4): a return is a standalone event — restore stock to the warehouse
+  // (REVERSAL) and book the return transport as its own shipment with the cost. It does
+  // NOT reopen the original SO; value is settled via the quality-issue / credit-note path.
+  function returnToWarehouse(d: any) {
+    const fx = parseNum(d.fxRate) || 1;
+    const costN = parseNum(d.cost);
+    setLots(prev => prev.map(l => {
+      if (l.id !== selected.id) return l;
+      const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      const movements = [...(l.movements || []), { id: nextId(), date: d.date || today, type: "REVERSAL", qtyKg: d.kg, fromId: d.fromId || null, toId: d.toId, note: d.reason || "Return to warehouse" }];
+      return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
+    }));
+    if (typeof extSetShipments === "function") {
+      extSetShipments((prev: any[]) => {
+        const year = new Date(d.date || Date.now()).getFullYear();
+        const retCount = (prev || []).filter((s: any) => s.purpose === "RETURN").length;
+        const number = `RET-${year}-${String(retCount + 1).padStart(4, "0")}`;
+        const costPLN = Math.round(costN * fx * 100) / 100;
+        const sh = {
+          id: nextId(), number, purpose: "RETURN", status: "Delivered", billingStatus: "Not ready",
+          loadingDate: d.date, expectedDeliveryDate: d.date,
+          legs: [{ id: 1, mode: "Road", status: "Delivered", fromLocationId: d.fromId || null, toLocationId: d.toId, carrierId: null, plannedPickupDate: d.date, plannedDeliveryDate: d.date, costAmount: costN, costCurrency: d.currency, costFxRate: fx, costPLN, notes: "Return from client" }],
+          costs: costN > 0 ? [{ id: 1, type: "return_freight", supplierId: null, amount: costN, currency: d.currency, fxRate: fx, amountPLN: costPLN, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: d.reason || "Return transport" }] : [],
+          documents: [], lotRefs: [selected.number], terms: "", customs: { applies: false },
+          notes: `Return to warehouse: ${d.kg} kg of ${selected.number}.${d.reason ? " " + d.reason : ""}`,
+        };
+        return [sh, ...(prev || [])];
+      });
+    }
+    setShowReturn(false);
+  }
+
+  async function deleteMovement(movId) {
+    if (!(await uiConfirm({ tone: "danger", title: "Delete movement", message: "Stock will be recalculated.", confirmLabel: "Delete" }))) return;
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
       const movements = (l.movements || []).filter(m => m.id !== movId);
+      return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
+    }));
+  }
+  // v6.18.17 (C): void a wrongly-entered MANUAL movement/reclass/claim. The entry is
+  // kept in the lot's history (shown red, read-only) for the record, but excluded from
+  // the stock recompute. System events (IN / SHIP_OUT / REVERSAL) can't be voided here —
+  // they're driven by the PO / shipment / return and would desync the lot.
+  async function voidMovement(movId) {
+    if (!(await uiConfirm({ tone: "danger", title: "Void this entry?", message: "It stays in the history (marked voided, in red) but no longer affects stock. This can't be undone.", confirmLabel: "Void" }))) return;
+    setLots(prev => prev.map(l => {
+      if (l.id !== selected.id) return l;
+      const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
+      const movements = (l.movements || []).map(m => m.id === movId ? { ...m, voided: true, voidedAt: localTodayISO() } : m);
       return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
     }));
   }
@@ -1775,7 +2116,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       // Mirror the customs cost into the lot's cost breakdown (replace any prior
       // customs cost line for this kind, so editing doesn't double-count).
       const tag = kind === "export" ? "Export customs" : "Import customs";
-      const fx = data.currency === "PLN" ? 1 : data.currency === "EUR" ? 4.25 : 3.9;
+      const fx = defaultFxRate(data.currency);
       const otherCosts = (l.costs || []).filter(c => c.label !== tag);
       const costs = data.cost > 0
         ? [...otherCosts, { type: "customs", label: tag, source: data.declRef || "customs", amount: data.cost, currency: data.currency, pln: Math.round(data.cost * fx * 100) / 100 }]
@@ -1799,7 +2140,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       // A weight-loss / damage / rejection outcome records a DAMAGE write-off movement.
       if (data.lossKg > 0) {
         const label = data.outcome === "weight_loss" ? "Inspection: weight loss" : data.outcome === "rejection" ? "Inspection: client rejection" : "Inspection: damage";
-        movements = [...movements, { id: Date.now(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${data.findings ? " — " + data.findings : ""}` }];
+        movements = [...movements, { id: nextId(), date: data.date || today, type: "DAMAGE", qtyKg: data.lossKg, fromId: l.locationId, toId: l.locationId, note: `${label}${data.findings ? " — " + data.findings : ""}` }];
       }
       const recomputed = recomputeLotFromMovements({ ...l, baseLocationId, inspections }, movements);
       return recomputed;
@@ -1807,9 +2148,43 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     setShowInspection(false);
   }
 
-  function deleteLot() {
+  async function deleteLot() {
     if (!selected) return;
-    if (!window.confirm(`Delete lot ${selected.number}? It will be soft-deleted.`)) return;
+    const lotNo = selected.number;
+
+    // Gather dependents that would be orphaned by removing this lot.
+    const dependentSOs = (liveSOs || []).filter((o: any) =>
+      o.status !== "Cancelled" &&
+      (o.items || []).some((it: any) =>
+        (it.sourceType === "STOCK" && String(it.sourceRef) === String(lotNo)) ||
+        (it.sourceType === "PO" && selected.poRef && String(it.sourceRef) === String(selected.poRef))
+      )
+    ).map((o: any) => o.number);
+
+    const dependentShipments = (shipments || []).filter((sh: any) =>
+      (sh.lotRefs || []).map(String).includes(String(lotNo)) ||
+      (sh.goods || []).some((g: any) => String(g.lotRef) === String(lotNo))
+    ).map((sh: any) => sh.number);
+
+    const hasPhysical = (parseFloat(selected.receivedKg) || 0) > 0
+      || (parseFloat(selected.physicalKg) || 0) > 0
+      || (selected.movements || []).length > 0;
+
+    const blockers: string[] = [];
+    if (dependentSOs.length) blockers.push(`• Sales Order(s): ${[...new Set(dependentSOs)].join(", ")}`);
+    if (dependentShipments.length) blockers.push(`• Shipment(s): ${[...new Set(dependentShipments)].join(", ")}`);
+    if (hasPhysical) blockers.push("• This lot has received goods / recorded movements (real stock history).");
+
+    if (blockers.length) {
+      await uiAlert({
+        tone: "warn",
+        title: `Lot ${lotNo} can't be deleted`,
+        message: `It's still referenced:\n\n${blockers.join("\n")}\n\nDeleting it would leave dangling references that distort COGS and reports. Cancel the dependent Sales Order(s)/Shipment(s) first, or void its movements, then an empty, unreferenced lot can be removed.`,
+      });
+      return;
+    }
+    if (!(await uiConfirm({ tone: "danger", title: `Delete lot ${lotNo}?`, message: "This permanently removes it from inventory.", confirmLabel: "Delete lot" }))) return;
+
     setLots(prev => prev.filter(l => l.id !== selected.id));
     setSelectedId(null);
     setView("list");
@@ -1820,23 +2195,95 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     const brokers = (extContacts || []).filter((c: any) => c.type === "Broker" || c.type === "Forwarder" || (c.services || []).includes("Customs"));
     return (
       <>
-        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
+        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
 
         {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
-          setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: Date.now(), type: "SORTING", kg, date, note }] } : l));
+          setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: nextId(), type: "SORTING", kg, date, note }] } : l));
           setSortingLot(null);
-        }} />}        {showCustoms && <CustomsModal lot={selected} kind={showCustoms} brokers={brokers} onCancel={() => setShowCustoms(null)} onConfirm={saveCustoms} />}
+        }} />}
 
+        {showReturn && selected && <ReturnModal lot={selected} contacts={extContacts} onCancel={() => setShowReturn(false)} onConfirm={returnToWarehouse} />}
+
+        {claimLot && <ClaimModal
+          lot={lots.find(l => l.id === claimLot.id) || claimLot}
+          po={(extPOs || []).find((p: any) => p.number === (lots.find(l => l.id === claimLot.id) || claimLot).poRef) || null}
+          existing={((lots.find(l => l.id === claimLot.id) || claimLot).claims || [])[0] || null}
+          onCancel={() => setClaimLot(null)}
+          onSave={(claim, comp, issue) => {
+            // Batch 6a (BP-55b): issuing assigns the CLM number and drafts the
+            // incoming credit note against the producer (idempotent by number).
+            if (issue && !claim.number) {
+              claim = { ...claim, number: nextClaimNumber(lots, new Date().getFullYear()) };
+            }
+            if (issue) claim = { ...claim, status: "Issued", requestedCreditEUR: comp.creditNoteEUR, totalCostEUR: comp.totalCostEUR, defectValueEUR: comp.defectValueEUR, recoveredEUR: comp.recoveredEUR };
+            const lotNow = lots.find(l => l.id === claimLot.id) || claimLot;
+            if (issue && extSetFinanceNotes) {
+              const clmNo = claim.number;
+              const claimForNote = claim;
+              const compForNote = comp;
+              const poForNote = (extPOs || []).find((p: any) => p.number === lotNow.poRef) || null;
+              extSetFinanceNotes((prev: any[]) => {
+                const exists = (prev || []).some((nt: any) => nt.relatedRef === clmNo);
+                if (exists) return prev;
+                const note = buildClaimNote(lotNow, poForNote, claimForNote, compForNote, claimForNote.eurPlnRate, { nextId, todayISO: localTodayISO });
+                return [note, ...(prev || [])];
+              });
+            }
+            setLots(prev => prev.map(l => {
+              if (l.id !== claimLot.id) return l;
+              const others = (l.claims || []).filter((c: any) => c.id && claim.id ? c.id !== claim.id : false);
+              const withId = claim.id ? claim : { ...claim, id: nextId() };
+              let next = { ...l, claims: [withId, ...others] };
+              // Batch 6c (BP-33): issuing a claim with an affected quantity logs a
+              // CLAIM movement — client-side, NO warehouse stock effect (reducer
+              // semantics v6.18.10 #5) — so the lot's claimedKg reflects reality.
+              const kg = parseFloat(String(claim.affectedKg || "")) || 0;
+              if (issue && kg > 0) {
+                const already = (l.movements || []).some((m: any) => m.type === "CLAIM" && String(m.note || "").includes(withId.number));
+                if (!already) {
+                  next = {
+                    ...next,
+                    movements: [...(l.movements || []), { id: nextId(), date: claim.date || localTodayISO(), type: "CLAIM", qtyKg: kg, note: `Producer claim ${withId.number} — ${claim.defectType || "quality defect"} ${claim.defectPct || 0}%` }],
+                    claimedKg: (l.claimedKg || 0) + kg,
+                  };
+                }
+              }
+              return next;
+            }));
+            if (issue) setClaimLot(null);
+          }}
+        />}
         {settlementLot && <SettlementModal lot={lots.find(l => l.id === settlementLot.id) || settlementLot} orders={liveSOs} contacts={extContacts} pos={extPOs}
           onCancel={() => setSettlementLot(null)}
           onSave={(settlement, close) => {
+            // Batch 5c (BP-38/31): a closed settlement is a NUMBERED DOCUMENT.
+            if (close && !settlement.number) {
+              settlement = { ...settlement, number: nextSettlementNumber(lots, new Date().getFullYear()) };
+            }
+            // Auto-draft the commission invoice into the Invoices registry (idempotent:
+            // skip if an invoice already links to this settlement number).
+            if (close && extSetInvoices) {
+              const setNo = settlement.number;
+              const lotForDraft = lots.find(l => l.id === settlementLot.id) || settlementLot;
+              const po = (extPOs || []).find((p: any) => p.number === lotForDraft.poRef) || null;
+              extSetInvoices((prev: any[]) => {
+                const exists = (prev || []).some((inv: any) => (inv.links || []).some((lk: any) => lk.type === "SET" && lk.number === setNo));
+                if (exists) return prev;
+                const draft = buildCommissionInvoiceDraft(lotForDraft, settlement, po, { nextId, todayISO: localTodayISO });
+                return [draft, ...(prev || [])];
+              });
+            }
             setLots(prev => prev.map(l => {
               if (l.id !== settlementLot.id) return l;
               let next = { ...l, settlement };
               if (close) {
                 const comps = settlementCostComponents(l, settlement.producerInvoiceAmountPLN, settlement.finalCommissionPLN ?? settlement.expectedCommissionPLN, settlement.producerInvoiceNo, settlement.commissionInvoiceNo);
-                const have = new Set((l.costs || []).map(c => c.source));
-                next = { ...next, costs: [...(l.costs || []), ...comps.filter(c => !have.has(c.source))] };
+                // Replace-by-ref: drop any prior settlement components for THIS lot
+                // (so re-closing a corrected settlement rewrites cleanly and never
+                // double-counts), then add the fresh pair.
+                const compSources = new Set(comps.map((c: any) => c.source));
+                const withoutPrior = (l.costs || []).filter((c: any) => !compSources.has(c.source));
+                next = { ...next, costs: [...withoutPrior, ...comps] };
               }
               return next;
             }));
@@ -1849,14 +2296,18 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           onQualityIssue={() => { setEditingMovement(null); setMovementMode("quality"); setShowMovement(true); }}
           onEditMovement={(m: any) => { setEditingMovement(m); setMovementMode(["DAMAGE", "RECLASS"].includes(m.type) ? "quality" : "movement"); setShowMovement(true); }}
           onDeleteMovement={deleteMovement}
-          onCustoms={(k: any) => setShowCustoms(k)}
+          onVoidMovement={voidMovement}
           onInspect={() => setShowInspection(true)}
+          onReturn={() => setShowReturn(true)}
           onDelete={deleteLot}
           liveSOs={liveSOs}
           shipments={extShipments}
           contacts={extContacts}
           onRecordSorting={(l) => setSortingLot(l)}
           onOpenSettlement={(l) => setSettlementLot(l)}
+          onOpenClaim={(l) => setClaimLot(l)}
+          tracePOs={extPOs}
+          traceInvoices={extInvoices}
         />
       </>
     );
@@ -1865,6 +2316,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   // ── list view ───────────────────────────────────────────────────────
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>
+      {dialogNode}
       {/* Top bar */}
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Inventory Lots</div>
@@ -1908,7 +2360,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             {["All", ...Object.keys(LOCATION_TYPES)].map(t => <option key={t} value={t}>{t === "All" ? "All locations" : `${locType(t).icon} ${locType(t).label}`}</option>)}
           </select>
           <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} title="Filter by product" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 180 }}>
-            {["All", ...PRODUCTS].map(p => <option key={p} value={p}>{p === "All" ? "All products" : p}</option>)}
+            {["All", ...productOptions].map(p => <option key={p} value={p}>{p === "All" ? "All products" : p}</option>)}
           </select>
           <select value={filterQuality} onChange={e => setFilterQuality(e.target.value)} title="Filter by quality" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 140 }}>
             {["All", ...QUALITY_GRADES].map(q => <option key={q} value={q}>{q === "All" ? "All grades" : `Kl. ${q}`}</option>)}
@@ -1939,7 +2391,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                   <div style={{ marginTop: 3 }}><VarianceBadge expected={l.expectedKg} actual={l.receivedKg} /></div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{l.product}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
                   <div style={{ fontSize: 11, color: "#AAA" }}>{l.size || "—"} · {l.origin || "—"} · {l.packaging}</div>
                 </div>
                 <div><QualityBadge quality={l.quality} /></div>

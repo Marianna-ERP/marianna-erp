@@ -1,9 +1,18 @@
 import React, { useState, useMemo } from "react";
+import { handoverSentence } from "./tradeFlow.domain";
+import { computedSOLinks } from "./documents.domain";
+import { buildCollectionShipment } from "./shipments.domain";
+import { localTodayISO as domainToday } from "./dates";
+import { Card, Lbl, SectionTitle } from "./ui";
+import { SO_STATUSES, SO_PRE_DISPATCH_STATUSES as RESERVING_SO_STATUSES } from "./types";
+import { normalizeProduct, productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
+import { nextId } from "./ids";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
-import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
-import { localTodayISO, localMonthISO } from "./dates";
+import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
+import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { ItemVarietyPicker } from "./ProductPicker";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -52,38 +61,16 @@ function tradingPartnerFromCounterparty(counterparty) {
 
 function clientsFromContacts(contacts) {
   const mapped = getCounterpartiesByType(contacts || [], "Client").map(tradingPartnerFromCounterparty);
-  return mapped.length ? mapped : CLIENTS;
+  return mapped; // Batch 0 (G1): no stub-client fallback — empty contacts = empty pickers
 }
 
 // ─── PO REFS STUB ─────────────────────────────────────────────────────────
 // Mirrors the PO export shape — replaced with live PO state on integration.
 // Each entry: { number, status, supplier, currency, fxRate, requiresSea, expectedDelivery, items }
 // where items[].id is referenced by sourceLineId on SO lines.
-function getPOsStub() {
-  return [
-    { number: "PO-2026-0117", status: "Shipped", supplierName: "AgriTrade MA", country: "Morocco", expectedDelivery: "2026-06-02", requiresSea: true,
-      items: [{ id: 1, product: "Papryka Kapia", origin: "Morocco", quality: "I", size: "M", qty: 12000, available: 12000, unit: "Kg", packaging: "5 kg carton" }] },
-    { number: "PO-2026-0118", status: "Arrived", supplierName: "AgriTrade MA", country: "Morocco", expectedDelivery: "2026-05-18", requiresSea: true,
-      items: [{ id: 1, product: "Carrot", origin: "Morocco", quality: "I", size: "60-100", qty: 24000, available: 16000, unit: "Kg", packaging: "10 kg mesh bag" }] },
-    { number: "PO-2026-0121", status: "Confirmed", supplierName: "FreshFarm ES", country: "Spain", expectedDelivery: "2026-06-05", requiresSea: false,
-      items: [{ id: 1, product: "Red Bell Pepper", origin: "Spain", quality: "I", size: "L", qty: 8000, available: 8000, unit: "Kg", packaging: "5 kg carton" }] },
-    { number: "PO-2026-0125", status: "Draft", supplierName: "FreshFarm ES", country: "Spain", expectedDelivery: "2026-06-20", requiresSea: false,
-      items: [{ id: 1, product: "Yellow Bell Pepper", origin: "Spain", quality: "I", size: "L", qty: 6000, available: 6000, unit: "Kg", packaging: "5 kg carton" }] },
-  ];
-}
 
 // ─── STOCK LOTS STUB ──────────────────────────────────────────────────────
 // Mirrors the Inventory module's lot export — replaced on integration.
-function getLotsStub() {
-  return [
-    { number: "LOT-2026-0086", product: "Papryka Kapia",      quality: "I",  size: "M",     origin: "Jordania", warehouse: "WH-01 Poznań",     availableKg: 8500,  packaging: "5 kg carton" },
-    { number: "LOT-2026-0091", product: "Golden Delicious",   quality: "I",  size: "70-80", origin: "Poland",   warehouse: "WH-01 Poznań",     availableKg: 12400, packaging: "13 kg wooden box" },
-    { number: "LOT-2026-0088", product: "Carrot",             quality: "I",  size: "60-100",origin: "Morocco",  warehouse: "WH-01 Poznań",     availableKg: 6800,  packaging: "10 kg mesh bag" },
-    { number: "LOT-2026-0095", product: "Red Bell Pepper",    quality: "I",  size: "L",     origin: "Jordania", warehouse: "WH-02 Warszawa",   availableKg: 2300,  packaging: "5 kg carton" },
-    { number: "LOT-2026-0098", product: "Tomato Cherry",      quality: "IB", size: "M",     origin: "Spain",    warehouse: "WH-02 Warszawa",   availableKg: 950,   packaging: "500g punnet" },
-    { number: "LOT-2026-0099", product: "Yellow Bell Pepper", quality: "I",  size: "L",     origin: "Jordania", warehouse: "WH-02 Warszawa",   availableKg: 4200,  packaging: "5 kg carton" },
-  ];
-}
 
 // Module-scope mutable data source.
 // In standalone mode, defaults to the stubs above.
@@ -94,8 +81,8 @@ function getLotsStub() {
 // We're using `let` here intentionally — these are NOT React state, they're just references to whatever
 // state the parent owns. Treating them as `const` would force us to plumb props through ~14 call sites in
 // 4 different functions. The render-time assignment pattern is safe given React's synchronous render model.
-let LOTS = getLotsStub();
-let PO_REFS = getPOsStub();
+let LOTS: any[] = [];      // Batch 0 (G1): no stub fallback — live props only
+let PO_REFS: any[] = [];   // Batch 0 (G1): no stub fallback — live props only
 
 // Convert the lots into the Inventory→SalesOrders interface shape.
 // Inventory stores: { number, product, quality, size, origin, warehouse, physicalKg, ... }
@@ -106,11 +93,18 @@ function _adaptLotsFromInventory(invLots) {
   return (invLots || []).map(l => ({
     number: l.number,
     product: l.product,
+    variety: l.variety || "",
+    cnCode: l.cnCode || "",
+    poRef: l.poRef || "",
+    status: l.status || "",
+    arrivalDate: l.arrivalDate || "",
     quality: l.quality,
     size: l.size,
     origin: l.origin,
     warehouse: l.warehouse || "—",
     availableKg: l.physicalKg ?? l.receivedKg ?? 0,
+    physicalKg: l.physicalKg ?? 0,
+    receivedKg: l.receivedKg ?? 0,
     packaging: l.packaging,
   }));
 }
@@ -151,17 +145,7 @@ function destinationDisplay(order) {
 }
 
 // ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
-const SO_STATUSES: Record<string, any> = {
-  Draft:       { bg: "#F3F4F6", color: "#6B7280", order: 0, desc: "Being prepared — can edit freely" },
-  Confirmed:   { bg: "#DBEAFE", color: "#2563EB", order: 1, desc: "Agreed with client, prices locked" },
-  Reserved:    { bg: "#E0F2FE", color: "#0369A1", order: 2, desc: "Stock allocated / PO confirmed" },
-  Loading:     { bg: "#FEF3C7", color: "#D97706", order: 3, desc: "Goods being prepared / loaded" },
-  Shipped:     { bg: "#EDE9FE", color: "#7C3AED", order: 4, desc: "Handed to carrier, en route" },
-  Delivered:   { bg: "#DCFCE7", color: "#16A34A", order: 5, desc: "Client confirmed receipt" },
-  Invoiced:    { bg: "#D1FAE5", color: "#059669", order: 6, desc: "Sales invoice (SINV) issued" },
-  Closed:      { bg: "#F3F4F6", color: "#374151", order: 7, desc: "Paid and complete" },
-  Cancelled:   { bg: "#FEE2E2", color: "#DC2626", order: -1, desc: "Cancelled" },
-};
+// SO_STATUSES: canonical definition moved to ./types (Batch 0).
 
 // Incoterms typical for sales (we're the seller, client is buyer)
 const INCOTERMS_SELL = [
@@ -367,7 +351,7 @@ function buildInvoiceFromSO(order, invoiceNumber, today) {
     linkedDocs: [{ type: "SO", number: order.number }],
     paymentStatus: "Draft",
     paidAmount: 0,
-    notes: `Issued from ${order.number}${order.deliveryDate ? ` — Goods delivered ${order.deliveryDate}` : ""}.\nLines:\n${order.items.map(it => `• ${it.product} ${parseFloat(it.qty || 0).toLocaleString("pl-PL")} kg @ ${parseFloat(it.unitPrice || 0).toFixed(2)} ${order.currency}`).join("\n")}`,
+    notes: `Issued from ${order.number}${order.deliveryDate ? ` — Goods delivered ${order.deliveryDate}` : ""}.\nLines:\n${order.items.map(it => `• ${it.product}${it.variety ? " " + it.variety : ""} ${parseFloat(it.qty || 0).toLocaleString("pl-PL")} kg @ ${parseFloat(it.unitPrice || 0).toFixed(2)} ${order.currency}`).join("\n")}`,
     attachment: null,
     creditNotes: [],
     createdAt: issueDate,
@@ -390,10 +374,6 @@ function validateSourcing(items) {
   };
 }
 
-function isPOUsableForConfirmedSO(po: any) {
-  if (!po) return false;
-  return po.status !== "Draft" && po.status !== "Cancelled";
-}
 
 function validatePOReadinessForSO(items: any[]) {
   const blocked: any[] = [];
@@ -416,62 +396,19 @@ function validatePOReadinessForSO(items: any[]) {
 // the stock should be represented by physical SHIP_OUT movements in Inventory, not
 // by a still-open reservation. This keeps Sales Orders aligned with Inventory and
 // prevents double-subtracting shipped quantities in integration mode.
-const RESERVING_SO_STATUSES = new Set([
-  "Confirmed", "Reserved", "Loading",
-]);
+// RESERVING_SO_STATUSES: canonical set imported from ./types (Batch 0).
 
-function productsMatch(a, b) {
-  return (a || "").toLowerCase().trim() === (b || "").toLowerCase().trim();
-}
+// productsMatch/normalizeProduct: imported from ./salesOrders.domain (Batch 1).
 
 // Returns: { liveAvailable, reservations: [{ soNumber, soId, status, qty }] }
 // for a given lot, considering reservations from all SOs except `excludeOrderId`.
 function lotReservations(lot, allOrders, excludeOrderId) {
-  const reservations = [];
-  let totalReserved = 0;
-  (allOrders || []).forEach(o => {
-    if (o.id === excludeOrderId) return;
-    if (!RESERVING_SO_STATUSES.has(o.status)) return; // Drafts and Cancelled don't reserve
-    (o.items || []).forEach(it => {
-      if (it.sourceType !== "STOCK") return;
-      if (it.sourceRef !== lot.number) return;
-      if (!productsMatch(it.product, lot.product)) return; // wrong-product picks don't reserve
-      const q = parseFloat(it.qty) || 0;
-      if (q <= 0) return;
-      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
-      totalReserved += q;
-    });
-  });
-  return {
-    liveAvailable: Math.max(0, lot.availableKg - totalReserved),
-    totalReserved,
-    reservations,
-  };
+  return lotReservationsForPicker(lot, allOrders, excludeOrderId); // engine: salesOrders.domain (Batch 1)
 }
 
 // Same idea for a PO line — reservations from non-Draft, non-Cancelled SOs.
 function poLineReservations(po, poLine, allOrders, excludeOrderId) {
-  const reservations = [];
-  let totalReserved = 0;
-  (allOrders || []).forEach(o => {
-    if (o.id === excludeOrderId) return;
-    if (!RESERVING_SO_STATUSES.has(o.status)) return;
-    (o.items || []).forEach(it => {
-      if (it.sourceType !== "PO") return;
-      if (it.sourceRef !== po.number) return;
-      if ((it.sourceLineId ?? 1) !== poLine.id) return;
-      if (!productsMatch(it.product, poLine.product)) return;
-      const q = parseFloat(it.qty) || 0;
-      if (q <= 0) return;
-      reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
-      totalReserved += q;
-    });
-  });
-  return {
-    liveAvailable: Math.max(0, poLine.available - totalReserved),
-    totalReserved,
-    reservations,
-  };
+  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId); // engine (Batch 1)
 }
 
 // Availability check — for each line, compute how much of its demanded qty is
@@ -506,146 +443,18 @@ function sameSoDuplicateSources(soItems) {
 }
 
 function computeLineAvailability(soItems, allOrders, currentOrderId) {
-  // Build a map of how much each lot / PO line has been reserved by OTHER reserving SOs.
-  // "Reserving" = status in RESERVING_SO_STATUSES (Confirmed and beyond, but not Cancelled).
-  // Don't count this SO's own draws (currentOrderId).
-  //
-  // IMPORTANT: only count a reservation if the SO line's product MATCHES the lot's
-  // (or PO line's) actual product. If a previous SO line was incorrectly tagged to
-  // a lot whose product is different (data error), that draw should not eat into
-  // this lot's pool. Otherwise unrelated products would block each other.
-  const committedFromStock = {}; // lot number -> kg
-  const committedFromPO    = {}; // `${poNumber}::${poLineId}` -> kg
-
-  (allOrders || []).forEach(o => {
-    if (o.id === currentOrderId) return;
-    if (!RESERVING_SO_STATUSES.has(o.status)) return; // Drafts/Cancelled don't reserve
-    (o.items || []).forEach(it => {
-      if (!it.sourceType || !it.sourceRef) return;
-      const q = parseFloat(it.qty) || 0;
-      if (q <= 0) return;
-      if (it.sourceType === "STOCK") {
-        const lot = LOTS.find(l => l.number === it.sourceRef);
-        if (!lot) return;
-        // Only count if this line's product is actually what's in the lot
-        if (!productsMatch(it.product, lot.product)) return;
-        committedFromStock[it.sourceRef] = (committedFromStock[it.sourceRef] || 0) + q;
-      } else if (it.sourceType === "PO") {
-        const po = PO_REFS.find(p => p.number === it.sourceRef);
-        if (!po || !isPOUsableForConfirmedSO(po)) return;
-        const poLine = po.items.find(l => l.id === (it.sourceLineId ?? 1));
-        if (!poLine) return;
-        // Same product-match guard for POs
-        if (!productsMatch(it.product, poLine.product)) return;
-        const k = `${it.sourceRef}::${it.sourceLineId ?? 1}`;
-        committedFromPO[k] = (committedFromPO[k] || 0) + q;
-      }
-    });
-  });
-
-  function lotRemaining(lotNumber) {
-    const lot = LOTS.find(l => l.number === lotNumber);
-    if (!lot) return 0;
-    return Math.max(0, lot.availableKg - (committedFromStock[lot.number] || 0));
-  }
-  function poLineRemaining(poNumber, lineId) {
-    const po = PO_REFS.find(p => p.number === poNumber);
-    if (!po || !isPOUsableForConfirmedSO(po)) return 0;
-    const line = po.items.find(l => l.id === (lineId ?? 1));
-    if (!line) return 0;
-    const k = `${po.number}::${line.id}`;
-    return Math.max(0, line.available - (committedFromPO[k] || 0));
-  }
-
-  return (soItems || []).map(it => {
-    const lineQty = parseFloat(it.qty) || 0;
-    const product = (it.product || "").toLowerCase().trim();
-
-    // Primary source — what this line actually points at.
-    // Two new sanity checks: the source must exist AND its product must match this line's product.
-    // If product mismatches, primaryAvailable is 0 (we treat it as not really sourced) — the user
-    // probably picked the wrong source for this product.
-    let primaryAvailable = 0;
-    let primaryProductMismatch = false;
-    if (it.sourceType === "STOCK" && it.sourceRef) {
-      const lot = LOTS.find(l => l.number === it.sourceRef);
-      if (lot) {
-        if (productsMatch(it.product, lot.product)) {
-          primaryAvailable = lotRemaining(it.sourceRef);
-        } else {
-          primaryProductMismatch = true;
-        }
-      }
-    } else if (it.sourceType === "PO" && it.sourceRef) {
-      const po = PO_REFS.find(p => p.number === it.sourceRef);
-      if (po && isPOUsableForConfirmedSO(po)) {
-        const poLine = po.items.find(l => l.id === (it.sourceLineId ?? 1));
-        if (poLine) {
-          if (productsMatch(it.product, poLine.product)) {
-            primaryAvailable = poLineRemaining(it.sourceRef, it.sourceLineId);
-          } else {
-            primaryProductMismatch = true;
-          }
-        }
-      }
-    }
-
-    // Other sources for the same product (case-insensitive match), excluding the primary
-    let otherStockKg = 0, otherPOKg = 0;
-    LOTS.forEach(lot => {
-      if ((lot.product || "").toLowerCase().trim() !== product) return;
-      if (it.sourceType === "STOCK" && it.sourceRef === lot.number) return;
-      otherStockKg += lotRemaining(lot.number);
-    });
-    PO_REFS.forEach(po => {
-      (po.items || []).forEach(line => {
-        if ((line.product || "").toLowerCase().trim() !== product) return;
-        if (it.sourceType === "PO" && it.sourceRef === po.number && (it.sourceLineId ?? 1) === line.id) return;
-        otherPOKg += poLineRemaining(po.number, line.id);
-      });
-    });
-
-    const otherSourcesAvailable = otherStockKg + otherPOKg;
-    const combinedAvailable = primaryAvailable + otherSourcesAvailable;
-    const primaryShortfallAmount = Math.max(0, lineQty - primaryAvailable);
-
-    return {
-      lineQty,
-      primaryAvailable: Math.round(primaryAvailable * 100) / 100,
-      otherStockKg: Math.round(otherStockKg * 100) / 100,
-      otherPOKg: Math.round(otherPOKg * 100) / 100,
-      otherSourcesAvailable: Math.round(otherSourcesAvailable * 100) / 100,
-      combinedAvailable: Math.round(combinedAvailable * 100) / 100,
-      overage: Math.round(primaryShortfallAmount * 100) / 100,
-      hasOverage: primaryShortfallAmount > 0.01,
-      primaryShortfall: primaryShortfallAmount > 0.01,
-      primaryProductMismatch, // true if the picked source's product doesn't match this line's product
-    };
-  });
+  // Engine extracted to salesOrders.domain (Batch 1) — LOTS/PO_REFS passed explicitly.
+  return domainComputeLineAvailability(soItems, allOrders, currentOrderId, LOTS, PO_REFS);
 }
 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title }: any) {
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
-  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} style={{ ...base, ...style }} />;
+  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <select value={value ?? ""} onChange={onChange} disabled={disabled} style={{ ...base, ...style }}>{children}</select>;
-}
-function Lbl({ children }: any) {
-  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
-}
-function Card({ children, style = {} }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
-}
-function SectionTitle({ children, right = null }: any) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{children}</div>
-      {right}
-    </div>
-  );
 }
 function StatusBadge({ status }: any) {
   const s = SO_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
@@ -738,6 +547,8 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
       sourceLineId: null,
       // Auto-fill spec fields from the lot for convenience
       product: lot.product,
+      variety: lot.variety || "",
+      cnCode: lot.cnCode || "",
       origin: lot.origin,
       size: lot.size,
       quality: lot.quality,
@@ -750,6 +561,8 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
       sourceRef: poLine._po.number,
       sourceLineId: poLine.id,
       product: poLine.product,
+      variety: poLine.variety || "",
+      cnCode: poLine.cnCode || "",
       origin: poLine.origin,
       size: poLine.size,
       quality: poLine.quality,
@@ -791,10 +604,13 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 110px 120px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#0369A1"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
-                  <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#0369A1" }}>{lot.number}</div>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}</div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}</div>
+                    <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#0369A1" }}>{lot.number}</div>
+                    {(lot as any).status && <span style={{ display: "inline-block", marginTop: 3, fontSize: 9.5, fontWeight: 700, padding: "1px 7px", borderRadius: 5, background: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }}>{(lot as any).status}</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}{(lot as any).variety ? " — " + (lot as any).variety : ""}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}{(lot as any).arrivalDate ? ` · arrived ${formatDMY((lot as any).arrivalDate)}` : ""}</div>
                     {live.reservations.length > 0 && (
                       <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}
@@ -802,7 +618,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                     )}
                   </div>
                   <div><QualityBadge quality={lot.quality} /></div>
-                  <div style={{ fontSize: 11, color: "#666" }}>{lot.warehouse}</div>
+                  <div style={{ fontSize: 11, color: "#666" }}>{lot.warehouse}{lot.poRef ? <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>from {lot.poRef}</div> : null}</div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#16A34A" }}>{fmtNum(live.liveAvailable)} kg</div>
                     <div style={{ fontSize: 10, color: "#888" }}>live available</div>
@@ -837,7 +653,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                     }}>{line._po.status}</span>
                   </div>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{line.product}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{line.product}{(line as any).variety ? " — " + (line as any).variety : ""}</div>
                     <div style={{ fontSize: 11, color: "#888" }}>{line.size} · {line.origin} · {line.packaging}</div>
                     <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>Supplier: {line._po.supplierName} · ETA {line._po.expectedDelivery}{line._po.requiresSea ? " ⚓" : ""}</div>
                     {live.reservations.length > 0 && (
@@ -893,8 +709,8 @@ function SODoc({ order }: any) {
 
   const meta = [
     { en: "SO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
-    { en: "Order date",         pl: "Data zamówienia",        value: order.orderDate },
-    { en: "Delivery date",      pl: "Data dostawy",           value: order.deliveryDate },
+    { en: "Order date",         pl: "Data zamówienia",        value: formatDMY(order.orderDate) },
+    { en: "Delivery date",      pl: "Data dostawy",           value: formatDMY(order.deliveryDate) },
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
     { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationLabel },
@@ -1010,7 +826,7 @@ function SODoc({ order }: any) {
             const lt = ((parseFloat(item.qty) || 0) * (parseFloat(item.unitPrice) || 0)).toFixed(2);
             return (
               <tr key={i}>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}{item.cnCode ? <div style={{ fontSize: 8.5, fontWeight: 400, color: "#666" }}>CN/HS: {item.cnCode}</div> : null}</td>
+                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>{item.product}{item.variety ? <span style={{ fontWeight: 400 }}> — {item.variety}</span> : null}{item.cnCode ? <div style={{ fontSize: 8.5, fontWeight: 400, color: "#666" }}>CN/HS: {item.cnCode}</div> : null}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.size}</td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>Kl. {item.quality}</td>
@@ -1090,8 +906,10 @@ function PrintModal({ order, onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
+      const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the SO
+      document.title = order.number || prevTitle;
       try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => iframe.remove(), 1000);
+      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -1117,6 +935,12 @@ function PrintModal({ order, onClose }: any) {
         </div>
         <div style={{ padding: 24, overflowY: "auto", background: "#ECECEC" }}>
           <div id="so-print-doc" style={{ background: "#fff", padding: "8mm", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", width: "186mm", margin: "0 auto", boxSizing: "content-box" }}>
+          {order.sellIncoterm && (
+            <div style={{ border: "1.5px solid #111", padding: "6px 10px", margin: "6px 0 10px", fontSize: 12.5 }}>
+              <b>Terms / Warunki: {order.sellIncoterm} {order.destinationText || ((order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client")) === "client" ? (order.client?.address || "") : "")} (Incoterms 2020)</b>
+              <div style={{ fontSize: 11, marginTop: 2 }}>{handoverSentence(order.sellIncoterm, order.destinationText || ((order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client")) === "client" ? (order.client?.name || "client") : ""))}</div>
+            </div>
+          )}
             <SODoc order={order} />
           </div>
         </div>
@@ -1127,10 +951,18 @@ function PrintModal({ order, onClose }: any) {
 
 
 // ─── EMAIL MODAL ──────────────────────────────────────────────────────────
-function EmailModal({ order, onClose }: any) {
-  const recipient = order.client?.email || order.client?.contact || "";
+function bestContactEmail(cp: any) {
+  const cs = (cp && cp.contacts) || [];
+  const withEmail = cs.find((p: any) => p.isPrimary && p.email) || cs.find((p: any) => p.email);
+  return (withEmail && withEmail.email) || (cp && cp.email) || "";
+}
+function EmailModal({ order, contacts = [], onClose }: any) {
+  // v6.18.14 (#1): resolve the client email LIVE from Contacts at send time.
+  const sid = order && order.client && order.client.id;
+  const liveClient = (sid != null) ? (contacts || []).find((c: any) => String(c.id) === String(sid)) : null;
+  const recipient = bestContactEmail(liveClient) || order.client?.email || order.client?.contact || "";
   const [subject, setSubject] = useState(`Sales Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nDelivery date: ${order.deliveryDate || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}${order.importPermitNo ? `\nImport permit no.: ${order.importPermitNo}` : ""}${order.acidNo ? `\nACID no.: ${order.acidNo}` : ""}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nDelivery date: ${formatDMY(order.deliveryDate) || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}${order.importPermitNo ? `\nImport permit no.: ${order.importPermitNo}` : ""}${order.acidNo ? `\nACID no.: ${order.acidNo}` : ""}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
 
   function openPrintForPdf() {
     const node = document.getElementById("so-print-doc-email");
@@ -1155,8 +987,10 @@ function EmailModal({ order, onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
+      const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the SO
+      document.title = order.number || prevTitle;
       try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => iframe.remove(), 1000);
+      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -1259,8 +1093,8 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div><Lbl>Invoice number</Lbl><Inp value={invoice.number} onChange={e => sf("number", e.target.value)} /></div>
               <div><Lbl>Type</Lbl><div style={{ padding: "8px 10px", background: "#DCFCE7", color: "#16A34A", borderRadius: 6, fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>SINV · Sales Invoice (↑ Receivable)</div></div>
-              <div><Lbl>Issue date</Lbl><Inp value={invoice.issueDate} onChange={e => sf("issueDate", e.target.value)} type="date" /></div>
-              <div><Lbl>Sale date</Lbl><Inp value={invoice.saleDate} onChange={e => sf("saleDate", e.target.value)} type="date" /></div>
+              <div><Lbl>Issue date</Lbl><Inp value={invoice.issueDate} onChange={e => sf("issueDate", e.target.value)} type="date" max={localTodayISO()} /></div>
+              <div><Lbl>Sale date</Lbl><Inp value={invoice.saleDate} onChange={e => sf("saleDate", e.target.value)} type="date" max={localTodayISO()} /></div>
               <div><Lbl>Due date</Lbl><Inp value={invoice.dueDate} onChange={e => sf("dueDate", e.target.value)} type="date" /></div>
               <div><Lbl>Payment method</Lbl>
                 <Sel value={invoice.paymentMethod} onChange={e => sf("paymentMethod", e.target.value)}>
@@ -1313,7 +1147,7 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
                   const lt = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
-                      <td style={{ padding: "6px 8px" }}>{it.product}</td>
+                      <td style={{ padding: "6px 8px" }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtNum(it.qty)} kg</td>
                       <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtMoney(it.unitPrice, order.currency)}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{fmtMoney(lt, order.currency)}</td>
@@ -1336,10 +1170,33 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
 
 
 // ─── ORDER FORM ───────────────────────────────────────────────────────────
-function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, onSave, onCancel, onPrint, onEmail }: any) {
+
+// Batch 6b hard gate (SO side): the sale's contract to the CLIENT — sell
+// incoterm + a resolved destination — gates confirm/print/email. This is also
+// the foundation Phase B stands on: disposition derives from these terms.
+function soTermsMissing(o: any): string | null {
+  if (!o?.sellIncoterm) return "the sell incoterm";
+  const mode = o.destinationMode || ((o.destinationLocationId || o.destinationText) ? "other" : "client");
+  if (mode === "client") {
+    if (!(o.client?.address || "").trim()) return "the client's registered address (or pick another destination)";
+    return null;
+  }
+  if (!(o.destinationLocationId || (o.destinationText || "").trim())) return `the destination for ${o.sellIncoterm}`;
+  return null;
+}
+
+function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
+  // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
+  // this session shows in the destination picker without a browser refresh.
+  const liveLocations = (() => {
+    const live = counterpartyLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+    const byId = new Map<string, any>();
+    [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
+    return [...byId.values()];
+  })();
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (i, k, v) => setOrder(o => ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
   const removeItem = (i) => setOrder(o => ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
@@ -1428,7 +1285,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   // Per-line availability check — does each line have enough stock/PO supply to fulfill it?
   // Aggregates across all matching sources (primary source + any other lot/PO with same product).
   // HARD BLOCK on non-Draft statuses (same as sourcing): can't promise to a client what we can't supply.
-  const availability = computeLineAvailability(order.items, allOrders, order.id);
+  // Batch 1 (G3): memoized — recompute only when the lines or other orders change,
+  // not on every keystroke in unrelated fields.
+  const availability = useMemo(() => computeLineAvailability(order.items, allOrders, order.id), [order.items, allOrders, order.id]);
   const overageCount = availability.filter(a => a.hasOverage).length;
   const availabilityBlock = overageCount > 0 && nonDraftStatuses.includes(order.status);
 
@@ -1592,8 +1451,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             <SectionTitle>ORDER DETAILS</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               <div>
-                <Lbl>SO number {!order.id && <span style={{ color: "#16A34A", fontWeight: 500 }}>· auto-generated</span>}</Lbl>
-                <Inp value={order.number} onChange={e => sf("number", e.target.value)} placeholder="SO-2026-NNNN" />
+                <Lbl>SO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
+                {/* BP-18: controlled document id — display/copy only. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                  <span>{order.number || "SO-2026-…"}</span>
+                  <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy SO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
+                </div>
               </div>
               <div>
                 <Lbl>Order date</Lbl>
@@ -1602,17 +1465,21 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               <div>
                 <Lbl>Expected delivery date</Lbl>
                 <Inp value={order.deliveryDate} onChange={e => sf("deliveryDate", e.target.value)} type="date" title="When the goods are expected to reach the agreed point" />
-                <Sel value={order.promisedDateMeans || "Delivery to client"} onChange={e => sf("promisedDateMeans", e.target.value)} style={{ marginTop: 4, fontSize: 11, padding: "5px 8px" }}>
-                  {["Delivery to client", "Pickup-ready at our side", "Handover at relay", "Loading at supplier", "Arrival at destination port"].map(m => <option key={m} value={m}>means: {m}</option>)}
-                </Sel>
+                {/* FB-14: redundant 'means' dropdown removed. */}
               </div>
               <div>
-                <Lbl>Actual delivery {order.actualDeliveryDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualDeliveryDate || ""} onChange={e => sf("actualDeliveryDate", e.target.value || null)} type="date" disabled={order.status !== "Delivered"} title={order.status !== "Delivered" ? "Available once the status is set to Delivered." : "When the goods actually reached the client."} />
+                <Lbl>Actual delivery</Lbl>
+                {/* BP-17: not typed here — comes from the linked Shipment delivery event
+                    (or the dispatch/collection event for EXW). Read-only. */}
+                <div style={{ padding: "9px 11px", border: "1px dashed #E5E7EB", borderRadius: 8, background: "#FAFAFA", fontSize: 12.5, color: order.actualDeliveryDate ? "#334155" : "#9CA3AF" }}>
+                  {order.actualDeliveryDate ? `${order.actualDeliveryDate} · from shipment` : ((order.linkedShipments?.length || 0) ? "Pending shipment delivery" : "No linked shipment")}
+                </div>
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
-              <div><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)}>
+              <div style={{ order: -1 }}><Lbl>Status</Lbl>
+                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)} disabled={order.status === "Cancelled"}
+                  title={order.status === "Cancelled" ? "This SO is cancelled — read-only and can't be reactivated." : ""}
+                  style={{ borderLeft: `4px solid ${(SO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (SO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
                   {Object.keys(SO_STATUSES).map(s => {
                     // Draft and Cancelled are always available; everything else requires all lines to be
                     // (a) sourced AND (b) have enough combined available qty to cover the demanded qty.
@@ -1700,12 +1567,22 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 )}
               </div>
               <div>
-                <Lbl>Destination</Lbl>
+                <Lbl>Destination <span style={{ color: "#BBB", fontWeight: 400 }}>· follows sell incoterm</span></Lbl>
                 <div style={{ fontSize: 10.5, color: order.sellIncoterm ? "#2563EB" : "#888", margin: "2px 0 6px", lineHeight: 1.4 }}>{incotermDestinationHint}</div>
+                {(() => {
+                  // FB-11: the destination options adapt to the sell incoterm — the term decides
+                  // where WE deliver, so we surface the right place type first.
+                  const ic = String(order.sellIncoterm || "").toUpperCase();
+                  const portLed = ["CIF", "CFR", "FOB", "FCA"].includes(ic);
+                  const clientLed = ["DAP", "DDP"].includes(ic);
+                  const whLed = ic === "EXW";
+                  return (
                 <Sel value={destMode} onChange={e => setDestMode(e.target.value)}>
-                  <option value="client">Client's registered address</option>
-                  <option value="other">Other address (specify below)</option>
+                  <option value="client">Client's registered address{clientLed ? " (recommended)" : ""}</option>
+                  <option value="other">{portLed ? "Port / named place (recommended)" : whLed ? "Our warehouse (EXW pickup)" : "Other address (specify below)"}</option>
                 </Sel>
+                  );
+                })()}
                 {destMode === "client" ? (
                   <div style={{ marginTop: 8, padding: "9px 11px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#FAFAFA", fontSize: 12, color: "#444", lineHeight: 1.45 }}>
                     {order.client ? (
@@ -1718,18 +1595,22 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   </div>
                 ) : (
                   <>
-                    <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
-                      <option value="">— select a known place —</option>
-                      <optgroup label="🎯 Client Site / DC">
-                        {LOCATIONS.filter(l => l.type === "CLIENT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                      </optgroup>
-                      <optgroup label="⚓ Port / terminal for FOB/CFR/CIF sales">
-                        {LOCATIONS.filter(l => l.type === "PORT").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                      </optgroup>
-                      <optgroup label="🏢 Our Warehouse (EXW pickup)">
-                        {LOCATIONS.filter(l => l.type === "OWN").map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                      </optgroup>
-                    </Sel>
+                    {(() => {
+                      const ic = String(order.sellIncoterm || "").toUpperCase();
+                      const portGroup = (<optgroup key="port" label="⚓ Port / terminal (FOB/CFR/CIF)">{liveLocations.filter((l: any) => l.type === "PORT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
+                      const clientGroup = (<optgroup key="client" label="🎯 Client Site / DC">{liveLocations.filter((l: any) => l.type === "CLIENT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
+                      const whGroup = (<optgroup key="wh" label="🏢 Our Warehouse (EXW pickup)">{liveLocations.filter((l: any) => l.type === "OWN").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
+                      // FB-11: lead with the incoterm-relevant place type.
+                      const order2 = ["CIF","CFR","FOB","FCA"].includes(ic) ? [portGroup, clientGroup, whGroup]
+                        : ic === "EXW" ? [whGroup, clientGroup, portGroup]
+                        : [clientGroup, portGroup, whGroup];
+                      return (
+                        <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
+                          <option value="">— select a known place —</option>
+                          {order2}
+                        </Sel>
+                      );
+                    })()}
                     <Inp
                       value={order.destinationText || ""}
                       onChange={e => sf("destinationText", e.target.value)}
@@ -1786,7 +1667,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
           {/* Line items */}
           <Card style={{ marginBottom: 16 }}>
-            <SectionTitle right={<button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>+ Add line</button>}>LINE ITEMS ({order.items.length})</SectionTitle>
+            <SectionTitle right={<div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => { const idx = order.items.length; addItem(); setTimeout(() => setSourceFor(idx), 0); }} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#0369A1", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }} title="Add a line sourced from a PO or stock — product, variety, packaging, origin, size and quality are copied automatically; you set only price, quantity and pallets.">+ Add from PO / stock</button>
+              <button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }} title="Add an empty line to fill in manually">+ Blank line</button>
+            </div>}>LINE ITEMS ({order.items.length})</SectionTitle>
             <datalist id="so-product-suggestions">
               {productSuggestions.map(p => <option key={p} value={p} />)}
             </datalist>
@@ -1911,20 +1795,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   )}
                   <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.9fr 0.8fr 0.9fr 1.1fr 1fr 1fr 1.3fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
-                      <Lbl>Product <span style={{ color: "#BBB", fontWeight: 400 }}>· autocomplete</span></Lbl>
-                      <input
-                        value={it.product || ""}
-                        onChange={e => si(i, "product", e.target.value)}
-                        onBlur={e => si(i, "product", normalizeProduct(e.target.value))}
-                        list="so-product-suggestions"
-                        placeholder="Start typing — pick or type new"
-                        style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" }}
-                      />
+                      <Lbl>Item / Variety {it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl>
+                      {it.sourceType && it.sourceRef
+                        ? <div style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F9FAFB", color: "#374151", minHeight: 18 }} title="Inherited from the linked source — clear the source link to change the product">{it.product || "—"}{it.variety ? ` — ${it.variety}` : ""}</div>
+                        : <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />}
                     </div>
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
-                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice" /></div>
+                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
                     <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" /></div>
                     <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
                     <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
@@ -1964,7 +1843,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+  // BP-49: linked records are COMPUTED from the documents that reference this SO,
+  // not read from stored arrays (which drift).
+  const computedLinks = computedSOLinks(order, { shipments, invoices: [], lots });
   // P/L visibility rule:
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
@@ -2025,7 +1907,13 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
               </button>
             );
           })()}
-          <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>
+          {order.sellIncoterm === "EXW" && !["Cancelled", "Draft"].includes(order.status) && onRecordCollection && (
+            <button onClick={onRecordCollection} title="EXW: the client collects — records the pickup and creates a minimal collection shipment (no transport order, no freight on our side)."
+              style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0369A1", background: "#F0F9FF", color: "#0369A1", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🚚 Record client collection</button>
+          )}
+          {order.status === "Cancelled"
+            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
+            : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -2103,7 +1991,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                         <tr key={i} style={{ borderBottom: "1px solid #F9FAFB", background: av.hasOverage ? "#FFFBEB" : undefined }}>
                           <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef) : ""} /></td>
                           <td style={{ padding: "10px 6px" }}>
-                            <div style={{ fontWeight: 600 }}>{it.product}</div>
+                            <div style={{ fontWeight: 600 }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</div>
                             <div style={{ fontSize: 11, color: "#888" }}>{it.size} · {it.origin} · {it.packaging}{it.pallets ? ` · ${it.pallets} pallets` : ""}</div>
                           </td>
                           <td style={{ padding: "10px 6px", textAlign: "center" }}><QualityBadge quality={it.quality} /></td>
@@ -2174,7 +2062,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                         <div>
                           <div style={{ fontSize: 13, fontWeight: 700, color: "#16A34A", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.number}</div>
-                          <div style={{ fontSize: 10, color: "#888", marginTop: 1 }}>SINV · Issue {inv.issueDate} · Due {inv.dueDate}</div>
+                          <div style={{ fontSize: 10, color: "#888", marginTop: 1 }}>SINV · Issue {formatDMY(inv.issueDate)} · Due {formatDMY(inv.dueDate)}</div>
                         </div>
                         <div style={{ padding: "2px 8px", background: "#DCFCE7", color: "#16A34A", borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em" }}>READY</div>
                       </div>
@@ -2203,21 +2091,21 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                 </Card>
               )}
 
-              {(order.linkedInvoices?.length > 0 || order.linkedShipments?.length > 0) && (
+              {(computedLinks.linkedInvoices?.length > 0 || computedLinks.linkedShipments?.length > 0) && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>LINKED RECORDS</SectionTitle>
-                  {order.linkedInvoices?.length > 0 && (
+                  {computedLinks.linkedInvoices?.length > 0 && (
                     <div style={{ marginBottom: 8 }}>
                       <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SALES INVOICES</div>
-                      {order.linkedInvoices.map(inv => (
+                      {computedLinks.linkedInvoices.map(inv => (
                         <div key={inv} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div>
                       ))}
                     </div>
                   )}
-                  {order.linkedShipments?.length > 0 && (
+                  {computedLinks.linkedShipments?.length > 0 && (
                     <div>
                       <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SHIPMENTS</div>
-                      {order.linkedShipments.map(s => (
+                      {computedLinks.linkedShipments.map(s => (
                         <div key={s} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#F3E8FF", border: "1px solid #DDD6FE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace" }}>{s}</div>
                       ))}
                     </div>
@@ -2233,14 +2121,43 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
 }
 
 // ─── MAIN — LIST VIEW + ROUTER ────────────────────────────────────────────
+
+function CollectionModal({ so, onClose, onSave }: any) {
+  const [date, setDate] = useState(localTodayISO());
+  const [truckPlate, setTruckPlate] = useState("");
+  const [driverName, setDriverName] = useState("");
+  const [notes, setNotes] = useState("");
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 8000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 440, maxWidth: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.25)", padding: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>Record client collection — {so.number}</div>
+        <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>EXW: the client collects the goods. This creates a minimal collection shipment (no transport order, no freight on our side) and, on Delivered, ships the sourced lots out of inventory.</div>
+        <Lbl>Collection date</Lbl>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <Lbl>Client truck plate (optional)</Lbl>
+        <input value={truckPlate} onChange={e => setTruckPlate(e.target.value)} placeholder="e.g. WZ 12345" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <Lbl>Driver (optional)</Lbl>
+        <input value={driverName} onChange={e => setDriverName(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <Lbl>Note (optional)</Lbl>
+        <input value={notes} onChange={e => setNotes(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 14, fontFamily: "inherit" }} />
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+          <button onClick={() => onSave({ date, truckPlate, driverName, notes })} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Create collection record</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SalesOrders({
   orders: extOrders, setOrders: extSetOrders,
-  invLots: extInvLots, setLots: extSetLots, allPOs: extPOs,
+  invLots: extInvLots, setLots: extSetLots, allPOs: extPOs, shipments: extShipments = [], setShipments: extSetShipments = null,
   contacts: extContacts,
-  shipments: extShipments = [],
   operationalCosts: extOperationalCosts = [],
   userRole = "General Manager",
   userName = "",
+  productCatalog = [],
+  setProductCatalog,
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
@@ -2287,6 +2204,16 @@ export default function SalesOrders({
   // In standalone mode (no extInvLots / extPOs), LOTS and PO_REFS retain their seed values.
   if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots);
   if (extPOs)    PO_REFS = _adaptPOsFromModule(extPOs);
+  // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields.
+  // Backfill them from the originating PO line so sourcing "from stock" is as complete as
+  // "from PO" (both the picker row and the inherited SO line then show Item — Variety + CN/HS).
+  LOTS = (LOTS || []).map((lot: any) => {
+    if ((lot.variety && lot.cnCode) || !lot.poRef) return lot;
+    const po: any = (PO_REFS || []).find((p: any) => p.number === lot.poRef);
+    const line: any = po && (po.items || []).find((it: any) => String(it.product || "").toLowerCase() === String(lot.product || "").toLowerCase());
+    if (!line) return lot;
+    return { ...lot, variety: lot.variety || line.variety || "", cnCode: lot.cnCode || line.cnCode || "" };
+  });
   const clients = useMemo(() => clientsFromContacts(extContacts), [extContacts]);
 
   const [view, setView] = useState("list"); // list | form | detail
@@ -2361,7 +2288,7 @@ export default function SalesOrders({
       destinationLocationId: null,
       destinationText: "",
       currency: "PLN", fxRate: 1, fxLockedAt: null,
-      items: [{ id: Date.now(), product: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
+      items: [{ id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }],
       notes: "",
       linkedInvoices: [], linkedShipments: [],
     });
@@ -2374,7 +2301,7 @@ export default function SalesOrders({
     if (!extSetLots || !order) return;
     const today = localTodayISO();
     extSetLots(prevLots => prevLots.map(lot => {
-      const alreadyReversed = (lot.movements || []).some(m => m.type === "REVERSAL" && String(m.note || "").includes(order.number));
+      const alreadyReversed = (lot.movements || []).some(m => m.type === "REVERSAL" && (m.soRef ? String(m.soRef) === String(order.number) : String(m.note || "").includes(order.number)));
       if (alreadyReversed) return lot;
 
       let qtyToRestore = 0;
@@ -2386,19 +2313,20 @@ export default function SalesOrders({
         if (!matchesLot) return;
 
         const shippedForSO = (lot.movements || [])
-          .filter(m => m.type === "SHIP_OUT" && String(m.note || "").includes(order.number))
+          .filter(m => m.type === "SHIP_OUT" && (m.soRef ? String(m.soRef) === String(order.number) : String(m.note || "").includes(order.number)))
           .reduce((sum, m) => sum + (parseFloat(m.qtyKg) || 0), 0);
         if (shippedForSO > 0) qtyToRestore += Math.min(lineQty || shippedForSO, shippedForSO);
       });
 
       if (qtyToRestore <= 0) return lot;
       const reversal = {
-        id: Date.now() + Math.round(Math.random() * 100000),
+        id: nextId(),
         date: today,
         type: "REVERSAL",
         qtyKg: qtyToRestore,
         fromId: lot.locationId,
         toId: lot.locationId,
+        soRef: order.number,
         note: `Inventory reversal for cancelled ${order.number}`,
       };
       const nextPhysical = (parseFloat(lot.physicalKg) || 0) + qtyToRestore;
@@ -2412,6 +2340,13 @@ export default function SalesOrders({
   }
 
   function saveOrder(o) {
+    // Batch 6b: hard confirm-gate — no SO past Draft without its sell terms.
+    const termsMissing = soTermsMissing(o);
+    if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
+      alert(`This SO cannot move to ${o.status} without ${termsMissing}. "CIF" without "CIF Jeddah" is only half the contract.`);
+      return;
+    }
+
     // Duplicate number guard
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
     if (dup) { alert(`SO number ${o.number} already exists.`); return; }
@@ -2483,7 +2418,7 @@ export default function SalesOrders({
     const alreadyInvoiced = (o.linkedInvoices && o.linkedInvoices.length > 0)
       || (o.pendingInvoices && o.pendingInvoices.length > 0);
 
-    const savedOrder = { ...o, id: o.id ?? Date.now() };
+    const savedOrder = { ...o, id: o.id ?? nextId() };
     setOrders(prev => {
       const exists = prev.find(p => p.id === savedOrder.id);
       if (exists) return prev.map(p => p.id === savedOrder.id ? savedOrder : p);
@@ -2510,6 +2445,18 @@ export default function SalesOrders({
     setSelected(o);
     setView("detail");
   }
+  // Batch 3b (decision 2): EXW client collection — one click creates the minimal
+  // collection shipment (purpose OUTBOUND, responsibility Client, no legs/TO/freight).
+  const [collectionFor, setCollectionFor] = useState<any>(null);
+  function recordCollection(info) {
+    if (!extSetShipments) { window.alert("Shipments store not available."); return; }
+    const built = buildCollectionShipment(collectionFor, extInvLots || [], extShipments, info, { todayISO: domainToday, nextId });
+    if (!built.goods.length) { window.alert("No sourced lines found — source the SO lines from stock or a PO first, then record the collection."); return; }
+    extSetShipments(prev => [built, ...(prev || [])]);
+    setOrders(prev => prev.map(o => o.id === collectionFor.id ? { ...o, linkedShipments: Array.from(new Set([...(o.linkedShipments || []), built.number])) } : o));
+    setCollectionFor(null);
+  }
+
   function deleteOrder() {
     if (!window.confirm(`Cancel SO ${selected.number}? Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.`)) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
@@ -2522,10 +2469,14 @@ export default function SalesOrders({
   // SO's pendingInvoices array and appends its number to linkedInvoices for cross-reference.
   function confirmInvoiceCreation(invoice) {
     const targetId = invoiceOrder.id;
+    // #4: issuing the invoice advances the SO to "Invoiced" (from Shipped/Delivered).
+    // Closed stays Closed; earlier stages aren't forced forward.
+    const advance = (st: string) => (["Shipped", "Delivered"].includes(st) ? "Invoiced" : st);
     setOrders(prev => prev.map(p => {
       if (p.id !== targetId) return p;
       return {
         ...p,
+        status: advance(p.status),
         pendingInvoices: [...(p.pendingInvoices || []), invoice],
         linkedInvoices: [...(p.linkedInvoices || []), invoice.number],
       };
@@ -2534,6 +2485,7 @@ export default function SalesOrders({
     if (selected && selected.id === targetId) {
       setSelected(prev => ({
         ...prev,
+        status: advance(prev.status),
         pendingInvoices: [...(prev.pendingInvoices || []), invoice],
         linkedInvoices: [...(prev.linkedInvoices || []), invoice.number],
       }));
@@ -2546,13 +2498,16 @@ export default function SalesOrders({
     return (
       <>
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
-        {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
+        {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
         <OrderForm
           order={form} setOrder={setForm}
           productSuggestions={productSuggestions}
           allOrders={orders}
           clients={clients}
+          contacts={extContacts}
+          productCatalog={productCatalog}
+          setProductCatalog={setProductCatalog}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={() => {
@@ -2560,6 +2515,7 @@ export default function SalesOrders({
               alert("Cannot print or share a draft SO. Confirm the order first.");
               return;
             }
+            { const _m = soTermsMissing(form); if (_m) { alert(`Cannot print this SO without ${_m} — the client must see the delivery terms.`); return; } }
             setPrintOrder(form);
           }}
           onEmail={() => {
@@ -2567,6 +2523,7 @@ export default function SalesOrders({
               alert("Cannot email a draft SO. Confirm the order first.");
               return;
             }
+            { const _m = soTermsMissing(form); if (_m) { alert(`Cannot email this SO without ${_m} — the client must see the delivery terms.`); return; } }
             setEmailOrder(form);
           }}
         />
@@ -2577,7 +2534,7 @@ export default function SalesOrders({
     return (
       <>
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
-        {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
+        {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
         <OrderDetail
           order={selected}
@@ -2599,6 +2556,7 @@ export default function SalesOrders({
               alert("Cannot print or share a draft SO. Confirm the order first.");
               return;
             }
+            { const _m = soTermsMissing(selected); if (_m) { alert(`Cannot print this SO without ${_m} — the client must see the delivery terms.`); return; } }
             setPrintOrder(selected);
           }}
           onEmail={() => {
@@ -2606,10 +2564,12 @@ export default function SalesOrders({
               alert("Cannot email a draft SO. Confirm the order first.");
               return;
             }
+            { const _m = soTermsMissing(selected); if (_m) { alert(`Cannot email this SO without ${_m} — the client must see the delivery terms.`); return; } }
             setEmailOrder(selected);
           }}
           onIssueInvoice={() => setInvoiceOrder(selected)}
           onDelete={deleteOrder}
+          onRecordCollection={() => setCollectionFor(selected)}
         />
       </>
     );
@@ -2676,10 +2636,10 @@ export default function SalesOrders({
             const rowAvail = computeLineAvailability(o.items, orders, o.id);
             const rowOverageCount = rowAvail.filter(a => a.hasOverage).length;
             return (
-              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
+              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: o.status === "Cancelled" ? "#FEF2F2" : "#fff", color: o.status === "Cancelled" ? "#B91C1C" : undefined, cursor: "pointer" }}
                 onClick={() => openDetail(o)}
-                onMouseEnter={e => e.currentTarget.style.background = "#FAFAFA"}
-                onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                onMouseEnter={e => e.currentTarget.style.background = o.status === "Cancelled" ? "#FEE2E2" : "#FAFAFA"}
+                onMouseLeave={e => e.currentTarget.style.background = o.status === "Cancelled" ? "#FEF2F2" : "#fff"}>
                 <div>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
                   {rowOverageCount > 0 && (
@@ -2692,8 +2652,8 @@ export default function SalesOrders({
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{o.client?.name || "—"}</div>
                   <div style={{ fontSize: 11, color: "#AAA" }}>{o.items.length} {o.items.length === 1 ? "line" : "lines"} · {fmtNum(o.items.reduce((s, it) => s + (parseFloat(it.qty) || 0), 0))} kg</div>
                 </div>
-                <div style={{ fontSize: 12, color: "#555" }}>{o.orderDate}</div>
-                <div style={{ fontSize: 12, color: "#555" }}>{o.deliveryDate || "—"}</div>
+                <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(o.orderDate)}</div>
+                <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(o.deliveryDate) || "—"}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(netTotal(o.items), o.currency)}</div>
@@ -2714,6 +2674,10 @@ export default function SalesOrders({
           {filtered.length} of {orders.length} sales orders · Click any row to open
         </div>
       </div>
+      {collectionFor && (
+        <CollectionModal so={collectionFor} onClose={() => setCollectionFor(null)} onSave={recordCollection} />
+      )}
+
     </div>
   );
 }

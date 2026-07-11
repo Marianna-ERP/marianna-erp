@@ -386,19 +386,33 @@ function counterpartyLocationRole(c: any): { legacyType: string; type: LocationT
   return null; // carriers / forwarders / brokers are providers, not delivery places
 }
 
-// Register (idempotently) supplier / client / warehouse counterparty addresses.
-export function registerCounterpartyLocations(contacts: any[]): void {
+// Pure builder: every supplier / client / warehouse counterparty address as a
+// Location (no mutation). v6.18.4 (P0-4): used at render time by the SO, Shipment
+// and Inventory pickers so a counterparty added this session appears immediately,
+// without waiting for the module-load bootstrap (which only runs on a refresh).
+export function counterpartyLocations(contacts: any[]): Location[] {
+  const out: Location[] = [];
   (contacts || []).forEach((c: any) => {
     const role = counterpartyLocationRole(c);
     if (!role || (c.id == null)) return;
     contactAddresses(c).forEach(({ address, index }) => {
-      const id = warehouseCpLocId(c.id, index);
-      const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
-      const loc: Location = { id, type: role.type, legacyType: role.legacyType, name, country: c.country || "", address: address || undefined };
-      const existing = LOCATIONS.find(l => String(l.id) === String(id));
-      if (!existing) LOCATIONS.push(loc);
-      else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; }
+      out.push({
+        id: warehouseCpLocId(c.id, index),
+        type: role.type, legacyType: role.legacyType,
+        name: index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`,
+        country: c.country || "", address: address || undefined,
+      });
     });
+  });
+  return out;
+}
+
+// Register (idempotently) supplier / client / warehouse counterparty addresses.
+export function registerCounterpartyLocations(contacts: any[]): void {
+  counterpartyLocations(contacts).forEach((loc: Location) => {
+    const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
+    if (!existing) LOCATIONS.push(loc);
+    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; }
   });
 }
 

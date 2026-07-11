@@ -8,6 +8,7 @@
 export interface FakturowniaConfig {
   subdomain: string;   // e.g. "marianna2"  → https://marianna2.fakturownia.pl
   apiToken: string;
+  liveWriteEnabled?: boolean;  // v6.18.4: live invoice creation is OFF unless explicitly enabled
 }
 
 const CONFIG_KEY = "marianna-erp:v1:fakturowniaConfig";
@@ -19,7 +20,7 @@ export function readFakturowniaConfig(): FakturowniaConfig | null {
     if (!raw) return null;
     const c = JSON.parse(raw);
     if (!c || !c.subdomain || !c.apiToken) return null;
-    return { subdomain: String(c.subdomain).trim(), apiToken: String(c.apiToken).trim() };
+    return { subdomain: String(c.subdomain).trim(), apiToken: String(c.apiToken).trim(), liveWriteEnabled: c.liveWriteEnabled === true };
   } catch { return null; }
 }
 
@@ -27,7 +28,7 @@ export function writeFakturowniaConfig(c: FakturowniaConfig | null): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
     if (!c) window.localStorage.removeItem(CONFIG_KEY);
-    else window.localStorage.setItem(CONFIG_KEY, JSON.stringify({ subdomain: c.subdomain.trim(), apiToken: c.apiToken.trim() }));
+    else window.localStorage.setItem(CONFIG_KEY, JSON.stringify({ subdomain: c.subdomain.trim(), apiToken: c.apiToken.trim(), liveWriteEnabled: c.liveWriteEnabled === true }));
   } catch { /* ignore */ }
 }
 
@@ -90,6 +91,29 @@ export async function testConnection(c: FakturowniaConfig): Promise<FktResult<{ 
   const r = await fktGet(c, "/invoices.json", { page: 1, per_page: 1, period: "this_month" });
   if (!r.ok) return r as any;
   return { ok: true, data: { count: Array.isArray(r.data) ? r.data.length : 0 } };
+}
+
+// ── Invoice creation (push) ──────────────────────────────────────────────────
+// POST /invoices.json. `body` is the full payload object built by
+// invoicing.buildFakturowniaPayload (it already contains api_token + invoice).
+// Mirrors fktGet's CORS-tolerant error handling: a browser POST may be blocked by
+// CORS exactly like reads, in which case corsLikely is true and the caller should
+// fall back to the copy-payload / backend path.
+export async function createInvoice(c: FakturowniaConfig, body: any): Promise<FktResult<any>> {
+  const url = new URL(fakturowniaBase(c) + "/invoices.json");
+  try {
+    const res = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ ...body, api_token: c.apiToken }),
+    });
+    if (!res.ok) {
+      return { ok: false, status: res.status, error: res.status === 401 ? "Unauthorized — the API token may be read-only or invalid." : res.status === 422 ? "Fakturownia rejected the invoice data (HTTP 422) — check required fields." : `Fakturownia answered HTTP ${res.status}.` };
+    }
+    return { ok: true, data: await res.json(), status: res.status };
+  } catch (err: any) {
+    return { ok: false, error: String(err?.message || err), corsLikely: true };
+  }
 }
 
 // ── Tolerant mapping of a Fakturownia invoice JSON to the shapes the ERP uses ─

@@ -7,9 +7,22 @@ import SalesOrders from "./SalesOrders";
 import Shipments from "./Shipments";
 import Finance from "./Finance";
 import Settings from "./Settings";
+import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { SHELL_SEED } from "./shell_seed";
-import { useLocalStoredState } from "./useLocalStoredState";
+import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
+import { convertSettledRefsToEvents } from "./payments.domain";
 import { APP_VERSION } from "./version";
+import IntegrityBadge from "./IntegrityBadge";
+import { primeIdsFrom } from "./ids";
+import Invoices from "./Invoices";
+import { migrateLegacyInvoices } from "./invoicing";
+
+// Batch 5: migrate older-version stored data forward BEFORE any hook reads it
+// (module scope — runs before the App component's hooks read the stores).
+// NOTE (v6.26.1): this call must sit AFTER all imports — CRA's eslint
+// `import/first` rule fails the build otherwise. That exact mistake broke the
+// v6.26.0 deploy; the release gate now runs the real CRA build to catch it.
+runMigrationsIfNeeded();
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
@@ -82,49 +95,66 @@ function refreshShipmentCounterparties(shipments: any[], contacts: any[]) {
   }));
 }
 
-const NAV_ITEMS = [
-  { key: "dashboard", icon: "⊞", label: "Dashboard" },
-  { key: "finance", icon: "Σ", label: "Finance" },
-  { key: "pos", icon: "↓", label: "Purchase Orders" },
-  { key: "lots", icon: "▣", label: "Inventory" },
-  { key: "orders", icon: "↑", label: "Sales Orders" },
-  { key: "shipments", icon: "▤", label: "Shipments" },
-  { key: "contacts", icon: "◻", label: "Counterparties" },
-  { key: "settings", icon: "⚙", label: "Settings" },
+// v6.18.2: nav grouped into clusters so it stays compact and doesn't scroll.
+// Short labels keep it tight; full names remain as tooltips.
+const NAV_GROUPS: { items: { key: string; icon: string; label: string; short: string }[] }[] = [
+  { items: [{ key: "dashboard", icon: "⊞", label: "Dashboard", short: "Dashboard" }] },
+  { items: [
+    { key: "pos", icon: "↓", label: "Purchase Orders", short: "POs" },
+    { key: "lots", icon: "▣", label: "Inventory", short: "Inventory" },
+    { key: "orders", icon: "↑", label: "Sales Orders", short: "SOs" },
+    { key: "shipments", icon: "▤", label: "Shipments", short: "Shipments" },
+  ] },
+  { items: [
+    { key: "invoices", icon: "₣", label: "Invoices", short: "Invoices" },
+    { key: "finance", icon: "Σ", label: "Finance", short: "Finance" },
+  ] },
+  { items: [
+    { key: "contacts", icon: "◻", label: "Counterparties", short: "Parties" },
+    { key: "settings", icon: "⚙", label: "Settings", short: "Settings" },
+  ] },
 ];
 
-function TopNav({ active, onNav = () => {} }: any) {
+function TopNav({ active, onNav = () => {}, rightSlot = null }: any) {
   return (
     <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", minHeight: 56, display: "flex", alignItems: "center", gap: 0, flexShrink: 0, overflowX: "auto" }}>
       <div style={{ fontSize: 17, fontWeight: 700, color: "#111", letterSpacing: "-0.3px", marginRight: 24, whiteSpace: "nowrap" }}>
         MARIANNA <span style={{ fontSize: 11, fontWeight: 500, color: "#AAA", marginLeft: 6, letterSpacing: 0 }}>ERP</span>
       </div>
-      <div style={{ display: "flex", gap: 4 }}>
-        {NAV_ITEMS.map(n => {
-          const isActive = active === n.key;
-          return (
-            <button key={n.key} onClick={() => onNav(n.key)}
-              style={{
-                padding: "8px 12px", borderRadius: 7,
-                border: "none",
-                background: isActive ? "#111" : "transparent",
-                color: isActive ? "#fff" : "#666",
-                fontSize: 12.5, fontWeight: isActive ? 600 : 500,
-                cursor: "pointer",
-                display: "flex", alignItems: "center", gap: 6,
-                fontFamily: "inherit",
-                transition: "background 0.12s",
-                whiteSpace: "nowrap",
-              }}
-              onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "#F3F4F6"; }}
-              onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}>
-              <span style={{ fontSize: 13, opacity: 0.75 }}>{n.icon}</span>
-              {n.label}
-            </button>
-          );
-        })}
+      <div style={{ display: "flex", gap: 0, alignItems: "center" }}>
+        {NAV_GROUPS.map((group, gi) => (
+          <React.Fragment key={gi}>
+            {gi > 0 && <div style={{ width: 1, height: 22, background: "#ECECEC", margin: "0 8px", flexShrink: 0 }} />}
+            <div style={{ display: "flex", gap: 2 }}>
+              {group.items.map(n => {
+                const isActive = active === n.key;
+                return (
+                  <button key={n.key} onClick={() => onNav(n.key)} title={n.label}
+                    style={{
+                      padding: "7px 9px", borderRadius: 7,
+                      border: "none",
+                      background: isActive ? "#111" : "transparent",
+                      color: isActive ? "#fff" : "#666",
+                      fontSize: 12, fontWeight: isActive ? 600 : 500,
+                      cursor: "pointer",
+                      display: "flex", alignItems: "center", gap: 5,
+                      fontFamily: "inherit",
+                      transition: "background 0.12s",
+                      whiteSpace: "nowrap",
+                    }}
+                    onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "#F3F4F6"; }}
+                    onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}>
+                    <span style={{ fontSize: 13, opacity: 0.75 }}>{n.icon}</span>
+                    {n.short}
+                  </button>
+                );
+              })}
+            </div>
+          </React.Fragment>
+        ))}
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "#AAA", paddingLeft: 16, whiteSpace: "nowrap" }}>
+        {rightSlot}
         <span title="App build version. Everyone sharing a JSON file must be on the same version." style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
         <span>Hazem Osman</span>
         <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>HO</div>
@@ -143,6 +173,9 @@ export default function App() {
   const [warehouseInvoices, setWarehouseInvoices] = useLocalStoredState("warehouseInvoices", SHELL_SEED.warehouseInvoices || []);
   const [settledRefs, setSettledRefs] = useLocalStoredState("settledRefs", []);
   const [creditNotes, setCreditNotes] = useLocalStoredState("creditNotes", []);
+  const [invoices, setInvoices] = useLocalStoredState("invoices", []);
+  const [productCatalog, setProductCatalog] = useLocalStoredState("productCatalog", PRODUCT_CATALOG_SEED);
+  const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
   const [logisticsPoints, setLogisticsPoints] = useLocalStoredState("logisticsPoints", []);
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
   const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
@@ -159,9 +192,40 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contacts]);
 
+  // Keep the stable-id generator primed above every id already in loaded data, so a
+  // freshly minted id can never collide with one from storage or a JSON import.
+  useEffect(() => {
+    primeIdsFrom(contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts);
+  }, [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts]);
+
+  // Fold the four legacy invoice representations (SO pendingInvoices, warehouse
+  // invoices, invoice-backed operational costs) into the unified Invoicing model.
+  // Idempotent by source tag — safe to run on every relevant change; never duplicates.
+  useEffect(() => {
+    setInvoices((prev: any[]) => {
+      const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts, pos });
+      return merged.length !== (prev || []).length ? merged : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, warehouseInvoices, operationalCosts, pos]);
+
   const [activeModule, setActiveModule] = useState("dashboard");
   // One-time reminder for testers to export/back up their data (localStorage only).
   const [backupReminderDismissed, setBackupReminderDismissed] = useLocalStoredState("backupReminderDismissed", false);
+  const storageHealthState = useStorageHealth(); // Batch 5: surface failed writes
+
+  // Batch 5d (BP-39): one-time conversion — legacy "mark paid" flags on invoices
+  // become tagged payment events. Idempotent: converted refs are removed.
+  const settledConversionDone = React.useRef(false);
+  React.useEffect(() => {
+    if (settledConversionDone.current) return;
+    settledConversionDone.current = true;
+    const invRefs = (settledRefs || []).filter((r: string) => String(r).startsWith("INV:") || String(r).startsWith("SINV:"));
+    if (!invRefs.length) return;
+    const res = convertSettledRefsToEvents(invoices, settledRefs, { todayISO: () => new Date().toISOString().slice(0, 10), nextId: () => Date.now() + Math.floor(Math.random() * 1000) });
+    if (res.converted > 0) { setInvoices(res.invoices); setSettledRefs(res.settledRefs); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function reloadFromStorage() {
     window.location.reload();
@@ -172,19 +236,21 @@ export default function App() {
       case "dashboard":
         return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} creditNotes={creditNotes} setCreditNotes={setCreditNotes} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} creditNotes={creditNotes} setCreditNotes={setCreditNotes} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} />;
       case "pos":
-        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} />;
+        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "lots":
-        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} pos={pos} />;
+        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />;
       case "orders":
-        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} />;
+        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "shipments":
         return <Shipments shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} />;
+      case "invoices":
+        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} lots={lots} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} />;
+        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       default:
         return null;
     }
@@ -192,7 +258,21 @@ export default function App() {
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
-      <TopNav active={activeModule} onNav={setActiveModule} />
+      <TopNav active={activeModule} onNav={setActiveModule} rightSlot={
+        <IntegrityBadge
+          data={{ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes }}
+          onNavigate={setActiveModule}
+        />
+      } />
+      {storageHealthState.failing && (
+        <div style={{ background: "#FEF2F2", borderBottom: "2px solid #DC2626", padding: "10px 18px", display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 16 }}>🛑</span>
+          <div style={{ fontSize: 12.5, color: "#991B1B", lineHeight: 1.45 }}>
+            <strong>Saving to browser storage is FAILING</strong> (key "{storageHealthState.failedKey}": {storageHealthState.lastError || "storage full or disabled"}).
+            Your latest changes exist only in this tab and will be LOST on refresh — go to <strong>Settings → Export</strong> now, then free space (delete old backups) and reload.
+          </div>
+        </div>
+      )}
       {!backupReminderDismissed && (
         <div style={{ background: "#FEF3C7", borderBottom: "1px solid #FDE68A", padding: "10px 28px", display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: "#92400E", flexShrink: 0 }}>
           <span style={{ fontSize: 15 }}>💾</span>

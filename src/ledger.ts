@@ -1,3 +1,4 @@
+import { paidFromEvents, notesTotalsAdjustment } from "./payments.domain";
 // ─── v6.9: RECEIVABLES & PAYABLES AGGREGATION ───────────────────────────────
 // Pulls every "money owed" item the system already tracks into one ledger:
 //   RECEIVABLE (money in)  ← sales invoices issued from SOs
@@ -25,6 +26,8 @@ export interface LedgerItem {
 }
 
 export interface LedgerTotals {
+  notesReceivableAdjPLN?: number; // BP-37: signed adjustment applied from credit/debit notes
+  notesPayableAdjPLN?: number;
   receivableOpenPLN: number;
   receivableOverduePLN: number;
   payableOpenPLN: number;
@@ -46,6 +49,8 @@ export interface LedgerInputs {
   lots?: any[];
   warehouseInvoices?: any[];
   operationalCosts?: any[];
+  invoices?: any[];           // v6.18.6 (P0-7): unified Invoices store — source of truth
+  financeNotes?: any[];       // credit/debit notes (passed through; not yet in totals)
   pos?: any[];
   settledRefs?: string[];     // refs the user marked paid
   fakturowniaPaid?: Record<string, boolean>; // invoiceNo → paid (from live sync)
@@ -58,22 +63,40 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
   const fktPaid = inp.fakturowniaPaid || {};
   const items: LedgerItem[] = [];
 
-  // ── RECEIVABLES: sales invoices issued from SOs ──
-  (inp.orders || []).forEach((o: any) => {
-    if (!o || o.status === "Cancelled") return;
-    (o.pendingInvoices || []).forEach((inv: any) => {
-      const ref = `SINV:${inv.number}`;
-      const isPaid = settled.has(ref) || fktPaid[String(inv.number)] === true || inv.fktPaid === true;
-      items.push({
-        ref, direction: "receivable", kind: "Sales invoice",
-        counterparty: o.client?.name || "—",
-        documentNo: inv.number, date: inv.issueDate || inv.date || "", dueDate: inv.dueDate || "",
-        amountPLN: r2(n(inv.grossPLN) || n(inv.netPLN) || n(inv.grossAmount) * (n(inv.fxRate) || 1)),
-        currency: inv.currency || o.currency || "PLN",
-        amountOrig: r2(n(inv.grossAmount) || n(inv.netAmount)),
-        status: classify(inv.dueDate, isPaid, today),
-        sourceModule: "Sales Orders", note: o.number,
-      });
+  // ── INVOICES (single source of truth) ───────────────────────────────────────
+  // v6.18.6 (P0-7): receivables (SALES) and invoice-based payables (COST: warehouse,
+  // freight, cost invoices) now come from the unified Invoices store — NOT from the
+  // legacy orders.pendingInvoices / warehouseInvoices / operationalCosts reads. Those
+  // legacy records are folded into `invoices` by migrateLegacyInvoices (idempotent),
+  // so the totals match what they were — but edits/payments/new invoices made in the
+  // Invoices module now flow straight through to the ledger and P/L.
+  (inp.invoices || []).forEach((inv: any) => {
+    if (!inv || inv.paymentStatus === "Cancelled") return;
+    const isSales = inv.kind === "SALES";
+    const gross = r2(n(inv.grossPLN) || n(inv.netPLN));
+    if (gross <= 0 && !inv.number) return; // skip empty drafts (no number, no amount)
+    const ref = `INV:${inv.id}`;
+    // Paid if the invoice itself says so (payment recorded in the Invoices module),
+    // or it's fully covered by recorded payments, or marked paid here / in Fakturownia.
+    // Also honour the legacy SINV: mark-paid ref so previously-cleared sales invoices
+    // don't reappear as open after the switch.
+    const legacyPaid = isSales && settled.has(`SINV:${inv.number}`);
+    // Batch 5b (BP-36): payments are EVENTS — paidFromEvents sums them, and
+    // synthesises one event from a legacy paidAmount, so old data reads the same.
+    const isPaid = inv.paymentStatus === "Paid"
+      || (gross > 0 && paidFromEvents(inv) * (n(inv.fxRate) || 1) >= gross - 0.01)
+      || settled.has(ref) || legacyPaid
+      || fktPaid[String(inv.number)] === true;
+    items.push({
+      ref, direction: isSales ? "receivable" : "payable",
+      kind: isSales ? "Sales invoice" : (inv.category === "WAREHOUSE" ? "Warehouse invoice" : inv.category === "PURCHASE" ? "PO purchase" : "Cost invoice"),
+      counterparty: inv.counterparty?.name || "—",
+      documentNo: inv.number || inv.fakturownia?.legalNumber || String(inv.id),
+      date: inv.issueDate || inv.saleDate || "", dueDate: inv.dueDate || "",
+      amountPLN: gross, currency: inv.currency || "PLN",
+      amountOrig: r2(n(inv.grossAmount) || n(inv.netAmount) || gross),
+      status: classify(inv.dueDate, isPaid, today),
+      sourceModule: "Invoices", note: (inv.links || []).map((l: any) => l.number).filter(Boolean).join(", ") || inv.source || "",
     });
   });
 
@@ -94,37 +117,19 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     });
   });
 
-  // ── PAYABLES: warehouse invoices ──
-  (inp.warehouseInvoices || []).forEach((inv: any) => {
-    const ref = `WHINV:${inv.id}`;
-    items.push({
-      ref, direction: "payable", kind: "Warehouse invoice",
-      counterparty: inv.warehouseName || "Warehouse",
-      documentNo: inv.invoiceNo || String(inv.id), date: inv.date || "", dueDate: inv.dueDate || "",
-      amountPLN: r2(n(inv.amountPLN)), currency: inv.currency || "PLN", amountOrig: r2(n(inv.amount)),
-      status: classify(inv.dueDate, settled.has(ref) || inv.status === "Paid", today),
-      sourceModule: "Finance · Warehouse charges", note: inv.period,
-    });
-  });
-
-  // ── PAYABLES: operational cost invoices (those with an invoice number) ──
-  (inp.operationalCosts || []).forEach((c: any) => {
-    if (!c.invoiceNo) return; // only invoice-backed costs are payables; payroll/taxes excluded
-    const ref = `COST:${c.id}`;
-    items.push({
-      ref, direction: "payable", kind: "Cost invoice",
-      counterparty: c.supplierName || "—",
-      documentNo: c.invoiceNo, date: c.date || "", dueDate: c.dueDate || "",
-      amountPLN: r2(n(c.amountPLN)), currency: c.currency || "PLN", amountOrig: r2(n(c.amount)),
-      status: classify(c.dueDate, settled.has(ref) || c.status === "Paid", today),
-      sourceModule: "Finance · Operational costs", note: c.description,
-    });
-  });
-
-  // ── PAYABLES: firm-price PO purchases (non-consignment, confirmed) ──
+  // ── PAYABLES: firm-price PO purchases not yet represented by a purchase invoice ──
+  // v6.18.9 (#5): once a PO is Arrived it's folded into a PURCHASE invoice (counted in
+  // the invoices loop above), so here we only count firm POs that don't yet have one —
+  // i.e. the Confirmed-but-not-arrived commitment. Same total, counted exactly once.
+  const poNumbersWithInvoice = new Set(
+    (inp.invoices || [])
+      .filter((inv: any) => inv && inv.kind === "COST")
+      .flatMap((inv: any) => (inv.links || []).filter((l: any) => l.type === "PO").map((l: any) => String(l.number)))
+  );
   (inp.pos || []).forEach((po: any) => {
     if ((po.pricingMode || "firm") === "consignment") return;
     if (!["Confirmed", "Received", "Closed", "Arrived"].includes(po.status)) return;
+    if (poNumbersWithInvoice.has(String(po.number))) return; // now represented by a purchase invoice
     const total = (po.items || []).reduce((s: number, it: any) => s + n(it.qty) * n(it.unitPrice), 0);
     if (total <= 0) return;
     const fx = n(po.fxRate) || 1;
@@ -139,13 +144,20 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     });
   });
 
+  // Batch 5b (BP-37): credit/debit notes now ENTER the totals. A credit note we
+  // issued reduces open receivables; a supplier's credit note reduces open payables;
+  // debit notes increase their side. (This flip was deliberately test-pinned in the
+  // old behaviour so it lands as an explicit change, not a drift.)
+  const notesAdj = notesTotalsAdjustment(inp.financeNotes || []);
   const totals: LedgerTotals = {
-    receivableOpenPLN: r2(items.filter(i => i.direction === "receivable" && i.status !== "Paid").reduce((s, i) => s + i.amountPLN, 0)),
+    receivableOpenPLN: r2(Math.max(0, items.filter(i => i.direction === "receivable" && i.status !== "Paid").reduce((s, i) => s + i.amountPLN, 0) + notesAdj.receivableAdjPLN)),
     receivableOverduePLN: r2(items.filter(i => i.direction === "receivable" && i.status === "Overdue").reduce((s, i) => s + i.amountPLN, 0)),
-    payableOpenPLN: r2(items.filter(i => i.direction === "payable" && i.status !== "Paid").reduce((s, i) => s + i.amountPLN, 0)),
+    payableOpenPLN: r2(Math.max(0, items.filter(i => i.direction === "payable" && i.status !== "Paid").reduce((s, i) => s + i.amountPLN, 0) + notesAdj.payableAdjPLN)),
     payableOverduePLN: r2(items.filter(i => i.direction === "payable" && i.status === "Overdue").reduce((s, i) => s + i.amountPLN, 0)),
+    notesReceivableAdjPLN: notesAdj.receivableAdjPLN,
+    notesPayableAdjPLN: notesAdj.payableAdjPLN,
     netPositionPLN: 0,
-  };
+  } as LedgerTotals;
   totals.netPositionPLN = r2(totals.receivableOpenPLN - totals.payableOpenPLN);
   return { items, totals };
 }

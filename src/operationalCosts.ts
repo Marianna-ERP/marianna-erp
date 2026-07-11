@@ -196,6 +196,10 @@ function activeForOverhead(order: any): boolean {
 function countableCost(cost: OperationalCost, mode: MarginMode): boolean {
   if (!cost || cost.allocationMethod === "not_allocated") return false;
   if (mode === "forecast") return ["Budget", "Expected", "Received", "Posted", "Paid"].includes(cost.status || "Expected");
+  // Batch 5d (BP-38): in ACTUAL mode the honest evidence of spend is a real cost
+  // invoice — an entry linked to one (invoiceRef) counts regardless of its status
+  // label. The status path remains for entries not yet linked (legacy data).
+  if ((cost as any).invoiceRef) return true;
   return ["Received", "Posted", "Paid"].includes(cost.status || "Expected");
 }
 

@@ -1,7 +1,12 @@
 import React, { useState, useRef, useMemo } from "react";
+import { structToFlow, flowToStruct, reconcilePOFlow, isDirectCargoPlan, handoverTextForIncoterm, handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow } from "./tradeFlow.domain";
+import { Card, Lbl, SectionTitle } from "./ui";
+import { nextId, nextIds } from "./ids";
+import { FX_RATES, defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
-import { LOCATIONS as SHARED_LOCATIONS } from "./locations";
-import { localTodayISO, localMonthISO } from "./dates";
+import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./locations";
+import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { ItemVarietyPicker } from "./ProductPicker";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -292,7 +297,7 @@ const FLOW_DESTINATION_TYPE: Record<string, string> = {
 };
 
 // Stub FX rates for currency conversion in summary (would come from NBP in production)
-const FX_RATES: Record<string, number> = { PLN: 1, EUR: 4.2531, USD: 3.8812 };
+// FX_RATES now sourced from ./fx (single source of truth)
 
 // ─── SEED DATA ──────────────────────────────────────────────────────────────
 const SUPPLIERS = getSuppliersStub();
@@ -399,27 +404,13 @@ export const INITIAL_ORDERS = [
 ];
 
 // ─── SHARED ATOMS ───────────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title }: any) {
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
-  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} style={{ ...base, ...style }} />;
+  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <select value={value || ""} onChange={onChange} disabled={disabled} style={{ ...base, ...style }}>{children}</select>;
-}
-function Lbl({ children }: any) {
-  return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>;
-}
-function Card({ children, style = {} }: any) {
-  return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
-}
-function SectionTitle({ children, right = null }: any) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{children}</div>
-      {right}
-    </div>
-  );
 }
 function StatusBadge({ status }: any) {
   const s = PO_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
@@ -435,7 +426,18 @@ function QualityBadge({ quality }: any) {
   const p = palette[quality] || palette["I"];
   return <span style={{ background: p.bg, color: p.color, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
-function FlowBadge({ flow, compact = false }: any) {
+function FlowBadge({ flow, order = null, compact = false }: any) {
+  // v6.29.0: terms-first vocabulary — old-flow and new POs render identically.
+  if (order && (order.buyIncoterm || order.tradeMovement)) {
+    const dir = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? MOVEMENT_LABELS[order.tradeMovement]
+      : (String(order.flow || flow || "").startsWith("EXP") ? MOVEMENT_LABELS.EXPORT : MOVEMENT_LABELS.IMPORT);
+    const place = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
+    return (
+      <span title={handoverSentence(order.buyIncoterm, place)} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
+        <b style={{ color: dir.color }}>{dir.label}</b>{order.buyIncoterm ? <> · {order.buyIncoterm}{place ? ` ${place}` : ""}</> : null}
+      </span>
+    );
+  }
   const f = FLOW_TYPES[flow];
   if (!f) return null;
   return (
@@ -528,9 +530,9 @@ function PODoc({ order }: any) {
   // Single source of truth for the row labels in the metadata + supplier blocks
   const meta = [
     { en: "PO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
-    { en: "Order date",         pl: "Data zamówienia",        value: order.orderDate },
-    { en: "Loading date",       pl: "Data załadunku",         value: order.loadingDate },
-    { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: order.expectedDeliveryDate },
+    { en: "Order date",         pl: "Data zamówienia",        value: formatDMY(order.orderDate) },
+    { en: "Loading date",       pl: "Data załadunku",         value: formatDMY(order.loadingDate) },
+    { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: formatDMY(order.expectedDeliveryDate) },
     { en: "Destination",        pl: "Miejsce docelowe",       value: destinationDisplay(order) },
     { en: "Purchase Incoterm",  pl: "Warunki zakupu Incoterms", value: order.buyIncoterm,      strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
@@ -645,7 +647,7 @@ function PODoc({ order }: any) {
             return (
               <tr key={i}>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>
-                  {item.product}
+                  {item.product}{item.variety ? <span style={{ fontWeight: 400 }}> — {item.variety}</span> : null}
                   {item.coloration && <div style={{ fontSize: 9.5, color: "#666", fontWeight: 400, fontStyle: "italic" }}>{item.coloration}</div>}
                 </td>
                 <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
@@ -778,6 +780,10 @@ function PrintModal({ order, onClose }: any) {
 
     // Wait for the embedded base64 logo image to load before triggering print
     const fire = () => {
+      // v6.18.8 (#1): the browser's "Save as PDF" uses the top document's title for
+      // the default filename, so temporarily set it to the PO number, then restore.
+      const prevTitle = document.title;
+      document.title = order.number || prevTitle;
       try {
         iframe.contentWindow?.focus();
         iframe.contentWindow?.print();
@@ -786,7 +792,7 @@ function PrintModal({ order, onClose }: any) {
         alert("Printing failed. Try opening the artifact in its own window and printing from there.");
       }
       // Clean up the iframe after a delay (the print dialog needs time to read it)
-      setTimeout(() => iframe.remove(), 1000);
+      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
     };
 
     // The image inside the iframe needs to finish loading first
@@ -817,6 +823,12 @@ function PrintModal({ order, onClose }: any) {
         <div style={{ padding: 24, overflowY: "auto", background: "#ECECEC" }}>
           {/* On-screen preview sized to mimic an A4 sheet */}
           <div id="po-print-doc" style={{ background: "#fff", padding: "8mm", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", width: "186mm", margin: "0 auto", boxSizing: "content-box" }}>
+          {order.buyIncoterm && (
+            <div style={{ border: "1.5px solid #111", padding: "6px 10px", margin: "6px 0 10px", fontSize: 12.5 }}>
+              <b>Terms / Warunki: {order.buyIncoterm} {order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || ""} (Incoterms 2020)</b>
+              <div style={{ fontSize: 11, marginTop: 2 }}>{handoverSentence(order.buyIncoterm, order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "")}</div>
+            </div>
+          )}
             <PODoc order={order} />
           </div>
         </div>
@@ -826,9 +838,24 @@ function PrintModal({ order, onClose }: any) {
 }
 
 // ─── EMAIL MODAL ────────────────────────────────────────────────────────────
-function EmailModal({ order, onClose }: any) {
+// v6.18.14 (#1): resolve the supplier email LIVE from Contacts at send time, so an
+// email added/changed in Contacts after the PO was created is seen without a refresh.
+// Falls back to the copy embedded on the PO.
+function bestContactEmail(cp: any) {
+  const cs = (cp && cp.contacts) || [];
+  const withEmail = cs.find((p: any) => p.isPrimary && p.email) || cs.find((p: any) => p.email);
+  return (withEmail && withEmail.email) || (cp && cp.email) || "";
+}
+function liveEmailForOrder(order: any, contacts: any[]) {
+  const sid = order && order.supplier && order.supplier.id;
+  const live = (sid != null) ? (contacts || []).find((c: any) => String(c.id) === String(sid)) : null;
+  return bestContactEmail(live) || (order && order.supplier && order.supplier.email) || "";
+}
+
+function EmailModal({ order, contacts = [], onClose }: any) {
+  const resolvedEmail = liveEmailForOrder(order, contacts);
   const [subject, setSubject] = useState(`Purchase Order ${order.number} — ${COMPANY.name}`);
-  const [body, setBody] = useState(`Dear ${order.supplier?.name || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${order.loadingDate}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.name}`);
+  const [body, setBody] = useState(`Dear ${order.supplier?.name || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${formatDMY(order.loadingDate)}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.name}`);
   const [stage, setStage] = useState("compose"); // compose → opened
 
   // ── Step 1: Open the print dialog so the user can "Save as PDF" ──
@@ -864,8 +891,10 @@ function EmailModal({ order, onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
+      const prevTitle = document.title; // v6.18.14 (#2): name the saved PDF after the PO here too
+      document.title = order.number || prevTitle;
       try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => iframe.remove(), 1000);
+      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -879,7 +908,7 @@ function EmailModal({ order, onClose }: any) {
 
   // ── Step 2: Open the user's email client with the draft message ──
   function openMailClient() {
-    const to = order.supplier?.email || "";
+    const to = resolvedEmail || "";
     const mailto = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     window.location.href = mailto;
   }
@@ -906,7 +935,7 @@ function EmailModal({ order, onClose }: any) {
             </ol>
           </div>
 
-          <div><Lbl>TO</Lbl><Inp value={order.supplier?.email || "(supplier email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
+          <div><Lbl>TO</Lbl><Inp value={resolvedEmail || "(supplier email missing in Contacts)"} disabled style={{ background: "#F9FAFB", color: "#666" }} /></div>
           <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
           <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
 
@@ -922,9 +951,9 @@ function EmailModal({ order, onClose }: any) {
             <button onClick={openPrintForPdf} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>① Save PDF</button>
             <button
               onClick={openMailClient}
-              disabled={!order.supplier?.email}
-              title={!order.supplier?.email ? "Supplier email missing in Contacts" : ""}
-              style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: order.supplier?.email ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 13, fontWeight: 600, cursor: order.supplier?.email ? "pointer" : "not-allowed" }}>
+              disabled={!resolvedEmail}
+              title={!resolvedEmail ? "Supplier email missing in Contacts" : ""}
+              style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: resolvedEmail ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 13, fontWeight: 600, cursor: resolvedEmail ? "pointer" : "not-allowed" }}>
               ② Open email draft →
             </button>
           </div>
@@ -971,31 +1000,55 @@ function LifecycleTimeline({ status }: any) {
 }
 
 // ─── ORDER FORM ─────────────────────────────────────────────────────────────
-function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, onSave, onCancel, onPrint, onEmail }: any) {
+
+// Batch 6b hard gate: a PO leaving Draft — or being printed/emailed to the
+// producer — must carry its purchase terms. "CIF" without "CIF Alexandria" is
+// only half the contract, so the incoterm and its named place gate together.
+function poTermsMissing(o: any): string | null {
+  if (!o?.buyIncoterm) return "the purchase incoterm";
+  if (!(o?.destinationLocationId || (o?.destinationText || "").trim())) return `the named place for ${o.buyIncoterm}`;
+  return null;
+}
+
+function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
-  // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at
-  // origin. Block the forward transition while the loading date is still ahead.
+  // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at origin.
   const SHIP_OR_LATER = ["Shipped", "Arrived", "Closed"];
+
+  // v6.18.5 (P0-5) + v6.18.14 (#3): once anything downstream depends on this PO — a
+  // linked SO line, a non-cancelled shipment, or a lot that's been received/moved — the
+  // PO is the base of the structure and is FULLY locked: no field edits and no status
+  // change at all (including revert-to-Draft and Cancel). It can only be removed by
+  // unlinking every downstream document first, then deleting.
+  const poNum = order.number;
+  const hasLinkedSO = (allSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+  const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
+  const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
+  const hasDependents = hasLinkedSO || hasShipment || lotReceivedOrMoved;
+  const terminalStatus = ["Arrived", "Shipped", "Closed", "Cancelled", "Invoiced"].includes(order.status);
+  const isLocked = !!order.id && (hasDependents || (order.status !== "Draft" && terminalStatus)); // fully locked once anything depends on it
+
   const setStatus = (newStatus) => {
+    if (hasDependents) {
+      const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
+      alert(`This PO is locked: it has downstream dependents (${what}).\n\nWhile anything is linked, its status can't be changed (including back to Draft) or cancelled — that would corrupt the linked records. Unlink all downstream documents first, then the PO can be changed or deleted.`);
+      return;
+    }
     if (SHIP_OR_LATER.includes(newStatus) && order.loadingDate && String(order.loadingDate) > localTodayISO()) {
       alert(`This PO can't be set to "${newStatus}" yet — the loading date (${order.loadingDate}) hasn't been reached.\n\nGoods can't leave origin before they are loaded. Update the loading date if it has actually changed, or wait until the loading date.`);
       return;
     }
     sf("status", newStatus);
   };
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
+  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
   const showOtherTerms = order.paymentTerms === "Other";
 
-  const isLocked = order.status !== "Draft" && order.id; // Once confirmed, FX rate locks
-
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalInPLN = total * (parseFloat(order.fxRate) || FX_RATES[order.currency] || 1);
-  const compatibleIncoterms = FLOW_TYPES[order.flow]?.buyIncoterms || INCOTERMS_BUY.map(i => i.code);
-  const incotermWarning = order.flow && order.buyIncoterm && !compatibleIncoterms.includes(order.buyIncoterm);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1028,10 +1081,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status || "Draft"} />
-                {order.flow && <FlowBadge flow={order.flow} />}
+                {order.flow && <FlowBadge order={order} flow={order.flow} />}
               </div>
               <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
-              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Confirmed — product, quantities, supplier & commercial terms are locked" : "Draft — all fields editable"}</div>
+              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Locked — commercial terms can't change; downstream records depend on this PO" : order.status !== "Draft" && order.id ? "Confirmed — still editable (nothing depends on it yet); edits re-sync the expected lot" : "Draft — all fields editable"}</div>
             </div>
             <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Total net</div>
@@ -1043,7 +1096,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 
           {isLocked && (
             <div style={{ marginBottom: 16, padding: "11px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12.5, color: "#92400E", lineHeight: 1.5 }}>
-              🔒 <strong>This PO is confirmed and locked.</strong> Product, quantities, supplier, incoterm, flow and commercial terms can't be changed — inventory lots, sales orders and shipments already depend on them. You can still update operational fields (dates, status, notes). To change the locked details, cancel this PO and raise a new one.
+              🔒 <strong>This PO is locked.</strong> Its commercial terms (product, quantities, supplier, incoterm, flow, pricing) can't be changed because something downstream already depends on it{(() => {
+                const reasons = [hasLinkedSO && "a sales order is sourced from it", hasShipment && "a shipment references it", lotReceivedOrMoved && "its goods have been received or moved"].filter(Boolean);
+                return reasons.length ? ` — ${reasons.join(", ")}` : "";
+              })()}. You can still update operational fields (dates, status, notes). To change the locked details, cancel this PO and raise a new one.
+            </div>
+          )}
+          {!isLocked && order.id && order.status !== "Draft" && (
+            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 12.5, color: "#1E40AF", lineHeight: 1.5 }}>
+              ✎ <strong>Confirmed, and still editable.</strong> Nothing depends on this PO yet (no sales order, no shipment, goods not received), so you can still change its details — saving will re-sync the expected inventory lot. As soon as you link an SO, create a shipment, or receive goods, the commercial terms lock automatically. Reverting to Draft withdraws the not-yet-received lot.
             </div>
           )}
 
@@ -1052,12 +1113,24 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <SectionTitle>ORDER DETAILS</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               <div>
-                <Lbl>PO number {!order.id && <span style={{ color: "#16A34A", fontWeight: 500 }}>· auto-generated</span>}</Lbl>
-                <Inp value={order.number} onChange={e => sf("number", e.target.value)} placeholder="PO-2026-NNNN" />
+                <Lbl>Status</Lbl>
+                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)} disabled={hasDependents || order.status === "Cancelled"}
+                  title={order.status === "Cancelled" ? "This PO is cancelled — kept for the record, read-only, and can't be reactivated." : hasDependents ? "Locked — a Sales Order, shipment or inventory depends on this PO. Unlink everything first." : ""}
+                  style={{ borderLeft: `4px solid ${(PO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (PO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
+                  {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
+                </Sel>
+              </div>
+              <div>
+                <Lbl>PO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
+                {/* BP-6: number is a controlled document id — display/copy only, never edited. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                  <span>{order.number || "PO-2026-…"}</span>
+                  <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy PO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
+                </div>
               </div>
               <div>
                 <Lbl>Order date</Lbl>
-                <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" title="The date the PO was created/agreed with the supplier" />
+                <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" max={localTodayISO()} title="The date the PO was created/agreed with the supplier" />
               </div>
               <div>
                 <Lbl>Loading date</Lbl>
@@ -1066,20 +1139,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Expected delivery date</Lbl>
-                <Inp value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed point" />
-                <Sel value={order.promisedDateMeans || "Arrival at our warehouse"} onChange={e => sf("promisedDateMeans", e.target.value)} style={{ marginTop: 4, fontSize: 11, padding: "5px 8px" }}>
-                  {["Pickup from supplier", "Arrival at port", "Arrival at our warehouse", "Arrival at client"].map(m => <option key={m} value={m}>means: {m}</option>)}
-                </Sel>
+                <Inp value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed handover point" />
+                {/* FB-14: 'means' dropdown removed — the handover point (derived from the incoterm) already says where. */}
               </div>
               <div>
-                <Lbl>Actual availability {order.actualAvailabilityDate && <span style={{ color: "#16A34A", fontWeight: 500 }}>· confirmed</span>}</Lbl>
-                <Inp value={order.actualAvailabilityDate || ""} onChange={e => sf("actualAvailabilityDate", e.target.value || null)} type="date" title="When the goods actually became available at our side (customs-cleared / received). Leave blank until it happens." />
+                <Lbl>Actual availability</Lbl>
+                {/* BP-9: no longer typed here — the real date comes from the Shipment arrival /
+                    Inventory receipt event. Shown read-only when known. */}
+                <div style={{ padding: "9px 11px", border: "1px dashed #E5E7EB", borderRadius: 8, background: "#FAFAFA", fontSize: 12.5, color: order.actualAvailabilityDate ? "#334155" : "#9CA3AF" }}>
+                  {order.actualAvailabilityDate ? `${order.actualAvailabilityDate} · from arrival/receipt` : "From shipment arrival / inventory receipt"}
+                </div>
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once it arrives</div>
-              </div>
-              <div><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)}>
-                  {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
-                </Sel>
               </div>
               <div style={{ gridColumn: "span 3" }}>
                 <Lbl>Supplier</Lbl>
@@ -1095,74 +1165,72 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>FLOW · PURCHASE INCOTERM · DESTINATION</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
-              <div>
-                <Lbl>Flow type</Lbl>
-                <Sel disabled={isLocked} value={order.flow || ""} onChange={e => {
-                  const nextFlow = e.target.value;
-                  setOrder(o => ({
-                    ...o,
-                    flow: nextFlow,
-                    // Auto-fill requiresSea from the flow's default — but ONLY if it hasn't been explicitly set yet
-                    requiresSea: (o.requiresSea === undefined || o.requiresSea === null)
-                      ? (FLOW_TYPES[nextFlow]?.defaultRequiresSea || false)
-                      : o.requiresSea,
-                  }));
-                }}>
-                  <option value="">— select —</option>
-                  {FLOW_GROUPS.map(g => (
-                    <optgroup key={g.id} label={`${g.label} ─────────`}>
-                      {Object.entries(FLOW_TYPES).filter(([, f]) => f.group === g.id).map(([k, f]) => (
-                        <option key={k} value={k}>{f.emoji} {f.short}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </Sel>
-                {order.flow && <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>{FLOW_TYPES[order.flow].desc}</div>}
-              </div>
-              <div>
-                <Lbl>Purchase Incoterm</Lbl>
-                <Sel value={order.buyIncoterm || ""} onChange={e => sf("buyIncoterm", e.target.value)} disabled={isLocked}>
-                  <option value="">— select —</option>
-                  {INCOTERMS_BUY.map(i => <option key={i.code} value={i.code}>{i.code}{compatibleIncoterms.includes(i.code) ? "" : " ⚠"}</option>)}
-                </Sel>
-                {incotermWarning && (
-                  <div style={{ fontSize: 10.5, color: "#D97706", marginTop: 4 }}>⚠ {order.buyIncoterm} is unusual for {FLOW_TYPES[order.flow].short}. Typical: {compatibleIncoterms.join(", ")}.</div>
-                )}
-              </div>
-              <div>
-                <Lbl>Destination {order.flow && <span style={{ color: "#BBB", fontWeight: 400 }}>· typical: {LOCATION_TYPES[FLOW_DESTINATION_TYPE[order.flow]]?.label}</span>}</Lbl>
-                <Sel disabled={isLocked} value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
-                  <option value="">— select —</option>
-                  {(() => {
-                    // Show typical destination type first, then the others
-                    const typeOrder = ["OWN", "PORT", "CLIENT"];
-                    const preferred = FLOW_DESTINATION_TYPE[order.flow];
-                    const sortedTypes = preferred
-                      ? [preferred, ...typeOrder.filter(t => t !== preferred)]
-                      : typeOrder;
-                    return sortedTypes.map(t => {
-                      const locs = LOCATIONS.filter(l => l.type === t);
-                      if (locs.length === 0) return null;
-                      const label = `${locType(t).icon} ${locType(t).label}${preferred === t ? "  · typical for this flow" : ""}`;
-                      return (
-                        <optgroup key={t} label={label}>
-                          {locs.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                        </optgroup>
-                      );
-                    });
-                  })()}
-                </Sel>
-                <Inp
-                  disabled={isLocked}
-                  value={order.destinationText || ""}
-                  onChange={e => sf("destinationText", e.target.value)}
-                  placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
-                  style={{ marginTop: 6 }}
-                />
-                <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                  For direct export CIF/CFR sales, use the client destination port as the PO destination. Use the free-text override when the port is not yet in the master list.
+              {/* ═══ Batch 6b (BP-56 final): PURCHASE TERMS — the contract, not the machinery.
+                  Incoterm + named place are THE inputs; movement + handover derive; the
+                  internal flow key is composed by the shim (composePOFlow at save). */}
+              <div style={{ gridColumn: "1 / -1", border: "1px solid #E0E7FF", background: "#F5F7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#4338CA", letterSpacing: "0.04em", marginBottom: 8 }}>PURCHASE TERMS <span style={{ fontWeight: 500, color: "#818CF8" }}>· required to confirm / print / send</span></div>
+                <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
+                  <div>
+                    <Lbl>Purchase incoterm *</Lbl>
+                    <Sel value={order.buyIncoterm || ""} onChange={e => { const inc = e.target.value; setOrder(o => { const hp = handoverPointForIncoterm(inc); return { ...o, buyIncoterm: inc, purchaseIncoterm: inc, handoverPoint: hp || o.handoverPoint }; }); }} disabled={isLocked}>
+                      <option value="">— select —</option>
+                      {INCOTERMS_BUY.map(i => <option key={i.code} value={i.code}>{i.code}</option>)}
+                    </Sel>
+                  </div>
+                  <div>
+                    {(() => {
+                      const pool = namedPlacePoolForIncoterm(order.buyIncoterm);
+                      // v6.29.0: merge live warehouse addresses from Contacts (v6.18.3
+                      // behaviour inherited from the removed legacy Destination field).
+                      const liveWh = warehouseAddressLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+                      const byId = new Map<any, any>();
+                      [...LOCATIONS, ...liveWh].forEach((l: any) => byId.set(String(l.id), l));
+                      const all = Array.from(byId.values());
+                      const opts = all.filter((l: any) => pool.types.includes(l.type));
+                      const rest = all.filter((l: any) => !pool.types.includes(l.type));
+                      return (<>
+                        <Lbl>{pool.label} *</Lbl>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                          <Sel disabled={isLocked} value={order.destinationLocationId ?? ""} onChange={e => sf("destinationLocationId", e.target.value ? Number(e.target.value) : null)}>
+                            <option value="">— select the named place —</option>
+                            {opts.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}
+                            {rest.length > 0 && <optgroup label="Other places">{rest.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}</optgroup>}
+                          </Sel>
+                          <Inp disabled={isLocked} value={order.destinationText || ""} onChange={e => sf("destinationText", e.target.value)} placeholder="…or type it (e.g. Alexandria)" />
+                        </div>
+                      </>);
+                    })()}
+                  </div>
                 </div>
+                {(() => {
+                  // Derived line: 4-class movement badge (click to flip) + the contractual sentence.
+                  const placeName = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
+                  const placeLoc = LOCATIONS.find((l: any) => l.id === order.destinationLocationId);
+                  const placeInEU = order.destinationText ? true : (placeLoc ? placeLoc.type !== "PORT" || isEUCountry("Poland") : true);
+                  const originCountry = order.supplier?.country || (order.items || [])[0]?.origin || "";
+                  const autoMove = movementFromEnds(isEUCountry(originCountry) , placeInEU);
+                  const move = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? order.tradeMovement : autoMove;
+                  const mv = MOVEMENT_LABELS[move] || MOVEMENT_LABELS.IMPORT;
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF" }}>
+                      {/* v6.29.0: read-only PROVISIONAL chip — direction is not a PO
+                          input; the shipment owns the journey's truth (editable there). */}
+                      <span title={`${mv.hint}. Provisional — the trade direction is set on the shipment, which owns the journey.`}
+                        style={{ border: `1px solid ${mv.color}`, color: mv.color, background: "#fff", borderRadius: 999, padding: "3px 12px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
+                        {mv.label} <span style={{ fontWeight: 500, opacity: 0.7 }}>· provisional</span>
+                      </span>
+                      <div style={{ fontSize: 11.5, color: order.buyIncoterm ? "#4338CA" : "#9CA3AF", lineHeight: 1.45 }}>
+                        {handoverSentence(order.buyIncoterm, placeName)}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
+              {/* v6.29.0: the legacy Destination field is GONE — the named place in
+                  PURCHASE TERMS is the single location fact on a PO (both wrote the
+                  same stored keys, so nothing is lost). Onward routing belongs to the
+                  shipment; disposition to the sale. */}
             </div>
             {/* Sea freight toggle — separate flag, not tied to flow choice */}
             <div style={{ marginTop: 14, padding: "10px 14px", background: order.requiresSea ? "#E0F2FE" : "#F9FAFB", border: `1px solid ${order.requiresSea ? "#BAE6FD" : "#F3F4F6"}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
@@ -1236,16 +1304,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.9fr 1fr 1.3fr 1.2fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
-                      <Lbl>Product <span style={{ color: "#BBB", fontWeight: 400 }}>· autocomplete</span></Lbl>
-                      <input
-                        value={it.product || ""}
-                        onChange={e => si(i, "product", e.target.value)}
-                        onBlur={e => si(i, "product", normalizeProduct(e.target.value))}
-                        list="po-product-suggestions"
-                        placeholder="Start typing — pick or type new"
-                        title="Pick a product from the suggestions, or type a new one. New products are remembered for next time."
-                        style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" }}
-                      />
+                      <Lbl>Item / Variety</Lbl>
+                      <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />
                     </div>
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
@@ -1257,11 +1317,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr 0.7fr", gap: 8, marginTop: 8 }}>
-                    <div><Lbl>Coloration / Variety</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr 0.7fr 0.9fr", gap: 8, marginTop: 8 }}>
+                    <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" /></div>
                     <div><Lbl>Boxes</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
                     <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
+                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode ?? ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 0808 10" title="Customs tariff code for this item — carried to the SO and shipment" /></div>
                   </div>
                 </div>
               );
@@ -1309,7 +1370,9 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
               <button onClick={isDraft ? undefined : onEmail} disabled={isDraft} title={tip} style={draftStyle}>✉ Email</button>
             </>;
           })()}
-          <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>
+          {order.status === "Cancelled"
+            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
+            : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -1321,7 +1384,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status} />
-                {order.flow && <FlowBadge flow={order.flow} />}
+                {order.flow && <FlowBadge order={order} flow={order.flow} />}
                 <VarianceBadge variance={order.variance} />
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>
@@ -1361,7 +1424,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                       return (
                         <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                           <td style={{ padding: "10px", fontWeight: 600 }}>
-                            {it.product}
+                            {it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}
                             {it.coloration && <div style={{ fontSize: 10.5, color: "#AAA", fontWeight: 400 }}>{it.coloration}</div>}
                           </td>
                           <td style={{ padding: "10px", color: "#555" }}>{it.origin || "—"}</td>
@@ -1604,25 +1667,76 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
   const existingForPO = (existingLots || []).filter(l => l.poRef === order.number);
   const lotRefs = [...existingForPO.map(l => l.number)];
   const newLots = [];
+  const lotPatches = []; // v6.18.5 (P0-5): updates to existing not-yet-received lots
 
   (order.items || []).forEach((it, idx) => {
     const already = existingForPO.find(l => {
+      // poLineId is authoritative: a lot matches its PO line by id. This prevents a
+      // second line of the SAME product from colliding with the first line's lot
+      // (the old name-fallback bug: two same-product lines → one lot, new line lost).
       if (String(l.poLineId || "") && String(l.poLineId) === String(it.id)) return true;
-      return String(l.product || "").trim().toLowerCase() === String(it.product || "").trim().toLowerCase();
+      if (String(l.poLineId || "")) return false; // has a (different) poLineId → not this line
+      // Legacy lot with NO poLineId: fall back to product-name match, but only if no other
+      // line already owns it and this is the first same-named line (idx-guarded).
+      const nameMatch = String(l.product || "").trim().toLowerCase() === String(it.product || "").trim().toLowerCase();
+      if (!nameMatch) return false;
+      const firstSameNamedIdx = (order.items || []).findIndex(x => String(x.product || "").trim().toLowerCase() === String(it.product || "").trim().toLowerCase());
+      return firstSameNamedIdx === idx;
     });
-    if (already) return;
 
     const qty = parseFloat(it.qty) || 0;
     const unitPrice = parseFloat(it.unitPrice) || 0;
     const isConsignment = (order.pricingMode || "firm") === "consignment";
     const purchaseAmount = isConsignment ? 0 : Math.round(qty * unitPrice * 100) / 100;
     const purchasePLN = isConsignment ? 0 : Math.round(purchaseAmount * fx * 100) / 100;
+
+    if (already) {
+      // v6.18.5 (P0-5): a confirmed PO that nothing depends on yet stays editable,
+      // and its edits SYNC the still-expected lot (instead of being silently ignored,
+      // which is the old `if (already) return;` bug). Only touch lots that have NOT
+      // received goods or moved — mirroring the prune guard — so real stock is safe.
+      const untouched = !(parseFloat(already.receivedKg) > 0) && !(parseFloat(already.physicalKg) > 0) && !((already.movements || []).length);
+      if (!untouched) return; // received/in-stock/moved → leave it exactly as is
+      lotPatches.push({
+        number: already.number,
+        patch: {
+          product: it.product || "Goods",
+          variety: it.variety || "",
+          cnCode: it.cnCode || "",
+          quality: it.quality || "I",
+          size: it.size || "",
+          origin: it.origin || order.supplier?.country || "",
+          flow: order.flow || "",
+          poLineId: it.id ?? idx + 1,
+          locationId: order.destinationLocationId || null,
+          destinationText: destinationDisplay(order),
+          directFlow: isDirectFlow(order.flow),
+          custodyType: isDirectFlow(order.flow) ? "Direct" : "Warehouse",
+          flowLabel: directFlowLabel(order),
+          loadingDate: order.loadingDate || null,
+          expectedKg: qty,
+          packaging: it.packaging || "",
+          status: isDirectFlow(order.flow) ? "Direct Expected" : "Expected",
+          arrivalDate: order.expectedDeliveryDate || null,
+          consignment: isConsignment,
+          // resync only the purchase cost line; keep any other cost lines (e.g. freight) intact
+          costs: [
+            ...((already.costs || []).filter((c: any) => c.type !== "purchase")),
+            ...(isConsignment ? [] : [{ type: "purchase", label: `Purchase expected (${order.number})`, source: order.number, amount: purchaseAmount, currency: order.currency || "PLN", pln: purchasePLN }]),
+          ],
+        },
+      });
+      return;
+    }
+
     const lotNumber = `LOT-${year}-${nextLotSerial([...(existingLots || []), ...newLots], year, 1)}`;
     lotRefs.push(lotNumber);
     newLots.push({
-      id: Date.now() + idx,
+      id: nextId(),
       number: lotNumber,
       product: it.product || "Goods",
+      variety: it.variety || "",
+      cnCode: it.cnCode || "",
       quality: it.quality || "I",
       size: it.size || "",
       origin: it.origin || order.supplier?.country || "",
@@ -1654,11 +1768,11 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
     });
   });
 
-  return { lotRefs: uniqRefs(lotRefs), newLots };
+  return { lotRefs: uniqRefs(lotRefs), newLots, lotPatches };
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [] }: any = {}) {
+export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], productCatalog = [], setProductCatalog }: any = {}) {
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
   const [localOrders, setLocalOrders] = useState(INITIAL_ORDERS);
   const orders = extPOs ?? localOrders;
@@ -1762,9 +1876,22 @@ ${blockNote}`.trim(),
 
   // mutations
   function saveOrder(o) {
+    // Batch 6b: hard confirm-gate — no PO past Draft without its terms.
+    const termsMissing = poTermsMissing(o);
+    if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
+      alert(`This PO cannot be ${o.status === "Confirmed" ? "confirmed" : "saved as " + o.status} without ${termsMissing}. The purchase terms are the contract — the producer must see them.`);
+      return;
+    }
+    // BP-57 Phase B: the internal flow is composed from the terms + the SALES
+    // reality — a governing SO that sends goods onward makes this PO direct.
+    if (o.buyIncoterm) o = { ...o, ...composePOFlow(o, extSOs) };
+
     // Guard: prevent duplicate PO numbers (in case the user manually edited it)
     const previous = orders.find(p => p.id === o.id);
     const becomesCancelled = o.status === "Cancelled" && (!previous || previous.status !== "Cancelled");
+    // v6.18.5 (P0-5): reverting a confirmed PO back to Draft withdraws its
+    // not-yet-received expected lots (they were auto-committed on confirm).
+    const revertingToDraft = !!previous && previous.status !== "Draft" && o.status === "Draft";
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
     if (dup) {
       window.alert(`PO number "${o.number}" is already used by another record. Please choose a different number.`);
@@ -1802,12 +1929,26 @@ ${blockNote}`.trim(),
         .map(l => l.number)
     );
 
-    const savedId = o.id ?? Date.now();
+    // v6.18.5 (P0-5): on revert-to-Draft, withdraw this PO's still-expected lots
+    // (no goods received, no movements). Real stock is never removed.
+    const withdrawLotNumbers = new Set<string>(
+      revertingToDraft
+        ? (lots || [])
+            .filter(l => l.poRef === o.number
+              && (l.status === "Expected" || l.status === "Direct Expected")
+              && !(parseFloat(l.receivedKg) > 0) && !(parseFloat(l.physicalKg) > 0)
+              && !((l.movements || []).length))
+            .map(l => String(l.number))
+        : []
+    );
+    const patchByNumber = new Map<string, any>((inventoryPlan.lotPatches || []).map((p: any) => [String(p.number), p.patch]));
+
+    const savedId = o.id ?? nextId();
     const updated = {
       ...o,
       id: savedId,
       linkedShipments: o.linkedShipments || [],
-      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]).filter(n => !orphanLotNumbers.has(n)),
+      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]).filter(n => !orphanLotNumbers.has(n) && !withdrawLotNumbers.has(String(n))),
       linkedInvoices: o.linkedInvoices || [],
     };
 
@@ -1815,11 +1956,13 @@ ${blockNote}`.trim(),
       updated.fxLockedAt = localTodayISO();
     }
 
-    if (extSetLots && (inventoryPlan.newLots?.length || orphanLotNumbers.size)) {
+    if (extSetLots && (inventoryPlan.newLots?.length || orphanLotNumbers.size || patchByNumber.size || withdrawLotNumbers.size)) {
       extSetLots(prev => {
         const existingNumbers = new Set((prev || []).map(l => l.number));
         const additions = (inventoryPlan.newLots || []).filter(l => !existingNumbers.has(l.number));
-        const kept = (prev || []).filter(l => !orphanLotNumbers.has(l.number));
+        const kept = (prev || [])
+          .filter(l => !orphanLotNumbers.has(l.number) && !withdrawLotNumbers.has(String(l.number)))
+          .map(l => patchByNumber.has(String(l.number)) ? { ...l, ...patchByNumber.get(String(l.number)) } : l);
         return [...kept, ...additions];
       });
     }
@@ -1849,7 +1992,7 @@ ${blockNote}`.trim(),
       buyIncoterm: "", flow: "",
       supplier: null, destinationLocationId: null, destinationText: "", requiresSea: false,
       currency: "PLN", fxRate: 1, fxLockedAt: null,
-      items: [{ id: Date.now(), product: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
+      items: [{ id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
       notes: "",
       linkedShipments: [], linkedLots: [], linkedInvoices: [], variance: null,
     });
@@ -1857,6 +2000,16 @@ ${blockNote}`.trim(),
   }
 
   function deleteOrder() {
+    // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
+    const poNum = selected.number;
+    const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+    const hasShipment = (extShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
+    const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
+    if (hasLinkedSO || hasShipment || lotReceivedOrMoved) {
+      const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
+      alert(`PO ${poNum} can't be cancelled or deleted: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.`);
+      return;
+    }
     if (!window.confirm(`Cancel PO ${selected.number}? Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.`)) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     setOrders(prev => prev.map(o => o.id === selected.id ? cancelled : o));
@@ -1871,11 +2024,17 @@ ${blockNote}`.trim(),
     return (
       <>
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
-        {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
+        {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         <OrderForm
           order={form} setOrder={setForm}
           productSuggestions={productSuggestions}
           suppliers={suppliers}
+          contacts={extContacts}
+          allSOs={extSOs}
+          allShipments={extShipments}
+          lots={lots}
+          productCatalog={productCatalog}
+          setProductCatalog={setProductCatalog}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={() => {
@@ -1883,6 +2042,7 @@ ${blockNote}`.trim(),
               alert("Cannot print or share a draft PO. Confirm the order first.");
               return;
             }
+            { const _m = poTermsMissing(form); if (_m) { alert(`Cannot print this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
             setPrintOrder(form);
           }}
           onEmail={() => {
@@ -1890,6 +2050,7 @@ ${blockNote}`.trim(),
               alert("Cannot email a draft PO to the supplier. Confirm the order first.");
               return;
             }
+            { const _m = poTermsMissing(form); if (_m) { alert(`Cannot email this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
             setEmailOrder(form);
           }}
         />
@@ -1901,11 +2062,11 @@ ${blockNote}`.trim(),
     return (
       <>
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
-        {emailOrder && <EmailModal order={emailOrder} onClose={() => setEmailOrder(null)} />}
+        {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         <OrderDetail
           order={selected}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
-          computedSOs={(extSOs || []).filter((so: any) => (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
+          computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}
           onDelete={deleteOrder}
@@ -1914,6 +2075,7 @@ ${blockNote}`.trim(),
               alert("Cannot print or share a draft PO. Confirm the order first.");
               return;
             }
+            { const _m = poTermsMissing(selected); if (_m) { alert(`Cannot print this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
             setPrintOrder(selected);
           }}
           onEmail={() => {
@@ -1921,6 +2083,7 @@ ${blockNote}`.trim(),
               alert("Cannot email a draft PO to the supplier. Confirm the order first.");
               return;
             }
+            { const _m = poTermsMissing(selected); if (_m) { alert(`Cannot email this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
             setEmailOrder(selected);
           }}
         />
@@ -2003,7 +2166,7 @@ ${blockNote}`.trim(),
             const totalPLN = plnTotal(o);
             const isLoadingOverdue = activeStatuses.has(o.status) && o.loadingDate && new Date(o.loadingDate) < todayStart;
             return (
-              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 200px 130px 120px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
+              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 200px 130px 120px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: o.status === "Cancelled" ? "#FEF2F2" : "#fff", color: o.status === "Cancelled" ? "#B91C1C" : undefined, cursor: "pointer" }}
                 onClick={() => { setSelected(o); setView("detail"); }}
                 onMouseEnter={e => e.currentTarget.style.background = "#FAFAFA"}
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
@@ -2014,11 +2177,11 @@ ${blockNote}`.trim(),
                 </div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{o.supplier?.name || "—"}</div>
-                  <div style={{ fontSize: 11, color: "#888" }}>{o.items.map(i => `${i.product} · ${fmtNum(i.qty)} kg`).join(" / ")}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{o.items.map(i => `${i.product}${i.variety ? " — " + i.variety : ""} · ${fmtNum(i.qty)} kg`).join(" / ")}</div>
                 </div>
                 <div><StatusBadge status={o.status} /></div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
-                  {o.flow && <FlowBadge flow={o.flow} compact />}
+                  {o.flow && <FlowBadge order={o} flow={o.flow} compact />}
                   {o.requiresSea && (
                     <span title="Sea freight involved" style={{ background: "#E0F2FE", color: "#0369A1", padding: "0 6px", borderRadius: 3, fontSize: 9.5, fontWeight: 700 }}>⚓ SEA</span>
                   )}
@@ -2029,8 +2192,8 @@ ${blockNote}`.trim(),
                   <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtNum(totalKg)} kg</div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, color: isLoadingOverdue ? "#DC2626" : "#666", fontWeight: isLoadingOverdue ? 600 : 400 }}>Load: {o.loadingDate || "—"}</div>
-                  <div style={{ fontSize: 11, color: "#666" }}>Del: {o.expectedDeliveryDate || "—"}</div>
+                  <div style={{ fontSize: 11, color: isLoadingOverdue ? "#DC2626" : "#666", fontWeight: isLoadingOverdue ? 600 : 400 }}>Load: {formatDMY(o.loadingDate) || "—"}</div>
+                  <div style={{ fontSize: 11, color: "#666" }}>Del: {formatDMY(o.expectedDeliveryDate) || "—"}</div>
                 </div>
                 <div style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace" }}>
                   {o.linkedShipments?.length > 0 && <div style={{ color: "#0284C7" }}>📦 {o.linkedShipments.length}</div>}
