@@ -72,10 +72,14 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         return { ...lot, receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000, physicalKg: currentPhysical, status: "Delivered (direct)", arrivalDate: lot.arrivalDate || date, movements: [...(lot.movements || []), inMove, outMove] };
       }
       const nextPhysical = Math.max(0, currentPhysical - qty);
+      // v6.30.1 (Safeguards 7a parity): the movement reducer accumulates and the
+      // integrity checker reports overIssuedKg, but this posting path clamped the
+      // excess silently — an over-issue arriving via a shipment was invisible.
+      const overIssue = qty > currentPhysical ? Math.round((qty - currentPhysical) * 1000) / 1000 : 0;
       const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;
       const note = `SHIP_OUT via ${sh.number}${(sh.soRefs || []).length ? ` for ${(sh.soRefs || []).join(", ")}` : ""}`;
       const movement = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, fromId, toId: destId, soRef, shipmentRef: sh.number, note };
-      return { ...lot, physicalKg: nextPhysical, status: nextPhysical <= 0 ? "Shipped Out" : lot.status, movements: [...(lot.movements || []), movement] };
+      return { ...lot, physicalKg: nextPhysical, overIssuedKg: Math.round(((num(lot.overIssuedKg)) + overIssue) * 1000) / 1000, status: nextPhysical <= 0 ? "Shipped Out" : lot.status, movements: [...(lot.movements || []), movement] };
     }
 
     if (purpose === "TRANSFER") {
@@ -133,15 +137,11 @@ export function responsibilityForPOShipment(po: any, supplierManagedTransport: b
 }
 
 // ── EXW client collection (Batch 3b, decision 2) ────────────────────────────
-export function findLotForSOLine(lots: any[], it: any): any | null {
-  if (!it?.sourceRef) return null;
-  if (it.sourceType === "STOCK") return (lots || []).find(l => l.number === it.sourceRef) || null;
-  if (it.sourceType === "PO") {
-    const norm = (p: any) => String(p || "").toLowerCase().trim();
-    return (lots || []).find(l => l.poRef === it.sourceRef && norm(l.product) === norm(it.product)) || null;
-  }
-  return null;
-}
+// v6.32.0 (A1): delegates to the canonical matcher in salesOrders.domain —
+// poLineId-first, variety-aware; this module's old name-only copy misresolved
+// multi-line same-product POs.
+import { findLotForSOLine } from "./salesOrders.domain";
+export { findLotForSOLine };
 
 export function nextShipmentNumberPure(shipments: any[], year: number): string {
   let max = 0;

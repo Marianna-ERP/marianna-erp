@@ -22,6 +22,8 @@
 // Both views return the same shape so the UI can flip a toggle without
 // branching at render time.
 
+import { findLotForSOLine, shippedKgByLine } from "./salesOrders.domain";
+
 export type MarginMode = "forecast" | "actual";
 
 export interface MarginLine {
@@ -114,10 +116,26 @@ function findPOLine(pos: any[], poNumber: string, poLineId: any): { po: any; lin
 
 // ─── REVENUE ────────────────────────────────────────────────────────────────
 
-function computeRevenue(order: any, mode: MarginMode): { lines: MarginLine[]; totalSO: number } {
+function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipments: any[] = []): { lines: MarginLine[]; totalSO: number; warnings: string[] } {
   const lines: MarginLine[] = [];
+  const warnings: string[] = [];
   let totalSO = 0;
-  (order.items || []).forEach((it: any) => {
+
+  // v6.32.0 (P1-1): actual revenue by kg actually dispatched per line, from
+  // SHIP_OUT movements + dispatched-shipment goods rows (deduped in the engine).
+  // If the SO status claims shipped but NO shipping evidence exists anywhere
+  // (legacy / manually-statused data), fall back to the old status-based 100%
+  // WITH a warning — older test data keeps its numbers while being flagged.
+  const statusShipped = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status);
+  let shipped: { perLine: number[]; totalKg: number; hasEvidence: boolean } | null = null;
+  if (mode === "actual") {
+    shipped = shippedKgByLine(order, lots, shipments);
+    if (!shipped.hasEvidence && statusShipped) {
+      warnings.push(`SO is ${order.status} but no shipment/movement evidence exists — actual revenue assumed 100% (legacy). Record the shipment to make this real.`);
+    }
+  }
+
+  (order.items || []).forEach((it: any, idx: number) => {
     const qty = safe(it.qty);
     const price = safe(it.unitPrice);
     const lineTotal = qty * price;
@@ -125,28 +143,31 @@ function computeRevenue(order: any, mode: MarginMode): { lines: MarginLine[]; to
     let amountSO = lineTotal;
     let note: string | undefined;
 
-    if (mode === "actual") {
-      // For "actual" view, we'd ideally count only the qty truly shipped. But
-      // we don't have per-line ship-tracking — the lot's SHIP_OUT movements
-      // only sum kg, not per-line revenue. For now: treat shipped/delivered/invoiced
-      // SOs as 100% revenue, and not-yet-shipped lines as 0.
-      const isLineShipped = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status);
-      if (!isLineShipped) {
-        amountSO = 0;
-        note = "Not yet shipped";
+    if (mode === "actual" && shipped) {
+      if (!shipped.hasEvidence) {
+        if (!statusShipped) { amountSO = 0; note = "Not yet shipped"; }
+      } else {
+        const kg = Math.min(shipped.perLine[idx] || 0, qty);
+        amountSO = round2(kg * price);
+        if (kg <= 0) note = "Not yet shipped";
+        else if (kg < qty) {
+          note = `Partial: ${kg.toLocaleString("pl-PL")} of ${qty.toLocaleString("pl-PL")} kg shipped`;
+          label = `${it.product || "—"} · ${kg.toLocaleString("pl-PL")}/${qty.toLocaleString("pl-PL")} kg @ ${price} ${order.currency || "PLN"}/kg`;
+        }
       }
     }
 
     totalSO += amountSO;
     lines.push({ label, amountSO, amountPLN: round2(amountSO * safe(order.fxRate || 1)), note });
   });
-  return { lines, totalSO: round2(totalSO) };
+  return { lines, totalSO: round2(totalSO), warnings };
 }
 
 // ─── COGS ───────────────────────────────────────────────────────────────────
 
 function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode): { lines: MarginLine[]; totalPLN: number; warnings: string[]; hasMissingData: boolean } {
   const lines: MarginLine[] = [];
+  const cogsClaimedLots = new Set<string>(); // v6.32.0 (A1): one lot serves one line
   let totalPLN = 0;
   const warnings: string[] = [];
   let hasMissingData = false;
@@ -202,7 +223,11 @@ function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode): { l
       if (mode === "actual") {
         // Has the PO arrived? If a lot has been auto-created for this PO line, count its actual costs;
         // otherwise the goods haven't physically moved yet, so COGS = 0 for ACTUAL view
-        const matchingLot = (lots || []).find((l: any) => l.poRef === po.number && (l.product || "").toLowerCase() === product.toLowerCase());
+        // v6.32.0 (A1): canonical matcher — poLineId-first, variety-aware. The old
+        // name-only find resolved every line of a multi-line same-product PO to
+        // the FIRST lot (wrong cost basis on real multi-line POs).
+        const matchingLot = findLotForSOLine(lots, it, { claimed: cogsClaimedLots });
+        if (matchingLot) cogsClaimedLots.add(String(matchingLot.number));
         if (matchingLot) {
           // Use the lot's cost basis × kg shipped
           const costPerKg = lotCostPerKg(matchingLot);
@@ -246,19 +271,63 @@ function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode): { l
 
 // ─── DIRECT COSTS (logistics) ──────────────────────────────────────────────
 
-function computeDirectCosts(order: any, shipments: any[], mode: MarginMode): { lines: MarginLine[]; totalPLN: number; warnings: string[] } {
+// v6.31.0 (P1-2 interim / BP-28B groundwork) — this function had four defects,
+// confirmed on real data:
+//   (a) under-capture: only header soRefs were read, so a shipment whose SO link
+//       lives on goods rows (groupage / SO backfilled in cargo) contributed 0;
+//   (b) vertical double-count: a cost line already allocated to lots (Batch 1b
+//       replace-by-source, tag "SHP-x/costId") ALSO counted as a direct cost —
+//       the same zloty in COGS and in direct;
+//   (c) horizontal double-count: the FULL shipment cost was charged to EVERY
+//       linked SO (a 2-SO groupage counted its freight twice in aggregates);
+//   (d) cancelled shipments still contributed costs (a re-booked truck burdened
+//       the SO with both the cancelled and the replacement freight).
+// Now: linked SOs = header soRefs ∪ goods[].soRef; each SO takes its kg share of
+// the goods rows (equal split across linked SOs when no goods kg is assigned);
+// cost lines whose allocation tag exists on any lot are skipped (they are in
+// COGS); Cancelled shipments are excluded (T-14: kept for the record, out of P/L).
+// The explicit cost-ownership flag (BP-26/41) will formalise (b) by declaration;
+// this makes the numbers correct from the data that already exists.
+
+function shipmentSOShare(sh: any, soNumber: string): number {
+  const goods = (sh.goods || []).filter((g: any) => g);
+  const linkedSOs = new Set<string>([
+    ...((sh.soRefs || []).filter(Boolean).map(String)),
+    ...goods.map((g: any) => g.soRef).filter(Boolean).map(String),
+  ]);
+  if (!linkedSOs.has(String(soNumber))) return 0;
+  if (linkedSOs.size === 1) return 1;
+  const assigned = goods.filter((g: any) => g.soRef);
+  const totalKg = assigned.reduce((s: number, g: any) => s + safe(g.qtyKg), 0);
+  if (totalKg > 0) {
+    const soKg = assigned.filter((g: any) => String(g.soRef) === String(soNumber))
+      .reduce((s: number, g: any) => s + safe(g.qtyKg), 0);
+    return soKg / totalKg;
+  }
+  return 1 / linkedSOs.size; // no kg assigned to SOs → equal split
+}
+
+function costLineAllocatedToLots(sh: any, cost: any, lots: any[]): boolean {
+  const tag = `${sh.number}/${cost.id}`;
+  return (lots || []).some((l: any) => (l.costs || []).some((c: any) => String(c.source || "") === tag));
+}
+
+function computeDirectCosts(order: any, shipments: any[], mode: MarginMode, lots: any[] = []): { lines: MarginLine[]; totalPLN: number; warnings: string[] } {
   const lines: MarginLine[] = [];
   const warnings: string[] = [];
   let totalPLN = 0;
 
-  // Shipments that link to this SO
-  const linked = (shipments || []).filter((s: any) => (s.soRefs || []).includes(order.number));
+  // Shipments that link to this SO — header refs OR goods-row refs (defect a),
+  // excluding Cancelled (defect d).
+  const linked = (shipments || []).filter((s: any) =>
+    s && s.status !== "Cancelled" && shipmentSOShare(s, order.number) > 0);
 
   if (linked.length === 0) {
     return { lines, totalPLN: 0, warnings };
   }
 
   linked.forEach((sh: any) => {
+    const share = shipmentSOShare(sh, order.number);
     const costs = sh.costs || [];
     costs.forEach((c: any) => {
       const amountPLN = safe(c.amountPLN) || (safe(c.amount) * safe(c.fxRate || 1));
@@ -271,11 +340,15 @@ function computeDirectCosts(order: any, shipments: any[], mode: MarginMode): { l
           return;
         }
       }
-      // For FORECAST: count everything regardless of invoice status
-      totalPLN += amountPLN;
+      // Defect (b): this cost line already lives on lot landed cost → it reaches
+      // the SO through COGS; counting it here too would double it.
+      if (costLineAllocatedToLots(sh, c, lots)) return;
+      const shareAmount = round2(amountPLN * share);
+      if (shareAmount === 0) return;
+      totalPLN += shareAmount;
       lines.push({
-        label: `${sh.number} · ${c.type || "cost"} (${c.invoiceStatus || "Expected"})`,
-        amountPLN: round2(amountPLN),
+        label: `${sh.number} · ${c.type || "cost"} (${c.invoiceStatus || "Expected"})${share < 1 ? ` · ${Math.round(share * 100)}% share` : ""}`,
+        amountPLN: shareAmount,
         note: c.notes || undefined,
       });
     });
@@ -296,9 +369,9 @@ export function computeSOMargin(
   const currency = order.currency || "PLN";
   const fxRate = safe(order.fxRate || 1) || 1;
 
-  const rev = computeRevenue(order, mode);
+  const rev = computeRevenue(order, mode, lots, shipments);
   const cogs = computeCOGS(order, lots, pos, mode);
-  const direct = computeDirectCosts(order, shipments, mode);
+  const direct = computeDirectCosts(order, shipments, mode, lots);
 
   const revenuePLN = round2(rev.totalSO * fxRate);
   const totalCostsPLN = round2(cogs.totalPLN + direct.totalPLN);
@@ -326,66 +399,11 @@ export function computeSOMargin(
     marginSO,
     marginPct,
 
-    warnings: [...cogs.warnings, ...direct.warnings],
+    warnings: [...rev.warnings, ...cogs.warnings, ...direct.warnings],
     hasMissingData: cogs.hasMissingData,
   };
 }
 
-// Convenience: aggregate margins across many SOs (for Finance module).
-export interface AggregateMargin {
-  totalRevenuePLN: number;
-  totalCOGSPLN: number;
-  totalDirectPLN: number;
-  totalMarginPLN: number;
-  avgMarginPct: number;
-  orderCount: number;
-}
+// v6.32.0 (R7b-5): unused aggregateMargins/groupAndAggregateMargins removed —
+// Finance aggregates per-SO via computeSOMargin directly.
 
-export function aggregateMargins(
-  orders: any[],
-  lots: any[],
-  pos: any[],
-  shipments: any[],
-  mode: MarginMode,
-  filter?: (o: any) => boolean
-): AggregateMargin {
-  const filtered = (orders || []).filter(o => o.status !== "Cancelled").filter(filter || (() => true));
-  let totalRev = 0, totalCOGS = 0, totalDirect = 0;
-  filtered.forEach(o => {
-    const m = computeSOMargin(o, lots, pos, shipments, mode);
-    totalRev += m.revenuePLN;
-    totalCOGS += m.cogsPLN;
-    totalDirect += m.directCostsPLN;
-  });
-  const totalMargin = round2(totalRev - totalCOGS - totalDirect);
-  return {
-    totalRevenuePLN: round2(totalRev),
-    totalCOGSPLN: round2(totalCOGS),
-    totalDirectPLN: round2(totalDirect),
-    totalMarginPLN: totalMargin,
-    avgMarginPct: totalRev > 0 ? round2((totalMargin / totalRev) * 100) : 0,
-    orderCount: filtered.length,
-  };
-}
-
-// Convenience: group SOs by a key function and compute aggregate per group.
-export function groupAndAggregateMargins(
-  orders: any[],
-  lots: any[],
-  pos: any[],
-  shipments: any[],
-  mode: MarginMode,
-  groupBy: (o: any) => string,
-  filter?: (o: any) => boolean
-): { key: string; agg: AggregateMargin }[] {
-  const filtered = (orders || []).filter(o => o.status !== "Cancelled").filter(filter || (() => true));
-  const groups: Record<string, any[]> = {};
-  filtered.forEach(o => {
-    const key = groupBy(o) || "—";
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(o);
-  });
-  return Object.entries(groups)
-    .map(([key, groupOrders]) => ({ key, agg: aggregateMargins(groupOrders, lots, pos, shipments, mode) }))
-    .sort((a, b) => b.agg.totalMarginPLN - a.agg.totalMarginPLN);
-}

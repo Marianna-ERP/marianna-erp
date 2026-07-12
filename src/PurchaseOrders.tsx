@@ -322,86 +322,13 @@ function tradingPartnerFromCounterparty(counterparty) {
 
 function suppliersFromContacts(contacts) {
   const mapped = getCounterpartiesByType(contacts || [], "Supplier").map(tradingPartnerFromCounterparty);
-  return mapped.length ? mapped : SUPPLIERS;
+  // v6.30.2 (G1 completion): no stub-supplier fallback — empty Contacts = empty picker,
+  // mirroring the SO-side clientsFromContacts fix from Batch 0. The demo SUPPLIERS
+  // array remains for standalone/dev seeds only; a clean system must stay clean.
+  return mapped;
 }
 
-export const INITIAL_ORDERS = [
-  {
-    id: 1, number: "PO-2025-0468", status: "Arrived",
-    orderDate: "2025-10-10", loadingDate: "2025-10-15", expectedDeliveryDate: "2026-05-20", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: "2026-05-20",
-    paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "EXW", flow: "EXP_CIF",
-    supplier: SUPPLIERS[0],
-    destinationLocationId: 6, requiresSea: true,
-    currency: "PLN", fxRate: 1, fxLockedAt: "2025-10-10",
-    items: [{ id: 1, product: "Golden Delicious", coloration: "przełamany", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 19422, pallets: 33, unitPrice: 2.80, currency: "PLN", packaging: "13 kg wooden box" }],
-    notes: 'Łuszczka na trzy deski "NO NAME" ; górna warstwa dla kalibrów 70/80 na wytłoczce\nFolia "MARIANNA" & sticker "MARIANNA" na górnej wrastwie',
-    linkedShipments: ["SHP-2026-0044"],
-    linkedLots: ["LOT-2026-0091"],
-    linkedInvoices: ["PINV-2026-0021"],
-    variance: { expectedKg: 19500, receivedKg: 19422 },
-  },
-  {
-    id: 2, number: "PO-2026-0112", status: "Draft",
-    orderDate: "2026-05-20", loadingDate: "2026-05-28", expectedDeliveryDate: "2026-06-02", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
-    paymentTerms: "14 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "DDP", flow: "IMP_DDP_WH",
-    supplier: SUPPLIERS[1],
-    destinationLocationId: 1, requiresSea: false,
-    currency: "EUR", fxRate: 4.2531, fxLockedAt: null,
-    items: [{ id: 1, product: "Red Bell Pepper", coloration: "", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 1.85, currency: "EUR", packaging: "5 kg carton" }],
-    notes: "",
-    linkedShipments: [],
-    linkedLots: [],
-    linkedInvoices: [],
-    variance: null,
-  },
-  {
-    id: 3, number: "PO-2026-0118", status: "Arrived",
-    orderDate: "2026-04-22", loadingDate: "2026-05-02", expectedDeliveryDate: "2026-05-15", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: "2026-05-15",
-    paymentTerms: "Advance payment", paymentTermsOther: "",
-    buyIncoterm: "CIF", flow: "IMP_CIF_WH",
-    supplier: SUPPLIERS[2],
-    destinationLocationId: 1, requiresSea: true,
-    currency: "USD", fxRate: 3.8812, fxLockedAt: "2026-04-22",
-    items: [{ id: 1, product: "Carrot", coloration: "", origin: "Morocco", size: "L", quality: "I", unit: "Kg", qty: 24000, unitPrice: 0.55, currency: "USD", packaging: "10 kg mesh bag" }],
-    notes: "CIF Gdańsk. Supplier handles sea freight, we customs and inland.",
-    linkedShipments: ["SHP-2026-0040"],
-    linkedLots: ["LOT-2026-0088"],
-    linkedInvoices: ["PINV-2026-0024", "LINV-2026-0010", "CINV-2026-0004"],
-    variance: { expectedKg: 24000, receivedKg: 23720 },
-  },
-  {
-    id: 4, number: "PO-2026-0117", status: "Shipped",
-    orderDate: "2026-05-05", loadingDate: "2026-05-20", expectedDeliveryDate: "2026-05-30", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: "2026-05-30",
-    paymentTerms: "Cash against documents", paymentTermsOther: "",
-    buyIncoterm: "EXW", flow: "IMP_EXWS_WH",
-    supplier: SUPPLIERS[2],
-    destinationLocationId: 1, requiresSea: true,
-    currency: "USD", fxRate: 3.8812, fxLockedAt: "2026-05-05",
-    items: [{ id: 1, product: "Papryka Kapia", coloration: "", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, pallets: 20, unitPrice: 1.20, currency: "USD", packaging: "5 kg carton" }],
-    notes: "EXW Agadir. Container at Gdańsk awaiting customs.",
-    linkedShipments: ["SHP-2026-0045"],
-    linkedLots: ["LOT-2026-0086"],
-    linkedInvoices: [],
-    variance: null,
-  },
-  {
-    id: 5, number: "PO-2026-0121", status: "Confirmed",
-    orderDate: "2026-05-15", loadingDate: "2026-06-02", expectedDeliveryDate: "2026-06-05", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
-    paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "DDP", flow: "IMP_DDP_WH",
-    supplier: SUPPLIERS[1],
-    destinationLocationId: 1, requiresSea: false,
-    currency: "EUR", fxRate: 4.2531, fxLockedAt: "2026-05-15",
-    items: [{ id: 1, product: "Red Bell Pepper", coloration: "", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 8000, unitPrice: 1.85, currency: "EUR", packaging: "5 kg carton" }],
-    notes: "DDP delivery to WH-01 Poznań. Pre-sold from PO source to SO-2026-0102.",
-    linkedShipments: [],
-    linkedLots: ["LOT-2026-0100"],
-    linkedInvoices: [],
-    variance: null,
-  },
-];
+// v6.32.0 (R7b-5): demo seed INITIAL_ORDERS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED ATOMS ───────────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
@@ -1774,7 +1701,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 // ─── MAIN ───────────────────────────────────────────────────────────────────
 export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], productCatalog = [], setProductCatalog }: any = {}) {
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
-  const [localOrders, setLocalOrders] = useState(INITIAL_ORDERS);
+  const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const orders = extPOs ?? localOrders;
   const setOrders = extSetPOs ?? setLocalOrders;
   const suppliers = useMemo(() => suppliersFromContacts(extContacts), [extContacts]);

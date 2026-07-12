@@ -1,3 +1,4 @@
+import { productsMatch } from "./salesOrders.domain";
 // ─── v6.6: CONSIGNMENT (COMMISSION) SETTLEMENT ENGINE ───────────────────────
 // Producer ships goods on consignment; we sell at our prices, deduct all
 // attributable expenses, and settle per lot/truck:
@@ -51,8 +52,14 @@ export function currentCommissionPct(producer: any, dateISO: string): number | n
 export function lineSourcesLot(item: any, lot: any): boolean {
   if (!item || !lot) return false;
   if (item.sourceType === "STOCK" && String(item.sourceRef) === String(lot.number)) return true;
-  if (item.sourceType === "PO" && lot.poRef && String(item.sourceRef) === String(lot.poRef)
-      && norm(item.product) === norm(lot.product)) return true;
+  if (item.sourceType === "PO" && lot.poRef && String(item.sourceRef) === String(lot.poRef)) {
+    // v6.32.0 (A1, canonical semantics): poLineId is authoritative when both
+    // sides carry it (FB-1); otherwise variety-aware product match (FB-12) —
+    // the old name-only rule could attribute one variety's sales to another
+    // variety's consignment settlement.
+    if (item.sourceLineId != null && lot.poLineId != null) return String(item.sourceLineId) === String(lot.poLineId);
+    return productsMatch(item.product, lot.product, item.variety, lot.variety);
+  }
   return false;
 }
 

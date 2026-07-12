@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";
 // ─────────────────────────────────────────────────────────────────────────────
 // payments.domain.ts — payment EVENTS on invoices (Batch 5b, BP-36)
 //
@@ -10,7 +11,8 @@
 // it (fx-aware ledger fallback, Fakturownia sync display) stays correct.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function n(v: any): number { const x = parseFloat(String(v ?? "")); return isFinite(x) ? x : 0; }
+// v6.32.0 (R7b-4): comma-aware canonical parser — "1,5" now parses as 1.5.
+const n = parseNum;
 function r2(v: number): number { return Math.round(v * 100) / 100; }
 
 export interface PaymentEvent {

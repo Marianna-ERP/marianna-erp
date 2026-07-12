@@ -14,8 +14,10 @@
 // event and the invoice becomes normally receivable.
 // ─────────────────────────────────────────────────────────────────────────────
 import { applyPaymentEvent } from "./payments.domain";
+import { parseNum } from "./numbers";
 
-function n(v: any): number { const x = parseFloat(String(v ?? "")); return isFinite(x) ? x : 0; }
+// v6.32.0 (R7b-4): comma-aware canonical parser — "1,5" now parses as 1.5.
+const n = parseNum;
 function r2(v: number): number { return Math.round(v * 100) / 100; }
 
 /** Next settlement number, scanning existing lot.settlement.number values. */
@@ -49,10 +51,14 @@ export function buildCommissionInvoiceDraft(lot: any, settlement: any, po: any, 
     vatRate: 0, grossAmount: commission, grossPLN: commission,
     paymentStatus: "Draft",
     paidAmount: 0,
+    // v6.30.1: positions now use the canonical InvoicePosition shape
+    // ({name, quantity, unit, vatRate, grossTotal}) — the previous
+    // {description, qty, unitPrice, net} shape was invisible to
+    // buildFakturowniaPayload, which would have pushed a nameless,
+    // amount-less line ("—", qty 1) to Fakturownia.
     positions: [{
-      id: deps.nextId(),
-      description: `Commission ${n(settlement.commissionPct)}% — consignment settlement ${settlement.number || ""} (lot ${lot.number}${lot.product ? ", " + lot.product : ""})`.trim(),
-      qty: 1, unit: "service", unitPrice: commission, net: commission,
+      name: `Commission ${n(settlement.commissionPct)}% — consignment settlement ${settlement.number || ""} (lot ${lot.number}${lot.product ? ", " + lot.product : ""})`.trim(),
+      quantity: 1, unit: "service", vatRate: 0, grossTotal: commission,
     }],
     links: [
       { type: "LOT", number: lot.number },

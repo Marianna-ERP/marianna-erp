@@ -17,7 +17,10 @@ import { resolveFxRate } from "./fx";
 
 export type InvoiceKind = "SALES" | "COST";
 export type CostScope = "SHIPMENT" | "MONTHLY_SHARED" | "OVERHEAD";
-export type InvoiceCategory = "SINV" | "PURCHASE" | "FORWARDER" | "BROKER" | "WAREHOUSE" | "TRANSPORT" | "OTHER";
+// v6.30.1: COMMISSION added — the settlement close (settlement.domain) drafts a
+// SALES invoice with this category; it was previously outside the union and
+// unmapped in the Invoices UI (CATEGORY_META lookup crashed the list render).
+export type InvoiceCategory = "SINV" | "COMMISSION" | "PURCHASE" | "FORWARDER" | "BROKER" | "WAREHOUSE" | "TRANSPORT" | "OTHER";
 export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled";
 
 export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: string; }
@@ -64,7 +67,7 @@ function n(v: any): number { const x = parseFloat(String(v ?? "").replace(/\s/g,
 function r2(x: number): number { return Math.round(x * 100) / 100; }
 function arr<T = any>(v: any): T[] { return Array.isArray(v) ? v : []; }
 
-const PAYABLE_CATEGORIES: InvoiceCategory[] = ["PURCHASE", "FORWARDER", "BROKER", "WAREHOUSE", "TRANSPORT", "OTHER"];
+// v6.32.0 (R7b-5): unused PAYABLE_CATEGORIES removed.
 export function invoiceDirection(inv: Invoice): "receivable" | "payable" {
   return inv.kind === "SALES" ? "receivable" : "payable";
 }

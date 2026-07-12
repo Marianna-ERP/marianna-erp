@@ -5,10 +5,11 @@
 // localStorage under "productCatalog" and editable in Settings → Product catalog.
 // Sizes are deliberately NOT here — size stays its own field on the line/lot.
 
-export interface CatalogItem {
-  item: string;
-  varieties: string[];
-}
+// v6.32.0 (R7b-3): single contract — the CatalogItem interface lives in
+// types.ts (which also carries defaultCnCode for BP-8); re-exported here for
+// existing importers.
+import type { CatalogItem } from "./types";
+export type { CatalogItem };
 
 export const PRODUCT_CATALOG_SEED: CatalogItem[] = [
   { item: "Apples", varieties: ["Braeburn", "Elise", "Elstar", "Fuji", "Gala", "Gala Must", "Gala Pasek", "Gala Royal", "Gala Schniga", "Gala Schniko Red", "Gloster", "Golden Altesse", "Golden Delicious", "Granny Smith", "Idared", "Jazz", "Jonagold", "Jonagored", "Kanzi", "Modi", "Morgenduft", "Naidared", "Pink Lady", "Pinova", "Prince", "Red Cap", "Red Chief", "Red Delicious", "Red Jeromine"] },

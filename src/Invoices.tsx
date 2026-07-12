@@ -21,6 +21,7 @@ function Sel({ value, onChange, children, disabled, style }: any) { return <sele
 
 const CATEGORY_META: Record<InvoiceCategory, { label: string; color: string; bg: string }> = {
   SINV: { label: "Sales", color: "#16A34A", bg: "#DCFCE7" },
+  COMMISSION: { label: "Commission", color: "#7C3AED", bg: "#EDE9FE" },  // v6.30.1: settlement commission invoices
   PURCHASE: { label: "Purchase", color: "#DC2626", bg: "#FEE2E2" },
   FORWARDER: { label: "Forwarder", color: "#DC2626", bg: "#FEE2E2" },
   BROKER: { label: "Broker/Customs", color: "#DC2626", bg: "#FEE2E2" },
@@ -37,7 +38,8 @@ const STATUS_META: Record<PaymentStatus, { bg: string; color: string }> = {
 function money(n: number, cur?: string) { if (n == null || isNaN(n)) return "—"; return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur ? " " + cur : ""}`; }
 function daysUntil(d: string) { if (!d) return null; const t = new Date(localTodayISO()); const x = new Date(d); return Math.floor((x.getTime() - t.getTime()) / 86400000); }
 
-function CatBadge({ cat }: { cat: InvoiceCategory }) { const m = CATEGORY_META[cat]; return <span style={{ background: m.bg, color: m.color, padding: "2px 8px", borderRadius: 6, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{cat}</span>; }
+// v6.30.1: fall back to OTHER so an unknown/legacy category can never crash the render.
+function CatBadge({ cat }: { cat: InvoiceCategory }) { const m = CATEGORY_META[cat] || CATEGORY_META.OTHER; return <span style={{ background: m.bg, color: m.color, padding: "2px 8px", borderRadius: 6, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{cat}</span>; }
 function StatusBadge({ s }: { s: PaymentStatus }) { const m = STATUS_META[s] || STATUS_META.Draft; return <span style={{ background: m.bg, color: m.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{s}</span>; }
 function DirPill({ inv }: { inv: Invoice }) { const r = invoiceDirection(inv) === "receivable"; return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: r ? "#16A34A" : "#DC2626", fontWeight: 600 }}><span style={{ fontSize: 13 }}>{r ? "↑" : "↓"}</span>{r ? "Receivable" : "Payable"}</span>; }
 
@@ -369,7 +371,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
             <div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 6 }}><CatBadge cat={inv.category} /><DirPill inv={inv} /><StatusBadge s={inv.paymentStatus} />{locked && <span style={{ fontSize: 11, color: "#0284C7", fontWeight: 600 }}>🔒 locked</span>}</div>
               <div style={{ fontSize: 24, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.number || "(no number yet)"}</div>
-              <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>{CATEGORY_META[inv.category].label} · {inv.counterparty?.name || "—"}</div>
+              <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>{(CATEGORY_META[inv.category] || CATEGORY_META.OTHER).label} · {inv.counterparty?.name || "—"}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Gross total</div>

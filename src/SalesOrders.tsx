@@ -174,87 +174,7 @@ const PAYMENT_TERMS = [
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────
 // 5 example SOs in different lifecycle stages, covering both sourcing types.
-export const INIT_ORDERS = [
-  {
-    id: 1, number: "SO-2026-0094", status: "Delivered",
-    orderDate: "2026-01-22", deliveryDate: "2026-01-25", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-25",
-    paymentTerms: "14 days from invoice date", paymentTermsOther: "",
-    sellIncoterm: "DAP",
-    client: CLIENTS[0],            // Biedronka
-    destinationLocationId: 10,     // Biedronka DC Poznań
-    currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-22",
-    items: [
-      { id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 8000, unitPrice: 0.32,
-        sourceType: "STOCK", sourceRef: "LOT-2026-0091B", sourceLineId: null, packaging: "13 kg wooden box" },
-    ],
-    notes: "Standard weekly order — pallet labels per Biedronka spec PL-FRUIT-A4.",
-    linkedInvoices: ["FV2026/01/12"], linkedShipments: ["SHP-2026-0042"],
-  },
-  {
-    id: 2, number: "SO-2026-0088", status: "Invoiced",
-    orderDate: "2026-01-15", deliveryDate: "2026-01-20", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-20",
-    paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    sellIncoterm: "DAP",
-    client: CLIENTS[1],            // Lidl
-    destinationLocationId: 11,
-    currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-15",
-    items: [
-      { id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 2400, unitPrice: 0.33,
-        sourceType: "STOCK", sourceRef: "LOT-2026-0091B", sourceLineId: null, packaging: "13 kg wooden box" },
-    ],
-    notes: "",
-    linkedInvoices: ["FV2026/01/08"], linkedShipments: ["SHP-2026-0038"],
-  },
-  {
-    id: 3, number: "SO-2026-0091", status: "Shipped",
-    orderDate: "2026-01-26", deliveryDate: "2026-01-29", promisedDateMeans: "Delivery to client", actualDeliveryDate: "2026-01-29",
-    paymentTerms: "21 days from invoice date", paymentTermsOther: "",
-    sellIncoterm: "EXW",
-    client: CLIENTS[4],            // Euro-Papryka
-    destinationLocationId: 1,      // EXW — picked up from our WH
-    currency: "PLN", fxRate: 1, fxLockedAt: "2026-01-26",
-    items: [
-      { id: 1, product: "Papryka Kapia", origin: "Jordania", size: "M", quality: "I", unit: "Kg", qty: 6000, unitPrice: 2.10,
-        sourceType: "STOCK", sourceRef: "LOT-2026-0086", sourceLineId: null, packaging: "5 kg carton" },
-      { id: 2, product: "Yellow Bell Pepper", origin: "Jordania", size: "L", quality: "I", unit: "Kg", qty: 3600, unitPrice: 2.85,
-        sourceType: "STOCK", sourceRef: "LOT-2026-0099", sourceLineId: null, packaging: "5 kg carton" },
-      { id: 3, product: "Red Bell Pepper", origin: "Jordania", size: "L", quality: "I", unit: "Kg", qty: 1200, unitPrice: 3.15,
-        sourceType: "STOCK", sourceRef: "LOT-2026-0095", sourceLineId: null, packaging: "5 kg carton" },
-    ],
-    notes: "Papryka Kapia / Żółta / Czerwona — EXW Jabłonna · GM 022 · Origin Jordania.",
-    linkedInvoices: ["FV2026/01/15"], linkedShipments: [],
-  },
-  {
-    id: 4, number: "SO-2026-0102", status: "Confirmed",
-    orderDate: "2026-05-20", deliveryDate: "2026-06-10", promisedDateMeans: "Delivery to client", actualDeliveryDate: null,
-    paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    sellIncoterm: "DAP",
-    client: CLIENTS[0],            // Biedronka
-    destinationLocationId: 10,
-    currency: "PLN", fxRate: 1, fxLockedAt: "2026-05-20",
-    items: [
-      { id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 8.40,
-        sourceType: "PO", sourceRef: "PO-2026-0121", sourceLineId: 1, packaging: "5 kg carton" },
-    ],
-    notes: "Pre-sold from PO. Sea-free direct Spain truck delivery week 24.",
-    linkedInvoices: [], linkedShipments: [],
-  },
-  {
-    id: 5, number: "SO-2026-0105", status: "Draft",
-    orderDate: "2026-05-26", deliveryDate: "2026-06-15", promisedDateMeans: "Delivery to client", actualDeliveryDate: null,
-    paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    sellIncoterm: "DAP",
-    client: CLIENTS[2],            // Metro
-    destinationLocationId: 13,
-    currency: "PLN", fxRate: 1, fxLockedAt: null,
-    items: [
-      { id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, unitPrice: 6.20,
-        sourceType: "PO", sourceRef: "PO-2026-0117", sourceLineId: 1, packaging: "5 kg carton" },
-    ],
-    notes: "Tied to Moroccan container PO-2026-0117. Confirm only after vessel arrives Gdańsk.",
-    linkedInvoices: [], linkedShipments: [],
-  },
-];
+// v6.32.0 (R7b-5): demo seed INIT_ORDERS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────
 function fmtNum(n) {
@@ -2160,7 +2080,7 @@ export default function SalesOrders({
   setProductCatalog,
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
-  const [localOrders, setLocalOrders] = useState(INIT_ORDERS);
+  const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const orders = extOrders ?? localOrders;
   const setOrders = extSetOrders ?? setLocalOrders;
 
@@ -2301,6 +2221,15 @@ export default function SalesOrders({
     if (!extSetLots || !order) return;
     const today = localTodayISO();
     extSetLots(prevLots => prevLots.map(lot => {
+      // v6.30.1: direct pass-through lots (IN+SHIP_OUT pair, never our stock) must
+      // NOT be restored: adding a REVERSAL here pushed physicalKg above zero on a
+      // lot that was never in our warehouse — phantom stock the availability engine
+      // would then offer for sale. Goods physically delivered straight to a client
+      // come back via a return shipment (purpose RETURN) or a claim, not a cancel.
+      const isDirectLot = !!lot.directFlow || lot.custodyType === "Direct"
+        || lot.status === "Direct Expected" || lot.status === "Delivered (direct)";
+      if (isDirectLot) return lot;
+
       const alreadyReversed = (lot.movements || []).some(m => m.type === "REVERSAL" && (m.soRef ? String(m.soRef) === String(order.number) : String(m.note || "").includes(order.number)));
       if (alreadyReversed) return lot;
 
@@ -2309,7 +2238,11 @@ export default function SalesOrders({
         const lineQty = parseFloat(it.qty) || 0;
         let matchesLot = false;
         if (it.sourceType === "STOCK" && it.sourceRef === lot.number) matchesLot = true;
-        if (it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product)) matchesLot = true;
+        // v6.32.0 (A1): poLineId-first + variety-aware (was product-name only)
+        if (it.sourceType === "PO" && lot.poRef === it.sourceRef) {
+          if (it.sourceLineId != null && lot.poLineId != null) { if (String(it.sourceLineId) === String(lot.poLineId)) matchesLot = true; }
+          else if (productsMatch(it.product, lot.product, it.variety, lot.variety)) matchesLot = true;
+        }
         if (!matchesLot) return;
 
         const shippedForSO = (lot.movements || [])

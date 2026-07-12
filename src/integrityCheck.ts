@@ -50,7 +50,12 @@ function r2(x: number): number { return Math.round(x * 100) / 100; }
 function norm(s: any): string { return String(s ?? "").trim().toLowerCase(); }
 function arr<T = any>(v: any): T[] { return Array.isArray(v) ? v : []; }
 
-const RESERVING_SO_STATUSES = new Set(["Confirmed", "Reserved", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"]);
+// v6.30.1: aligned with SO_PRE_DISPATCH_STATUSES (types.ts / Batch 1 decision).
+// Shipped+ orders already had their kg physically subtracted via SHIP_OUT, so
+// counting them as reserving here double-subtracted and raised false LOT_OVERSOLD
+// errors on every correctly shipped lot. Kept as a local copy (this module has
+// zero imports by design) — if the canonical set changes, change both.
+const RESERVING_SO_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
 const SHIPPED_PLUS = new Set(["Shipped", "Delivered", "Invoiced", "Closed"]);
 
 export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
@@ -97,8 +102,15 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
           add("error", "ORPHAN_SO_PO", "Sales Orders", o.number || "(unnumbered SO)",
             `Line "${it.product || "—"}" sources PO ${it.sourceRef}, which no longer exists. COGS cannot be computed.`);
         } else {
+          // v6.30.1: the old `|| po.items.length > 0` made this check dead — any PO
+          // with at least one line passed, so a missing line id was never flagged.
+          // Strict when the SO line names an explicit sourceLineId; a legacy line
+          // (sourceLineId null → defaulted) only requires the PO to have lines,
+          // because legacy PO line ids are timestamps and "1" would never match.
+          const hasLine = it.sourceLineId != null
+            ? arr(po.items).some((l: any) => String(l.id) === String(it.sourceLineId))
+            : arr(po.items).length > 0;
           const lineId = it.sourceLineId ?? 1;
-          const hasLine = arr(po.items).some((l: any) => String(l.id) === String(lineId)) || arr(po.items).length > 0;
           if (!hasLine) {
             add("warning", "ORPHAN_SO_POLINE", "Sales Orders", o.number || "(unnumbered SO)",
               `Line "${it.product || "—"}" references PO ${it.sourceRef} line ${lineId}, which is missing.`);
@@ -115,14 +127,10 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     });
   });
 
-  // Shipment refs pointing at missing POs / SOs / lots.
+  // Shipment refs pointing at missing lots. (PO/SO refs are checked ONCE, in
+  // 7a.4 below, as errors — v6.31.0 removed the duplicate warnings this section
+  // used to emit for the same condition, which double-counted the badge.)
   shipments.forEach((sh: any) => {
-    arr(sh.poRefs).forEach((ref: any) => {
-      if (!poByNumber.has(String(ref))) add("warning", "ORPHAN_SHIP_PO", "Shipments", sh.number || "(unnumbered shipment)", `Shipment references PO ${ref}, which no longer exists.`);
-    });
-    arr(sh.soRefs).forEach((ref: any) => {
-      if (!orderByNumber.has(String(ref))) add("warning", "ORPHAN_SHIP_SO", "Shipments", sh.number || "(unnumbered shipment)", `Shipment references SO ${ref}, which no longer exists.`);
-    });
     arr(sh.lotRefs).forEach((ref: any) => {
       if (!lotByNumber.has(String(ref))) add("warning", "ORPHAN_SHIP_LOT", "Shipments", sh.number || "(unnumbered shipment)", `Shipment references lot ${ref}, which no longer exists.`);
     });
@@ -231,7 +239,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   dupScan(orders, "number", "Sales Orders", "SOs");
   dupScan(shipments, "number", "Shipments", "shipments");
 
-  // ── 5. Invoices & finance notes (v6.18.6, P0-7) ────────────────────────────
+  // ── 9. Invoices & finance notes (v6.18.6, P0-7) ────────────────────────────
   const invoices = arr(inp.invoices);
   const financeNotes = arr(inp.financeNotes);
   const shipByNumber = new Set(shipments.map((s: any) => String(s.number)));
@@ -281,7 +289,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     }
   });
 
-  // ── 6. Shipment ↔ inventory consistency (v6.18.7, P1-6) ────────────────────
+  // ── 10. Shipment ↔ inventory consistency (v6.18.7, P1-6) ───────────────────
   // A delivered shipment whose lots show no recorded movement — stock probably
   // wasn't received/shipped (the "apply inventory" step was missed).
   shipments.forEach((sh: any) => {
@@ -353,6 +361,123 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
       });
     });
   }
+
+  // ── v6.31.0: close-out completeness, receipt-loss tripwire, FX sanity ──────
+
+  // 11.1 SO CLOSE-OUT COMPLETENESS. The business reads an SO's P/L once, at
+  // close — so a Closed SO with provisional cost data means the one number that
+  // matters was read incomplete. Aggregates the reasons into a single warning.
+  {
+    const shipmentsForSO = (soNumber: string) =>
+      shipments.filter((s: any) => s && s.status !== "Cancelled" && (
+        arr(s.soRefs).map(String).includes(String(soNumber)) ||
+        arr(s.goods).some((g: any) => String(g?.soRef || "") === String(soNumber))));
+    orders.forEach((o: any) => {
+      if (o?.status !== "Closed") return;
+      const reasons: string[] = [];
+      const linked = shipmentsForSO(o.number);
+      const expectedCosts = linked.flatMap((s: any) => arr(s.costs).filter((c: any) => (c.invoiceStatus || "Expected") === "Expected"));
+      if (expectedCosts.length) reasons.push(`${expectedCosts.length} shipment cost line(s) still "Expected" (no invoice received)`);
+      // Sourced lots with no cost data → COGS reads zero for those kg.
+      arr(o.items).forEach((it: any) => {
+        if (it.sourceType === "STOCK" && it.sourceRef) {
+          const lot = lotByNumber.get(String(it.sourceRef));
+          if (lot && !arr(lot.costs).length) reasons.push(`lot ${it.sourceRef} has no cost data`);
+        }
+      });
+      // No traceable SHIP_OUT at all → actual COGS is zero (mirrors check 3,
+      // which only covers Shipped+; Closed is where it is fatal for the number).
+      let shipped = 0;
+      lots.forEach((lot: any) => arr(lot.movements).forEach((m: any) => {
+        if (m.voided) return;
+        const matches = m.soRef ? String(m.soRef) === String(o.number) : String(m.note || "").includes(String(o.number));
+        if (m.type === "SHIP_OUT" && matches) shipped += num(m.qtyKg);
+      }));
+      const demand = arr(o.items).reduce((s: number, it: any) => s + num(it.qty), 0);
+      if (shipped <= 0 && demand > 0) reasons.push("no SHIP_OUT movement traceable to this SO — actual COGS reads zero");
+      if (reasons.length) add("warning", "SO_CLOSED_PL_INCOMPLETE", "Sales Orders", o.number || "(unnumbered SO)",
+        `SO is Closed but its final P/L is incomplete: ${reasons.slice(0, 3).join("; ")}${reasons.length > 3 ? ` (+${reasons.length - 3} more)` : ""}. The close-out figure is understated or provisional.`);
+    });
+  }
+
+  // 11.2 RECEIPT-LOSS TRIPWIRE (T-20). "Lot reset to Expected/0 kg although the
+  // shipment shows arrived" is under investigation awaiting a repro — these two
+  // read-only checks catch the aftermath the moment it happens on real data.
+  lots.forEach((l: any) => {
+    const inMoves = arr(l.movements).filter((m: any) => m?.type === "IN" && !m.voided);
+    const receivedKg = num(l.receivedKg);
+    if (inMoves.length && (l.status === "Expected" || (receivedKg === 0 && num(l.physicalKg) === 0 && !arr(l.movements).some((m: any) => m?.type === "SHIP_OUT" && !m.voided)))) {
+      add("error", "LOT_RECEIPT_INCONSISTENT", "Inventory", l.number || "(lot)",
+        `Lot has ${inMoves.length} IN movement(s) but reads ${l.status || "Expected"} / ${receivedKg} kg received — its receipt state was reset while the history survived. (T-20 tripwire: note what was done just before this appeared.)`);
+    }
+    if (receivedKg > 0 && arr(l.movements).length > 0 && !inMoves.length) {
+      add("warning", "LOT_RECEIPT_NO_MOVEMENT", "Inventory", l.number || "(lot)",
+        `Lot shows ${receivedKg} kg received but no (non-voided) IN movement — state and history have drifted; a recompute would zero it.`);
+    }
+  });
+
+  // 11.3 FX SANITY (tier-2 item, pulled forward — found live in real data: an EUR
+  // SO with fxRate 1 understates PLN revenue ~4×). A non-PLN document whose
+  // locked rate is missing or ≈1 almost certainly never had its rate set.
+  {
+    const fxSuspect = (cur: any, fx: any) => {
+      const c = String(cur || "PLN").toUpperCase();
+      if (c === "PLN") return false;
+      const r = num(fx);
+      return r <= 1.05; // 0/blank parses to 0; EUR/USD ≈ 4 — anything ≤1.05 is unset
+    };
+    orders.forEach((o: any) => {
+      if (o?.status === "Cancelled" || o?.status === "Draft") return;
+      if (fxSuspect(o.currency, o.fxRate)) add("warning", "FX_RATE_SUSPECT", "Sales Orders", o.number || "(SO)",
+        `SO is in ${String(o.currency).toUpperCase()} with fxRate ${num(o.fxRate) || "blank"} — PLN revenue and margin are understated until the locked rate is set.`);
+    });
+    pos.forEach((p: any) => {
+      if (p?.status === "Cancelled" || p?.status === "Draft") return;
+      if (fxSuspect(p.currency, p.fxRate)) add("warning", "FX_RATE_SUSPECT", "Purchase Orders", p.number || "(PO)",
+        `PO is in ${String(p.currency).toUpperCase()} with fxRate ${num(p.fxRate) || "blank"} — PLN cost is understated until the locked rate is set.`);
+    });
+    arr(inp.invoices).forEach((v: any) => {
+      if (!v || v.paymentStatus === "Cancelled") return;
+      if (fxSuspect(v.currency, v.fxRate)) add("warning", "FX_RATE_SUSPECT", "Invoices", v.number || `invoice #${v.id}`,
+        `Invoice is in ${String(v.currency).toUpperCase()} with fxRate ${num(v.fxRate) || "blank"} — its PLN amounts are understated.`);
+    });
+  }
+
+  // ── v6.32.0: operational-testing safeguards ─────────────────────────────
+
+  // 12.1 DUPLICATE LIVE SHIPMENT. Two non-cancelled shipments for the same SO
+  // with identical goods kg and identical cost totals — the re-booked-truck
+  // pattern where the superseded booking was never cancelled, silently doubling
+  // freight in the SO's P/L. (Found live: SHP-2026-0005 / 0006.)
+  {
+    const live = shipments.filter((s: any) => s && s.status !== "Cancelled");
+    const key = (s: any) => {
+      const sos = arr(s.soRefs).filter(Boolean).map(String).sort().join("+");
+      const kg = arr(s.goods).reduce((t: number, g: any) => t + num(g?.qtyKg), 0);
+      const cost = arr(s.costs).reduce((t: number, c: any) => t + (num(c?.amountPLN) || num(c?.amount) * (num(c?.fxRate) || 1)), 0);
+      return sos ? `${sos}|${Math.round(kg)}|${Math.round(cost)}` : null;
+    };
+    const seen = new Map<string, string>();
+    live.forEach((s: any) => {
+      const k = key(s);
+      if (!k) return;
+      if (seen.has(k)) {
+        add("warning", "DUP_LIVE_SHIPMENT", "Shipments", s.number || "(shipment)",
+          `Looks like a duplicate of ${seen.get(k)} — same SO link, same goods kg, same cost total, both live. If one superseded the other, cancel the old booking; otherwise the SO carries the freight twice.`);
+      } else seen.set(k, s.number || "(shipment)");
+    });
+  }
+
+  // 12.2 STALE BILLING FLAG. billingStatus says "Cost allocated" but no lot
+  // carries this shipment's allocation tags (Batch-1b replace-by-source) — the
+  // allocation never ran or was reverted; the flag misleads the tester.
+  shipments.forEach((sh: any) => {
+    if (!sh || sh.billingStatus !== "Cost allocated") return;
+    if (!arr(sh.costs).length) return;
+    const tagged = lots.some((l: any) => arr(l.costs).some((c: any) => String(c?.source || "").startsWith(`${sh.number}/`)));
+    if (!tagged) add("warning", "STALE_BILLING_FLAG", "Shipments", sh.number || "(shipment)",
+      `billingStatus is "Cost allocated" but no lot carries this shipment's cost allocation — the flag is stale (allocation never ran, was reverted, or the shipment was cancelled). Re-run the allocation or reset the status.`);
+  });
 
   const counts = {
     error: issues.filter(i => i.severity === "error").length,

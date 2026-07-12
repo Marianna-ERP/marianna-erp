@@ -8,7 +8,8 @@
     "strict": false,
     "outDir": "./build",
     "rootDir": "../src",
-    "ignoreDeprecations": "6.0"
+    "ignoreDeprecations": "6.0",
+    "types": []
   },
   "files": [
     "../src/types.ts",
@@ -23,6 +24,13 @@
     "../src/settlement.domain.ts",
     "../src/claim.domain.ts",
     "../src/trace.domain.ts",
-    "../src/integrityCheck.ts"
+    "../src/integrityCheck.ts",
+    "../src/warehouseCharges.ts",
+    "../src/fx.ts",
+    "../src/ids.ts",
+    "../src/invoicing.ts",
+    "../src/marginCalculations.ts",
+    "../src/numbers.ts",
+    "../src/consignment.ts"
   ]
 }

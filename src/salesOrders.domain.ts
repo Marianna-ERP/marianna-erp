@@ -244,3 +244,122 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
     };
   });
 }
+
+// ─── v6.32.0: canonical SO-line → lot matcher (A1) ──────────────────────────
+// Six modules matched an SO line to its lot with six divergent rules — none
+// poLineId-aware except the expected-lot builder (FB-1), none variety-aware
+// except the availability engine (FB-12). Real-data consequence: a multi-line
+// same-product PO (e.g. 5 apple lines on one PO) resolved EVERY line to the
+// FIRST lot, so actual COGS used the wrong cost basis. This is the single rule;
+// all modules delegate here.
+//   Priority: STOCK → lot by number;
+//             PO    → poLineId (authoritative, FB-1) → poRef + product+variety
+//                     (FB-12 semantics) → poRef + name only (legacy lots that
+//                     predate poLineId/variety), first unclaimed.
+export function findLotForSOLine(lots: any[], it: any, opts: { claimed?: Set<string> } = {}): any | null {
+  if (!it) return null;
+  const claimed = opts.claimed;
+  const free = (l: any) => !claimed || !claimed.has(String(l.number));
+  if (it.sourceType === "STOCK" && it.sourceRef) {
+    return (lots || []).find(l => String(l.number) === String(it.sourceRef)) || null;
+  }
+  if (it.sourceType === "PO" && it.sourceRef) {
+    const byPO = (lots || []).filter(l => String(l.poRef || "") === String(it.sourceRef));
+    if (it.sourceLineId != null) {
+      const exact = byPO.find(l => l.poLineId != null && String(l.poLineId) === String(it.sourceLineId));
+      if (exact) return exact;
+    }
+    const byProduct = byPO.find(l => free(l) && productsMatch(it.product, l.product, it.variety, l.variety));
+    if (byProduct) return byProduct;
+    return byPO.find(l => free(l) && normalizeProduct(l.product) === normalizeProduct(it.product)) || null;
+  }
+  return null;
+}
+
+// ─── v6.32.0: per-line shipped kg (P1-1 engine) ─────────────────────────────
+// Actual revenue used to be all-or-nothing on SO *status*; partial deliveries
+// were mis-stated. This computes, per SO line, the kg actually dispatched, from
+// two evidence sources with precise dedup:
+//   1. lot SHIP_OUT movements for this SO (net of REVERSAL), via the canonical
+//      matcher — authoritative once a shipment has POSTED (movements carry
+//      shipmentRef);
+//   2. safety net: goods rows of DELIVERED/CLOSED shipments that have not
+//      posted movements yet (transient failure case). Loaded shipments are
+//      deliberately NOT revenue: COGS recognises at posting (Delivered), and
+//      recognising revenue earlier than its cost showed absurd mid-flight
+//      margins (full revenue, zero cost). At Delivered the two sides align.
+// Kg pools are allocated greedily across the SO's lines in order, capped at
+// each line's qty, so two lines sourcing the same lot never double-claim.
+export function shippedKgByLine(order: any, lots: any[], shipments: any[]): { perLine: number[]; totalKg: number; hasEvidence: boolean } {
+  const so = String(order?.number || "");
+  const items = order?.items || [];
+  const nrm = (s: any) => { const v = String(s || ""); if (v === "Arrived" || v === "In Transit" || v === "In transit") return "Loaded"; if (v === "Confirmed") return "Booked"; return v; };
+  const DISPATCHED = new Set(["Delivered", "Closed"]);
+
+  // 1. movement pool per lot (net shipped kg for this SO)
+  const movePool = new Map<string, number>();
+  (lots || []).forEach((l: any) => {
+    let kg = 0;
+    (l.movements || []).forEach((m: any) => {
+      if (m?.voided) return;
+      const matches = m.soRef ? String(m.soRef) === so : String(m.note || "").includes(so);
+      if (!matches) return;
+      if (m.type === "SHIP_OUT") kg += Number(m.qtyKg) || 0;
+      if (m.type === "REVERSAL") kg -= Number(m.qtyKg) || 0;
+    });
+    if (kg > 0) movePool.set(String(l.number), kg);
+  });
+
+  // 2. goods-row pool from dispatched, not-yet-posted, live shipments
+  type GoodsRow = { kg: number; product: any; variety: any; poRef: any; lotRef: any };
+  const goodsPool: GoodsRow[] = [];
+  (shipments || []).forEach((s: any) => {
+    if (!s || s.status === "Cancelled" || !DISPATCHED.has(nrm(s.status))) return;
+    const posted = (lots || []).some((l: any) => (l.movements || []).some((m: any) =>
+      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(s.number) : String(m.note || "").includes(String(s.number)))));
+    if (posted) return; // its kg already live in the movement pool
+    const headerSOs = (s.soRefs || []).filter(Boolean).map(String);
+    (s.goods || []).forEach((g: any) => {
+      if (!g) return;
+      const rowSO = g.soRef ? String(g.soRef) : null;
+      const belongs = rowSO ? rowSO === so : (headerSOs.length === 1 && headerSOs[0] === so);
+      if (!belongs) return;
+      const kg = Number(g.qtyKg) || 0;
+      if (kg > 0) goodsPool.push({ kg, product: g.product, variety: g.variety, poRef: g.poRef, lotRef: g.lotRef });
+    });
+  });
+
+  const hasEvidence = movePool.size > 0 || goodsPool.length > 0;
+  const claimed = new Set<string>();
+  const perLine = items.map((it: any) => {
+    let need = Number(it.qty) || 0;
+    let got = 0;
+    // (1) movements of the line's lot
+    const lot = findLotForSOLine(lots, it, { claimed });
+    if (lot) {
+      claimed.add(String(lot.number));
+      const avail = movePool.get(String(lot.number)) || 0;
+      const take = Math.min(need, avail);
+      if (take > 0) { got += take; need -= take; movePool.set(String(lot.number), avail - take); }
+    }
+    // (2) goods rows: lotRef → poRef+product/variety → product/variety
+    if (need > 0) {
+      const passes: ((g: GoodsRow) => boolean)[] = [
+        g => !!lot && String(g.lotRef || "") === String(lot.number),
+        g => it.sourceType === "PO" && !!g.poRef && String(g.poRef) === String(it.sourceRef) && productsMatch(it.product, g.product, it.variety, g.variety),
+        g => productsMatch(it.product, g.product, it.variety, g.variety),
+      ];
+      for (const pass of passes) {
+        if (need <= 0) break;
+        for (const g of goodsPool) {
+          if (need <= 0) break;
+          if (g.kg <= 0 || !pass(g)) continue;
+          const take = Math.min(need, g.kg);
+          got += take; need -= take; g.kg -= take;
+        }
+      }
+    }
+    return got;
+  });
+  return { perLine, totalKg: perLine.reduce((a: number, b: number) => a + b, 0), hasEvidence };
+}
