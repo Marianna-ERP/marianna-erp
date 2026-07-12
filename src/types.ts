@@ -146,6 +146,8 @@ export interface SOrder {
   /** LEGACY (BP-49 / A3-6): stored link + pending-invoice arrays. */
   linkedInvoices?: string[];
   linkedShipments?: string[];
+  /** @deprecated v6.33.0 (A3-6): the Invoices register is the sole owner — this
+   *  field is read only by the legacy fold, then stripped. Never write it. */
   pendingInvoices?: any[];
 }
 

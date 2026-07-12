@@ -6,6 +6,7 @@ import { localTodayISO as domainToday } from "./dates";
 import { Card, Lbl, SectionTitle } from "./ui";
 import { SO_STATUSES, SO_PRE_DISPATCH_STATUSES as RESERVING_SO_STATUSES } from "./types";
 import { normalizeProduct, productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
+import { salesInvoiceFromSODraft } from "./invoicing";
 import { nextId } from "./ids";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
@@ -968,9 +969,8 @@ function EmailModal({ order, contacts = [], onClose }: any) {
 // User can adjust VAT rate, payment method, and dates before confirming.
 //
 // Interim behavior (no backend yet): the invoice object is stored in this SO's
-// `pendingInvoices` array AND its number is added to `linkedInvoices`. When the
-// Invoices module integration shell is built, these pendingInvoices will be
-// exported into the actual invoices state. For now this gives the user a clear
+// v6.33.0 (A3-6): the canonical invoice is written to the Invoices REGISTER
+// (sole owner); the SO keeps only the number in `linkedInvoices`.
 // record of the invoice that needs to be created in Fakturownia / the Invoices module.
 function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfirm }: any) {
   const today = localTodayISO();
@@ -1763,7 +1763,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
   const computedLinks = computedSOLinks(order, { shipments, invoices: [], lots });
@@ -1819,7 +1819,7 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
             // Issue Invoice button: only meaningful after Shipped, hidden if already invoiced.
             const shippedOrLater = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status);
             const alreadyInvoiced = (order.linkedInvoices && order.linkedInvoices.length > 0)
-              || (order.pendingInvoices && order.pendingInvoices.length > 0);
+              || soInvoices.length > 0; // v6.33.0 (A3-6): register is the source of truth
             if (!shippedOrLater || alreadyInvoiced || !onIssueInvoice) return null;
             return (
               <button onClick={onIssueInvoice} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
@@ -1974,10 +1974,10 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                 </div>
               </Card>
 
-              {order.pendingInvoices?.length > 0 && (
+              {soInvoices.length > 0 && (
                 <Card style={{ marginBottom: 16, border: "1px solid #BBF7D0", background: "#F0FDF4" }}>
                   <SectionTitle>SALES INVOICE READY</SectionTitle>
-                  {order.pendingInvoices.map((inv, idx) => (
+                  {soInvoices.map((inv, idx) => (
                     <div key={idx} style={{ background: "#fff", border: "1px solid #BBF7D0", borderRadius: 8, padding: "10px 12px", marginBottom: 6 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                         <div>
@@ -1993,10 +1993,10 @@ function OrderDetail({ order, onBack, onEdit, onPrint, onEmail, onDelete, onIssu
                       </div>
                     </div>
                   ))}
-                  {order.pendingInvoices.some(inv => inv.fktMatched) ? (
+                  {soInvoices.some(inv => inv.fakturownia?.exported) ? (
                     <div style={{ fontSize: 10.5, color: "#0C4A6E", marginTop: 8, lineHeight: 1.5, padding: "7px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6 }}>
-                      {order.pendingInvoices.filter(inv => inv.fktMatched).map((inv, i) => (
-                        <div key={i}>✓ Matched in Fakturownia{inv.ksef ? <> · KSeF <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.ksef}</span></> : null} · <strong>{inv.fktPaid ? "PAID" : "unpaid"}</strong></div>
+                      {soInvoices.filter(inv => inv.fakturownia?.exported).map((inv, i) => (
+                        <div key={i}>✓ Matched in Fakturownia{inv.fakturownia?.ksef ? <> · KSeF <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.fakturownia.ksef}</span></> : null} · <strong>{inv.fakturownia?.paid ? "PAID" : "unpaid"}</strong></div>
                       ))}
                     </div>
                   ) : (
@@ -2074,6 +2074,7 @@ export default function SalesOrders({
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs, shipments: extShipments = [], setShipments: extSetShipments = null,
   contacts: extContacts,
   operationalCosts: extOperationalCosts = [],
+  invoices: extInvoices = null, setInvoices: extSetInvoices = null,
   userRole = "General Manager",
   userName = "",
   productCatalog = [],
@@ -2081,6 +2082,13 @@ export default function SalesOrders({
 }: any = {}) {
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
+  // v6.33.0 (A3-6): the Invoices register is the sole owner of invoices — this
+  // module reads and writes THERE, never into order.pendingInvoices.
+  const [localInvoices, setLocalInvoices] = useState<any[]>([]);
+  const invoices = extInvoices ?? localInvoices;
+  const setInvoices = extSetInvoices ?? setLocalInvoices;
+  const invoicesForSO = (soNumber: any) => (invoices || []).filter((iv: any) =>
+    (iv.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(soNumber)));
   const orders = extOrders ?? localOrders;
   const setOrders = extSetOrders ?? setLocalOrders;
 
@@ -2095,25 +2103,25 @@ export default function SalesOrders({
     const r = await fetchInvoices(fktCfg, { income: 1, period: "this_year" });
     setFktMatching(false);
     if (!r.ok) { setFktMatchMsg({ kind: "error", text: r.corsLikely ? "Browser can't reach Fakturownia (CORS) — matching will run from the Phase-2 backend." : (r.error || "Fetch failed.") }); return; }
-    const invoices = (r.data || []).map(mapInvoice);
+    const fktList = (r.data || []).map(mapInvoice);
     let matched = 0;
-    setOrders(prev => prev.map(o => {
-      if (o.id !== order.id) return o;
-      const next = { ...o, pendingInvoices: (o.pendingInvoices || []).map(pi => {
-        // match by exact invoice number, else by client tax id + gross amount + close date
-        let hit = invoices.find(iv => String(iv.number).trim() === String(pi.number).trim());
-        if (!hit) {
-          hit = invoices.find(iv => {
-            const amtClose = Math.abs((iv.grossTotal || 0) - (pi.grossAmount || 0)) < 1;
-            const taxMatch = o.client?.nip && iv.buyerTaxNo && String(iv.buyerTaxNo).replace(/\D/g, "").includes(String(o.client.nip).replace(/\D/g, ""));
-            return amtClose && taxMatch;
-          });
-        }
-        if (!hit) return pi;
-        matched++;
-        return { ...pi, fktMatched: true, fktNumber: hit.number, ksef: hit.ksefNo || "", fktPaid: !!hit.paid, fktStatus: hit.status };
-      }) };
-      return next;
+    // v6.33.0 (A3-6): the match result is written on the REGISTER invoices
+    // linked to this SO (fakturownia.*), never on the order.
+    setInvoices((prev: any[]) => (prev || []).map((reg: any) => {
+      const linksThisSO = (reg.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(order.number));
+      if (!linksThisSO || reg.kind !== "SALES") return reg;
+      // match by exact invoice number, else by client tax id + gross amount
+      let hit = fktList.find(iv => String(iv.number).trim() === String(reg.number).trim());
+      if (!hit) {
+        hit = fktList.find(iv => {
+          const amtClose = Math.abs((iv.grossTotal || 0) - (reg.grossAmount || 0)) < 1;
+          const taxMatch = order.client?.nip && iv.buyerTaxNo && String(iv.buyerTaxNo).replace(/\D/g, "").includes(String(order.client.nip).replace(/\D/g, ""));
+          return amtClose && taxMatch;
+        });
+      }
+      if (!hit) return reg;
+      matched++;
+      return { ...reg, locked: true, fakturownia: { ...(reg.fakturownia || {}), exported: true, legalNumber: hit.number, ksef: hit.ksefNo || "", paid: !!hit.paid, status: hit.status } };
     }));
     setFktMatchMsg({ kind: matched ? "success" : "error", text: matched ? `Matched ${matched} invoice(s) from Fakturownia.` : "No matching invoice found in Fakturownia for this SO yet." });
   }
@@ -2146,12 +2154,14 @@ export default function SalesOrders({
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterClient, setFilterClient] = useState("All");
 
-  // Helper: collect all invoice numbers across pendingInvoices on all SOs (for nextSINVNumber)
+  // v6.33.0 (A3-6): numbering sees the WHOLE Invoices register (an SINV created
+  // directly in the Invoices module previously wasn't seen here — latent number
+  // collision), plus linkedInvoices as belt-and-braces for pre-register data.
   function allInvoiceNumbers() {
-    return orders.flatMap(o => [
-      ...(o.linkedInvoices || []),
-      ...((o.pendingInvoices || []).map(inv => inv.number)),
-    ]);
+    return [
+      ...(invoices || []).map((iv: any) => iv.number),
+      ...orders.flatMap(o => (o.linkedInvoices || [])),
+    ].filter(Boolean);
   }
 
   // Product suggestions, same pattern as PO
@@ -2349,7 +2359,7 @@ export default function SalesOrders({
     const becameShipped = o.status === "Shipped" && (!previous || previous.status !== "Shipped");
     const becameCancelled = o.status === "Cancelled" && (!previous || previous.status !== "Cancelled");
     const alreadyInvoiced = (o.linkedInvoices && o.linkedInvoices.length > 0)
-      || (o.pendingInvoices && o.pendingInvoices.length > 0);
+      || invoicesForSO(o.number).length > 0; // v6.33.0 (A3-6)
 
     const savedOrder = { ...o, id: o.id ?? nextId() };
     setOrders(prev => {
@@ -2398,31 +2408,24 @@ export default function SalesOrders({
     setSelected(null);
     setView("list");
   }
-  // Confirm handler for the invoice creation modal — saves the SINV draft into the
-  // SO's pendingInvoices array and appends its number to linkedInvoices for cross-reference.
-  function confirmInvoiceCreation(invoice) {
+  // v6.33.0 (A3-6): confirm handler writes the canonical invoice into the
+  // Invoices REGISTER (sole owner) — order.pendingInvoices is never written
+  // again. The SO keeps only the number cross-reference in linkedInvoices and
+  // advances to Invoiced.
+  function confirmInvoiceCreation(draft) {
     const targetId = invoiceOrder.id;
+    const canonical = salesInvoiceFromSODraft(invoiceOrder, draft);
+    setInvoices((prev: any[]) => [...(prev || []), canonical]);
     // #4: issuing the invoice advances the SO to "Invoiced" (from Shipped/Delivered).
     // Closed stays Closed; earlier stages aren't forced forward.
     const advance = (st: string) => (["Shipped", "Delivered"].includes(st) ? "Invoiced" : st);
-    setOrders(prev => prev.map(p => {
-      if (p.id !== targetId) return p;
-      return {
-        ...p,
-        status: advance(p.status),
-        pendingInvoices: [...(p.pendingInvoices || []), invoice],
-        linkedInvoices: [...(p.linkedInvoices || []), invoice.number],
-      };
-    }));
-    // If user is in detail view of this SO, keep `selected` in sync
-    if (selected && selected.id === targetId) {
-      setSelected(prev => ({
-        ...prev,
-        status: advance(prev.status),
-        pendingInvoices: [...(prev.pendingInvoices || []), invoice],
-        linkedInvoices: [...(prev.linkedInvoices || []), invoice.number],
-      }));
-    }
+    const patch = (p: any) => ({
+      ...p,
+      status: advance(p.status),
+      linkedInvoices: [...(p.linkedInvoices || []), canonical.number],
+    });
+    setOrders(prev => prev.map(p => p.id === targetId ? patch(p) : p));
+    if (selected && selected.id === targetId) setSelected(prev => patch(prev));
     setInvoiceOrder(null);
   }
 
@@ -2471,6 +2474,7 @@ export default function SalesOrders({
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
         <OrderDetail
           order={selected}
+          soInvoices={invoicesForSO(selected.number)}
           allOrders={orders}
           fktConfigured={fktConfigured}
           fktMatching={fktMatching}

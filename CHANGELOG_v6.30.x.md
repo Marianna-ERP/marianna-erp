@@ -182,3 +182,66 @@ exists as the named place.
 Suite 148/148 (10 new pinned scenarios); full typecheck clean. Real-data
 regression: forecast figures identical to the v6.31.0 reconciliation; actual
 coherently zero pre-delivery; the two new checks fire on the known real cases.
+
+---
+
+# Update v6.33.0 — Invoices sole owner (A3-6) + legacy credit-notes fold (A3-5 residue)
+
+Delivered BEFORE invoicing/finance testing begins (per plan), so that test
+round validates the final architecture. No P/L engine changes: SO margins are
+byte-identical to v6.32.0.
+
+## A3-6 — the Invoices register is the sole owner of invoices
+- The SO "Issue Sales Invoice" modal now writes a CANONICAL invoice into the
+  register (new pure builder `salesInvoiceFromSODraft`, shared with the legacy
+  fold so folded and API-created invoices are one shape and one source-tag
+  namespace). `order.pendingInvoices` is NEVER written again; the SO keeps only
+  the number in `linkedInvoices` and advances to Invoiced as before.
+- The SO detail panel, the "already invoiced" guards and the Fakturownia match
+  all read/write the REGISTER (match results land in `invoice.fakturownia.*`
+  and lock the invoice).
+- Invoice numbering now sees the whole register — fixes a latent collision: an
+  SINV created directly in the Invoices module was invisible to the SO's
+  next-number logic.
+- Migration completes ("read-only, then deleted"): the idempotent fold keeps
+  running on load (old backups keep importing safely), and once folded the
+  legacy `pendingInvoices` arrays are STRIPPED from the orders
+  (`stripPendingInvoices`, same-reference when clean so no effect loops).
+  Duplication is impossible by construction: the API path and the fold share
+  the source tag `SO:{so}:{number}` — pinned by test.
+- `types.ts`: `pendingInvoices` marked `@deprecated`.
+
+## A3-5 residue — legacy Finance credit notes
+- One-shot fold of the legacy `creditNotes` array into the canonical
+  FinanceNote model (`migrateLegacyCreditNotes`, idempotent by source tag
+  `legacyCN:{id}`; all legacy records are CREDIT notes). Consequence — and the
+  point of BP-37: these records now finally ENTER the receivable/payable
+  totals; before, the old tab's records were displayed but never counted.
+- The Finance "Credit Notes" tab is retired (view + tab removed); notes are
+  created and managed in Invoices, against a specific invoice or standalone.
+  The legacy storage key stays importable: importing an old backup re-triggers
+  the fold, then the array is emptied.
+
+Suite 152/152 (4 new pinned scenarios: builder shape/tag, import-cannot-
+duplicate, strip semantics, credit-note fold entering totals). Typecheck clean.
+
+---
+
+# Hotfix v6.33.1 — deploy failure root-caused, P-4 gate re-established
+
+Two distinct causes behind the Vercel failure, both corrected:
+
+1. **Packaging**: the batch zips were OVERLAYS (changed files only) and were
+   deployed as a full repo — public/index.html and the CRA scaffolding were
+   therefore missing. From this release the zip is the COMPLETE deployable
+   repository (src/, public/, tests/, dev/, configs, docs — everything except
+   node_modules and build). Extract → `npm install` → deploy; nothing to merge.
+2. **Process violation, owned**: the standing P-4 gate (run the real
+   `CI=false npm run build` before packaging) was skipped for v6.32.0/v6.33.0.
+   The real build immediately caught what the offline typecheck cannot: an
+   eslint `import/first` violation from the v6.32.0 matcher-delegation edit in
+   shipments.domain.ts (same failure class as v6.26.0). Import hoisted above
+   the first statement; the real CRA production build now PASSES and is again
+   a hard pre-packaging gate for every release.
+
+No functional changes. Suite 152/152; typecheck clean; real build green.

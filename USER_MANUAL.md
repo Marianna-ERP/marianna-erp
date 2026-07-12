@@ -1,4 +1,4 @@
-# MARIANNA ERP — User Manual (v6.32.0)
+# MARIANNA ERP — User Manual (v6.33.0)
 
 A practical guide to the day-to-day cycle: counterparties → purchase orders →
 shipments → inventory → sales orders → invoices → finance. This edition fully
@@ -181,11 +181,18 @@ your warehouse for EXW), lines, prices.
 
 ## 7. Invoices
 
-The Invoices module owns every money document: sales invoices, purchase/cost
-invoices, credit & debit notes, **consignment settlements** (SET numbers, with
-the auto-drafted commission invoice) and payment events.
+The Invoices module owns every money document — **it is the sole register**:
+sales invoices, purchase/cost invoices, credit & debit notes, **consignment
+settlements** (SET numbers, with the auto-drafted commission invoice) and
+payment events.
 
-- Issuing a client invoice moves a Shipped/Delivered SO to Invoiced.
+- "Issue Sales Invoice" on an SO writes the invoice **into this register** and
+  moves a Shipped/Delivered SO to Invoiced; the SO panel and the Fakturownia
+  match read and write the register too. Invoice numbering sees the whole
+  register, so numbers issued here and from an SO can never collide.
+- Legacy data folds in automatically and only once: old SO-embedded invoices
+  and the old Finance credit-notes list migrate into the register/notes on
+  load (importing an old backup re-triggers the fold; nothing duplicates).
 - Payments are **events** (date, amount, method, note) — paidAmount and the
   status (Partially paid / Paid / Overdue) are derived.
 - Duplicate guard: same counterparty + number + direction warns at entry and is
@@ -224,5 +231,8 @@ warehouse-charge predictions vs invoices.
   notes in totals.
 - P/L: per-line evidence-based actuals, pro-rata groupage costs, no
   double-counting with lot allocation, cancelled shipments excluded.
+- Invoices: single register owns all invoices — the SO invoice flow writes
+  there; the Finance Credit Notes tab is retired, its records folded into the
+  canonical notes and finally counted in the receivable/payable totals.
 - Clean system: no demo data anywhere after a reset.
 - Decimal commas accepted everywhere in the engines.

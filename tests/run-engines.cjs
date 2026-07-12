@@ -1153,6 +1153,52 @@ T("checker: stale 'Cost allocated' flag caught; real allocation not", () => {
   assert.ok(!r2.issues.some(i => i.code === "STALE_BILLING_FLAG"));
 });
 
+console.log("── v6.33.0: Invoices sole owner (A3-6) + legacy credit-notes fold (A3-5) ──");
+const { salesInvoiceFromSODraft, salesInvoiceSourceTag, stripPendingInvoices, migrateLegacyCreditNotes, migrateLegacyInvoices } = require("./build/invoicing.js");
+
+T("A3-6: SO draft → canonical register invoice (shape + source tag + SO link)", () => {
+  const so = { number: "SO-9", currency: "EUR", client: { name: "Client X" }, items: [{ product: "Apples", qty: 1000 }] };
+  const inv = salesInvoiceFromSODraft(so, { number: "FV2026/07/01", netAmount: 2000, vatRate: 5, fxRate: 4.3, currency: "EUR", issueDate: "2026-07-12" });
+  assert.equal(inv.kind, "SALES");
+  assert.equal(inv.category, "SINV");
+  assert.equal(inv.vatAmount, 100);
+  assert.equal(inv.grossAmount, 2100);
+  assert.equal(inv.grossPLN, 9030);
+  assert.equal(inv.source, salesInvoiceSourceTag("SO-9", "FV2026/07/01"));
+  assert.ok(inv.links.some(l => l.type === "SO" && l.number === "SO-9"));
+});
+T("A3-6: importing an old backup can NOT duplicate an API-created invoice (same source tag)", () => {
+  const so = { number: "SO-9", currency: "EUR", client: {}, items: [] };
+  const draft = { number: "FV2026/07/01", netAmount: 2000, vatRate: 5, fxRate: 4.3, currency: "EUR" };
+  const apiCreated = salesInvoiceFromSODraft(so, draft);
+  // old backup: the SO still carries the same invoice as a pendingInvoice
+  const legacyOrder = { ...so, pendingInvoices: [draft] };
+  const merged = migrateLegacyInvoices({ existing: [apiCreated], orders: [legacyOrder], warehouseInvoices: [], operationalCosts: [] });
+  assert.equal(merged.length, 1); // deduped by source tag
+});
+T("A3-6: stripPendingInvoices removes the legacy array; same reference when clean", () => {
+  const dirty = [{ number: "SO-1", pendingInvoices: [{ number: "X" }] }, { number: "SO-2" }];
+  const r = stripPendingInvoices(dirty);
+  assert.equal(r.changed, true);
+  assert.ok(!("pendingInvoices" in r.orders[0]));
+  const clean = [{ number: "SO-3" }];
+  const r2 = stripPendingInvoices(clean);
+  assert.equal(r2.changed, false);
+  assert.ok(r2.orders === clean); // same ref → no React effect loop
+});
+T("A3-5: legacy creditNotes fold into FinanceNote, idempotent, and ENTER the totals", () => {
+  const legacy = [{ id: 7, direction: "outgoing", partyName: "Client X", category: "Goods / quality", amount: 500, currency: "PLN", fxRate: 1, status: "Issued", reason: "quality", date: "2026-06-01" }];
+  const once = migrateLegacyCreditNotes({ existing: [], creditNotes: legacy });
+  assert.equal(once.length, 1);
+  assert.equal(once[0].noteType, "CREDIT");
+  assert.equal(once[0].amountPLN, 500);
+  assert.equal(once[0].source, "legacyCN:7");
+  const twice = migrateLegacyCreditNotes({ existing: once, creditNotes: legacy });
+  assert.equal(twice.length, 1); // idempotent by source tag
+  const adj = notesTotalsAdjustment(twice);
+  assert.ok(adj.receivableAdjPLN < 0); // outgoing credit note reduces what clients owe us
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

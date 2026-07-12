@@ -20,6 +20,8 @@
 // number is left untouched (same guard as before, now tested).
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { findLotForSOLine } from "./salesOrders.domain";
+
 function num(v: any): number {
   const x = parseFloat(String(v ?? "").replace(",", "."));
   return isFinite(x) ? x : 0;
@@ -140,7 +142,6 @@ export function responsibilityForPOShipment(po: any, supplierManagedTransport: b
 // v6.32.0 (A1): delegates to the canonical matcher in salesOrders.domain —
 // poLineId-first, variety-aware; this module's old name-only copy misresolved
 // multi-line same-product POs.
-import { findLotForSOLine } from "./salesOrders.domain";
 export { findLotForSOLine };
 
 export function nextShipmentNumberPure(shipments: any[], year: number): string {
