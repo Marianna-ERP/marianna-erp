@@ -1,13 +1,13 @@
 import React, { useMemo, useState } from "react";
 import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
-import { postShipmentToLots, derivePurpose, responsibilityForPOShipment, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms } from "./shipments.domain";
+import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms } from "./shipments.domain";
 import { printHtmlNode } from "./documentService";
 import { SmallButton } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
-import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 
 // MARIANNA ERP - Shipments / Logistics module
 // Standalone-friendly: when no props are passed it starts empty (demo seeds moved out of the bundle in v6.32.0).
@@ -194,20 +194,12 @@ function statusRank(status) {
   return i < 0 ? 999 : i;
 }
 
-function locationInputValue(id, custom) {
-  if (custom) return custom;
-  const l = locById(id);
-  return l ? l.name : "";
-}
 
 function locationTextFromFields(id, custom) {
   if (custom) return custom;
   return locText(id);
 }
 
-function locationDatalistId(prefix, legIdx) {
-  return `${prefix}-location-options-${legIdx}`;
-}
 
 // ─── v6.3.0: grouped, mode-aware From/To selector ──────────────────────────
 // Replaces the free-text datalist (easy to mistype) with a structured dropdown
@@ -541,7 +533,6 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
   // v6.29.0: the shipment owns the trade direction — seeded from the PO's
   // provisional value here, editable on the shipment afterwards.
   const tradeDirection = shipmentTradeDirection(null, po);
-  const isExport = tradeDirection === "EXPORT";
   const mode = opts.mode || (po.requiresSea ? "Multimodal" : "Road");
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
@@ -812,9 +803,6 @@ function buildManualShipment__raw(opts, shipments) {
 
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max }: any) {
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
-}
-function TextArea({ value, onChange = () => {}, placeholder = "", rows = 3, style = {}, disabled = false }: any) {
-  return <textarea value={value ?? ""} onChange={onChange} placeholder={placeholder} rows={rows} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", resize: "vertical", ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   return <select value={value ?? ""} onChange={onChange} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }}>{children}</select>;
@@ -1157,7 +1145,6 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
     d.customs = normalizeCustoms(d.customs || d.customsClearance); // BP-27 string→object migration on open
     return d;
   });
-  const setCustoms = (patch: any) => setDraft((prev: any) => ({ ...prev, customs: { ...(prev.customs || {}), ...patch } }));
   const roadProviders = logisticsProviders(contacts, "Road");
   const seaProviders = logisticsProviders(contacts, "Sea");
   const customsProviders = logisticsProviders(contacts, "Customs");

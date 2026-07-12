@@ -79,7 +79,6 @@ export function computedSOLinks(so: any, { shipments = [], invoices = [], lots =
  * Unsold / Linked / Partially sold / Fully sold — quantity-aware where possible.
  */
 export function poSalesLink(po: any, orders: any[]) {
-  const norm = (p: any) => String(p || "").toLowerCase().trim();
   const soLines: any[] = [];
   (orders || []).forEach(o => {
     if (o.status === "Cancelled") return;

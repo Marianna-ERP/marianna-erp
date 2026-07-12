@@ -13,7 +13,3 @@ export function fmtNum(n: any): string {
 }
 
 /** Money in PLN with thousands separators, no decimals (dashboard/inventory style). */
-export function fmtPLN0(n: any): string {
-  if (n === undefined || n === null || isNaN(n)) return "—";
-  return `${Math.round(Number(n)).toLocaleString("pl-PL")} PLN`;
-}

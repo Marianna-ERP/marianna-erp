@@ -198,7 +198,6 @@ export function migrateLegacyInvoices(opts: {
     pushIf(src, () => {
       const fx = resolveFxRate(w.fxRate, w.currency);
       const net = r2(n(w.amount) || n(w.amountPLN) / (fx || 1));
-      const gross = r2(n(w.amountPLN) || net * fx);
       return {
         id: nextId(), kind: "COST", category: "WAREHOUSE", costScope: "MONTHLY_SHARED",
         number: w.invoiceNo || "", counterparty: { name: w.warehouseName || "Warehouse" },

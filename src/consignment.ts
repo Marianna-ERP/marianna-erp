@@ -35,7 +35,6 @@ export interface LotSettlementCalc {
 
 function n(v: any): number { const x = parseFloat(v); return isFinite(x) ? x : 0; }
 function r2(x: number): number { return Math.round(x * 100) / 100; }
-function norm(s: any): string { return String(s || "").trim().toLowerCase(); }
 
 // Season commission for a producer: the rate with the latest validFrom <= date.
 export function currentCommissionPct(producer: any, dateISO: string): number | null {

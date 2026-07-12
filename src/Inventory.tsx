@@ -9,12 +9,11 @@ import { lotReservationsForStock, productsMatch as domainProductsMatch, soClient
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
-import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
-const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 
 const LOCATION_TYPES: Record<string, any> = {
   OWN:      { label: "Our Warehouse",   color: "#0284C7", bg: "#E0F2FE", icon: "🏢" },
@@ -318,11 +317,6 @@ function customsStagesForFlow(flow: string) {
   return out;
 }
 
-const FLOW_GROUPS = [
-  { id: "EXP", label: "EXPORT", color: "#16A34A" },
-  { id: "IMP", label: "IMPORT", color: "#2563EB" },
-];
-
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"]; // Polish convention (Klasa I/IB/II/Industrial)
 
 
@@ -577,7 +571,6 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   const [claimCurrency, setClaimCurrency] = useState(editing?.claimCurrency || "PLN");
   const effectiveType = clientSide && type === "DAMAGE" ? "CLAIM" : type;
   const reservationState = lotReservations(lot, liveSOs);
-  const liveAvailableKg = reservationState.liveAvailable;
   // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
   // so quantity-reducing movements validate against the expected/direct quantity —
   // consistent with how lotReservations computes availability for direct lots.
@@ -746,43 +739,6 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   );
 }
 
-// ─── CUSTOMS MODAL (v6.1d) ──────────────────────────────────────────────────
-function CustomsModal({ lot, kind, brokers = [], onCancel, onConfirm }: any) {
-  const existing = (lot.customs && lot.customs[kind]) || {};
-  const [status, setStatus] = useState(existing.status || "Not started");
-  const [declRef, setDeclRef] = useState(existing.declRef || "");
-  const [brokerId, setBrokerId] = useState(existing.brokerId || "");
-  const [date, setDate] = useState(existing.date || "");
-  const [cost, setCost] = useState(existing.cost != null ? String(existing.cost) : "");
-  const [currency, setCurrency] = useState(existing.currency || "PLN");
-  const title = kind === "export" ? "Export customs clearance" : "Import customs clearance";
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90, padding: 20 }}>
-      <div style={{ width: 480, background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <strong>🛃 {title}</strong>
-          <span style={{ fontSize: 12, color: "#888" }}>{lot.number}</span>
-        </div>
-        <div style={{ padding: 20, display: "grid", gap: 12 }}>
-          <div><Lbl>Status</Lbl><Sel value={status} onChange={e => setStatus(e.target.value)}>{["Not started", "In progress", "Cleared", "Held"].map(s => <option key={s}>{s}</option>)}</Sel></div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div><Lbl>Declaration ref (SAD / MRN)</Lbl><Inp value={declRef} onChange={e => setDeclRef(e.target.value)} placeholder="e.g. 26PL..." /></div>
-            <div><Lbl>Clearance date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
-          </div>
-          <div><Lbl>Customs broker</Lbl><Sel value={brokerId} onChange={e => setBrokerId(e.target.value)}><option value="">— none —</option>{brokers.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}</Sel></div>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
-            <div><Lbl>Customs cost (flows into lot cost)</Lbl><Inp type="number" value={cost} onChange={e => setCost(e.target.value)} placeholder="0" /></div>
-            <div><Lbl>Currency</Lbl><Sel value={currency} onChange={e => setCurrency(e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
-          </div>
-          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-            <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm(kind, { status, declRef, brokerId: brokerId ? parseInt(brokerId) : null, date, cost: parseFloat(cost) || 0, currency })} style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: "#DB2777", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save clearance</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── INSPECTION MODAL (v6.2) ────────────────────────────────────────────────
 const INSPECTION_CONTEXTS = [
@@ -1152,7 +1108,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onCustoms, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [] }: any) {
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [] }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1765,7 +1721,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
   const [claimLot, setClaimLot] = useState(null); // Batch 6a (BP-55b): lot for the producer-claim modal
   const [editingMovement, setEditingMovement] = useState(null);
-  const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
   const [showReturn, setShowReturn] = useState(false); // v6.18.12 (#4): return-to-warehouse modal
   const [showInspection, setShowInspection] = useState(false);
   const [search, setSearch] = useState("");
@@ -1909,23 +1864,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     }));
   }
 
-  function saveCustoms(kind, data) {
-    setLots(prev => prev.map(l => {
-      if (l.id !== selected.id) return l;
-      const customs = { ...(l.customs || {}), [kind]: data };
-      // Mirror the customs cost into the lot's cost breakdown (replace any prior
-      // customs cost line for this kind, so editing doesn't double-count).
-      const tag = kind === "export" ? "Export customs" : "Import customs";
-      const fx = defaultFxRate(data.currency);
-      const otherCosts = (l.costs || []).filter(c => c.label !== tag);
-      const costs = data.cost > 0
-        ? [...otherCosts, { type: "customs", label: tag, source: data.declRef || "customs", amount: data.cost, currency: data.currency, pln: Math.round(data.cost * fx * 100) / 100 }]
-        : otherCosts;
-      const next = { ...l, customs, costs };
-      return next;
-    }));
-    setShowCustoms(null);
-  }
 
   function saveInspection(data) {
     setLots(prev => prev.map(l => {
@@ -1992,7 +1930,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 
   // ── routes ──────────────────────────────────────────────────────────
   if (view === "detail" && selected) {
-    const brokers = (extContacts || []).filter((c: any) => c.type === "Broker" || c.type === "Forwarder" || (c.services || []).includes("Customs"));
     return (
       <>
         {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
@@ -2176,7 +2113,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           </div>
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No lots match the current filters.</div>}
           {filtered.map((l, idx) => {
-            const loc = locById(l.locationId);
             const cpk = costPerKg(l);
             const res = lotReservations(l, liveSOs);
             const soList = soRefsFor(l, liveSOs, shipments);
@@ -2230,10 +2166,3 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 }
 
 // ─── helpers ───────────────────────────────────────────────────────────────
-function chipStyle(active, accent = "#111") {
-  return {
-    padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: active ? "#111" : "#E5E7EB",
-    background: active ? "#111" : "#fff", color: active ? "#fff" : (accent || "#555"),
-    fontSize: 11, cursor: "pointer", fontWeight: 500, fontFamily: "inherit",
-  };
-}

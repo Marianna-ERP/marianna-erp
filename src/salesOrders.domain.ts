@@ -189,7 +189,6 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
 
   return (soItems || []).map((it: any) => {
     const lineQty = parseFloat(it.qty) || 0;
-    const product = normalizeProduct(it.product);
     const lineKey = productVarietyKey(it); // FB-12
 
     let primaryAvailable = 0;

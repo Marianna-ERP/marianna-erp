@@ -63,23 +63,6 @@ export function isDirectCargoPlan(s: any): boolean {
   return s?.cargoPlan === "DIRECT_TO_CLIENT";
 }
 
-export const TRADE_MOVEMENTS = [
-  { code: "IMPORT", label: "Import" },
-  { code: "EXPORT", label: "Export" },
-];
-export const HANDOVER_POINTS = [
-  { code: "supplier",    label: "Supplier site (we take over at the producer)" },
-  { code: "origin_port", label: "Port of loading" },
-  { code: "dest_port",   label: "Port of discharge" },
-  { code: "our_wh",      label: "Our warehouse" },
-  { code: "client",      label: "Client / destination" },
-];
-export const CARGO_PLANS = [
-  { code: "OUR_WAREHOUSE",    label: "To our warehouse (stock / split distribution)" },
-  { code: "DIRECT_TO_CLIENT", label: "Direct to client (back-to-back — never our warehouse)" },
-  { code: "TO_PORT",          label: "To port (onward by sea)" },
-  { code: "CLIENT_PICKUP",    label: "Client collects (EXW — no logistics on our side)" },
-];
 
 /** Ensure a PO has both representations in sync (called on load / save). */
 export function reconcilePOFlow(po: any): any {

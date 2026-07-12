@@ -69,9 +69,6 @@ function Inp(props: any) {
 function Sel(props: any) {
   return <select {...props} style={{ width: "100%", padding: "8px 9px", border: "1px solid #E5E7EB", borderRadius: 7, fontSize: 12, fontFamily: "inherit", background: "#fff", ...(props.style || {}) }}>{props.children}</select>;
 }
-function Lbl({ children }: any) {
-  return <div style={{ fontSize: 10, color: "#888", fontWeight: 600, marginBottom: 4, letterSpacing: "0.02em" }}>{children}</div>;
-}
 function StatBlock({ label, value, valueColor, sub }: any) {
   return (
     <div>
@@ -106,7 +103,6 @@ const catLabel = (k: any) => OPERATIONAL_COST_CATEGORIES.find(c => c.key === k)?
 const methodLabel = (k: any) => ALLOCATION_METHODS.find(m => m.key === k)?.label || String(k || "").replace(/_/g, " ");
 
 function newCostTemplate(): OperationalCost {
-  const now = new Date();
   const period = localMonthISO();
   return {
     id: nextId(),

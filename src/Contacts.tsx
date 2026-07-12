@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef } from "react";
 import { Lbl } from "./ui";
 import { nextId } from "./ids";
-import { locationsByLegacyType, contactAddresses, warehouseCpLocId, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
+import { contactAddresses, warehouseCpLocId, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";

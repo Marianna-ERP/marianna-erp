@@ -1,11 +1,11 @@
-import React, { useState, useRef, useMemo } from "react";
-import { structToFlow, flowToStruct, reconcilePOFlow, isDirectCargoPlan, handoverTextForIncoterm, handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow } from "./tradeFlow.domain";
+import React, { useState, useMemo } from "react";
+import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle } from "./ui";
-import { nextId, nextIds } from "./ids";
-import { FX_RATES, defaultFxRate } from "./fx";
+import { nextId } from "./ids";
+import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./locations";
-import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -274,27 +274,12 @@ const LOCATION_TYPES: Record<string, any> = {
   CLIENT:   { label: "Client Site",    color: "#7C3AED", icon: "🎯" },
   BROKER:   { label: "Customs / Broker", color: "#DB2777", icon: "🛃" },
 };
-const DEFAULT_LOCATION_TYPE = { label: "Location", color: "#6B7280", icon: "📍" };
-function locType(t: string) { return LOCATION_TYPES[t] || DEFAULT_LOCATION_TYPE; }
 // LOCATIONS now comes from the shared ./locations source of truth.
 // Mapped so the legacy single-word `type` field still works in existing UI code.
 const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
 
 // Which location type is the typical destination for each flow (drives optgroup ordering in the dropdown).
 // User can still pick from any type — this just shows the most common option first.
-const FLOW_DESTINATION_TYPE: Record<string, string> = {
-  EXP_EXWS:     "PORT",
-  EXP_FOB:      "PORT",
-  EXP_CIF:      "PORT",
-  EXP_DDP_EU:   "CLIENT",
-  EXP_DDP_XEU:  "CLIENT",
-  IMP_EXWS_WH:  "OWN",
-  IMP_EXWS_DIR: "CLIENT",
-  IMP_CIF_WH:   "OWN",
-  IMP_CIF_DIR:  "CLIENT",
-  IMP_DDP_WH:   "OWN",
-  IMP_DDP_DIR:  "CLIENT",
-};
 
 // Stub FX rates for currency conversion in summary (would come from NBP in production)
 // FX_RATES now sourced from ./fx (single source of truth)
@@ -783,7 +768,6 @@ function EmailModal({ order, contacts = [], onClose }: any) {
   const resolvedEmail = liveEmailForOrder(order, contacts);
   const [subject, setSubject] = useState(`Purchase Order ${order.number} — ${COMPANY.name}`);
   const [body, setBody] = useState(`Dear ${order.supplier?.name || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${formatDMY(order.loadingDate)}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.name}`);
-  const [stage, setStage] = useState("compose"); // compose → opened
 
   // ── Step 1: Open the print dialog so the user can "Save as PDF" ──
   // Same hidden-iframe approach as PrintModal so it works in sandboxed contexts.
@@ -1222,11 +1206,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             {order.items.map((it, i) => {
               const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
-              const normalizeProduct = (raw) => {
-                if (!raw) return raw;
-                const match = productSuggestions.find(p => p.toLowerCase() === raw.trim().toLowerCase());
-                return match || raw.trim();
-              };
               return (
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.9fr 1fr 1.3fr 1.2fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
@@ -2141,10 +2120,3 @@ ${blockNote}`.trim(),
   );
 }
 
-function chipStyle(active, accent = "#111") {
-  return {
-    padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: active ? "#111" : "#E5E7EB",
-    background: active ? "#111" : "#fff", color: active ? "#fff" : (accent || "#555"),
-    fontSize: 11, cursor: "pointer", fontWeight: 500, fontFamily: "inherit",
-  };
-}

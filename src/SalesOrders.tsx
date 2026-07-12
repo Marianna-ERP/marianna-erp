@@ -4,15 +4,15 @@ import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
 import { Card, Lbl, SectionTitle } from "./ui";
-import { SO_STATUSES, SO_PRE_DISPATCH_STATUSES as RESERVING_SO_STATUSES } from "./types";
-import { normalizeProduct, productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
+import { SO_STATUSES } from "./types";
+import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
 import { nextId } from "./ids";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
-import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -427,7 +427,6 @@ function LifecycleBar({ status }: any) {
         const stageOrder = SO_STATUSES[s].order;
         const past = !isCancelled && stageOrder < currentOrder;
         const current = !isCancelled && stageOrder === currentOrder;
-        const future = isCancelled || stageOrder > currentOrder;
         return (
           <React.Fragment key={s}>
             <div style={{
@@ -625,7 +624,6 @@ function SODoc({ order }: any) {
   const total = netTotal(order.items);
   const currency = order.currency || "PLN";
   const paymentDisplay = order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms;
-  const destination = locById(order.destinationLocationId);
   const destinationLabel = destinationDisplay(order);
 
   const meta = [
@@ -1596,11 +1594,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             </datalist>
             {order.items.map((it, i) => {
               const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
-              const normalizeProduct = (raw) => {
-                if (!raw) return raw;
-                const match = productSuggestions.find(p => p.toLowerCase() === raw.trim().toLowerCase());
-                return match || raw.trim();
-              };
               const lineNeedsSource = !it.sourceType || !it.sourceRef;
               const lineIsBlocking = lineNeedsSource && nonDraftStatuses.includes(order.status);
               const avail = availability[i] || {};

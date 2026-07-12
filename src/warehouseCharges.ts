@@ -149,7 +149,7 @@ export function computeLotWarehouseCharges(
   asOfISO: string,
   win?: ChargeWindow
 ): LotWarehouseCharges | null {
-  const { periods, firstInDate, receivedKg, shippedKg } = computeStoragePeriods(lot, asOfISO);
+  const { periods, firstInDate } = computeStoragePeriods(lot, asOfISO);
   // Tariff resolves per stored location; in practice a lot sits in one tariffed
   // warehouse. Use the first tariffed location found among periods (or lot.locationId).
   let match = null as any;
