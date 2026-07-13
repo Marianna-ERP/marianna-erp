@@ -1,15 +1,16 @@
 import React, { useMemo, useState } from "react";
-import { postShipmentToLots, derivePurpose, responsibilityForPOShipment, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms } from "./shipments.domain";
+import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
+import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms } from "./shipments.domain";
 import { printHtmlNode } from "./documentService";
 import { SmallButton } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs } from "./costAllocation";
 import { nextId } from "./ids";
-import { resolveFxRate } from "./fx";
+import { resolveFxRate, defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
-import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 
 // MARIANNA ERP - Shipments / Logistics module
-// Standalone-friendly: when no props are passed it uses INIT_SHIPMENTS plus small
+// Standalone-friendly: when no props are passed it starts empty (demo seeds moved out of the bundle in v6.32.0).
 // fallback providers, POs, SOs and lots. In the shell, App.tsx passes live state.
 
 const COMPANY = {
@@ -132,22 +133,11 @@ const FALLBACK_PROVIDERS = [
   { id: 11, type: "Broker", name: "CustomsPro Sp. z o.o.", country: "Poland", nip: "5252111222", address: "ul. Celna 4, Warszawa", services: ["Customs"], contact: "Customs desk", phone: "", email: "" },
 ];
 
-const STANDALONE_POS = [
-  { id: 1, number: "PO-2025-0468", status: "Arrived", loadingDate: "2025-10-10", expectedDeliveryDate: "2025-10-13", buyIncoterm: "EXW", flow: "EXP_DDP_EU", requiresSea: false, supplier: { id: 1, name: "Bialski Owoc", country: "Poland", address: "Wojska Polskiego 6F, 96-230 Biala Rawska" }, destinationLocationId: 21, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", qty: 19422, unitPrice: 2.80, packaging: "13 kg loose crate" }], linkedShipments: ["SHP-2025-0107"], linkedLots: ["LOT-2026-0091"] },
-  { id: 2, number: "PO-2026-0117", status: "Shipped", loadingDate: "2026-05-20", expectedDeliveryDate: "2026-05-30", buyIncoterm: "EXW", flow: "IMP_EXWS_WH", requiresSea: true, supplier: { id: 3, name: "AgriTrade MA", country: "Morocco", address: "Agadir" }, destinationLocationId: 1, currency: "USD", fxRate: 3.8812, items: [{ id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", qty: 12000, unitPrice: 1.20, packaging: "5 kg carton" }], linkedShipments: ["SHP-2026-0045"], linkedLots: ["LOT-2026-0086"] },
-  { id: 3, number: "PO-2026-0121", status: "Confirmed", loadingDate: "2026-06-02", expectedDeliveryDate: "2026-06-05", buyIncoterm: "DDP", flow: "IMP_DDP_WH", requiresSea: false, supplier: { id: 2, name: "FreshFarm ES", country: "Spain", address: "Valencia" }, destinationLocationId: 1, currency: "EUR", fxRate: 4.2531, items: [{ id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", qty: 8000, unitPrice: 1.85, packaging: "5 kg carton" }], linkedShipments: [], linkedLots: ["LOT-2026-0100"] },
-];
+// v6.32.0 (R7b-5): demo seed STANDALONE_POS moved out of the production bundle → dev/demoSeed.reference.ts
 
-const STANDALONE_SOS = [
-  { id: 4, number: "SO-2026-0102", status: "Confirmed", orderDate: "2026-05-20", deliveryDate: "2026-06-10", sellIncoterm: "DAP", client: { id: 4, name: "Biedronka", country: "Poland", address: "Poznan" }, destinationLocationId: 10, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 8.40, sourceType: "PO", sourceRef: "PO-2026-0121", sourceLineId: 1, packaging: "5 kg carton" }], linkedShipments: [] },
-  { id: 5, number: "SO-2026-0105", status: "Booked", orderDate: "2026-05-26", deliveryDate: "2026-06-15", sellIncoterm: "DAP", client: { id: 6, name: "Metro Cash & Carry", country: "Poland", address: "Warszawa" }, destinationLocationId: 13, currency: "PLN", fxRate: 1, items: [{ id: 1, product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, unitPrice: 6.20, sourceType: "PO", sourceRef: "PO-2026-0117", sourceLineId: 1, packaging: "5 kg carton" }], linkedShipments: [] },
-];
+// v6.32.0 (R7b-5): demo seed STANDALONE_SOS moved out of the production bundle → dev/demoSeed.reference.ts
 
-const STANDALONE_LOTS = [
-  { id: 1, number: "LOT-2026-0091", product: "Golden Delicious", origin: "Poland", size: "70-80", quality: "I", locationId: 6, physicalKg: 19422, expectedKg: 19500, receivedKg: 19422, status: "Loaded", poRef: "PO-2025-0468", packaging: "13 kg loose crate", costs: [], movements: [] },
-  { id: 5, number: "LOT-2026-0086", product: "Papryka Kapia", origin: "Morocco", size: "M", quality: "I", locationId: 1, physicalKg: 2500, expectedKg: 8500, receivedKg: 8500, status: "In Stock", poRef: "PO-2026-0117", packaging: "5 kg carton", costs: [], movements: [] },
-  { id: 8, number: "LOT-2026-0100", product: "Red Bell Pepper", origin: "Spain", size: "L", quality: "I", locationId: 4, physicalKg: 0, expectedKg: 8000, receivedKg: 0, status: "Expected", poRef: "PO-2026-0121", packaging: "5 kg carton", costs: [], movements: [] },
-];
+// v6.32.0 (R7b-5): demo seed STANDALONE_LOTS moved out of the production bundle → dev/demoSeed.reference.ts
 
 const STANDARD_ROAD_TERMS = [
   "Payment is due 30 days after receipt of the invoice together with confirmed original CMR and loading specification / stamped invoice.",
@@ -164,235 +154,7 @@ const STANDARD_ROAD_TERMS = [
   "Disputes are subject to Polish transport law / CMR and the competent court for Warsaw.",
 ];
 
-export const INIT_SHIPMENTS = [
-  {
-    id: 1,
-    number: "SHP-2025-0107",
-    transportOrderNo: "07/10/2025.1",
-    mode: "Road",
-    purpose: "PO_EXPORT",
-    status: "Confirmed",
-    poRefs: ["PO-2025-0468"],
-    soRefs: [],
-    lotRefs: ["LOT-2026-0091"],
-    carrierId: 1001,
-    forwarderId: null,
-    brokerId: 22,
-    vehicleCount: 1,
-    costResponsibility: "Marianna",
-    loadingDate: "2025-10-10",
-    expectedDeliveryDate: "2025-10-13",
-    actualLoadingDate: null,
-    actualDeliveryDate: null,
-    originLocationId: 3,
-    destinationLocationId: 21,
-    customsClearance: "AM sped s.c., Slomczyn 81, 05-600 Grojec",
-    temperatureMinC: 2,
-    temperatureMaxC: 4,
-    confirmationStatus: "Generated",
-    confirmationSentAt: null,
-    billingStatus: "Not ready",
-    notes: "Facsimile road order: Biala Rawska -> Venice Cold Stores. Clean reefer trailer required.",
-    legs: [
-      { id: 1, mode: "Road", status: "Confirmed", fromLocationId: 3, toLocationId: 21, carrierId: 1001, plannedPickupDate: "2025-10-10", plannedDeliveryDate: "2025-10-13T09:00", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 2, temperatureMaxC: 4, costAmount: 1700, costCurrency: "EUR", costFxRate: 4.25, costPLN: 7225, notes: "One refrigerated truck. Delivery by 09:00." },
-    ],
-    goods: [
-      { id: 1, poRef: "PO-2025-0468", soRef: "", lotRef: "LOT-2026-0091", product: "Jablko", origin: "Poland", quality: "I", size: "70-80", packaging: "13 kg loose crate", qtyKg: 19422, grossKg: 22500, pallets: 21, description: "21 pallets: 20 x 1200x1000 + 1 x 1200x800" },
-    ],
-    costs: [
-      { id: 1, type: "road_freight", supplierId: 1001, amount: 1700, currency: "EUR", fxRate: 4.25, amountPLN: 7225, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Freight from facsimile" },
-    ],
-    documents: [
-      { id: 1, type: "Transport order", ref: "07/10/2025.1", status: "Generated", date: "2025-10-07", notes: "Based on carrier order template" },
-      { id: 2, type: "CMR", ref: "", status: "Required", date: "", notes: "Original confirmed CMR required for payment" },
-      { id: 3, type: "OCP policy", ref: "", status: "Required", date: "", notes: "Carrier insurance" },
-    ],
-    terms: STANDARD_ROAD_TERMS,
-  },
-  {
-    id: 2,
-    number: "SHP-2026-0045",
-    transportOrderNo: "SHP-2026-0045",
-    mode: "Multimodal",
-    purpose: "PO_IMPORT",
-    status: "Loaded",
-    poRefs: ["PO-2026-0117"],
-    soRefs: ["SO-2026-0105"],
-    lotRefs: ["LOT-2026-0086"],
-    carrierId: null,
-    forwarderId: 15,
-    brokerId: 11,
-    vehicleCount: 1,
-    costResponsibility: "Marianna",
-    loadingDate: "2026-05-20",
-    expectedDeliveryDate: "2026-05-30",
-    actualLoadingDate: "2026-05-20",
-    actualDeliveryDate: null,
-    originLocationId: 5,
-    destinationLocationId: 1,
-    customsClearance: "CustomsPro / Gdansk",
-    temperatureMinC: 5,
-    temperatureMaxC: 8,
-    confirmationStatus: "Sent",
-    confirmationSentAt: "2026-05-18T09:30:00",
-    billingStatus: "Not ready",
-    notes: "EXW Morocco. Forwarder combines container and inland handling. BL and container captured after sailing.",
-    legs: [
-      { id: 1, mode: "Road", status: "Delivered", fromLocationId: 5, toLocationId: 23, carrierId: 9, plannedPickupDate: "2026-05-20", plannedDeliveryDate: "2026-05-20", actualPickupDate: "2026-05-20", actualDeliveryDate: "2026-05-20", vehiclePlate: "MA-74231", trailerPlate: "MA-RF-108", driverName: "Youssef A.", driverPhone: "+212 600 000 111", temperatureMinC: 5, temperatureMaxC: 8, costAmount: 2100, costCurrency: "PLN", costFxRate: 1, costPLN: 2100, notes: "Producer to port warehouse" },
-      { id: 2, mode: "Sea", status: "Loaded", fromLocationId: 23, toLocationId: 6, forwarderId: 15, plannedPickupDate: "2026-05-22", plannedDeliveryDate: "2026-05-30", containerNumber: "MSCU1234567", sealNumber: "SL998877", bookingNumber: "RAB-AGD-0522", blNumber: "BL-MA-2026-7781", shippingLine: "MSC", costAmount: 1850, costCurrency: "USD", costFxRate: 3.8812, costPLN: 7180.22, notes: "Container leg to Gdansk" },
-      { id: 3, mode: "Road", status: "Planned", fromLocationId: 6, toLocationId: 1, carrierId: 9, plannedPickupDate: "2026-05-30", plannedDeliveryDate: "2026-05-30", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 5, temperatureMaxC: 8, costAmount: 1450, costCurrency: "PLN", costFxRate: 1, costPLN: 1450, notes: "Port to WH-01 after customs" },
-    ],
-    goods: [
-      { id: 1, poRef: "PO-2026-0117", soRef: "SO-2026-0105", lotRef: "LOT-2026-0086", product: "Papryka Kapia", origin: "Morocco", quality: "I", size: "M", packaging: "5 kg carton", qtyKg: 12000, grossKg: 12800, pallets: 20, description: "Moroccan pepper, reefer container" },
-    ],
-    costs: [
-      { id: 1, type: "pre_carriage", supplierId: 9, amount: 2100, currency: "PLN", fxRate: 1, amountPLN: 2100, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Supplier to port (road carrier)" },
-      { id: 2, type: "sea_freight", supplierId: 15, amount: 1850, currency: "USD", fxRate: 3.8812, amountPLN: 7180.22, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Sea leg" },
-      { id: 3, type: "customs", supplierId: 11, amount: 985, currency: "PLN", fxRate: 1, amountPLN: 985, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Import duties / phyto expected" },
-    ],
-    documents: [
-      { id: 1, type: "Booking", ref: "RAB-AGD-0522", status: "Received", date: "2026-05-18", notes: "Forwarder booking" },
-      { id: 2, type: "Container", ref: "MSCU1234567 / SL998877", status: "Received", date: "2026-05-22", notes: "Container and seal" },
-      { id: 3, type: "BL", ref: "BL-MA-2026-7781", status: "Received", date: "2026-05-23", notes: "Bill of lading" },
-    ],
-    terms: STANDARD_ROAD_TERMS,
-  },
-  {
-    id: 3,
-    number: "SHP-2026-0060",
-    transportOrderNo: "SHP-2026-0060",
-    mode: "Road",
-    purpose: "SO_DELIVERY",
-    status: "Booked",
-    poRefs: ["PO-2026-0121"],
-    soRefs: ["SO-2026-0102"],
-    lotRefs: ["LOT-2026-0100"],
-    carrierId: 17,
-    forwarderId: null,
-    brokerId: null,
-    vehicleCount: 1,
-    costResponsibility: "Marianna",
-    loadingDate: "2026-06-05",
-    expectedDeliveryDate: "2026-06-10",
-    actualLoadingDate: null,
-    actualDeliveryDate: null,
-    originLocationId: 1,
-    destinationLocationId: 10,
-    customsClearance: "Not required - EU road",
-    temperatureMinC: 6,
-    temperatureMaxC: 8,
-    confirmationStatus: "Not sent",
-    confirmationSentAt: null,
-    billingStatus: "Not ready",
-    notes: "Delivery from Spanish PO to Biedronka after arrival. Use once stock/lot is available.",
-    legs: [
-      { id: 1, mode: "Road", status: "Booked", fromLocationId: 1, toLocationId: 10, carrierId: 17, plannedPickupDate: "2026-06-05", plannedDeliveryDate: "2026-06-10", vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: 6, temperatureMaxC: 8, costAmount: 1450, costCurrency: "PLN", costFxRate: 1, costPLN: 1450, notes: "WH-01 to Biedronka" },
-    ],
-    goods: [
-      { id: 1, poRef: "PO-2026-0121", soRef: "SO-2026-0102", lotRef: "LOT-2026-0100", product: "Red Bell Pepper", origin: "Spain", quality: "I", size: "L", packaging: "5 kg carton", qtyKg: 5000, grossKg: 5400, pallets: 10, description: "Sales delivery for Biedronka" },
-    ],
-    costs: [
-      { id: 1, type: "road_freight", supplierId: 17, amount: 1450, currency: "PLN", fxRate: 1, amountPLN: 1450, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Agreed road freight" },
-    ],
-    documents: [
-      { id: 1, type: "Transport order", ref: "", status: "Required", date: "", notes: "Generate and send to carrier" },
-      { id: 2, type: "CMR", ref: "", status: "Required", date: "", notes: "Required for billing" },
-    ],
-    terms: STANDARD_ROAD_TERMS,
-  },
-
-  {
-    id: 4,
-    number: "SHP-2026-0070",
-    transportOrderNo: "SHP-2026-0070",
-    mode: "Multimodal",
-    purpose: "PO_IMPORT",
-    status: "Arrived",
-    poRefs: ["PO-2026-0130"],
-    soRefs: [],
-    lotRefs: ["LOT-2026-0108"],
-    carrierId: 17,
-    forwarderId: 16,
-    brokerId: 11,
-    vehicleCount: 9,
-    costResponsibility: "Marianna",
-    loadingDate: "2026-06-12",
-    expectedDeliveryDate: "2026-07-03",
-    actualLoadingDate: "2026-06-12",
-    actualDeliveryDate: null,
-    originLocationId: 23,
-    destinationLocationId: 1,
-    customsClearance: "CustomsPro Sp. z o.o. - Gdansk port clearance",
-    temperatureMinC: 7,
-    temperatureMaxC: 10,
-    confirmationStatus: "Sent",
-    confirmationSentAt: "2026-06-10T09:30:00.000Z",
-    billingStatus: "Ready for supplier invoice",
-    notes: "Scenario for multiple transport units: 4 sea containers of potatoes arrive at Gdansk port, then the same cargo is split over 5 road trucks due to EU road weight limits.",
-    legs: [
-      {
-        id: 1,
-        mode: "Sea",
-        status: "Arrived",
-        fromLocationId: 23,
-        toLocationId: 6,
-        forwarderId: 16,
-        plannedPickupDate: "2026-06-12",
-        plannedDeliveryDate: "2026-07-01",
-        costAmount: 7200,
-        costCurrency: "USD",
-        costFxRate: 3.9,
-        costPLN: 28080,
-        notes: "Four reefer containers Morocco -> Gdansk",
-        vehicles: [
-          { id: 1, mode: "Sea", qtyKg: 27000, pallets: 0, containerNumber: "DSVU2400011", sealNumber: "SL240001", bookingNumber: "DSV-POT-2400", blNumber: "BL-POT-2400-1", shippingLine: "MSC", notes: "Container 1/4" },
-          { id: 2, mode: "Sea", qtyKg: 27000, pallets: 0, containerNumber: "DSVU2400012", sealNumber: "SL240002", bookingNumber: "DSV-POT-2400", blNumber: "BL-POT-2400-1", shippingLine: "MSC", notes: "Container 2/4" },
-          { id: 3, mode: "Sea", qtyKg: 27000, pallets: 0, containerNumber: "DSVU2400013", sealNumber: "SL240003", bookingNumber: "DSV-POT-2400", blNumber: "BL-POT-2400-1", shippingLine: "MSC", notes: "Container 3/4" },
-          { id: 4, mode: "Sea", qtyKg: 27000, pallets: 0, containerNumber: "DSVU2400014", sealNumber: "SL240004", bookingNumber: "DSV-POT-2400", blNumber: "BL-POT-2400-1", shippingLine: "MSC", notes: "Container 4/4" },
-        ],
-      },
-      {
-        id: 2,
-        mode: "Road",
-        status: "Booked",
-        fromLocationId: 6,
-        toLocationId: 1,
-        carrierId: 17,
-        plannedPickupDate: "2026-07-02",
-        plannedDeliveryDate: "2026-07-03",
-        temperatureMinC: 7,
-        temperatureMaxC: 10,
-        costAmount: 5900,
-        costCurrency: "PLN",
-        costFxRate: 1,
-        costPLN: 5900,
-        notes: "Five truck split from port to WH-01 due to weight limits",
-        vehicles: [
-          { id: 11, mode: "Road", qtyKg: 21600, pallets: 18, truckPlate: "WX 2401A", trailerPlate: "WX 2401T", driverName: "Driver 1", driverPhone: "+48 500 000 001", notes: "Truck 1/5" },
-          { id: 12, mode: "Road", qtyKg: 21600, pallets: 18, truckPlate: "WX 2402A", trailerPlate: "WX 2402T", driverName: "Driver 2", driverPhone: "+48 500 000 002", notes: "Truck 2/5" },
-          { id: 13, mode: "Road", qtyKg: 21600, pallets: 18, truckPlate: "WX 2403A", trailerPlate: "WX 2403T", driverName: "Driver 3", driverPhone: "+48 500 000 003", notes: "Truck 3/5" },
-          { id: 14, mode: "Road", qtyKg: 21600, pallets: 18, truckPlate: "WX 2404A", trailerPlate: "WX 2404T", driverName: "Driver 4", driverPhone: "+48 500 000 004", notes: "Truck 4/5" },
-          { id: 15, mode: "Road", qtyKg: 21600, pallets: 18, truckPlate: "WX 2405A", trailerPlate: "WX 2405T", driverName: "Driver 5", driverPhone: "+48 500 000 005", notes: "Truck 5/5" },
-        ],
-      },
-    ],
-    goods: [
-      { id: 1, poRef: "PO-2026-0130", soRef: "", lotRef: "LOT-2026-0108", product: "Potato", origin: "Morocco", quality: "I", size: "50+", packaging: "25 kg bags", qtyKg: 108000, grossKg: 111000, pallets: 90, description: "4 containers split into 5 EU-compliant road trucks" },
-    ],
-    costs: [
-      { id: 1, type: "sea_freight", supplierId: 16, amount: 7200, currency: "USD", fxRate: 3.9, amountPLN: 28080, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Sea freight for 4 containers" },
-      { id: 2, type: "on_carriage", supplierId: 17, amount: 5900, currency: "PLN", fxRate: 1, amountPLN: 5900, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "5 trucks from Gdansk port to WH-01" },
-      { id: 3, type: "customs", supplierId: 11, amount: 980, currency: "PLN", fxRate: 1, amountPLN: 980, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "Customs documents" },
-    ],
-    documents: [
-      { id: 1, type: "Transport order", ref: "SHP-2026-0070", status: "Sent", date: "2026-06-10", notes: "Bilingual order sent to forwarder/carrier" },
-      { id: 2, type: "BL", ref: "BL-POT-2400-1", status: "Received", date: "2026-06-13", notes: "One BL covering four containers" },
-      { id: 3, type: "CMR", ref: "", status: "Required", date: "", notes: "Five CMRs expected, one per road truck" },
-    ],
-    terms: STANDARD_ROAD_TERMS,
-  },
-
-];
+// v6.32.0 (R7b-5): demo seed INIT_SHIPMENTS moved out of the production bundle → dev/demoSeed.reference.ts
 
 function todayISO() {
   return localTodayISO();
@@ -420,6 +182,11 @@ function uniq(arr) {
 function locById(id) {
   return LOCATIONS.find(l => String(l.id) === String(id));
 }
+// v6.34.0: a location id → its country, for the direction matrix.
+function countryOfLocation(id) {
+  const l = locById(id);
+  return l ? String(l.country || "") : "";
+}
 
 function locText(id, fallback = "") {
   const l = locById(id);
@@ -432,20 +199,12 @@ function statusRank(status) {
   return i < 0 ? 999 : i;
 }
 
-function locationInputValue(id, custom) {
-  if (custom) return custom;
-  const l = locById(id);
-  return l ? l.name : "";
-}
 
 function locationTextFromFields(id, custom) {
   if (custom) return custom;
   return locText(id);
 }
 
-function locationDatalistId(prefix, legIdx) {
-  return `${prefix}-location-options-${legIdx}`;
-}
 
 // ─── v6.3.0: grouped, mode-aware From/To selector ──────────────────────────
 // Replaces the free-text datalist (easy to mistype) with a structured dropdown
@@ -681,7 +440,12 @@ function logisticsProviders(contacts = [], service = "") {
       return (service === "Customs" && types.includes("Broker"));
     })
     .map(providerFromContact);
-  const combined = [...fromContacts, ...FALLBACK_PROVIDERS.filter(p => !service || (p.services || []).includes(service) || (service === "Customs" && p.type === "Broker"))];
+  // v6.30.2 (clean system): FALLBACK_PROVIDERS are NO LONGER offered as options —
+  // pickers list Contacts only, so a reset system shows no demo carriers/forwarders.
+  // Legacy shipments that still reference a fallback id keep displaying correctly
+  // (providerById below resolves them, preferring a same-named live contact per T-25);
+  // on the next edit the user re-picks the provider from Contacts.
+  const combined = [...fromContacts];
   const seen = new Set();
   return combined.filter(p => {
     if (seen.has(String(p.id))) return false;
@@ -733,8 +497,11 @@ function nextShipmentNumber(shipments) {
   const year = new Date().getFullYear();
   let max = 0;
   (shipments || []).forEach(s => {
-    const m = String(s.number || "").match(/SHP-\d{4}-(\d+)/);
-    if (m) max = Math.max(max, parseInt(m[1], 10));
+    // v6.31.0: year-scoped like nextShipmentNumberPure (shipments.domain) — the
+    // old year-blind regex took the global max, so from 1 January the two
+    // generators diverged (this one continuing, the domain one restarting).
+    const m = String(s.number || "").match(/^SHP-(\d{4})-(\d+)$/);
+    if (m && Number(m[1]) === year) max = Math.max(max, parseInt(m[2], 10));
   });
   return `SHP-${year}-${String(max + 1).padStart(4, "0")}`;
 }
@@ -761,24 +528,37 @@ function norm(v) {
 
 
 // v6.3.0: every newly built shipment starts with the standard document checklist.
-function buildShipmentFromPO(po, opts, shipments, lots) { return withStandardDocs(buildShipmentFromPO__raw(po, opts, shipments, lots)); }
+function buildShipmentFromPO(po, opts, shipments, lots, governingSO = null) { return withStandardDocs(buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO)); }
 function buildShipmentFromSO(so, opts, shipments, lots) { return withStandardDocs(buildShipmentFromSO__raw(so, opts, shipments, lots)); }
 function buildManualShipment(opts, shipments) { return withStandardDocs(buildManualShipment__raw(opts, shipments)); }
 
-function buildShipmentFromPO__raw(po, opts, shipments, lots) {
+function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null) {
   const id = nextId();
   const number = nextShipmentNumber(shipments);
-  const isExport = String(po.flow || "").startsWith("EXP");
+  // v6.29.0: the shipment owns the trade direction — seeded from the PO's
+  // provisional value here, editable on the shipment afterwards.
+  const tradeDirection = shipmentTradeDirection(null, po, governingSO, countryOfLocation);
   const mode = opts.mode || (po.requiresSea ? "Multimodal" : "Road");
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
-  // Origin = supplier facility (PO pickup). Try a known location id first; otherwise
-  // fall back to the supplier's real address as FREE TEXT so ANY supplier works
-  // (including newly added ones not in the fixed location list). Never default to WH-01.
-  const originLocationId = guessSupplierLocationId(po) || opts.originLocationId || null;
-  const originCustom = originLocationId ? "" : (opts.originCustom || (po.supplier ? `${po.supplier.name}${po.supplier.address ? ", " + po.supplier.address : ""}${po.supplier.country ? ", " + po.supplier.country : ""}` : ""));
-  const destinationLocationId = po.destinationLocationId || opts.destinationLocationId || null;
-  const destinationCustom = destinationLocationId ? "" : (opts.destinationCustom || "");
+  // v6.32.0 (P1-7, terms-aware): the PO's named place (BP-56) is the HANDOVER
+  // point — where OUR journey starts. So:
+  //   • EXW/FCA/FOB/CIF/CFR/CIP → shipment ORIGIN defaults to the named place
+  //     (for CIF that is the port of discharge, seller-paid main carriage —
+  //     previously the origin wrongly defaulted to the producer, making the
+  //     journey look producer→warehouse);
+  //   • DAP/DPU/DDP (seller delivers) → named place is OUR delivery place, so
+  //     it stays the DESTINATION default and the origin stays the supplier.
+  // Fallback for POs without a named place: supplier facility as before.
+  const sellerDelivers = ["DAP", "DPU", "DDP"].includes(String(po.buyIncoterm || "").toUpperCase());
+  const namedPlaceId = po.destinationLocationId || null;
+  const namedPlaceText = po.destinationText || "";
+  const supplierGuessId = guessSupplierLocationId(po);
+  const supplierText = po.supplier ? `${po.supplier.name}${po.supplier.address ? ", " + po.supplier.address : ""}${po.supplier.country ? ", " + po.supplier.country : ""}` : "";
+  const originLocationId = (!sellerDelivers && namedPlaceId) || supplierGuessId || opts.originLocationId || null;
+  const originCustom = originLocationId ? "" : (opts.originCustom || (!sellerDelivers && namedPlaceText) || supplierText);
+  const destinationLocationId = (sellerDelivers ? namedPlaceId : null) || opts.destinationLocationId || null;
+  const destinationCustom = destinationLocationId ? "" : (opts.destinationCustom || (sellerDelivers ? namedPlaceText : ""));
   const poLotRefs = uniq([...(po.linkedLots || []), ...(lots || []).filter(l => l.poRef === po.number).map(l => l.number)]);
   // Find any SO that sources from this PO, so goods rows can carry the SO ref.
   const soRefForPO = (opts.soRefs && opts.soRefs[0]) || "";
@@ -793,6 +573,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
     return {
       id: idx + 1,
       poRef: po.number,
+    tradeDirection,
       soRef: soRefForPO,
       lotRef: lot,
       product: it.product || "Goods",
@@ -851,6 +632,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots) {
     status: "Booked",
     poRefs: [po.number],
     soRefs: (opts.soRefs || []),
+    governingSoRef: opts.governingSoRef || (governingSO && governingSO.number) || "",
     lotRefs: poLotRefs,
     carrierId,
     forwarderId,
@@ -1028,9 +810,6 @@ function buildManualShipment__raw(opts, shipments) {
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max }: any) {
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
 }
-function TextArea({ value, onChange = () => {}, placeholder = "", rows = 3, style = {}, disabled = false }: any) {
-  return <textarea value={value ?? ""} onChange={onChange} placeholder={placeholder} rows={rows} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", resize: "vertical", ...style }} />;
-}
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   return <select value={value ?? ""} onChange={onChange} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }}>{children}</select>;
 }
@@ -1085,6 +864,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const roadProviders = logisticsProviders(contacts, "Road");
   const seaProviders = logisticsProviders(contacts, "Sea");
   const [sourceType, setSourceType] = useState("PO");
+  const [governingSoPrompt, setGoverningSoPrompt] = useState(null); // v6.34.0: {po, sos} when a multi-SO PO needs a pick
   const [ref, setRef] = useState(""); // v6.18.14 (#4): no PO pre-selected — force a choice
   // Which PO line ids are loaded on this shipment (default: all). Lets the user load
   // a subset of a multi-product PO.
@@ -1161,14 +941,24 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref, sourceType]);
   const providers = form.mode === "Road" || form.mode === "Rail" ? roadProviders : form.mode === "Air" ? logisticsProviders(contacts, "Air") : seaProviders;
-  function create() {
+  function create(governingSoRef = "") {
     let sh;
     if (sourceType === "PO" && selectedPO) {
-      // Find any SOs that source from this PO so the shipment carries the SO ref too.
-      const linkedSOs = (orders || [])
-        .filter(o => (o.items || []).some(it => it.sourceType === "PO" && it.sourceRef === selectedPO.number))
-        .map(o => o.number);
-      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs: linkedSOs, selectedItemIds }, shipments, lots);
+      // v6.34.0 (BP-61, Reading 1): SOs sourcing from this PO. If MORE THAN ONE,
+      // ask which SO/client this truck is for (mirrors the physical split at the
+      // port) rather than silently attributing the wrong one — direction depends
+      // on it. One SO → use it. None → unsold portion to our warehouse.
+      const linkedSOList = (orders || [])
+        .filter(o => o.status !== "Cancelled" && (o.items || []).some(it => it.sourceType === "PO" && it.sourceRef === selectedPO.number));
+      if (linkedSOList.length > 1 && !governingSoRef) {
+        setGoverningSoPrompt({ po: selectedPO, sos: linkedSOList });
+        return; // wait for the pick; the picker calls create(chosenRef) to resume
+      }
+      const governing = (governingSoRef && governingSoRef !== "__none__")
+        ? linkedSOList.find(o => o.number === governingSoRef)
+        : (governingSoRef === "__none__" ? null : (linkedSOList[0] || null));
+      const soRefs = governing ? [governing.number] : [];
+      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds }, shipments, lots, governing);
     }
     else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, form, shipments, lots);
     else sh = buildManualShipment(form, shipments);
@@ -1339,8 +1129,40 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="green" onClick={create} disabled={blockCreate} title={needsRef ? `Select a ${sourceType} first` : blockCreate ? (poShipState?.alreadyFull ? "This PO is fully shipped — nothing left to ship" : "This shipment would exceed the PO quantity — reduce the lines selected") : ""}>Create shipment</SmallButton>
+        <SmallButton kind="green" onClick={() => create()} disabled={blockCreate} title={needsRef ? `Select a ${sourceType} first` : blockCreate ? (poShipState?.alreadyFull ? "This PO is fully shipped — nothing left to ship" : "This shipment would exceed the PO quantity — reduce the lines selected") : ""}>Create shipment</SmallButton>
       </div>
+
+      {/* v6.34.0 (BP-61): which SO/client is this truck for? Shown only when the
+          source PO links more than one active SO — mirrors the physical split at
+          the port. Each choice resolves this shipment's trade direction from its
+          own real ends (producer × that SO's destination). */}
+      {governingSoPrompt && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 8000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setGoverningSoPrompt(null)}>
+          <div onClick={(e: any) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 560, maxWidth: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.3)", padding: 22 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>Which sales order is this truck for?</div>
+            <div style={{ fontSize: 12, color: "#64748B", marginBottom: 14 }}>
+              PO <b>{governingSoPrompt.po.number}</b> is sold to {governingSoPrompt.sos.length} clients. Pick the one this shipment serves — it sets the destination and the trade direction. If this truck is the unsold portion going to your warehouse, choose that.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
+              {governingSoPrompt.sos.map((o: any) => {
+                const dir = shipmentTradeDirection(null, governingSoPrompt.po, o, countryOfLocation);
+                const lbl = MOVE_LBL[dir] || MOVE_LBL.IMPORT;
+                const dest = o.destinationText || (o.destinationLocationId != null ? (locById(o.destinationLocationId)?.name || "") : "") || o.client?.country || "—";
+                return (
+                  <button key={o.number} onClick={() => { setGoverningSoPrompt(null); create(o.number); }} style={{ textAlign: "left", border: "1px solid #E5E7EB", borderRadius: 9, padding: "10px 12px", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 800, color: "#2563EB" }}>{o.number}</span>
+                    <span style={{ fontSize: 12.5 }}>{o.client?.name || "(client)"} · {o.sellIncoterm || "—"} {dest}</span>
+                    <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 800, color: "#fff", background: lbl.color, borderRadius: 999, padding: "2px 9px" }}>{lbl.label}</span>
+                  </button>
+                );
+              })}
+              <button onClick={() => { setGoverningSoPrompt(null); create("__none__"); }} style={{ textAlign: "left", border: "1px dashed #CBD5E1", borderRadius: 9, padding: "10px 12px", background: "#F8FAFC", cursor: "pointer", fontSize: 12.5, color: "#475569" }}>
+                None — this truck is the unsold portion going to our warehouse
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   </div>;
 }
@@ -1372,7 +1194,6 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
     d.customs = normalizeCustoms(d.customs || d.customsClearance); // BP-27 string→object migration on open
     return d;
   });
-  const setCustoms = (patch: any) => setDraft((prev: any) => ({ ...prev, customs: { ...(prev.customs || {}), ...patch } }));
   const roadProviders = logisticsProviders(contacts, "Road");
   const seaProviders = logisticsProviders(contacts, "Sea");
   const customsProviders = logisticsProviders(contacts, "Customs");
@@ -1542,6 +1363,27 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)} disabled={draft.status === "Cancelled"} title={draft.status === "Cancelled" ? "This shipment is cancelled — read-only and can't be reactivated." : ""}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
+            <div><Lbl>Trade direction <span style={{ color: "#BBB", fontWeight: 400 }}>· owns the journey</span></Lbl>
+              {(() => {
+                const govSO = (orders || []).find((o: any) => o.number === draft.governingSoRef) || null;
+                const govPO = (pos || []).find((p: any) => (draft.poRefs || []).includes(p.number)) || null;
+                const auto = shipmentTradeDirection({ ...draft, tradeDirection: null }, govPO, govSO, countryOfLocation);
+                return (
+                  <Sel value={draft.tradeDirection || ""} onChange={e => sf("tradeDirection", e.target.value || null)} title="The journey's customs classification, derived from the producer's country and this truck's destination (its governing SO). Override only for edge cases the matrix can't see (e.g. goods transiting an EU port under T1).">
+                    <option value="">Auto — {MOVE_LBL[auto]?.label || auto} (derived)</option>
+                    {TRADE_DIRS.map((d: string) => <option key={d} value={d}>{MOVE_LBL[d]?.label || d}</option>)}
+                  </Sel>
+                );
+              })()}
+            </div>
+            <div><Lbl>Governing sales order <span style={{ color: "#BBB", fontWeight: 400 }}>· sets destination</span></Lbl>
+              <Sel value={draft.governingSoRef || ""} onChange={e => sf("governingSoRef", e.target.value || "")} title="Which client's truck this is. Sets the destination and, with the producer's country, the trade direction. Change it if this shipment was attributed to the wrong sales order.">
+                <option value="">None — to our warehouse</option>
+                {(orders || []).filter((o: any) => o.status !== "Cancelled" && (draft.poRefs || []).some((pr: string) => (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === pr))).map((o: any) => (
+                  <option key={o.number} value={o.number}>{o.number} · {o.client?.name || "(client)"}</option>
+                ))}
+              </Sel>
+            </div>
             <div><Lbl>Expected loading date</Lbl><Inp type="date" value={draft.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the whole shipment (PO loading date). In-between dates are set per leg below." /></div>
             <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={draft.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="End of the whole shipment (SO delivery date)." /></div>
           </div>
@@ -1767,7 +1609,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             const subtotals = Object.entries(byCur).filter(([, v]) => v > 0).map(([cur, v]) => fmtMoney(v, cur)).join(" + ");
             const totalPLN = shipmentCostPLN(draft);
             const eurLine = (draft.costs || []).find((c: any) => c.currency === "EUR" && parseNum(c.fxRate) > 0);
-            const eurRate = eurLine ? parseNum(eurLine.fxRate) : 4.25;
+            const eurRate = eurLine ? parseNum(eurLine.fxRate) : defaultFxRate("EUR"); // v6.30.1: no hardcoded FX — fx.ts is the single source
             const totalEUR = eurRate > 0 ? totalPLN / eurRate : 0;
             return (
               <div style={{ textAlign: "right", fontSize: 13, color: "#444", marginTop: 8 }}>
@@ -2269,25 +2111,31 @@ export default function Shipments({
   shipments: extShipments,
   setShipments: extSetShipments,
   contacts: extContacts = [],
-  pos: extPOs = [],
+  // v6.30.2: no `= []` defaults on pos/lots/orders — with them, `??` could never
+  // distinguish "standalone (props undefined)" from "clean system (empty array)".
+  pos: extPOs,
   setPOs: extSetPOs,
-  lots: extLots = [],
+  lots: extLots,
   setLots: extSetLots,
-  orders: extOrders = [],
+  orders: extOrders,
   setOrders: extSetOrders,
   onNavigate = () => {},
 }: any = {}) {
-  const [localShipments, setLocalShipments] = useState(INIT_SHIPMENTS);
-  const [localPOs, setLocalPOs] = useState(STANDALONE_POS);
-  const [localLots, setLocalLots] = useState(STANDALONE_LOTS);
-  const [localOrders, setLocalOrders] = useState(STANDALONE_SOS);
+  const [localShipments, setLocalShipments] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
+  const [localPOs, setLocalPOs] = useState<any[]>([]);
+  const [localLots, setLocalLots] = useState<any[]>([]);
+  const [localOrders, setLocalOrders] = useState<any[]>([]);
   const shipments = extShipments || localShipments;
   const setShipments = extSetShipments || setLocalShipments;
-  const pos = extPOs && extPOs.length ? extPOs : localPOs;
+  // v6.30.2 (G1 completion): nullish fallback, not length-based. The integrated app
+  // always passes arrays; an EMPTY array (clean system after reset) must stay empty,
+  // not silently swap in the STANDALONE_* demo data. Stubs remain for true standalone
+  // use only (props undefined).
+  const pos = extPOs ?? localPOs;
   const setPOs = extSetPOs || setLocalPOs;
-  const lots = extLots && extLots.length ? extLots : localLots;
+  const lots = extLots ?? localLots;
   const setLots = extSetLots || setLocalLots;
-  const orders = extOrders && extOrders.length ? extOrders : localOrders;
+  const orders = extOrders ?? localOrders;
   const setOrders = extSetOrders || setLocalOrders;
   const contacts = extContacts || [];
 

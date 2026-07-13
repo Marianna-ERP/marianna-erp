@@ -63,23 +63,6 @@ export function isDirectCargoPlan(s: any): boolean {
   return s?.cargoPlan === "DIRECT_TO_CLIENT";
 }
 
-export const TRADE_MOVEMENTS = [
-  { code: "IMPORT", label: "Import" },
-  { code: "EXPORT", label: "Export" },
-];
-export const HANDOVER_POINTS = [
-  { code: "supplier",    label: "Supplier site (we take over at the producer)" },
-  { code: "origin_port", label: "Port of loading" },
-  { code: "dest_port",   label: "Port of discharge" },
-  { code: "our_wh",      label: "Our warehouse" },
-  { code: "client",      label: "Client / destination" },
-];
-export const CARGO_PLANS = [
-  { code: "OUR_WAREHOUSE",    label: "To our warehouse (stock / split distribution)" },
-  { code: "DIRECT_TO_CLIENT", label: "Direct to client (back-to-back — never our warehouse)" },
-  { code: "TO_PORT",          label: "To port (onward by sea)" },
-  { code: "CLIENT_PICKUP",    label: "Client collects (EXW — no logistics on our side)" },
-];
 
 /** Ensure a PO has both representations in sync (called on load / save). */
 export function reconcilePOFlow(po: any): any {
@@ -149,14 +132,17 @@ export const MOVEMENT_LABELS: Record<string, { label: string; color: string; hin
 };
 
 /** Which location types the named place should offer, per incoterm. */
+// Labels per Hazem's table (v6.29.0): plain words, the label says what to type.
+// CFR corrected to the DISCHARGE port (Cost and Freight *to named port of
+// destination* — risk passes at loading, but the named place is the destination).
 export function namedPlacePoolForIncoterm(incoterm: string): { types: string[]; label: string } {
   const t = String(incoterm || "").toUpperCase();
-  if (t === "EXW" || t === "FCA") return { types: ["SUPPLIER"], label: "Named place — supplier site / origin point" };
-  if (t === "FOB" || t === "CFR") return { types: ["PORT"], label: "Named place — port of loading" };
-  if (t === "CIF") return { types: ["PORT"], label: "Named place — port of discharge" };
-  if (t === "DAP" || t === "DAT") return { types: ["CLIENT", "OWN"], label: "Named place — place of delivery" };
-  if (t === "DDP") return { types: ["OWN", "CLIENT"], label: "Named place — delivered to" };
-  return { types: ["SUPPLIER", "PORT", "OWN", "CLIENT"], label: "Named place" };
+  if (t === "EXW" || t === "FCA") return { types: ["SUPPLIER"], label: "Pickup place (supplier site)" };
+  if (t === "FOB") return { types: ["PORT"], label: "Port of loading" };
+  if (t === "CFR" || t === "CIF") return { types: ["PORT"], label: "Port of discharge" };
+  if (t === "DAP" || t === "DAT") return { types: ["CLIENT", "OWN"], label: "Delivery place" };
+  if (t === "DDP") return { types: ["OWN", "CLIENT"], label: "Delivered to (our address)" };
+  return { types: ["SUPPLIER", "PORT", "OWN", "CLIENT"], label: "Place (set the incoterm first)" };
 }
 
 /** One contractual sentence: responsibilities + the named place, in words. */
@@ -209,4 +195,64 @@ export function composePOFlow(po: any, orders: any[]): { flow: string; directFlo
     handoverPoint: po.handoverPoint,
   };
   return { flow: structToFlow(st) || po.flow || "", directFlow: st.cargoPlan === "DIRECT_TO_CLIENT" };
+}
+
+// ── v6.34.0: the SHIPMENT resolves direction from its REAL ends ──────────────
+// A shipment's direction is a fact about ITS journey — producer country (from
+// the PO) × final destination country (from the governing SO's destination).
+// One CIF-Koper PO can father an EU-import truck AND a T1 cross-trade truck;
+// each shipment resolves independently once its governing SO is known.
+//
+// Resolution order (first hit wins):
+//   1. explicit manual override on the shipment (the human's final word — the
+//      T1-at-an-EU-port subtlety the matrix can't infer)
+//   2. DERIVED from ends: producer country × SO destination country, via the
+//      four-class matrix — the automatic, correct answer for the common case
+//   3. the PO's provisional movement (no governing SO — unsold-to-warehouse)
+//   4. legacy flow key, then Import
+export const TRADE_DIRECTIONS = ["IMPORT", "EXPORT", "INTRA_EU", "CROSS_TRADE"];
+
+/** A country string for the shipment's ORIGIN — the producer, from the PO. */
+export function poOriginCountry(po: any, resolveCountry?: (id: any) => string): string {
+  if (!po) return "";
+  return String(po.supplier?.country || (po.items || [])[0]?.origin || "").trim();
+}
+
+/** A country string for the FINAL DESTINATION — from the governing SO. Prefers
+ *  the SO's named destination (per its sell incoterm) over the client's home
+ *  country: a CIF-to-a-port sale goes where the goods physically go (ruling #2).
+ *  resolveCountry maps a destinationLocationId → its country. */
+export function soDestinationCountry(so: any, resolveCountry?: (id: any) => string): string {
+  if (!so) return "";
+  if (so.destinationLocationId != null && resolveCountry) {
+    const c = resolveCountry(so.destinationLocationId);
+    if (c) return String(c).trim();
+  }
+  if (so.destinationText) {
+    // free-typed place — best effort: a trailing country-ish token, else the client's country
+    const txt = String(so.destinationText).trim();
+    if (txt) return txt;
+  }
+  return String(so.client?.country || "").trim();
+}
+
+/** The derived direction from two country strings, or "" when either is unknown. */
+export function directionFromCountries(originCountry: string, destCountry: string): string {
+  if (!originCountry || !destCountry) return "";
+  return movementFromEnds(isEUCountry(originCountry), isEUCountry(destCountry));
+}
+
+export function shipmentTradeDirection(shipment: any, po: any, so: any = null, resolveCountry?: (id: any) => string): string {
+  // 1. explicit manual override — always wins
+  if (shipment?.tradeDirection && MOVEMENT_LABELS[shipment.tradeDirection]) return shipment.tradeDirection;
+  // 2. derived from the real ends when a governing SO is known
+  if (so) {
+    const derived = directionFromCountries(poOriginCountry(po, resolveCountry), soDestinationCountry(so, resolveCountry));
+    if (derived) return derived;
+  }
+  // 3. PO provisional (no SO — unsold portion to warehouse)
+  if (po?.tradeMovement && MOVEMENT_LABELS[po.tradeMovement]) return po.tradeMovement;
+  // 4. legacy flow key, then Import
+  if (String(po?.flow || "").startsWith("EXP")) return "EXPORT";
+  return "IMPORT";
 }

@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";
 // ─────────────────────────────────────────────────────────────────────────────
 // claim.domain.ts — the Producer Claim document (Batch 6a, BP-55b / BP-33 / BP-37)
 //
@@ -13,7 +14,8 @@
 // All money maths per-line-rounded to 2dp, exactly like the paper form.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function n(v: any): number { const x = parseFloat(String(v ?? "")); return isFinite(x) ? x : 0; }
+// v6.32.0 (R7b-4): comma-aware canonical parser — "1,5" now parses as 1.5.
+const n = parseNum;
 function r2(v: number): number { return Math.round(v * 100) / 100; }
 
 export type ClaimCurrency = "PLN" | "EUR" | "EGP";

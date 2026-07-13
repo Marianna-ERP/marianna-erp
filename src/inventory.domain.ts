@@ -27,6 +27,7 @@ export type LocByIdFn = (id: any) => LocResolved | null | undefined;
  */
 export function recomputeLotFromMovements(lot: any, movements: any[], locById: LocByIdFn) {
   let receivedKg = 0, physicalKg = 0, damagedKg = 0, claimedKg = 0;
+  let overIssuedKg = 0; // Safeguards 7a: clamped excess, surfaced not swallowed
   let locationId = lot.baseLocationId ?? lot.locationId;
   let status = lot.expectedKg && movements.length === 0 ? "Expected" : (lot.status || "Expected");
   const ordered = [...movements].filter(m => !m.voided).sort(
@@ -38,9 +39,16 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
     switch (m.type) {
       case "IN": receivedKg += q; physicalKg += q; locationId = m.toId; sawIn = true; break;
       case "TRANSFER": locationId = m.toId; break;
-      case "SHIP_OUT": physicalKg = Math.max(0, physicalKg - q); sawShipOut = true; break;
+      case "SHIP_OUT":
+        // Safeguards 7a: an over-issue (shipping more than exists) is still
+        // clamped for crash-safety, but no longer SILENT — the excess is
+        // accumulated and surfaced by the integrity checker.
+        if (q > physicalKg) overIssuedKg += q - physicalKg;
+        physicalKg = Math.max(0, physicalKg - q); sawShipOut = true; break;
       case "REVERSAL": physicalKg += q; if (m.toId) locationId = m.toId; break;
-      case "DAMAGE": physicalKg = Math.max(0, physicalKg - q); damagedKg += q; break;
+      case "DAMAGE":
+        if (q > physicalKg) overIssuedKg += q - physicalKg;
+        physicalKg = Math.max(0, physicalKg - q); damagedKg += q; break;
       case "CLAIM": claimedKg += q; break;
       case "RECLASS": break;
       default: break;
@@ -57,5 +65,6 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
   } else if (movements.length === 0 && lot.expectedKg) {
     status = "Expected";
   }
-  return { ...lot, movements: ordered, receivedKg, physicalKg, damagedKg, claimedKg, locationId, status };
+  return { ...lot,
+    overIssuedKg, movements: ordered, receivedKg, physicalKg, damagedKg, claimedKg, locationId, status };
 }

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
 import { computeClaim, nextClaimNumber, buildClaimNote } from "./claim.domain";
+import { buildTraceTree } from "./trace.domain";
 import { fmtNum } from "./format";
 import { Card, Lbl, useConfirm } from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
@@ -8,12 +9,11 @@ import { lotReservationsForStock, productsMatch as domainProductsMatch, soClient
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
-import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
-const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 
 const LOCATION_TYPES: Record<string, any> = {
   OWN:      { label: "Our Warehouse",   color: "#0284C7", bg: "#E0F2FE", icon: "🏢" },
@@ -317,11 +317,6 @@ function customsStagesForFlow(flow: string) {
   return out;
 }
 
-const FLOW_GROUPS = [
-  { id: "EXP", label: "EXPORT", color: "#16A34A" },
-  { id: "IMP", label: "IMPORT", color: "#2563EB" },
-];
-
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"]; // Polish convention (Klasa I/IB/II/Industrial)
 
 
@@ -439,207 +434,7 @@ function uniqStrings(arr) {
   return Array.from(new Set((arr || []).map(x => String(x || "")).filter(Boolean)));
 }
 
-export const INIT_LOTS = [
-  // EXPORT — apples (CIF) — currently in port transit
-  {
-    id: 1, number: "LOT-2026-0091", product: "Golden Delicious", quality: "I", size: "70-80", origin: "Poland",
-    flow: "EXP_CIF",
-    poRef: "PO-2025-0468",
-    locationId: 6, // Gdańsk Port
-    expectedKg: 19500,
-    receivedKg: 19422,      // what came in when received
-    physicalKg: 19422,      // still physically present (in port transit, not yet dispatched)
-    damagedKg: 0,
-    packaging: "13 kg wooden box",
-    status: "In Transit",
-    arrivalDate: "2026-05-20", productionDate: "2026-05-18",
-    costs: [
-      { type: "purchase", label: "Purchase (PINV)",         source: "PINV-2026-0021", amount: 54381.60, currency: "PLN", pln: 54381.60 },
-      { type: "freight",  label: "Inland freight (LINV)",   source: "LINV-2026-0008", amount: 2400.00,  currency: "PLN", pln: 2400.00 },
-      { type: "customs",  label: "Export customs + phyto",  source: "CINV-2026-0003", amount: 187.00,   currency: "PLN", pln: 187.00 },
-    ],
-    movements: [
-      { id: 1, date: "2026-05-19", type: "IN",       qtyKg: 19422, fromId: 3, toId: 3, note: "Loaded at producer, expected 19,500 kg" },
-      { id: 2, date: "2026-05-20", type: "TRANSFER", qtyKg: 19422, fromId: 3, toId: 6, note: "Trucked to Gdańsk port" },
-    ],
-    notes: "EXW producer Białski Owoc. Sold CIF to overseas client. Vessel ETA destination: 2026-06-12.",
-  },
-
-  // Apples in our WH — has heavy SO reservations from seed SOs 1 & 2 (Biedronka + Lidl)
-  // SO-2026-0094 (Delivered, 8000 kg) and SO-2026-0088 (Invoiced, 2400 kg) — both Shipped+, so they DON'T count vs liveAvailable
-  // (their physical departure should have already been recorded via SHIP_OUT movements — see below)
-  {
-    id: 2, number: "LOT-2026-0091B", product: "Golden Delicious", quality: "I", size: "70-80", origin: "Poland",
-    flow: "IMP_DDP_WH",
-    poRef: "PO-2025-0470",
-    locationId: 1, // WH-01 Poznań
-    expectedKg: 22800,
-    receivedKg: 22800,
-    physicalKg: 12400,  // 22800 received − 8000 (SO-94) − 2400 (SO-88) shipped out = 12400 left physically
-    damagedKg: 0,
-    packaging: "13 kg wooden box",
-    status: "In Stock",
-    arrivalDate: "2026-04-28", productionDate: "2026-04-25",
-    costs: [
-      { type: "purchase", label: "Purchase (PINV)",         source: "PINV-2026-0019", amount: 11400.00, currency: "PLN", pln: 11400.00 },
-      { type: "storage",  label: "Storage May 1-26 (alloc)", source: "WINV-2026-0002", amount: 386.00,   currency: "PLN", pln: 386.00 },
-    ],
-    movements: [
-      { id: 1, date: "2026-04-28", type: "IN",       qtyKg: 22800, fromId: 3, toId: 1, note: "DDP delivery from Białski" },
-      { id: 2, date: "2026-01-25", type: "SHIP_OUT", qtyKg: 8000,  fromId: 1, toId: 8, note: "Shipped for SO-2026-0094 (Biedronka DC Poznań)" },
-      { id: 3, date: "2026-01-20", type: "SHIP_OUT", qtyKg: 2400,  fromId: 1, toId: 9, note: "Shipped for SO-2026-0088 (Lidl DC Chorzów)" },
-    ],
-    notes: "Apple lot for retailer chains. 12,400 kg still physically present.",
-  },
-
-  // Import carrots — In Stock, partially damaged
-  {
-    id: 3, number: "LOT-2026-0088", product: "Carrot", quality: "I", size: "60-100", origin: "Morocco",
-    flow: "IMP_CIF_WH",
-    poRef: "PO-2026-0118",
-    locationId: 1,
-    expectedKg: 24000,
-    receivedKg: 23720,
-    physicalKg: 23420,  // received 23720 − 300 damaged write-off = 23420 physically
-    damagedKg: 300,
-    packaging: "10 kg mesh bag",
-    status: "In Stock",
-    arrivalDate: "2026-05-15", productionDate: "2026-05-05",
-    costs: [
-      { type: "purchase", label: "Purchase (PINV)",                source: "PINV-2026-0024", amount: 4350.00,  currency: "EUR", pln: 18505.00 },
-      { type: "freight",  label: "Port→WH freight (LINV)",         source: "LINV-2026-0010", amount: 1800.00,  currency: "PLN", pln: 1800.00 },
-      { type: "customs",  label: "Import duties + VAT + phyto",    source: "CINV-2026-0004", amount: 2310.00,  currency: "PLN", pln: 2310.00 },
-      { type: "storage",  label: "Storage May 1-15 (allocated)",   source: "WINV-2026-0002", amount: 142.00,   currency: "PLN", pln: 142.00 },
-    ],
-    movements: [
-      { id: 1, date: "2026-05-14", type: "IN",       qtyKg: 23720, fromId: 5, toId: 6, note: "Arrived Gdańsk port from Morocco" },
-      { id: 2, date: "2026-05-15", type: "TRANSFER", qtyKg: 23720, fromId: 6, toId: 1, note: "Customs cleared, trucked to WH-01" },
-      { id: 3, date: "2026-05-22", type: "DAMAGE",   qtyKg: 300,   fromId: 1, toId: 1, note: "Quality check — 300 kg molded, write-off" },
-    ],
-    notes: "Expected 24,000 kg, received 23,720 (−280 kg, 1.2% variance). Will split across 3–4 retailers.",
-  },
-
-  // Import tomato — Shipped Out (whole lot delivered direct to Biedronka)
-  {
-    id: 4, number: "LOT-2026-0089", product: "Tomato Round", quality: "I", size: "M", origin: "Spain",
-    flow: "IMP_CIF_DIR",
-    poRef: "PO-2026-0120",
-    locationId: 8, // Biedronka DC Poznań — direct flow, never our WH
-    expectedKg: 18000,
-    receivedKg: 17940,
-    physicalKg: 0,  // entire lot dispatched direct
-    damagedKg: 0,
-    packaging: "5 kg carton",
-    status: "Shipped Out",
-    arrivalDate: "2026-05-23", productionDate: "2026-05-10",
-    costs: [
-      { type: "purchase", label: "Purchase (PINV)",                source: "PINV-2026-0025", amount: 8400.00,  currency: "EUR", pln: 35820.00 },
-      { type: "freight",  label: "Port→client freight (LINV)",     source: "LINV-2026-0012", amount: 1450.00,  currency: "PLN", pln: 1450.00 },
-      { type: "customs",  label: "Import customs (CINV)",          source: "CINV-2026-0005", amount: 1620.00,  currency: "PLN", pln: 1620.00 },
-    ],
-    movements: [
-      { id: 1, date: "2026-05-21", type: "IN",       qtyKg: 17940, fromId: 4, toId: 6, note: "Arrived Gdańsk from Spain" },
-      { id: 2, date: "2026-05-22", type: "TRANSFER", qtyKg: 17940, fromId: 6, toId: 8, note: "Customs cleared, direct to Biedronka" },
-      { id: 3, date: "2026-05-23", type: "SHIP_OUT", qtyKg: 17940, fromId: 8, toId: 8, note: "POD signed at Biedronka DC Poznań" },
-    ],
-    notes: "Direct flow — never entered our WH. Full container sold to single client.",
-  },
-
-  // Papryka Kapia — heavy SO reservations from active SOs
-  // SO-2026-0091 (Shipped, 6000 kg) — already departed, doesn't count vs liveAvailable
-  // Result: 8500 received − 6000 SHIP_OUT = 2500 physically present, no pre-dispatch reservations → liveAvailable = 2500
-  {
-    id: 5, number: "LOT-2026-0086", product: "Papryka Kapia", quality: "I", size: "M", origin: "Jordania",
-    flow: "IMP_EXWS_WH",
-    poRef: "PO-2026-0117",
-    locationId: 1, // moved into our WH after customs
-    expectedKg: 8500,
-    receivedKg: 8500,
-    physicalKg: 2500,
-    damagedKg: 0,
-    packaging: "5 kg carton",
-    status: "In Stock",
-    arrivalDate: "2026-01-22", productionDate: "2026-01-18",
-    costs: [
-      { type: "purchase", label: "Purchase EXW (PINV)",            source: "PINV-2026-0008", amount: 8800.00,  currency: "USD", pln: 34155.00 },
-      { type: "freight",  label: "Producer→port truck (LINV)",    source: "LINV-2026-0003", amount: 2100.00,  currency: "PLN", pln: 2100.00 },
-      { type: "customs",  label: "Import duties + phyto",          source: "CINV-2026-0002", amount: 985.00,   currency: "PLN", pln: 985.00 },
-    ],
-    movements: [
-      { id: 1, date: "2026-01-19", type: "IN",       qtyKg: 8500, fromId: 5, toId: 5, note: "Loaded at producer Agadir (EXW)" },
-      { id: 2, date: "2026-01-20", type: "TRANSFER", qtyKg: 8500, fromId: 5, toId: 6, note: "Arrived Gdańsk" },
-      { id: 3, date: "2026-01-22", type: "TRANSFER", qtyKg: 8500, fromId: 6, toId: 1, note: "Customs cleared, trucked to WH-01" },
-      { id: 4, date: "2026-01-29", type: "SHIP_OUT", qtyKg: 6000, fromId: 1, toId: 14, note: "Shipped for SO-2026-0091 (Euro-Papryka)" },
-    ],
-    notes: "Origin Jordania. 2,500 kg still physically present in WH-01.",
-  },
-
-  // Red Bell Pepper — small remainder, post-shipout to Euro-Papryka
-  {
-    id: 6, number: "LOT-2026-0095", product: "Red Bell Pepper", quality: "I", size: "L", origin: "Jordania",
-    flow: "IMP_DDP_WH",
-    poRef: "PO-2026-0115",
-    locationId: 2, // WH-02 Warszawa
-    expectedKg: 2300,
-    receivedKg: 2300,
-    physicalKg: 1100,  // 2300 − 1200 (SO-91) shipped = 1100
-    damagedKg: 0,
-    packaging: "5 kg carton",
-    status: "In Stock",
-    arrivalDate: "2026-01-26", productionDate: "2026-01-22",
-    costs: [
-      { type: "purchase", label: "Purchase DDP (PINV)",            source: "PINV-2026-0007", amount: 9250.00,  currency: "EUR", pln: 39341.18 },
-    ],
-    movements: [
-      { id: 1, date: "2026-01-26", type: "IN",       qtyKg: 2300, fromId: 4, toId: 2, note: "DDP delivery from FreshFarm ES" },
-      { id: 2, date: "2026-01-29", type: "SHIP_OUT", qtyKg: 1200, fromId: 2, toId: 14, note: "Shipped for SO-2026-0091 (Euro-Papryka)" },
-    ],
-    notes: "1,100 kg remaining for further allocation.",
-  },
-
-  // Yellow Bell Pepper — small remainder after Euro-Papryka
-  {
-    id: 7, number: "LOT-2026-0099", product: "Yellow Bell Pepper", quality: "I", size: "L", origin: "Jordania",
-    flow: "IMP_DDP_WH",
-    poRef: "PO-2026-0116",
-    locationId: 2,
-    expectedKg: 4200,
-    receivedKg: 4200,
-    physicalKg: 600,  // 4200 − 3600 (SO-91) = 600
-    damagedKg: 0,
-    packaging: "5 kg carton",
-    status: "In Stock",
-    arrivalDate: "2026-01-26", productionDate: "2026-01-22",
-    costs: [
-      { type: "purchase", label: "Purchase DDP (PINV)",            source: "PINV-2026-0006", amount: 12000.00, currency: "EUR", pln: 51037.20 },
-    ],
-    movements: [
-      { id: 1, date: "2026-01-26", type: "IN",       qtyKg: 4200, fromId: 4, toId: 2, note: "DDP delivery from FreshFarm ES" },
-      { id: 2, date: "2026-01-29", type: "SHIP_OUT", qtyKg: 3600, fromId: 2, toId: 14, note: "Shipped for SO-2026-0091 (Euro-Papryka)" },
-    ],
-    notes: "600 kg remaining.",
-  },
-
-  // Expected lot (just-confirmed PO, not yet shipped)
-  {
-    id: 8, number: "LOT-2026-0100", product: "Red Bell Pepper", quality: "I", size: "L", origin: "Spain",
-    flow: "IMP_DDP_WH",
-    poRef: "PO-2026-0121",
-    locationId: 4,
-    expectedKg: 8000,
-    receivedKg: 0,
-    physicalKg: 0,
-    damagedKg: 0,
-    packaging: "5 kg carton",
-    status: "Expected",
-    arrivalDate: "2026-06-05", productionDate: null,
-    costs: [
-      { type: "purchase", label: "Purchase DDP (PINV — expected)", source: "PO-2026-0121", amount: 14800.00, currency: "EUR", pln: 62945.88 },
-    ],
-    movements: [],
-    notes: "PO confirmed, supplier loading week of 2026-06-02. Expected DDP arrival 2026-06-05.",
-  },
-];
+// v6.32.0 (R7b-5): demo seed INIT_LOTS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED UI ATOMS ────────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max }: any) {
@@ -776,7 +571,6 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   const [claimCurrency, setClaimCurrency] = useState(editing?.claimCurrency || "PLN");
   const effectiveType = clientSide && type === "DAMAGE" ? "CLAIM" : type;
   const reservationState = lotReservations(lot, liveSOs);
-  const liveAvailableKg = reservationState.liveAvailable;
   // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
   // so quantity-reducing movements validate against the expected/direct quantity —
   // consistent with how lotReservations computes availability for direct lots.
@@ -945,43 +739,6 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   );
 }
 
-// ─── CUSTOMS MODAL (v6.1d) ──────────────────────────────────────────────────
-function CustomsModal({ lot, kind, brokers = [], onCancel, onConfirm }: any) {
-  const existing = (lot.customs && lot.customs[kind]) || {};
-  const [status, setStatus] = useState(existing.status || "Not started");
-  const [declRef, setDeclRef] = useState(existing.declRef || "");
-  const [brokerId, setBrokerId] = useState(existing.brokerId || "");
-  const [date, setDate] = useState(existing.date || "");
-  const [cost, setCost] = useState(existing.cost != null ? String(existing.cost) : "");
-  const [currency, setCurrency] = useState(existing.currency || "PLN");
-  const title = kind === "export" ? "Export customs clearance" : "Import customs clearance";
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 90, padding: 20 }}>
-      <div style={{ width: 480, background: "#fff", borderRadius: 12, boxShadow: "0 20px 60px rgba(0,0,0,0.24)" }}>
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <strong>🛃 {title}</strong>
-          <span style={{ fontSize: 12, color: "#888" }}>{lot.number}</span>
-        </div>
-        <div style={{ padding: 20, display: "grid", gap: 12 }}>
-          <div><Lbl>Status</Lbl><Sel value={status} onChange={e => setStatus(e.target.value)}>{["Not started", "In progress", "Cleared", "Held"].map(s => <option key={s}>{s}</option>)}</Sel></div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div><Lbl>Declaration ref (SAD / MRN)</Lbl><Inp value={declRef} onChange={e => setDeclRef(e.target.value)} placeholder="e.g. 26PL..." /></div>
-            <div><Lbl>Clearance date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
-          </div>
-          <div><Lbl>Customs broker</Lbl><Sel value={brokerId} onChange={e => setBrokerId(e.target.value)}><option value="">— none —</option>{brokers.map((b: any) => <option key={b.id} value={b.id}>{b.name}</option>)}</Sel></div>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
-            <div><Lbl>Customs cost (flows into lot cost)</Lbl><Inp type="number" value={cost} onChange={e => setCost(e.target.value)} placeholder="0" /></div>
-            <div><Lbl>Currency</Lbl><Sel value={currency} onChange={e => setCurrency(e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
-          </div>
-          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-            <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm(kind, { status, declRef, brokerId: brokerId ? parseInt(brokerId) : null, date, cost: parseFloat(cost) || 0, currency })} style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: "#DB2777", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Save clearance</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── INSPECTION MODAL (v6.2) ────────────────────────────────────────────────
 const INSPECTION_CONTEXTS = [
@@ -1351,7 +1108,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onCustoms, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null }: any) {
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [] }: any) {
   const res = lotReservations(lot, liveSOs);
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1450,6 +1207,9 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                     {(lot.claims || []).length ? `Producer claim (${lot.claims.length})` : "Producer claim"}
                   </button>
                 )}
+                <button onClick={() => printHtmlNodeInv("lot-trace-doc", `Trace-${lot.number}`)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #0F766E", background: "#fff", color: "#0F766E", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="One-click recall report: where this lot came from and everywhere it went — supplier, shipments, clients, invoices.">
+                  🔎 Trace / recall
+                </button>
               </div>
             </Card>
           )}
@@ -1596,6 +1356,28 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
 
               {/* Movement history */}
               <Card style={{ marginBottom: 16 }}>
+                {(() => {
+                  // Safeguards 7a: the recall report — hidden, print-only.
+                  const t = buildTraceTree(lot, { pos: tracePOs, orders: liveSOs, shipments, invoices: traceInvoices }, localTodayISO());
+                  const cell = { border: "1px solid #999", padding: "4px 6px", fontSize: 11 } as any;
+                  const hd = { ...cell, background: "#F3F4F6", fontWeight: 700 } as any;
+                  return (
+                    <div id="lot-trace-doc" style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", color: "#111", fontFamily: "Arial, sans-serif", fontSize: 12, padding: 24 }}>
+                      <div style={{ fontSize: 17, fontWeight: 800 }}>TRACEABILITY / RECALL REPORT — {t.lot.number}</div>
+                      <div style={{ marginBottom: 10 }}>Generated / Wygenerowano: {t.generatedAt} · {t.lot.product}{t.lot.variety ? ` — ${t.lot.variety}` : ""} · received {Number(t.lot.receivedKg || 0).toLocaleString("pl-PL")} kg</div>
+                      <div style={{ fontWeight: 800, margin: "8px 0 4px" }}>ORIGIN / POCHODZENIE</div>
+                      <div>PO: <b>{t.origin.poNumber || "—"}</b> · Supplier / Dostawca: <b>{t.origin.supplier || "—"}</b>{t.origin.origin ? ` · Origin: ${t.origin.origin}` : ""}{t.origin.supplierAddress ? ` · ${t.origin.supplierAddress}` : ""}</div>
+                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>SHIPMENTS / TRANSPORTY ({t.shipments.length})</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["No.", "Direction", "Route", "Dates", "Carrier", "Status"].map(h => <th key={h} style={hd}>{h}</th>)}</tr></thead>
+                        <tbody>{t.shipments.map((s: any) => <tr key={s.number}>{[s.number, s.direction || "—", [s.from, s.to].filter(Boolean).join(" → ") || "—", s.dates || "—", s.carrier || "—", s.status || "—"].map((v: any, k: number) => <td key={String(k)} style={cell}>{v}</td>)}</tr>)}</tbody></table>
+                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>SOLD TO / SPRZEDANO ({t.sales.length})</div>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["SO", "Client / Klient", "Qty kg", "Destination", "Status"].map(h => <th key={h} style={hd}>{h}</th>)}</tr></thead>
+                        <tbody>{t.sales.map((s: any, k: number) => <tr key={String(k)}>{[s.soNumber, s.client, s.qtyKg.toLocaleString("pl-PL"), s.destination || "—", s.status || "—"].map((v: any, j: number) => <td key={String(j)} style={cell}>{v}</td>)}</tr>)}</tbody></table>
+                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>RELATED INVOICES / FAKTURY ({t.invoices.length})</div>
+                      <div>{t.invoices.map((v: any) => `${v.number}${v.counterparty ? ` (${v.counterparty})` : ""}`).join(" · ") || "—"}</div>
+                    </div>
+                  );
+                })()}
                 {(() => {
                   // Batch 6c (BP-33): one place for the lot's quality story —
                   // claims, claimed/damaged totals, quality movements.
@@ -1923,7 +1705,7 @@ function ClaimModal({ lot, po, existing = null, onCancel, onSave }: any) {
 export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
-  const [localLots, setLocalLots] = useState(INIT_LOTS);
+  const [localLots, setLocalLots] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const lots = extLots ?? localLots;
   const setLots = extSetLots ?? setLocalLots;
   // Live SOs from shell (replaces the standalone-only module-scope SOS).
@@ -1939,7 +1721,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
   const [claimLot, setClaimLot] = useState(null); // Batch 6a (BP-55b): lot for the producer-claim modal
   const [editingMovement, setEditingMovement] = useState(null);
-  const [showCustoms, setShowCustoms] = useState(null); // "export" | "import" | null
   const [showReturn, setShowReturn] = useState(false); // v6.18.12 (#4): return-to-warehouse modal
   const [showInspection, setShowInspection] = useState(false);
   const [search, setSearch] = useState("");
@@ -2083,23 +1864,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     }));
   }
 
-  function saveCustoms(kind, data) {
-    setLots(prev => prev.map(l => {
-      if (l.id !== selected.id) return l;
-      const customs = { ...(l.customs || {}), [kind]: data };
-      // Mirror the customs cost into the lot's cost breakdown (replace any prior
-      // customs cost line for this kind, so editing doesn't double-count).
-      const tag = kind === "export" ? "Export customs" : "Import customs";
-      const fx = defaultFxRate(data.currency);
-      const otherCosts = (l.costs || []).filter(c => c.label !== tag);
-      const costs = data.cost > 0
-        ? [...otherCosts, { type: "customs", label: tag, source: data.declRef || "customs", amount: data.cost, currency: data.currency, pln: Math.round(data.cost * fx * 100) / 100 }]
-        : otherCosts;
-      const next = { ...l, customs, costs };
-      return next;
-    }));
-    setShowCustoms(null);
-  }
 
   function saveInspection(data) {
     setLots(prev => prev.map(l => {
@@ -2166,7 +1930,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 
   // ── routes ──────────────────────────────────────────────────────────
   if (view === "detail" && selected) {
-    const brokers = (extContacts || []).filter((c: any) => c.type === "Broker" || c.type === "Forwarder" || (c.services || []).includes("Customs"));
     return (
       <>
         {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
@@ -2280,6 +2043,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           onRecordSorting={(l) => setSortingLot(l)}
           onOpenSettlement={(l) => setSettlementLot(l)}
           onOpenClaim={(l) => setClaimLot(l)}
+          tracePOs={extPOs}
+          traceInvoices={extInvoices}
         />
       </>
     );
@@ -2348,7 +2113,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           </div>
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No lots match the current filters.</div>}
           {filtered.map((l, idx) => {
-            const loc = locById(l.locationId);
             const cpk = costPerKg(l);
             const res = lotReservations(l, liveSOs);
             const soList = soRefsFor(l, liveSOs, shipments);
@@ -2402,10 +2166,3 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 }
 
 // ─── helpers ───────────────────────────────────────────────────────────────
-function chipStyle(active, accent = "#111") {
-  return {
-    padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: active ? "#111" : "#E5E7EB",
-    background: active ? "#111" : "#fff", color: active ? "#fff" : (accent || "#555"),
-    fontSize: 11, cursor: "pointer", fontWeight: 500, fontFamily: "inherit",
-  };
-}

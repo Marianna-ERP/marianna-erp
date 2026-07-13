@@ -146,6 +146,8 @@ export interface SOrder {
   /** LEGACY (BP-49 / A3-6): stored link + pending-invoice arrays. */
   linkedInvoices?: string[];
   linkedShipments?: string[];
+  /** @deprecated v6.33.0 (A3-6): the Invoices register is the sole owner — this
+   *  field is read only by the legacy fold, then stripped. Never write it. */
   pendingInvoices?: any[];
 }
 
@@ -237,15 +239,41 @@ export interface TransportUnit {
 export interface ShipmentLeg {
   id: number;
   mode: string;                 // Road | Sea | Rail | Air
-  originLocationId?: number | string | null;
-  originCustom?: string;
-  destinationLocationId?: number | string | null;
-  destinationCustom?: string;
+  status?: string;
+  // v6.30.1 — CONTRACT FIX: the previous declaration said originLocationId /
+  // destinationLocationId / loadingDate / unloadingDate / units, but no code has
+  // ever written those fields. Every leg builder in Shipments.tsx, the seeds and
+  // the posting engine (shipments.domain postShipmentToLots) use the names below.
+  // Anyone coding against the old contract produced legs the engine couldn't read
+  // (destId/fromId silently fell through to fallbacks).
+  fromLocationId?: number | string | null;
+  fromCustom?: string;
+  toLocationId?: number | string | null;
+  toCustom?: string;
   carrierId?: number | string | null;
   forwarderId?: number | string | null;
-  loadingDate?: string;
-  unloadingDate?: string;
-  units?: TransportUnit[];
+  plannedPickupDate?: string;
+  plannedPickupTime?: string;
+  plannedDeliveryDate?: string;
+  plannedDeliveryTime?: string;
+  actualPickupDate?: string;
+  actualDeliveryDate?: string;
+  /** Transport units live in `vehicles` (v6.10 — one home for vehicle data);
+   *  transportUnitsForLeg() falls back to the legacy leg-level fields below. */
+  vehicles?: TransportUnit[];
+  /** LEGACY leg-level unit fields (pre-v6.10) — read via transportUnitsForLeg. */
+  vehiclePlate?: string;
+  trailerPlate?: string;
+  driverName?: string;
+  driverPhone?: string;
+  containerNumber?: string;
+  sealNumber?: string;
+  bookingNumber?: string;
+  blNumber?: string;
+  awbNumber?: string;
+  shippingLine?: string;
+  temperatureMinC?: number;
+  temperatureMaxC?: number;
   /** LEGACY (BP-50): leg-level cost fields — cost lines are the only cost truth. */
   costAmount?: number;
   costCurrency?: string;

@@ -82,8 +82,11 @@ export function tariffHasRates(t?: WarehouseTariff | null): boolean {
 export interface StoragePeriod { locationId: any; from: string; to: string; kg: number; days: number }
 
 export function computeStoragePeriods(lot: any, asOfISO: string): { periods: StoragePeriod[]; firstInDate: string | null; receivedKg: number; shippedKg: number } {
+  // v6.30.1: voided movements are excluded here exactly as in
+  // recomputeLotFromMovements (v6.18.17) — a voided IN/SHIP_OUT must not accrue
+  // kg-days or handling in the expected warehouse invoice.
   const movements = [...(lot?.movements || [])]
-    .filter((m: any) => m && m.date && isFinite(dayMs(m.date)))
+    .filter((m: any) => m && !m.voided && m.date && isFinite(dayMs(m.date)))
     .sort((a: any, b: any) => dayMs(a.date) - dayMs(b.date) || (a.id || 0) - (b.id || 0));
   const periods: StoragePeriod[] = [];
   let kg = 0;
@@ -146,7 +149,7 @@ export function computeLotWarehouseCharges(
   asOfISO: string,
   win?: ChargeWindow
 ): LotWarehouseCharges | null {
-  const { periods, firstInDate, receivedKg, shippedKg } = computeStoragePeriods(lot, asOfISO);
+  const { periods, firstInDate } = computeStoragePeriods(lot, asOfISO);
   // Tariff resolves per stored location; in practice a lot sits in one tariffed
   // warehouse. Use the first tariffed location found among periods (or lot.locationId).
   let match = null as any;
@@ -192,11 +195,11 @@ export function computeLotWarehouseCharges(
     return (!win?.from || x >= dayMs(win.from)) && (!win?.to || x < dayMs(win.to));
   };
   if (safeN(t.handlingInPerKg) > 0) {
-    const kgIn = (lot?.movements || []).filter((m: any) => m.type === "IN" && inWin(m.date)).reduce((s: number, m: any) => s + safeN(m.qtyKg), 0);
+    const kgIn = (lot?.movements || []).filter((m: any) => m.type === "IN" && !m.voided && inWin(m.date)).reduce((s: number, m: any) => s + safeN(m.qtyKg), 0);
     if (kgIn > 0) { const a = r2(kgIn * safeN(t.handlingInPerKg)); lines.push({ kind: "handling_in", label: `Handling in · ${kgIn.toLocaleString("pl-PL")} kg @ ${t.handlingInPerKg}`, qty: kgIn, unit: "kg", rate: safeN(t.handlingInPerKg), amount: a, amountPLN: r2(a * fx) }); }
   }
   if (safeN(t.handlingOutPerKg) > 0) {
-    const kgOut = (lot?.movements || []).filter((m: any) => m.type === "SHIP_OUT" && inWin(m.date)).reduce((s: number, m: any) => s + safeN(m.qtyKg), 0);
+    const kgOut = (lot?.movements || []).filter((m: any) => m.type === "SHIP_OUT" && !m.voided && inWin(m.date)).reduce((s: number, m: any) => s + safeN(m.qtyKg), 0);
     if (kgOut > 0) { const a = r2(kgOut * safeN(t.handlingOutPerKg)); lines.push({ kind: "handling_out", label: `Handling out · ${kgOut.toLocaleString("pl-PL")} kg @ ${t.handlingOutPerKg}`, qty: kgOut, unit: "kg", rate: safeN(t.handlingOutPerKg), amount: a, amountPLN: r2(a * fx) }); }
   }
   // Sorting events logged on the lot.

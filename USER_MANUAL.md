@@ -1,255 +1,238 @@
-# MARIANNA ERP — User Manual (v6.10.0)
+# MARIANNA ERP — User Manual (v6.33.0)
 
-A practical guide to running the day-to-day cycle: counterparties → purchase
-orders → shipments → inventory → sales orders → finance. Sections marked **NEW
-v6.10** describe behaviour introduced in this release.
+A practical guide to the day-to-day cycle: counterparties → purchase orders →
+shipments → inventory → sales orders → invoices → finance. This edition fully
+replaces the v6.10 manual — the PO/SO trade model, the shipment editor, cost
+handling, settlements and claims have all been rebuilt since then.
 
 ---
 
 ## 1. Getting started
 
-- The app runs in the browser. All your data lives in this browser’s local
-  storage and is included in the Settings → Export JSON backup. Export regularly.
-- The left sidebar switches modules: Dashboard, Counterparties, Purchase Orders,
-  Shipments, Inventory, Sales Orders, Finance, Settings.
-- Most screens have a list on one side and a detail/edit panel on the other.
-  “Save” persists to local storage immediately.
+- The app runs in the browser. All data lives in this browser's local storage
+  and travels in the Settings → **Export JSON** backup. Export regularly; the
+  app also keeps an automatic backup ring and takes a backup before every
+  import and reset (Settings → Local backups).
+- A **clean system starts empty by design**: after a reset, the PO supplier
+  picker, the SO client picker and the shipment carrier/forwarder pickers show
+  nothing until you add counterparties. No demo data exists anywhere.
+- The **integrity badge** (top bar) continuously audits your data: broken
+  references, oversold lots, duplicate invoices, suspicious FX rates, duplicate
+  live shipments, incomplete closed orders. Click it whenever it turns amber or
+  red — each finding says what is wrong and where.
 
 ---
 
 ## 2. Counterparties
 
-Counterparties are every company you deal with: clients, suppliers, carriers,
-forwarders, brokers and **warehouses**. One company can wear several hats (e.g.
-a client that is also a carrier) via **“Also acts as”**.
+Every company you deal with: clients, suppliers, carriers, forwarders, brokers
+and warehouses. One company can wear several hats via **"Also acts as"**.
 
-### Adding / editing a counterparty
-1. Click **+ New** (or **Edit** on a selected company).
-2. Set the **Primary type** and any additional types.
-3. Fill company name, country, the **NIP / Tax ID / EU VAT** field, and address.
+- Fill company name, country, **NIP / Tax ID / EU VAT** and address. Foreign
+  companies without a Polish NIP show their EU VAT in the list.
+- **Warehouse companies** get a tariff section (storage, handling, sorting,
+  free days) used to predict and check that warehouse's invoices, and can carry
+  several operating addresses — each becomes a selectable location.
+- **Find duplicates / Merge** scans by tax id, then name; when merging, NIP and
+  EU-VAT move together as one choice.
+- CSV import groups multiple contact rows per company into one counterparty.
+- A counterparty referenced by any document cannot be hard-deleted.
 
-### Warehouse tariff (companies typed “Warehouse”)
-When a counterparty is a Warehouse, a **Warehouse tariff** section appears. It is
-used to predict and check that warehouse’s invoices.
-
-- **NEW v6.10 — decimals with a comma.** Storage, handling in/out, sorting, free
-  days and FX → PLN all accept comma decimals (e.g. type `0,30`). What you type is
-  kept as-is while editing; it is converted to a number when you press Save.
-- **NEW v6.10 — Locations this warehouse operates.** The picker lists all
-  warehouse locations **and** every warehouse counterparty’s address(es), not just
-  the two built-in warehouses. Tick the locations whose stored lots should be
-  charged on this tariff.
-- **NEW v6.10 — Additional delivery addresses.** A warehouse company can have more
-  than one site. Use **+ Add another address** to record each one; these become
-  selectable warehouse destinations elsewhere.
-
-### Find duplicates / merge
-1. Use **Find duplicates** to scan for likely repeats (by tax ID, then by name).
-2. Choose **Merge…** to combine a duplicate into a kept record.
-3. For each differing field, pick which side wins.
-   - **NEW v6.10 — tax identity.** NIP and EU-VAT now move together as one choice.
-     Whichever side you pick supplies *both* values, so an old EU-VAT can no longer
-     stick around after a merge. If you pick a side whose VAT is empty, the VAT is
-     cleared.
+Decimal commas are accepted in every numeric field of the engines (`0,30` and
+`0.30` are the same number) — the old "use a dot if the field rejects the
+comma" tip is obsolete.
 
 ---
 
-## 3. Purchase Orders (PO)
+## 3. Purchase Orders
 
-A PO records what you buy from a supplier.
+A PO records **the purchase agreement**: supplier, terms, lines, money. It does
+not own the route (Shipments) or the stock (Inventory).
 
-### Creating / editing
-1. **+ New PO**, choose the supplier, set order date and **loading date** (when the
-   supplier loads your truck/container — goods leave origin).
-2. Set the **purchase Incoterm** (EXW, FCA, FOB, CIF, DDP, …) and destination flow.
-3. Add **line items**. Each line has product, origin, size, quality, **Qty (kg)**,
-   unit price, packaging, **Boxes** and **Pallets**.
-   - **NEW v6.10 — Boxes.** Record the number of boxes per line. The PO detail
-     view shows a Boxes column and a Boxes total.
+### Purchase terms (the current model)
+1. Pick the supplier, order date and **loading date**.
+2. Set the **purchase Incoterm** and the **named place** — the place adapts to
+   the incoterm (producer site for EXW, port of loading for FOB, **port of
+   discharge for CIF/CFR**, your warehouse for DDP). The app derives and shows:
+   - the **trade movement** badge (Import / Export / Intra-EU / Cross-trade),
+   - a plain-language **handover sentence** ("Seller delivers when …").
+3. You cannot Confirm, print or email a PO without incoterm + named place.
 
-### Status and the loading date
-The lifecycle is Draft → Confirmed → In Production → Shipped → Arrived → Closed.
+There is no flow-type dropdown and no disposition on the PO any more: **what
+happens to the goods after purchase is decided by the sale** (the SO), per
+portion. The PO only says how you bought.
 
-- **NEW v6.10 — ship gating.** You cannot set the status to **Shipped, Arrived or
-  Closed while the loading date is still in the future.** The app blocks the change
-  and tells you the loading date hasn’t been reached. If the loading date really
-  changed, update it first, then change the status.
+### Lines, status, locking
+- Each line: product **Item + Variety** from the catalog (Settings), CN/HS,
+  origin, size, quality, qty (kg), unit price, packaging, boxes, pallets. Item,
+  variety and CN/HS inherit downstream (SO → lot → shipment) and lock there.
+- Editable statuses are **Draft / Confirmed / Cancelled**. Operational progress
+  (linked SO, shipment, receipt) shows as computed badges — you never set
+  "Shipped" by hand.
+- A Confirmed PO with anything linked downstream is locked; each block tells
+  you what is linked. Cancelled = red, read-only, kept for the record.
+- The PO number is system-generated and read-only.
+
+Confirming a PO creates its **expected lots** (one per line, `poLineId`-linked);
+editing the PO re-syncs still-expected lots; reverting to Draft withdraws them.
 
 ---
 
 ## 4. Shipments
 
-A shipment moves goods along one or more **legs** (Road / Sea / Air / Rail). Each
-leg has a route (From → To), dates, **transport units**, and costs.
+Shipments own the **physical route** and the **transport money**.
 
-### Creating a shipment
-1. **Create shipment**, pick the source (from a PO, an SO, or Manual) and the mode.
-2. In **Provider and cost**, choose the carrier/forwarder and enter the freight.
-   - **NEW v6.10 — DDP purchases.** If you build the shipment from a **DDP** PO,
-     this section changes: there is **no carrier to order and no freight cost on
-     your side** (the supplier arranges transport). Instead you record the
-     **incoming truck plate, trailer, driver name and phone** so you can track the
-     delivery. These details seed the first leg’s transport unit, and the leg is
-     created with zero cost (responsibility = Supplier).
+### Creating
+**+ New shipment** opens the one-step full-page editor on a draft — nothing is
+saved until Save. Pick the source PO or SO explicitly (no silent default).
 
-### Editing legs
-Open a shipment → **Edit** → the **Legs** section.
+- **Origin defaults follow the purchase terms** (new in v6.32.0): for
+  EXW/FCA/FOB/CIF/CFR/CIP the origin pre-fills with the PO's **named place** —
+  so a CIF purchase starts its journey at the port of discharge, not at the
+  producer. For DAP/DPU/DDP (supplier delivers) the origin stays the supplier
+  and the destination pre-fills with the named place.
+- **Groupage**: the SOURCES bar ("+ add goods from PO/SO") loads several POs or
+  SOs on one truck; every goods row remembers its own PO/SO/lot.
+- **Multi-stop legs**: each road leg can carry an ordered stop list; the
+  printed transport order renders the numbered tour (base route + stops).
+- Leg 2 pickup cannot precede leg 1 delivery.
 
-- **Route (From / To).**
-  - **NEW v6.10 — free text.** Below each From/To dropdown there is now always a
-    **free-text box**. Pick a known place from the dropdown, *or* type an address
-    manually (useful for DDP and one-off places). Typing in the box overrides the
-    dropdown for that side.
-- **Transport units (trucks / containers / AWB).**
-  - **NEW v6.10 — one home for vehicle data.** Truck plate, trailer plate, driver
-    name and driver phone are entered **per unit** here (the old duplicate
-    leg-level fields were removed). Use **+ Add unit** when one leg is split over
-    several trucks. The transport order is generated from these units. Legs created
-    before this release keep their values — they appear automatically as Unit #1.
+### Status and inventory
+The lifecycle is **Draft → Booked → Loaded → Delivered → Closed** (plus
+Cancelled), and only the **next** logical action button shows. Marking
+**Delivered** is what posts inventory: receipt for inbound, SHIP_OUT for
+outbound, moves for transfers — driven by the shipment's purpose, never typed
+by hand. Direct/EXW pass-through sales post the IN+SHIP_OUT pair at handover.
 
-### Costs & billing
-Costs are recorded per leg/provider. A DDP supplier→warehouse leg carries no cost
-on your books. The transport order and goods documents are generated from the
-shipment’s legs and units.
+### Costs
+- Freight and FX live as **cost lines**, not in the create step. Each line has
+  a currency, FX, an **invoice status** (Expected → Received → Checked) and the
+  cost responsibility (Marianna / Supplier / Client).
+- **Allocate costs to lots** writes the shipment costs into the lots' landed
+  cost (replace-by-source: re-running never duplicates; editing a cost and
+  re-allocating replaces the old value).
+- DAP/DDP purchases are supplier-arranged: responsibility Supplier, the
+  supplier-paid freight line can be erased.
+- A cancelled shipment keeps its record but is excluded from every P/L.
+
+### Trade direction
+The **shipment** owns the trade direction (editable, "Auto from source PO" by
+default); the PO shows only a provisional chip.
 
 ---
 
 ## 5. Inventory
 
-Goods received against POs become **lots**, stored at locations. Lot movements
-(IN / TRANSFER / SHIP_OUT / DAMAGE / REVERSAL) drive stock levels and feed the
-warehouse-charge engine. A lot stored at a tariffed warehouse location accrues
-the storage / handling / sorting charges defined on that warehouse’s tariff, so
-you can check the invoice you receive line by line (Finance → Warehouse charges).
+Inventory is **event-driven**: lots are created by PO confirmation, received
+and shipped by shipment events. Manual movements are for internal relocation,
+corrections (with reason) and opening balances only. Wrong manual entries are
+**voided** (kept red/struck in history), never deleted.
+
+- The lot detail shows: stock position (expected / received / physical /
+  reserved / **available for sale** / shipped-out), the journey with real event
+  dates, the movement history, the **cost breakdown** (purchase + allocated
+  freight/customs/warehouse…), and the QUALITY & CLAIMS panel.
+- **Producer claims**: the claim modal quantifies a defect (multi-currency,
+  defect %, market recovery), issues a CLM-numbered bilingual document, books
+  the requested credit note vs the producer, and logs a CLAIM movement
+  (client-side claims never change warehouse stock). Resolution lifecycle:
+  Issued → Accepted / Rejected / Settled.
+- **Returns** restore stock via a REVERSAL movement and a standalone RET
+  shipment; the original SO is not reopened — money goes the credit-note way.
+- One-click **Trace/recall report** per lot: origin → shipments → clients →
+  invoices, printable.
+- Consignment lots show a settlement badge and a link; the settlement document
+  itself lives in Invoices.
 
 ---
 
-## 6. Sales Orders (SO)
+## 6. Sales Orders
 
-An SO records what you sell to a client; lines can come from stock or be pre-sold
-from a PO.
+An SO records the sale: client, **sell incoterm + destination** (the
+destination adapts — ports for CIF/CFR/FOB, the client's address for DAP/DDP,
+your warehouse for EXW), lines, prices.
 
-### Incoterm · Delivery
-1. Set the **Sell Incoterm** (EXW, FCA, FOB, CIF, CFR, DAP, …).
-2. **NEW v6.10 — Destination “Deliver to”.** Choose:
-   - **Client’s registered address** (default). When you select the client, the
-     destination is auto-filled from their address on file and shown for
-     confirmation. If the client has no address, add one in Counterparties or pick
-     “Other”.
-   - **Other address.** Reveals the known-place dropdown **plus a free-text field**
-     for a one-off address the client asked you to deliver to. Free text takes
-     precedence on the printed SO.
+- Add lines **from PO or from stock** (the primary path — it copies product,
+  variety, CN/HS, origin, size, quality, packaging; you type only price, qty,
+  pallets). Availability is variety-aware and reserves per line.
+- You cannot confirm against a Draft PO, oversell availability, or confirm
+  without sell terms. Cancelling an SO frees its PO and reverses any real
+  ship-outs (direct pass-through lots are left untouched).
+- **The sale owns the disposition**: one CIF purchase can split into an
+  EXW-at-port portion, a DDP-direct portion and a to-warehouse portion, per SO.
+- EXW sales use **Record client collection** — a minimal collection shipment,
+  no transport order, no freight on your side.
+- The per-SO **P/L drill-down** lives in Finance. Read it at close: the
+  integrity badge warns if an SO is Closed while its cost data is still
+  provisional (costs "Expected", lots without costs, no traceable dispatch).
 
-The destination shown here prints on the Sales Order confirmation.
-
----
-
-## 7. Finance
-
-Four tabs: **Sales P/L**, **Operational Costs**, **Warehouse charges**,
-**Receivables & Payables**, with a Forecast / Actual toggle.
-
-### Operational Costs
-Company-level overheads (salary, rent, accountant, software, fuel, etc.), which
-are allocated to sales-order P/L by the rule you choose per cost.
-
-- **Add / edit a cost** on the left: period, date, category, cost center,
-  description, supplier, invoice no., amount, currency, FX, allocation method,
-  status.
-- **NEW v6.10 — Entries register.** The list shows **Date · Supplier · Category ·
-  Status · Amount**.
-  - **Hover** any row to preview its full detail (period, date, cost center,
-    invoice no., allocation, currency/FX, notes) in the panel above the table.
-  - **Edit** / **Delete** are on each row.
-  - **Filter by period and by supplier** using the dropdowns; the count and
-    filtered total update live.
-- **Import from Fakturownia.** Export your cost/expense register from Fakturownia
-  as XLS/CSV and load it here (or use the live read-only fetch where available).
-  Invoice number and issue date are imported and now visible as the Date and
-  Supplier columns / invoice subtext.
-
-### Warehouse charges
-Reconcile each rented warehouse’s monthly invoice against the charges the system
-expects from your lots’ movements and that warehouse’s tariff.
-
-### Receivables & Payables
-One ledger of everything owed — receivables from sales invoices, payables from
-producer payouts, warehouse invoices, invoice-backed operational costs and
-firm-price PO purchases — with Open / Overdue / Paid status and a net position.
+### How the P/L counts (since v6.31–6.32)
+- **Forecast** = full order value, PO purchase prices, expected logistics.
+- **Actual** = evidence-based: revenue and COGS recognise per line, by the kg
+  actually **delivered/posted** (partial deliveries show as "6 000/10 000 kg").
+  Goods merely loaded are not yet revenue — revenue and cost recognise
+  together. Legacy orders marked Shipped with no shipment records keep their
+  old 100% figure and get a warning.
+- Direct logistics costs: each SO takes **its kg share** of a groupage
+  shipment's costs; costs already allocated to lots are never counted twice;
+  cancelled shipments never count.
 
 ---
 
-## 8. Tips & housekeeping
+## 7. Invoices
 
-- **Back up often:** Settings → Export JSON. Import restores everything.
-- **Decimals:** comma decimals (`0,30`) are accepted on warehouse tariff and
-  commission fields; elsewhere use a dot if a field rejects the comma.
-- **Dates** are ISO (YYYY-MM-DD) under the hood; the date pickers handle the
-  formatting.
-- If a screen looks stale after an import, reload the page so every module picks
-  up the change.
+The Invoices module owns every money document — **it is the sole register**:
+sales invoices, purchase/cost invoices, credit & debit notes, **consignment
+settlements** (SET numbers, with the auto-drafted commission invoice) and
+payment events.
 
----
+- "Issue Sales Invoice" on an SO writes the invoice **into this register** and
+  moves a Shipped/Delivered SO to Invoiced; the SO panel and the Fakturownia
+  match read and write the register too. Invoice numbering sees the whole
+  register, so numbers issued here and from an SO can never collide.
+- Legacy data folds in automatically and only once: old SO-embedded invoices
+  and the old Finance credit-notes list migrate into the register/notes on
+  load (importing an old backup re-triggers the fold; nothing duplicates).
+- Payments are **events** (date, amount, method, note) — paidAmount and the
+  status (Partially paid / Paid / Overdue) are derived.
+- Duplicate guard: same counterparty + number + direction warns at entry and is
+  audited register-wide by the integrity checker.
+- Notes enter the receivable/payable totals with their sign.
+- Fakturownia: live-write is OFF by default (read/import + Copy-payload).
 
-## 9. What changed in v6.10.0 (quick reference)
+## 8. Finance
 
-| # | Area | Change |
-|---|------|--------|
-| 1–3 | Finance · Operational Costs | Date/Supplier columns, hover detail, edit/delete |
-| 4 | Finance · Operational Costs | Filter by period and supplier |
-| 5 | Counterparties · Merge | NIP + EU-VAT paired; stale VAT can’t survive |
-| 6 | Counterparties · Tariff | Comma decimals (`0,30`) accepted |
-| 7 | Counterparties · Tariff | “Operates” lists all warehouses + addresses |
-| 8 | Counterparties / Destinations | Multiple warehouse addresses (dropdown wiring in SO still pending) |
-| 9 | Purchase Orders | Block Shipped/Arrived/Closed before loading date |
-| 10 | Purchase Orders | Boxes per line + detail column |
-| 11 | Shipments | DDP create: track truck/driver, no carrier, no cost |
-| 12 | Shipments | Free-text From/To on legs |
-| 13 | Shipments | Truck/trailer/driver live in the unit section |
-| 14 | Shipments | DDP leg carries no freight cost |
-| 15 | Sales Orders | Destination = client address, or “Other” free text |
-
-*Manual generated for MARIANNA ERP v6.10.0.*
+Finance is analytics: the ledger (receivables/payables incl. notes), the P/L
+with the per-SO drill-down (forecast vs actual), operational overhead
+**budget** lines (actuals arrive as cost invoices linked by reference) and
+warehouse-charge predictions vs invoices.
 
 ---
 
-## 10. New in v6.11.0
+## 9. Settings & housekeeping
 
-### Finance → Credit Notes (new tab)
-Record any credit note tied to transport, a shipment, a client, a supplier or a
-warehouse. Pick the **direction** — *Incoming* (a supplier/carrier/warehouse
-credits us) or *Outgoing* (we credit a client) — then fill counterparty, category,
-the related **ref** (shipment / PO / SO / invoice), amount, currency, FX, status
-and reason. The tab totals **incoming**, **outgoing** and **net** in PLN. Notes
-persist locally and are included in the JSON backup. (Automatic netting into
-Receivables & Payables isn't wired yet — reconcile via the related ref.)
+- **Export JSON** regularly; imports warn on app-version mismatch and always
+  back up first. Storage health shows usage vs the ~5 MB budget.
+- Product catalog manager (Item → Variety, CSV in/out).
+- One editor at a time on a shared JSON; everyone on the same build (the
+  version badge is in the nav).
 
-### Inventory → Movement vs Record quality issue
-The lot action window now has two tabs. **Movement** covers Receipt (IN),
-Transfer and Ship Out. **Record quality issue** covers Damage (write-off) and
-Reclassify (grade change), for post-sorting results on a lot.
+## 10. What changed since the v6.10 manual (highlights)
 
-### EXW dispatches
-Recording a **Ship Out** for an EXW sale now works even when the lot is fully
-reserved/sold — it's capped by the physical (or expected) quantity, not the
-reserved-net availability. Set From = supplier/our warehouse, To = the client.
-
-### Sales Orders
-- **Actual delivery** date is enabled only once the status is **Delivered**.
-- **Import permit / ACID** each have a **Not applicable** toggle.
-- **Destination guidance** now matches the Incoterm (EXW none; FCA/FOB relay or
-  port of departure; CIF/CFR port of arrival; DAP/DDP client/other address).
-- Big PLN profitability figures now fit the P&L card; line totals stay in frame.
-
-### Purchase Orders
-- Changing the order **currency** updates every line and the printout, so a EUR PO
-  no longer prints a PLN first line.
-- Deleting a PO line now also removes its still-expected lot from Inventory.
-
-### Shipments
-- The Loading / Expected-delivery date helper captions were removed.
-- Costs & billing has a **“Bought DAP/DDP — supplier arranges & pays transport”**
-  toggle that records there's no freight cost on our side and unlocks the freight
-  line for removal.
-
-*Manual updated for MARIANNA ERP v6.11.0.*
+- PO: flow-type replaced by **incoterm + named place** with derived movement
+  and handover; statuses reduced to Draft/Confirmed/Cancelled + computed
+  badges; number locked; disposition moved to the sale.
+- Shipments: one-step full-page editor, groupage sources, multi-stop transport
+  orders, next-action-only statuses, structured customs, costs as lines with
+  invoice states, delivery-driven inventory posting, shipment-owned direction.
+- Inventory: event-driven movements, void-not-delete, claims & returns,
+  trace report, settlement moved to Invoices.
+- Invoices: single source of truth; payment events; settlements & commission;
+  notes in totals.
+- P/L: per-line evidence-based actuals, pro-rata groupage costs, no
+  double-counting with lot allocation, cancelled shipments excluded.
+- Invoices: single register owns all invoices — the SO invoice flow writes
+  there; the Finance Credit Notes tab is retired, its records folded into the
+  canonical notes and finally counted in the receivable/payable totals.
+- Clean system: no demo data anywhere after a reset.
+- Decimal commas accepted everywhere in the engines.

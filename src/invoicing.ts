@@ -17,7 +17,10 @@ import { resolveFxRate } from "./fx";
 
 export type InvoiceKind = "SALES" | "COST";
 export type CostScope = "SHIPMENT" | "MONTHLY_SHARED" | "OVERHEAD";
-export type InvoiceCategory = "SINV" | "PURCHASE" | "FORWARDER" | "BROKER" | "WAREHOUSE" | "TRANSPORT" | "OTHER";
+// v6.30.1: COMMISSION added — the settlement close (settlement.domain) drafts a
+// SALES invoice with this category; it was previously outside the union and
+// unmapped in the Invoices UI (CATEGORY_META lookup crashed the list render).
+export type InvoiceCategory = "SINV" | "COMMISSION" | "PURCHASE" | "FORWARDER" | "BROKER" | "WAREHOUSE" | "TRANSPORT" | "OTHER";
 export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled";
 
 export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: string; }
@@ -64,7 +67,7 @@ function n(v: any): number { const x = parseFloat(String(v ?? "").replace(/\s/g,
 function r2(x: number): number { return Math.round(x * 100) / 100; }
 function arr<T = any>(v: any): T[] { return Array.isArray(v) ? v : []; }
 
-const PAYABLE_CATEGORIES: InvoiceCategory[] = ["PURCHASE", "FORWARDER", "BROKER", "WAREHOUSE", "TRANSPORT", "OTHER"];
+// v6.32.0 (R7b-5): unused PAYABLE_CATEGORIES removed.
 export function invoiceDirection(inv: Invoice): "receivable" | "payable" {
   return inv.kind === "SALES" ? "receivable" : "payable";
 }
@@ -85,6 +88,83 @@ export function recomputeInvoiceMoney(inv: Partial<Invoice>): Partial<Invoice> {
 // ── MIGRATION: fold the four legacy sources into the unified model ──
 // Idempotent by `source` tag — a record already migrated (same source) is skipped,
 // so running this on every load never duplicates.
+// ─── v6.33.0 (A3-6): the Invoices register is the SOLE owner of invoices ────
+// The SO "Issue Sales Invoice" modal now writes HERE (via this builder) instead
+// of into order.pendingInvoices. The source tag is the same one the legacy fold
+// uses, so importing an old backup whose SO still carries the pendingInvoice
+// can never duplicate an invoice already created through the API.
+export function salesInvoiceSourceTag(soNumber: any, invNumber: any): string {
+  return `SO:${soNumber}:${invNumber || ""}`;
+}
+export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
+  const fx = resolveFxRate(pi.fxRate, pi.currency || order.currency);
+  const net = r2(n(pi.netAmount));
+  const vatRate = n(pi.vatRate);
+  const vat = r2(n(pi.vatAmount) || net * vatRate / 100);
+  const gross = r2(n(pi.grossAmount) || net + vat);
+  return {
+    id: nextId(), kind: "SALES", category: "SINV",
+    number: pi.number || "", counterparty: pi.counterparty || order.client || null,
+    issueDate: pi.issueDate || "", saleDate: pi.saleDate || "", dueDate: pi.dueDate || "",
+    paymentMethod: pi.paymentMethod || "Transfer",
+    currency: pi.currency || order.currency || "PLN", fxRate: fx,
+    netAmount: net, vatRate, vatAmount: vat, grossAmount: gross,
+    netPLN: r2(net * fx), grossPLN: r2(gross * fx),
+    positions: arr(order.items).map((it: any) => ({ name: it.product || "", quantity: n(it.qty), unit: it.unit || "kg", vatRate, grossTotal: undefined })),
+    links: [{ type: "SO", number: order.number }],
+    paymentStatus: (pi.paymentStatus as PaymentStatus) || "Draft",
+    paidAmount: n(pi.paidAmount),
+    notes: pi.notes || "", attachment: pi.attachment || null,
+    creditNoteIds: [], allocation: null,
+    fakturownia: { exported: !!pi.fktMatched, ref: pi.fktId, legalNumber: pi.fktMatched ? pi.number : undefined },
+    source: salesInvoiceSourceTag(order.number, pi.number || pi.id),
+    createdAt: pi.createdAt || pi.issueDate || "", locked: pi.paymentStatus === "Sent" || !!pi.fktMatched,
+  } as Invoice;
+}
+
+// v6.33.0 (A3-6): once the register owns an SO's invoices, the legacy
+// order.pendingInvoices arrays are stripped. Pure; returns the SAME array
+// reference when there is nothing to strip so React effects don't loop.
+export function stripPendingInvoices(orders: any[]): { orders: any[]; changed: boolean } {
+  let changed = false;
+  const out = arr(orders).map((o: any) => {
+    if (!o || !o.pendingInvoices || !o.pendingInvoices.length) return o;
+    changed = true;
+    const { pendingInvoices, ...rest } = o;
+    return rest;
+  });
+  return { orders: changed ? out : orders, changed };
+}
+
+// ─── v6.33.0 (A3-5 residue): legacy Finance creditNotes → FinanceNote ────────
+// The old Finance "Credit Notes" tab kept its own array that never entered the
+// receivable/payable totals. Fold each record into the canonical notes model
+// (all legacy records are CREDIT notes — the tab had no debit concept),
+// idempotent by source tag; after this they DO adjust the ledger totals (BP-37).
+export function migrateLegacyCreditNotes(opts: { existing: FinanceNote[]; creditNotes: any[] }): FinanceNote[] {
+  const existing = arr<FinanceNote>(opts.existing);
+  const have = new Set(existing.map(nte => nte.source).filter(Boolean));
+  const out: FinanceNote[] = [...existing];
+  arr(opts.creditNotes).forEach((cn: any) => {
+    const src = `legacyCN:${cn.id}`;
+    if (have.has(src)) return;
+    const fx = resolveFxRate(cn.fxRate, cn.currency);
+    const amount = n(cn.amount);
+    out.push({
+      id: nextId(), noteType: "CREDIT",
+      direction: cn.direction === "incoming" ? "incoming" : "outgoing",
+      invoiceId: null, relatedRef: cn.relatedRef || "",
+      partyName: cn.partyName || "", category: cn.category || "Other",
+      amount, currency: cn.currency || "PLN", fxRate: fx,
+      amountPLN: r2(n(cn.amountPLN) || amount * fx),
+      status: cn.status || "Draft", reason: cn.reason || "", date: cn.date || "",
+      source: src,
+    });
+    have.add(src);
+  });
+  return out;
+}
+
 export function migrateLegacyInvoices(opts: {
   existing: Invoice[];
   orders: any[];
@@ -102,34 +182,13 @@ export function migrateLegacyInvoices(opts: {
     haveSource.add(source);
   };
 
-  // 1. SALES invoices from SO pendingInvoices
+  // 1. SALES invoices from SO pendingInvoices — same builder as the live A3-6
+  // path (salesInvoiceFromSODraft), so folded and API-created invoices are one
+  // shape and one source-tag namespace.
   arr(opts.orders).forEach((o: any) => {
     arr(o.pendingInvoices).forEach((pi: any) => {
-      const src = `SO:${o.number}:${pi.number || pi.id || ""}`;
-      pushIf(src, () => {
-        const fx = resolveFxRate(pi.fxRate, pi.currency || o.currency);
-        const net = r2(n(pi.netAmount));
-        const vatRate = n(pi.vatRate);
-        const vat = r2(n(pi.vatAmount) || net * vatRate / 100);
-        const gross = r2(n(pi.grossAmount) || net + vat);
-        return {
-          id: nextId(), kind: "SALES", category: "SINV",
-          number: pi.number || "", counterparty: pi.counterparty || o.client || null,
-          issueDate: pi.issueDate || "", saleDate: pi.saleDate || "", dueDate: pi.dueDate || "",
-          paymentMethod: pi.paymentMethod || "Transfer",
-          currency: pi.currency || o.currency || "PLN", fxRate: fx,
-          netAmount: net, vatRate, vatAmount: vat, grossAmount: gross,
-          netPLN: r2(net * fx), grossPLN: r2(gross * fx),
-          positions: arr(o.items).map((it: any) => ({ name: it.product || "", quantity: n(it.qty), unit: it.unit || "kg", vatRate, grossTotal: undefined })),
-          links: [{ type: "SO", number: o.number }],
-          paymentStatus: (pi.paymentStatus as PaymentStatus) || "Draft",
-          paidAmount: n(pi.paidAmount),
-          notes: pi.notes || "", attachment: pi.attachment || null,
-          creditNoteIds: [], allocation: null,
-          fakturownia: { exported: !!pi.fktMatched, ref: pi.fktId, legalNumber: pi.fktMatched ? pi.number : undefined },
-          source: src, createdAt: pi.createdAt || pi.issueDate || "", locked: pi.paymentStatus === "Sent" || !!pi.fktMatched,
-        };
-      });
+      const src = salesInvoiceSourceTag(o.number, pi.number || pi.id);
+      pushIf(src, () => salesInvoiceFromSODraft(o, pi));
     });
   });
 
@@ -139,7 +198,6 @@ export function migrateLegacyInvoices(opts: {
     pushIf(src, () => {
       const fx = resolveFxRate(w.fxRate, w.currency);
       const net = r2(n(w.amount) || n(w.amountPLN) / (fx || 1));
-      const gross = r2(n(w.amountPLN) || net * fx);
       return {
         id: nextId(), kind: "COST", category: "WAREHOUSE", costScope: "MONTHLY_SHARED",
         number: w.invoiceNo || "", counterparty: { name: w.warehouseName || "Warehouse" },

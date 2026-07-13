@@ -1,26 +1,16 @@
 {
   "compilerOptions": {
-    "target": "ES2019",
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "strict": false,
-    "outDir": "./build",
-    "rootDir": "../src",
-    "ignoreDeprecations": "6.0"
+    "target": "ES2019", "module": "commonjs", "moduleResolution": "node",
+    "esModuleInterop": true, "skipLibCheck": true, "strict": false,
+    "outDir": "./build", "rootDir": "../src", "ignoreDeprecations": "6.0", "types": []
   },
   "files": [
-    "../src/types.ts",
-    "../src/inventory.domain.ts",
-    "../src/salesOrders.domain.ts",
-    "../src/costAllocation.ts",
-    "../src/ledger.ts",
-    "../src/shipments.domain.ts",
-    "../src/documents.domain.ts",
-    "../src/tradeFlow.domain.ts",
-    "../src/payments.domain.ts",
-    "../src/settlement.domain.ts",
-    "../src/claim.domain.ts"
+    "../src/types.ts", "../src/inventory.domain.ts", "../src/salesOrders.domain.ts",
+    "../src/costAllocation.ts", "../src/ledger.ts", "../src/shipments.domain.ts",
+    "../src/documents.domain.ts", "../src/tradeFlow.domain.ts", "../src/payments.domain.ts",
+    "../src/settlement.domain.ts", "../src/claim.domain.ts", "../src/trace.domain.ts",
+    "../src/integrityCheck.ts", "../src/warehouseCharges.ts", "../src/fx.ts",
+    "../src/ids.ts", "../src/invoicing.ts", "../src/marginCalculations.ts",
+    "../src/numbers.ts", "../src/consignment.ts"
   ]
 }

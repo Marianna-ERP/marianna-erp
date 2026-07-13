@@ -3,7 +3,7 @@ import { fmtNum } from "./format";
 import { Card } from "./ui";
 import { SO_PRE_DISPATCH_STATUSES as PRE_DISPATCH_STATUSES } from "./types";
 import { aggregateNetMargins } from "./operationalCosts";
-import { localTodayISO, localMonthISO } from "./dates";
+import { localMonthISO } from "./dates";
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────────────
 // Phase 1 dashboard: reads live state from PO / SO / Inventory / Contacts and
@@ -109,7 +109,6 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
     return m;
   }, [lots]);
   const lotsAtPort = lots.filter(l => l.status === "In Transit" || l.status === "Customs").length;
-  const lotsDamaged = lots.filter(l => (l.damagedKg || 0) > 0).length;
 
   // Total live reservations across all lots (SOs in pre-dispatch state).
   // This is what's promised but not yet shipped — a working "promised but not delivered" figure.

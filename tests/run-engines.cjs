@@ -804,6 +804,435 @@ T("DAMAGE reduces physical stock and accumulates damagedKg", () => {
   assert.equal(lot.damagedKg, 500);
 });
 
+// ── v6.29.0: shipment-owned trade direction + label table (Hazem's decisions) ──
+const { shipmentTradeDirection, namedPlacePoolForIncoterm: pool29 } = require("./build/tradeFlow.domain.js");
+
+console.log("── shipment owns the direction ──");
+T("precedence: shipment explicit > PO provisional > legacy flow > Import", () => {
+  assert.equal(shipmentTradeDirection({ tradeDirection: "CROSS_TRADE" }, { tradeMovement: "IMPORT" }), "CROSS_TRADE");
+  assert.equal(shipmentTradeDirection({}, { tradeMovement: "EXPORT" }), "EXPORT");
+  assert.equal(shipmentTradeDirection(null, { flow: "EXP_CIF" }), "EXPORT");
+  assert.equal(shipmentTradeDirection(null, { flow: "IMP_CIF_WH" }), "IMPORT");
+  assert.equal(shipmentTradeDirection(null, {}), "IMPORT");
+});
+T("garbage direction values fall through safely", () => {
+  assert.equal(shipmentTradeDirection({ tradeDirection: "NONSENSE" }, { tradeMovement: "EXPORT" }), "EXPORT");
+});
+console.log("── place labels per the agreed table (CFR → discharge) ──");
+T("CFR named place is the port of DISCHARGE (Incoterms-correct)", () => {
+  assert.equal(pool29("CFR").label, "Port of discharge");
+  assert.equal(pool29("FOB").label, "Port of loading");
+  assert.equal(pool29("EXW").label, "Pickup place (supplier site)");
+  assert.equal(pool29("DDP").label, "Delivered to (our address)");
+  assert.equal(pool29("").label, "Place (set the incoterm first)");
+});
+
+// ── Safeguards batch 7a ──
+const { buildTraceTree } = require("./build/trace.domain.js");
+const { checkIntegrity } = require("./build/integrityCheck.js");
+
+console.log("── over-issue flagged, not swallowed ──");
+T("shipping more than exists clamps AND reports the excess", () => {
+  const lot = recomputeLotFromMovements({ number: "LOT-O" }, [
+    { id: 1, date: "2026-07-01", type: "IN", qtyKg: 5000, toId: 1 },
+    { id: 2, date: "2026-07-02", type: "SHIP_OUT", qtyKg: 8000 },
+  ], locByIdStub);
+  assert.equal(lot.physicalKg, 0);          // still clamped (crash-safe)
+  assert.equal(lot.overIssuedKg, 3000);     // but no longer silent
+});
+T("normal issue reports zero excess", () => {
+  const lot = recomputeLotFromMovements({ number: "LOT-N" }, [
+    { id: 1, date: "2026-07-01", type: "IN", qtyKg: 5000, toId: 1 },
+    { id: 2, date: "2026-07-02", type: "SHIP_OUT", qtyKg: 2000 },
+  ], locByIdStub);
+  assert.equal(lot.overIssuedKg, 0);
+});
+
+console.log("── recall / trace tree ──");
+T("trace composes origin, shipments, sales, invoices", () => {
+  const lot = { number: "LOT-1", product: "Golden", poRef: "PO-9", receivedKg: 24000 };
+  const t = buildTraceTree(lot, {
+    pos: [{ number: "PO-9", supplier: { name: "Konkret", address: "Cairo" }, items: [{ origin: "Egypt" }] }],
+    orders: [
+      { number: "SO-1", status: "Confirmed", client: { name: "ClientA", address: "Jeddah" }, items: [{ sourceType: "PO", sourceRef: "PO-9", qty: 10000 }] },
+      { number: "SO-2", status: "Cancelled", client: { name: "GONE" }, items: [{ sourceType: "STOCK", sourceRef: "LOT-1", qty: 5000 }] },
+    ],
+    shipments: [
+      { number: "SHP-1", status: "Delivered", poRefs: ["PO-9"], goods: [] },
+      { number: "SHP-2", status: "Booked", poRefs: [], goods: [{ lotRef: "LOT-1" }] },
+      { number: "SHP-X", status: "Booked", poRefs: ["PO-OTHER"], goods: [] },
+    ],
+    invoices: [
+      { number: "FV/1", kind: "SALES", soRef: "SO-1", counterparty: { name: "ClientA" }, grossAmount: 100, currency: "EUR" },
+      { number: "PINV/9", kind: "COST", poRef: "PO-9", counterparty: { name: "Konkret" } },
+      { number: "ZZZ", kind: "COST", poRef: "PO-OTHER" },
+    ],
+  }, "2026-07-11");
+  assert.equal(t.origin.supplier, "Konkret");
+  assert.deepEqual(t.shipments.map(x => x.number).sort(), ["SHP-1", "SHP-2"]);
+  assert.deepEqual(t.sales.map(x => x.soNumber), ["SO-1"]);            // cancelled excluded
+  assert.deepEqual(t.invoices.map(x => x.number).sort(), ["FV/1", "PINV/9"]);
+});
+
+console.log("── integrity: new safeguard checks ──");
+T("duplicate invoice per counterparty+number flagged (BP-40)", () => {
+  const r = checkIntegrity({ invoices: [
+    { number: "FS 1/26", counterparty: { name: "Konkret" } },
+    { number: "FS 1/26", counterparty: { name: "Konkret" } },
+    { number: "FS 1/26", counterparty: { name: "OtherCo" } },   // same number, other party → fine
+  ]});
+  assert.equal(r.issues.filter(i => i.code === "DUP_INVOICE").length, 1);
+});
+T("paidAmount out of sync with events flagged", () => {
+  const r = checkIntegrity({ invoices: [{ number: "X", counterparty: { name: "A" }, paidAmount: 999, payments: [{ amount: 400 }] }] });
+  assert.ok(r.issues.some(i => i.code === "PAY_MISMATCH"));
+});
+T("over-issued lot flagged as error", () => {
+  const r = checkIntegrity({ lots: [{ number: "LOT-O", overIssuedKg: 3000 }] });
+  assert.ok(r.issues.some(i => i.code === "LOT_OVER_ISSUE" && i.severity === "error"));
+});
+T("shipment referencing a vanished PO flagged", () => {
+  const r = checkIntegrity({ shipments: [{ number: "SHP-1", poRefs: ["PO-GONE"] }], pos: [] });
+  assert.ok(r.issues.some(i => i.code === "SHIP_PO_MISSING"));
+});
+
+console.log("── v6.30.1: fix batch ──");
+// Fix 1 — the checker's reserving set matches the pinned pre-dispatch semantics.
+T("shipped SO no longer raises a false LOT_OVERSOLD on a correctly shipped lot", () => {
+  // 1000 kg received, all 1000 shipped for SO-A (physical now 0). Under the old
+  // 7-status set, SO-A's demand still counted as reserved vs available 0 → error.
+  const r = checkIntegrity({
+    lots: [{ number: "LOT-S", product: "Apples", availableKg: 0, physicalKg: 0, receivedKg: 1000 }],
+    orders: [{ number: "SO-A", status: "Shipped", items: [{ sourceType: "STOCK", sourceRef: "LOT-S", product: "Apples", qty: 1000 }] }],
+  });
+  assert.ok(!r.issues.some(i => i.code === "LOT_OVERSOLD"));
+});
+T("pre-dispatch oversell still flagged (defence in depth intact)", () => {
+  const r = checkIntegrity({
+    lots: [{ number: "LOT-S", product: "Apples", availableKg: 500 }],
+    orders: [{ number: "SO-B", status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "LOT-S", product: "Apples", qty: 900 }] }],
+  });
+  assert.ok(r.issues.some(i => i.code === "LOT_OVERSOLD" && i.severity === "error"));
+});
+// Fix 2 — ORPHAN_SO_POLINE is alive again.
+T("SO line naming a missing PO line id is flagged (check was dead before)", () => {
+  const r = checkIntegrity({
+    pos: [{ number: "PO-1", items: [{ id: 11, product: "Apples" }] }],
+    orders: [{ number: "SO-C", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 99, product: "Apples", qty: 100 }] }],
+  });
+  assert.ok(r.issues.some(i => i.code === "ORPHAN_SO_POLINE"));
+});
+T("legacy SO line (null sourceLineId) not flagged when the PO has lines", () => {
+  const r = checkIntegrity({
+    pos: [{ number: "PO-1", items: [{ id: 1717171717171, product: "Apples" }] }],
+    orders: [{ number: "SO-D", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: null, product: "Apples", qty: 100 }] }],
+  });
+  assert.ok(!r.issues.some(i => i.code === "ORPHAN_SO_POLINE"));
+});
+
+// Fix 3 — voided movements never accrue warehouse charges.
+const { computeLotWarehouseCharges, computeStoragePeriods } = require("./build/warehouseCharges.js");
+T("voided IN excluded from storage kg-days and handling (parity with the reducer)", () => {
+  const contacts = [{ id: 900, name: "Logipark", warehouseTariff: { storagePerKgDay: 0.01, handlingInPerKg: 0.05, freeDays: 0, locationIds: [1] } }];
+  const lotLive = { number: "LOT-W", locationId: 1, movements: [{ id: 1, type: "IN", date: "2026-06-01", qtyKg: 1000, toId: 1 }] };
+  const lotVoid = { number: "LOT-V", locationId: 1, movements: [{ id: 1, type: "IN", date: "2026-06-01", qtyKg: 1000, toId: 1, voided: true }] };
+  const live = computeLotWarehouseCharges(lotLive, contacts, "2026-06-11");
+  const voided = computeLotWarehouseCharges(lotVoid, contacts, "2026-06-11");
+  assert.ok(live && live.kgDays === 10000 && live.lines.some(l => l.kind === "handling_in"));
+  assert.ok(!voided || (voided.kgDays === 0 && voided.lines.length === 0));
+});
+T("voided SHIP_OUT does not reduce storage nor charge handling out", () => {
+  const { periods, shippedKg } = computeStoragePeriods({ number: "LOT-W2", locationId: 1, movements: [
+    { id: 1, type: "IN", date: "2026-06-01", qtyKg: 1000, toId: 1 },
+    { id: 2, type: "SHIP_OUT", date: "2026-06-05", qtyKg: 1000, voided: true },
+  ]}, "2026-06-11");
+  assert.equal(shippedKg, 0);
+  assert.equal(periods.reduce((s, p) => s + p.kg * p.days, 0), 10000); // full 10 days stored
+});
+
+// Fix 5 — the commission invoice pushes a real Fakturownia position.
+const { buildFakturowniaPayload } = require("./build/invoicing.js");
+T("commission invoice positions survive the Fakturownia payload builder", () => {
+  const lot = { number: "LOT-K", product: "Peppers", poRef: "PO-9" };
+  const settlement = { number: "SET-2026-0001", commissionPct: 10, finalCommissionPLN: 1234.56, closedAt: "2026-07-01" };
+  let id = 1;
+  const inv = buildCommissionInvoiceDraft(lot, settlement, { supplier: { name: "Producer X" } }, { nextId: () => id++, todayISO: () => "2026-07-01" });
+  const body = buildFakturowniaPayload(inv, { apiToken: "t" });
+  const pos = body.invoice.positions[0];
+  assert.ok(pos.name.includes("Commission 10%"));                 // not the "—" fallback
+  assert.equal(pos.total_price_gross, 1234.56);                    // amount carried through
+  assert.equal(inv.paymentStatus, "Paid");                         // offset event intact
+});
+
+// Fix 7 — shipment posting surfaces over-issue instead of clamping silently.
+T("OUTBOUND over-issue lands in overIssuedKg and the checker flags it", () => {
+  const sh = { number: "SHP-OI", purpose: "OUTBOUND", soRefs: ["SO-9"], goods: [{ lotRef: "LOT-OI", qtyKg: 1500, soRef: "SO-9" }], legs: [] };
+  const stocked = { number: "LOT-OI", product: "Apples", physicalKg: 1000, receivedKg: 1000, locationId: 1 };
+  const { lots } = postShipmentToLots(sh, [stocked], { todayISO: () => "2026-07-01", nextId: (() => { let i = 1; return () => i++; })() });
+  assert.equal(lots[0].physicalKg, 0);
+  assert.equal(lots[0].overIssuedKg, 500);
+  const r = checkIntegrity({ lots });
+  assert.ok(r.issues.some(i => i.code === "LOT_OVER_ISSUE"));
+});
+
+console.log("── v6.31.0: direct costs (P1-2 interim) + close-out + tripwires ──");
+const { computeSOMargin } = require("./build/marginCalculations.js");
+const mkSO631 = (n, qty = 1000, price = 2) => ({ number: n, status: "Confirmed", currency: "PLN", fxRate: 1, items: [{ product: "Apples", qty, unitPrice: price, sourceType: null, sourceRef: "" }] });
+
+T("(a) goods-row-only SO link now captures direct costs", () => {
+  const sh = { number: "SHP-G", status: "Booked", soRefs: [], goods: [{ soRef: "SO-G", qtyKg: 1000 }], costs: [{ id: 1, type: "road_freight", amountPLN: 500, invoiceStatus: "Expected" }] };
+  const m = computeSOMargin(mkSO631("SO-G"), [], [], [sh], "forecast");
+  assert.equal(m.directCostsPLN, 500); // was 0 (under-capture)
+});
+T("(c) groupage freight split pro-rata by kg, not full to every SO", () => {
+  const sh = { number: "SHP-2SO", status: "Booked", soRefs: ["SO-A", "SO-B"],
+    goods: [{ soRef: "SO-A", qtyKg: 6000 }, { soRef: "SO-B", qtyKg: 4000 }],
+    costs: [{ id: 1, type: "road_freight", amountPLN: 10000, invoiceStatus: "Expected" }] };
+  const a = computeSOMargin(mkSO631("SO-A"), [], [], [sh], "forecast");
+  const b = computeSOMargin(mkSO631("SO-B"), [], [], [sh], "forecast");
+  assert.equal(a.directCostsPLN, 6000);
+  assert.equal(b.directCostsPLN, 4000); // sum = 10000, was 20000
+});
+T("(c fallback) header-linked SOs with no goods kg split equally", () => {
+  const sh = { number: "SHP-EQ", status: "Booked", soRefs: ["SO-A", "SO-B"], goods: [], costs: [{ id: 1, amountPLN: 1000, invoiceStatus: "Expected" }] };
+  const a = computeSOMargin(mkSO631("SO-A"), [], [], [sh], "forecast");
+  assert.equal(a.directCostsPLN, 500);
+});
+T("(b) cost line allocated to lots is skipped in direct costs (no double-count)", () => {
+  const sh = { number: "SHP-AL", status: "Booked", soRefs: ["SO-A"], goods: [],
+    costs: [{ id: 7, type: "sea_freight", amountPLN: 3000, invoiceStatus: "Received" }, { id: 8, type: "customs", amountPLN: 700, invoiceStatus: "Received" }] };
+  const lots = [{ number: "LOT-1", costs: [{ source: "SHP-AL/7", pln: 3000 }] }]; // Batch-1b tag
+  const m = computeSOMargin(mkSO631("SO-A"), lots, [], [sh], "actual");
+  assert.equal(m.directCostsPLN, 700); // 3000 is in COGS via the lot, counted once
+});
+T("(d) cancelled shipments no longer contribute costs", () => {
+  const cancelled = { number: "SHP-X", status: "Cancelled", soRefs: ["SO-A"], goods: [], costs: [{ id: 1, amountPLN: 4000, invoiceStatus: "Received" }] };
+  const replacement = { number: "SHP-Y", status: "Loaded", soRefs: ["SO-A"], goods: [], costs: [{ id: 1, amountPLN: 4200, invoiceStatus: "Received" }] };
+  const m = computeSOMargin(mkSO631("SO-A"), [], [], [cancelled, replacement], "actual");
+  assert.equal(m.directCostsPLN, 4200); // was 8200
+});
+T("actual mode still gates on invoice status (Expected skipped)", () => {
+  const sh = { number: "SHP-ST", status: "Booked", soRefs: ["SO-A"], goods: [], costs: [{ id: 1, amountPLN: 900, invoiceStatus: "Expected" }] };
+  const m = computeSOMargin(mkSO631("SO-A"), [], [], [sh], "actual");
+  assert.equal(m.directCostsPLN, 0);
+});
+
+T("Closed SO with provisional/missing cost data flagged (close-out gate)", () => {
+  const r = checkIntegrity({
+    orders: [{ number: "SO-C", status: "Closed", items: [{ product: "Apples", qty: 1000, sourceType: "STOCK", sourceRef: "LOT-NC" }] }],
+    lots: [{ number: "LOT-NC", product: "Apples", costs: [], movements: [] }],
+    shipments: [{ number: "SHP-1", status: "Delivered", soRefs: ["SO-C"], costs: [{ id: 1, amountPLN: 100, invoiceStatus: "Expected" }] }],
+  });
+  assert.ok(r.issues.some(i => i.code === "SO_CLOSED_PL_INCOMPLETE"));
+});
+T("Closed SO with complete data is NOT flagged", () => {
+  const r = checkIntegrity({
+    orders: [{ number: "SO-OK", status: "Closed", items: [{ product: "Apples", qty: 1000, sourceType: "STOCK", sourceRef: "LOT-OK" }] }],
+    lots: [{ number: "LOT-OK", product: "Apples", costs: [{ pln: 2000 }], movements: [{ id: 1, type: "IN", qtyKg: 1000 }, { id: 2, type: "SHIP_OUT", qtyKg: 1000, soRef: "SO-OK" }] }],
+    shipments: [{ number: "SHP-1", status: "Delivered", soRefs: ["SO-OK"], costs: [{ id: 1, amountPLN: 100, invoiceStatus: "Received" }] }],
+  });
+  assert.ok(!r.issues.some(i => i.code === "SO_CLOSED_PL_INCOMPLETE"));
+});
+T("T-20 tripwire: lot with IN movement but Expected/0kg state → error", () => {
+  const r = checkIntegrity({ lots: [{ number: "LOT-T20", status: "Expected", receivedKg: 0, physicalKg: 0, movements: [{ id: 1, type: "IN", qtyKg: 19422, date: "2026-07-01" }] }] });
+  assert.ok(r.issues.some(i => i.code === "LOT_RECEIPT_INCONSISTENT" && i.severity === "error"));
+});
+T("direct pass-through lot (received>0, IN present, physical 0 + SHIP_OUT) NOT tripped", () => {
+  const r = checkIntegrity({ lots: [{ number: "LOT-DIR", status: "Delivered (direct)", receivedKg: 1000, physicalKg: 0, movements: [
+    { id: 1, type: "IN", qtyKg: 1000 }, { id: 2, type: "SHIP_OUT", qtyKg: 1000, soRef: "SO-1" }] }] });
+  assert.ok(!r.issues.some(i => i.code === "LOT_RECEIPT_INCONSISTENT"));
+});
+T("FX sanity: confirmed EUR SO with fxRate 1 flagged (real-data case)", () => {
+  const r = checkIntegrity({ orders: [{ number: "SO-FX", status: "Confirmed", currency: "EUR", fxRate: 1, items: [] }] });
+  assert.ok(r.issues.some(i => i.code === "FX_RATE_SUSPECT"));
+});
+T("FX sanity: PLN docs and proper rates untouched", () => {
+  const r = checkIntegrity({ orders: [
+    { number: "SO-P", status: "Confirmed", currency: "PLN", fxRate: 1, items: [] },
+    { number: "SO-E", status: "Confirmed", currency: "EUR", fxRate: 4.25, items: [] }] });
+  assert.ok(!r.issues.some(i => i.code === "FX_RATE_SUSPECT"));
+});
+T("A5 dedup: a broken shipment PO ref produces ONE issue, not two", () => {
+  const r = checkIntegrity({ shipments: [{ number: "SHP-1", poRefs: ["PO-GONE"] }], pos: [] });
+  const hits = r.issues.filter(i => i.entity === "SHP-1");
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].code, "SHIP_PO_MISSING");
+});
+
+console.log("── v6.32.0: canonical matcher (A1), per-line revenue (P1-1), parsers, checker ──");
+const { findLotForSOLine, shippedKgByLine } = require("./build/salesOrders.domain.js");
+const { parseNum } = require("./build/numbers.js");
+const { lineSourcesLot } = require("./build/consignment.js");
+
+T("matcher: multi-line same-product PO resolves each line to ITS lot (poLineId)", () => {
+  const lots = [
+    { number: "LOT-A", poRef: "PO-1", poLineId: "11", product: "Apples", costs: [{ pln: 1000 }] },
+    { number: "LOT-B", poRef: "PO-1", poLineId: "12", product: "Apples", costs: [{ pln: 9000 }] },
+  ];
+  assert.equal(findLotForSOLine(lots, { sourceType: "PO", sourceRef: "PO-1", sourceLineId: "12", product: "Apples" }).number, "LOT-B");
+  assert.equal(findLotForSOLine(lots, { sourceType: "PO", sourceRef: "PO-1", sourceLineId: "11", product: "Apples" }).number, "LOT-A");
+});
+T("matcher: variety-aware fallback when poLineId absent; claimed set prevents reuse", () => {
+  const lots = [
+    { number: "LOT-G", poRef: "PO-1", product: "Apples", variety: "Gala" },
+    { number: "LOT-J", poRef: "PO-1", product: "Apples", variety: "Jonagold" },
+  ];
+  assert.equal(findLotForSOLine(lots, { sourceType: "PO", sourceRef: "PO-1", product: "Apples", variety: "Jonagold" }).number, "LOT-J");
+  const claimed = new Set(["LOT-G"]);
+  const got = findLotForSOLine(lots, { sourceType: "PO", sourceRef: "PO-1", product: "Apples" }, { claimed });
+  assert.equal(got.number, "LOT-J"); // first unclaimed
+});
+T("shippedKgByLine: movements + Delivered-unposted safety net; Loaded is NOT revenue", () => {
+  const order = { number: "SO-1", items: [{ product: "Apples", qty: 10000, sourceType: "PO", sourceRef: "PO-1" }] };
+  const lots = [{ number: "LOT-A", poRef: "PO-1", product: "Apples", movements: [
+    { type: "SHIP_OUT", qtyKg: 4000, soRef: "SO-1", shipmentRef: "SHP-POSTED" }] }];
+  const shipments = [
+    { number: "SHP-POSTED", status: "Delivered", soRefs: ["SO-1"], goods: [{ soRef: "SO-1", product: "Apples", qtyKg: 4000 }] },   // posted → rows skipped (movement counts)
+    { number: "SHP-DEL-NP", status: "Delivered", soRefs: ["SO-1"], goods: [{ soRef: "SO-1", product: "Apples", qtyKg: 2500 }] },   // delivered, not posted → safety net counts
+    { number: "SHP-LOADED", status: "Loaded",    soRefs: ["SO-1"], goods: [{ soRef: "SO-1", product: "Apples", qtyKg: 3000 }] },   // in transit → NOT revenue (COGS symmetry)
+  ];
+  const r = shippedKgByLine(order, lots, shipments);
+  assert.equal(r.totalKg, 6500); // 4000 movement + 2500 delivered-unposted; Loaded excluded
+});
+T("P1-1: actual revenue is per-line partial, not all-or-nothing", () => {
+  const order = { number: "SO-1", status: "Shipped", currency: "PLN", fxRate: 1, items: [
+    { product: "Apples", qty: 10000, unitPrice: 2, sourceType: "PO", sourceRef: "PO-1" },
+    { product: "Pears", qty: 5000, unitPrice: 3, sourceType: "PO", sourceRef: "PO-2" }] };
+  const lots = [{ number: "LOT-A", poRef: "PO-1", product: "Apples", movements: [{ type: "SHIP_OUT", qtyKg: 6000, soRef: "SO-1", shipmentRef: "S1" }] }];
+  const m = computeSOMargin(order, lots, [], [], "actual");
+  assert.equal(m.revenuePLN, 12000); // 6000×2 shipped; pears line 0 — was 40000 (100% on status)
+});
+T("P1-1: legacy fallback — status Shipped with zero evidence keeps 100% + warning", () => {
+  const order = { number: "SO-L", status: "Shipped", currency: "PLN", fxRate: 1, items: [{ product: "Apples", qty: 1000, unitPrice: 2 }] };
+  const m = computeSOMargin(order, [], [], [], "actual");
+  assert.equal(m.revenuePLN, 2000);
+  assert.ok(m.warnings.some(w => w.includes("no shipment/movement evidence")));
+});
+T("COGS actual uses each line's OWN lot cost basis (was: first lot for all)", () => {
+  const pos = [{ number: "PO-1", currency: "PLN", fxRate: 1, items: [
+    { id: "11", product: "Apples", qty: 1000, unitPrice: 1 }, { id: "12", product: "Apples", qty: 1000, unitPrice: 9 }] }];
+  const lots = [
+    { number: "LOT-A", poRef: "PO-1", poLineId: "11", product: "Apples", receivedKg: 1000, costs: [{ pln: 1000 }],
+      movements: [{ type: "IN", qtyKg: 1000, shipmentRef: "X" }, { type: "SHIP_OUT", qtyKg: 1000, soRef: "SO-1", shipmentRef: "X" }] },
+    { number: "LOT-B", poRef: "PO-1", poLineId: "12", product: "Apples", receivedKg: 1000, costs: [{ pln: 9000 }],
+      movements: [{ type: "IN", qtyKg: 1000, shipmentRef: "Y" }, { type: "SHIP_OUT", qtyKg: 1000, soRef: "SO-1", shipmentRef: "Y" }] }];
+  const order = { number: "SO-1", status: "Shipped", currency: "PLN", fxRate: 1, items: [
+    { product: "Apples", qty: 1000, unitPrice: 2, sourceType: "PO", sourceRef: "PO-1", sourceLineId: "11" },
+    { product: "Apples", qty: 1000, unitPrice: 12, sourceType: "PO", sourceRef: "PO-1", sourceLineId: "12" }] };
+  const m = computeSOMargin(order, lots, pos, [], "actual");
+  assert.equal(m.cogsPLN, 10000); // 1×1000 + 1×9000 — old matcher charged LOT-A twice (2000)
+});
+T("parseNum: Polish comma decimals and mixed separators", () => {
+  assert.equal(parseNum("1,5"), 1.5);
+  assert.equal(parseNum("1.234,56"), 1234.56);
+  assert.equal(parseNum("1,234.56"), 1234.56);
+  assert.equal(parseNum("1 234,5"), 1234.5);
+  assert.equal(parseNum("2.5"), 2.5);
+  assert.equal(parseNum(""), 0);
+});
+T("consignment: variety separation + poLineId authority", () => {
+  const gala = { number: "LOT-G", poRef: "PO-1", poLineId: "1", product: "Apples", variety: "Gala" };
+  assert.ok(lineSourcesLot({ sourceType: "PO", sourceRef: "PO-1", product: "Apples", variety: "Gala" }, gala));
+  assert.ok(!lineSourcesLot({ sourceType: "PO", sourceRef: "PO-1", product: "Apples", variety: "Jonagold" }, gala));
+  assert.ok(!lineSourcesLot({ sourceType: "PO", sourceRef: "PO-1", sourceLineId: "2", product: "Apples", variety: "Gala" }, gala));
+});
+T("checker: duplicate live shipment flagged; cancelled duplicate not", () => {
+  const base = { soRefs: ["SO-1"], goods: [{ qtyKg: 19422 }], costs: [{ amountPLN: 4940 }] };
+  const r = checkIntegrity({ shipments: [
+    { ...base, number: "SHP-5", status: "Confirmed" }, { ...base, number: "SHP-6", status: "Confirmed" }], orders: [{ number: "SO-1", status: "Confirmed", items: [] }] });
+  assert.ok(r.issues.some(i => i.code === "DUP_LIVE_SHIPMENT"));
+  const r2 = checkIntegrity({ shipments: [
+    { ...base, number: "SHP-5", status: "Cancelled" }, { ...base, number: "SHP-6", status: "Confirmed" }], orders: [{ number: "SO-1", status: "Confirmed", items: [] }] });
+  assert.ok(!r2.issues.some(i => i.code === "DUP_LIVE_SHIPMENT"));
+});
+T("checker: stale 'Cost allocated' flag caught; real allocation not", () => {
+  const sh = { number: "SHP-2", status: "Cancelled", billingStatus: "Cost allocated", costs: [{ id: 9, amountPLN: 4000 }] };
+  const r = checkIntegrity({ shipments: [sh], lots: [{ number: "L1", costs: [] }] });
+  assert.ok(r.issues.some(i => i.code === "STALE_BILLING_FLAG"));
+  const r2 = checkIntegrity({ shipments: [sh], lots: [{ number: "L1", costs: [{ source: "SHP-2/9", pln: 4000 }] }] });
+  assert.ok(!r2.issues.some(i => i.code === "STALE_BILLING_FLAG"));
+});
+
+console.log("── v6.33.0: Invoices sole owner (A3-6) + legacy credit-notes fold (A3-5) ──");
+const { salesInvoiceFromSODraft, salesInvoiceSourceTag, stripPendingInvoices, migrateLegacyCreditNotes, migrateLegacyInvoices } = require("./build/invoicing.js");
+
+T("A3-6: SO draft → canonical register invoice (shape + source tag + SO link)", () => {
+  const so = { number: "SO-9", currency: "EUR", client: { name: "Client X" }, items: [{ product: "Apples", qty: 1000 }] };
+  const inv = salesInvoiceFromSODraft(so, { number: "FV2026/07/01", netAmount: 2000, vatRate: 5, fxRate: 4.3, currency: "EUR", issueDate: "2026-07-12" });
+  assert.equal(inv.kind, "SALES");
+  assert.equal(inv.category, "SINV");
+  assert.equal(inv.vatAmount, 100);
+  assert.equal(inv.grossAmount, 2100);
+  assert.equal(inv.grossPLN, 9030);
+  assert.equal(inv.source, salesInvoiceSourceTag("SO-9", "FV2026/07/01"));
+  assert.ok(inv.links.some(l => l.type === "SO" && l.number === "SO-9"));
+});
+T("A3-6: importing an old backup can NOT duplicate an API-created invoice (same source tag)", () => {
+  const so = { number: "SO-9", currency: "EUR", client: {}, items: [] };
+  const draft = { number: "FV2026/07/01", netAmount: 2000, vatRate: 5, fxRate: 4.3, currency: "EUR" };
+  const apiCreated = salesInvoiceFromSODraft(so, draft);
+  // old backup: the SO still carries the same invoice as a pendingInvoice
+  const legacyOrder = { ...so, pendingInvoices: [draft] };
+  const merged = migrateLegacyInvoices({ existing: [apiCreated], orders: [legacyOrder], warehouseInvoices: [], operationalCosts: [] });
+  assert.equal(merged.length, 1); // deduped by source tag
+});
+T("A3-6: stripPendingInvoices removes the legacy array; same reference when clean", () => {
+  const dirty = [{ number: "SO-1", pendingInvoices: [{ number: "X" }] }, { number: "SO-2" }];
+  const r = stripPendingInvoices(dirty);
+  assert.equal(r.changed, true);
+  assert.ok(!("pendingInvoices" in r.orders[0]));
+  const clean = [{ number: "SO-3" }];
+  const r2 = stripPendingInvoices(clean);
+  assert.equal(r2.changed, false);
+  assert.ok(r2.orders === clean); // same ref → no React effect loop
+});
+T("A3-5: legacy creditNotes fold into FinanceNote, idempotent, and ENTER the totals", () => {
+  const legacy = [{ id: 7, direction: "outgoing", partyName: "Client X", category: "Goods / quality", amount: 500, currency: "PLN", fxRate: 1, status: "Issued", reason: "quality", date: "2026-06-01" }];
+  const once = migrateLegacyCreditNotes({ existing: [], creditNotes: legacy });
+  assert.equal(once.length, 1);
+  assert.equal(once[0].noteType, "CREDIT");
+  assert.equal(once[0].amountPLN, 500);
+  assert.equal(once[0].source, "legacyCN:7");
+  const twice = migrateLegacyCreditNotes({ existing: once, creditNotes: legacy });
+  assert.equal(twice.length, 1); // idempotent by source tag
+  const adj = notesTotalsAdjustment(twice);
+  assert.ok(adj.receivableAdjPLN < 0); // outgoing credit note reduces what clients owe us
+});
+
+// ── v6.34.0: shipment direction from real ends — the Koper case (BP-61) ──
+const { shipmentTradeDirection: stdV34, directionFromCountries, soDestinationCountry } = require("./build/tradeFlow.domain.js");
+
+console.log("── shipment direction resolves per-truck from producer × SO destination ──");
+T("Koper split: ONE Egypt CIF PO fathers an EU-import truck AND a T1 cross-trade truck", () => {
+  const po = { number: "PO-K", supplier: { country: "Egypt" }, tradeMovement: "IMPORT" };
+  const soUA = { number: "SO-UA", sellIncoterm: "DAP", client: { country: "Ukraine" }, destinationLocationId: null, destinationText: "Ukraine" };
+  const soPL = { number: "SO-PL", sellIncoterm: "DDP", client: { country: "Poland" }, destinationText: "Poland" };
+  // each shipment resolves independently from its own governing SO
+  assert.equal(stdV34({}, po, soUA), "CROSS_TRADE"); // Egypt × Ukraine, T1
+  assert.equal(stdV34({}, po, soPL), "IMPORT");      // Egypt × EU (Poland)
+});
+T("no governing SO → PO provisional (unsold portion to our warehouse)", () => {
+  const po = { number: "PO-K", supplier: { country: "Egypt" }, tradeMovement: "IMPORT" };
+  assert.equal(stdV34({}, po, null), "IMPORT");
+});
+T("SO destination via resolveCountry(locationId) beats the client's home country (ruling #2)", () => {
+  const po = { supplier: { country: "Egypt" } };
+  // client is Polish but the sale is CIF to a Ukrainian port → goods physically go to UA
+  const so = { sellIncoterm: "CIF", client: { country: "Poland" }, destinationLocationId: 900 };
+  const resolve = (id) => id === 900 ? "Ukraine" : "";
+  assert.equal(stdV34({}, po, so, resolve), "CROSS_TRADE");
+});
+T("manual override always wins over the derived answer", () => {
+  const po = { supplier: { country: "Egypt" } };
+  const so = { client: { country: "Poland" }, destinationText: "Poland" }; // would derive IMPORT
+  assert.equal(stdV34({ tradeDirection: "CROSS_TRADE" }, po, so), "CROSS_TRADE");
+});
+T("intra-EU: Polish producer, German client", () => {
+  assert.equal(directionFromCountries("Poland", "Germany"), "INTRA_EU");
+  assert.equal(directionFromCountries("Egypt", "Saudi Arabia"), "CROSS_TRADE");
+  assert.equal(directionFromCountries("Egypt", ""), ""); // unknown end → no derivation
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

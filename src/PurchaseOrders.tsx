@@ -1,11 +1,11 @@
-import React, { useState, useRef, useMemo } from "react";
-import { structToFlow, flowToStruct, reconcilePOFlow, isDirectCargoPlan, handoverTextForIncoterm, handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow } from "./tradeFlow.domain";
+import React, { useState, useMemo } from "react";
+import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle } from "./ui";
-import { nextId, nextIds } from "./ids";
-import { FX_RATES, defaultFxRate } from "./fx";
+import { nextId } from "./ids";
+import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./locations";
-import { localTodayISO, localMonthISO, formatDMY } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -274,27 +274,12 @@ const LOCATION_TYPES: Record<string, any> = {
   CLIENT:   { label: "Client Site",    color: "#7C3AED", icon: "🎯" },
   BROKER:   { label: "Customs / Broker", color: "#DB2777", icon: "🛃" },
 };
-const DEFAULT_LOCATION_TYPE = { label: "Location", color: "#6B7280", icon: "📍" };
-function locType(t: string) { return LOCATION_TYPES[t] || DEFAULT_LOCATION_TYPE; }
 // LOCATIONS now comes from the shared ./locations source of truth.
 // Mapped so the legacy single-word `type` field still works in existing UI code.
 const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
 
 // Which location type is the typical destination for each flow (drives optgroup ordering in the dropdown).
 // User can still pick from any type — this just shows the most common option first.
-const FLOW_DESTINATION_TYPE: Record<string, string> = {
-  EXP_EXWS:     "PORT",
-  EXP_FOB:      "PORT",
-  EXP_CIF:      "PORT",
-  EXP_DDP_EU:   "CLIENT",
-  EXP_DDP_XEU:  "CLIENT",
-  IMP_EXWS_WH:  "OWN",
-  IMP_EXWS_DIR: "CLIENT",
-  IMP_CIF_WH:   "OWN",
-  IMP_CIF_DIR:  "CLIENT",
-  IMP_DDP_WH:   "OWN",
-  IMP_DDP_DIR:  "CLIENT",
-};
 
 // Stub FX rates for currency conversion in summary (would come from NBP in production)
 // FX_RATES now sourced from ./fx (single source of truth)
@@ -322,86 +307,13 @@ function tradingPartnerFromCounterparty(counterparty) {
 
 function suppliersFromContacts(contacts) {
   const mapped = getCounterpartiesByType(contacts || [], "Supplier").map(tradingPartnerFromCounterparty);
-  return mapped.length ? mapped : SUPPLIERS;
+  // v6.30.2 (G1 completion): no stub-supplier fallback — empty Contacts = empty picker,
+  // mirroring the SO-side clientsFromContacts fix from Batch 0. The demo SUPPLIERS
+  // array remains for standalone/dev seeds only; a clean system must stay clean.
+  return mapped;
 }
 
-export const INITIAL_ORDERS = [
-  {
-    id: 1, number: "PO-2025-0468", status: "Arrived",
-    orderDate: "2025-10-10", loadingDate: "2025-10-15", expectedDeliveryDate: "2026-05-20", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: "2026-05-20",
-    paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "EXW", flow: "EXP_CIF",
-    supplier: SUPPLIERS[0],
-    destinationLocationId: 6, requiresSea: true,
-    currency: "PLN", fxRate: 1, fxLockedAt: "2025-10-10",
-    items: [{ id: 1, product: "Golden Delicious", coloration: "przełamany", origin: "Poland", size: "70-80", quality: "I", unit: "Kg", qty: 19422, pallets: 33, unitPrice: 2.80, currency: "PLN", packaging: "13 kg wooden box" }],
-    notes: 'Łuszczka na trzy deski "NO NAME" ; górna warstwa dla kalibrów 70/80 na wytłoczce\nFolia "MARIANNA" & sticker "MARIANNA" na górnej wrastwie',
-    linkedShipments: ["SHP-2026-0044"],
-    linkedLots: ["LOT-2026-0091"],
-    linkedInvoices: ["PINV-2026-0021"],
-    variance: { expectedKg: 19500, receivedKg: 19422 },
-  },
-  {
-    id: 2, number: "PO-2026-0112", status: "Draft",
-    orderDate: "2026-05-20", loadingDate: "2026-05-28", expectedDeliveryDate: "2026-06-02", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
-    paymentTerms: "14 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "DDP", flow: "IMP_DDP_WH",
-    supplier: SUPPLIERS[1],
-    destinationLocationId: 1, requiresSea: false,
-    currency: "EUR", fxRate: 4.2531, fxLockedAt: null,
-    items: [{ id: 1, product: "Red Bell Pepper", coloration: "", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 5000, unitPrice: 1.85, currency: "EUR", packaging: "5 kg carton" }],
-    notes: "",
-    linkedShipments: [],
-    linkedLots: [],
-    linkedInvoices: [],
-    variance: null,
-  },
-  {
-    id: 3, number: "PO-2026-0118", status: "Arrived",
-    orderDate: "2026-04-22", loadingDate: "2026-05-02", expectedDeliveryDate: "2026-05-15", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: "2026-05-15",
-    paymentTerms: "Advance payment", paymentTermsOther: "",
-    buyIncoterm: "CIF", flow: "IMP_CIF_WH",
-    supplier: SUPPLIERS[2],
-    destinationLocationId: 1, requiresSea: true,
-    currency: "USD", fxRate: 3.8812, fxLockedAt: "2026-04-22",
-    items: [{ id: 1, product: "Carrot", coloration: "", origin: "Morocco", size: "L", quality: "I", unit: "Kg", qty: 24000, unitPrice: 0.55, currency: "USD", packaging: "10 kg mesh bag" }],
-    notes: "CIF Gdańsk. Supplier handles sea freight, we customs and inland.",
-    linkedShipments: ["SHP-2026-0040"],
-    linkedLots: ["LOT-2026-0088"],
-    linkedInvoices: ["PINV-2026-0024", "LINV-2026-0010", "CINV-2026-0004"],
-    variance: { expectedKg: 24000, receivedKg: 23720 },
-  },
-  {
-    id: 4, number: "PO-2026-0117", status: "Shipped",
-    orderDate: "2026-05-05", loadingDate: "2026-05-20", expectedDeliveryDate: "2026-05-30", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: "2026-05-30",
-    paymentTerms: "Cash against documents", paymentTermsOther: "",
-    buyIncoterm: "EXW", flow: "IMP_EXWS_WH",
-    supplier: SUPPLIERS[2],
-    destinationLocationId: 1, requiresSea: true,
-    currency: "USD", fxRate: 3.8812, fxLockedAt: "2026-05-05",
-    items: [{ id: 1, product: "Papryka Kapia", coloration: "", origin: "Morocco", size: "M", quality: "I", unit: "Kg", qty: 12000, pallets: 20, unitPrice: 1.20, currency: "USD", packaging: "5 kg carton" }],
-    notes: "EXW Agadir. Container at Gdańsk awaiting customs.",
-    linkedShipments: ["SHP-2026-0045"],
-    linkedLots: ["LOT-2026-0086"],
-    linkedInvoices: [],
-    variance: null,
-  },
-  {
-    id: 5, number: "PO-2026-0121", status: "Confirmed",
-    orderDate: "2026-05-15", loadingDate: "2026-06-02", expectedDeliveryDate: "2026-06-05", promisedDateMeans: "Arrival at our warehouse", actualAvailabilityDate: null,
-    paymentTerms: "30 days from invoice date", paymentTermsOther: "",
-    buyIncoterm: "DDP", flow: "IMP_DDP_WH",
-    supplier: SUPPLIERS[1],
-    destinationLocationId: 1, requiresSea: false,
-    currency: "EUR", fxRate: 4.2531, fxLockedAt: "2026-05-15",
-    items: [{ id: 1, product: "Red Bell Pepper", coloration: "", origin: "Spain", size: "L", quality: "I", unit: "Kg", qty: 8000, unitPrice: 1.85, currency: "EUR", packaging: "5 kg carton" }],
-    notes: "DDP delivery to WH-01 Poznań. Pre-sold from PO source to SO-2026-0102.",
-    linkedShipments: [],
-    linkedLots: ["LOT-2026-0100"],
-    linkedInvoices: [],
-    variance: null,
-  },
-];
+// v6.32.0 (R7b-5): demo seed INITIAL_ORDERS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED ATOMS ───────────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
@@ -426,7 +338,18 @@ function QualityBadge({ quality }: any) {
   const p = palette[quality] || palette["I"];
   return <span style={{ background: p.bg, color: p.color, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
-function FlowBadge({ flow, compact = false }: any) {
+function FlowBadge({ flow, order = null, compact = false }: any) {
+  // v6.29.0: terms-first vocabulary — old-flow and new POs render identically.
+  if (order && (order.buyIncoterm || order.tradeMovement)) {
+    const dir = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? MOVEMENT_LABELS[order.tradeMovement]
+      : (String(order.flow || flow || "").startsWith("EXP") ? MOVEMENT_LABELS.EXPORT : MOVEMENT_LABELS.IMPORT);
+    const place = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
+    return (
+      <span title={handoverSentence(order.buyIncoterm, place)} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
+        <b style={{ color: dir.color }}>{dir.label}</b>{order.buyIncoterm ? <> · {order.buyIncoterm}{place ? ` ${place}` : ""}</> : null}
+      </span>
+    );
+  }
   const f = FLOW_TYPES[flow];
   if (!f) return null;
   return (
@@ -845,7 +768,6 @@ function EmailModal({ order, contacts = [], onClose }: any) {
   const resolvedEmail = liveEmailForOrder(order, contacts);
   const [subject, setSubject] = useState(`Purchase Order ${order.number} — ${COMPANY.name}`);
   const [body, setBody] = useState(`Dear ${order.supplier?.name || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${formatDMY(order.loadingDate)}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.name}`);
-  const [stage, setStage] = useState("compose"); // compose → opened
 
   // ── Step 1: Open the print dialog so the user can "Save as PDF" ──
   // Same hidden-iframe approach as PrintModal so it works in sandboxed contexts.
@@ -1038,8 +960,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalInPLN = total * (parseFloat(order.fxRate) || FX_RATES[order.currency] || 1);
-  const compatibleIncoterms = FLOW_TYPES[order.flow]?.buyIncoterms || INCOTERMS_BUY.map(i => i.code);
-  const incotermWarning = order.flow && order.buyIncoterm && !compatibleIncoterms.includes(order.buyIncoterm);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1072,7 +992,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status || "Draft"} />
-                {order.flow && <FlowBadge flow={order.flow} />}
+                {order.flow && <FlowBadge order={order} flow={order.flow} />}
               </div>
               <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
               <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Locked — commercial terms can't change; downstream records depend on this PO" : order.status !== "Draft" && order.id ? "Confirmed — still editable (nothing depends on it yet); edits re-sync the expected lot" : "Draft — all fields editable"}</div>
@@ -1172,8 +1092,14 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   <div>
                     {(() => {
                       const pool = namedPlacePoolForIncoterm(order.buyIncoterm);
-                      const opts = LOCATIONS.filter((l: any) => pool.types.includes(l.type));
-                      const rest = LOCATIONS.filter((l: any) => !pool.types.includes(l.type));
+                      // v6.29.0: merge live warehouse addresses from Contacts (v6.18.3
+                      // behaviour inherited from the removed legacy Destination field).
+                      const liveWh = warehouseAddressLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+                      const byId = new Map<any, any>();
+                      [...LOCATIONS, ...liveWh].forEach((l: any) => byId.set(String(l.id), l));
+                      const all = Array.from(byId.values());
+                      const opts = all.filter((l: any) => pool.types.includes(l.type));
+                      const rest = all.filter((l: any) => !pool.types.includes(l.type));
                       return (<>
                         <Lbl>{pool.label} *</Lbl>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -1197,14 +1123,14 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   const autoMove = movementFromEnds(isEUCountry(originCountry) , placeInEU);
                   const move = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? order.tradeMovement : autoMove;
                   const mv = MOVEMENT_LABELS[move] || MOVEMENT_LABELS.IMPORT;
-                  const cycle = ["IMPORT", "EXPORT", "INTRA_EU", "CROSS_TRADE"];
                   return (
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF" }}>
-                      <button type="button" disabled={isLocked} title={`${mv.hint}. Click to change if the automatic classification is wrong.`}
-                        onClick={() => sf("tradeMovement", cycle[(cycle.indexOf(move) + 1) % cycle.length])}
-                        style={{ border: `1px solid ${mv.color}`, color: mv.color, background: "#fff", borderRadius: 999, padding: "3px 12px", fontSize: 11, fontWeight: 800, cursor: isLocked ? "default" : "pointer", whiteSpace: "nowrap" }}>
-                        {mv.label}
-                      </button>
+                      {/* v6.29.0: read-only PROVISIONAL chip — direction is not a PO
+                          input; the shipment owns the journey's truth (editable there). */}
+                      <span title={`${mv.hint}. Provisional — the trade direction is set on the shipment, which owns the journey.`}
+                        style={{ border: `1px solid ${mv.color}`, color: mv.color, background: "#fff", borderRadius: 999, padding: "3px 12px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
+                        {mv.label} <span style={{ fontWeight: 500, opacity: 0.7 }}>· provisional</span>
+                      </span>
                       <div style={{ fontSize: 11.5, color: order.buyIncoterm ? "#4338CA" : "#9CA3AF", lineHeight: 1.45 }}>
                         {handoverSentence(order.buyIncoterm, placeName)}
                       </div>
@@ -1212,47 +1138,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   );
                 })()}
               </div>
-              <div>
-                <Lbl>Destination {order.flow && <span style={{ color: "#BBB", fontWeight: 400 }}>· typical: {LOCATION_TYPES[FLOW_DESTINATION_TYPE[order.flow]]?.label}</span>}</Lbl>
-                <Sel disabled={isLocked} value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)}>
-                  <option value="">— select —</option>
-                  {(() => {
-                    // v6.18.3 (#2): merge the static location list with live warehouse
-                    // counterparty addresses from the current contacts, so a warehouse
-                    // added this session shows up immediately — no browser refresh.
-                    const live = warehouseAddressLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
-                    const byId = new Map<string, any>();
-                    [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
-                    const allLocs = [...byId.values()];
-                    // Show typical destination type first, then the others
-                    const typeOrder = ["OWN", "PORT", "CLIENT"];
-                    const preferred = FLOW_DESTINATION_TYPE[order.flow];
-                    const sortedTypes = preferred
-                      ? [preferred, ...typeOrder.filter(t => t !== preferred)]
-                      : typeOrder;
-                    return sortedTypes.map(t => {
-                      const locs = allLocs.filter((l: any) => l.type === t);
-                      if (locs.length === 0) return null;
-                      const label = `${locType(t).icon} ${locType(t).label}${preferred === t ? "  · typical for this flow" : ""}`;
-                      return (
-                        <optgroup key={t} label={label}>
-                          {locs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                        </optgroup>
-                      );
-                    });
-                  })()}
-                </Sel>
-                <Inp
-                  disabled={isLocked}
-                  value={order.destinationText || ""}
-                  onChange={e => sf("destinationText", e.target.value)}
-                  placeholder="Optional free-text destination, e.g. Port of Venice / Marghera, Italy"
-                  style={{ marginTop: 6 }}
-                />
-                <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                  For direct export CIF/CFR sales, use the client destination port as the PO destination. Use the free-text override when the port is not yet in the master list.
-                </div>
-              </div>
+              {/* v6.29.0: the legacy Destination field is GONE — the named place in
+                  PURCHASE TERMS is the single location fact on a PO (both wrote the
+                  same stored keys, so nothing is lost). Onward routing belongs to the
+                  shipment; disposition to the sale. */}
             </div>
             {/* Sea freight toggle — separate flag, not tied to flow choice */}
             <div style={{ marginTop: 14, padding: "10px 14px", background: order.requiresSea ? "#E0F2FE" : "#F9FAFB", border: `1px solid ${order.requiresSea ? "#BAE6FD" : "#F3F4F6"}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
@@ -1317,11 +1206,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             {order.items.map((it, i) => {
               const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
-              const normalizeProduct = (raw) => {
-                if (!raw) return raw;
-                const match = productSuggestions.find(p => p.toLowerCase() === raw.trim().toLowerCase());
-                return match || raw.trim();
-              };
               return (
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.9fr 1fr 1.3fr 1.2fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
@@ -1406,7 +1290,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status} />
-                {order.flow && <FlowBadge flow={order.flow} />}
+                {order.flow && <FlowBadge order={order} flow={order.flow} />}
                 <VarianceBadge variance={order.variance} />
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>
@@ -1796,7 +1680,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 // ─── MAIN ───────────────────────────────────────────────────────────────────
 export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], productCatalog = [], setProductCatalog }: any = {}) {
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
-  const [localOrders, setLocalOrders] = useState(INITIAL_ORDERS);
+  const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const orders = extPOs ?? localOrders;
   const setOrders = extSetPOs ?? setLocalOrders;
   const suppliers = useMemo(() => suppliersFromContacts(extContacts), [extContacts]);
@@ -2203,7 +2087,7 @@ ${blockNote}`.trim(),
                 </div>
                 <div><StatusBadge status={o.status} /></div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
-                  {o.flow && <FlowBadge flow={o.flow} compact />}
+                  {o.flow && <FlowBadge order={o} flow={o.flow} compact />}
                   {o.requiresSea && (
                     <span title="Sea freight involved" style={{ background: "#E0F2FE", color: "#0369A1", padding: "0 6px", borderRadius: 3, fontSize: 9.5, fontWeight: 700 }}>⚓ SEA</span>
                   )}
@@ -2236,10 +2120,3 @@ ${blockNote}`.trim(),
   );
 }
 
-function chipStyle(active, accent = "#111") {
-  return {
-    padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: active ? "#111" : "#E5E7EB",
-    background: active ? "#111" : "#fff", color: active ? "#fff" : (accent || "#555"),
-    fontSize: 11, cursor: "pointer", fontWeight: 500, fontFamily: "inherit",
-  };
-}

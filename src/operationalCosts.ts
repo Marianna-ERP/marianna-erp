@@ -210,7 +210,7 @@ function kgForOrder(order: any, mode: MarginMode): number {
 
 function shipmentCountForOrder(order: any, shipments: any[]): number {
   const number = String(order.number || "");
-  const linked = (shipments || []).filter((s: any) => (s.soRefs || []).includes(number) || (s.linkedSORefs || []).includes(number));
+  const linked = (shipments || []).filter((s: any) => (s.soRefs || []).includes(number)); // v6.32.0 (R7b-5): dead linkedSORefs condition removed (field never existed)
   return linked.length || 1;
 }
 
@@ -230,6 +230,37 @@ function basisForOrder(
   if (method === "by_gross_margin") return Math.max(0, base.marginPLN);
   // Default: by revenue
   return Math.max(0, base.revenuePLN);
+}
+
+// ─── v6.32.0 (R7b-6): allocation-basis memoization ──────────────────────────
+// Nested WeakMaps keyed on the four state-array references; inner Map keyed on
+// method|order|mode (basis) or method|period|mode (denominator). New arrays
+// from a React state update start a fresh cache — no manual invalidation.
+const _basisCache = new WeakMap<any, WeakMap<any, WeakMap<any, WeakMap<any, Map<string, number>>>>>();
+function _cacheFor(allOrders: any[], lots: any[], pos: any[], shipments: any[]): Map<string, number> {
+  const a: any = allOrders || [], l: any = lots || [], p: any = pos || [], sh: any = shipments || [];
+  let m1 = _basisCache.get(a); if (!m1) { m1 = new WeakMap(); _basisCache.set(a, m1); }
+  let m2 = m1.get(l); if (!m2) { m2 = new WeakMap(); m1.set(l, m2); }
+  let m3 = m2.get(p); if (!m3) { m3 = new WeakMap(); m2.set(p, m3); }
+  let m4 = m3.get(sh); if (!m4) { m4 = new Map(); m3.set(sh, m4); }
+  return m4;
+}
+function memoBasis(method: OperationalAllocationMethod, order: any, lots: any[], pos: any[], shipments: any[], mode: MarginMode, allOrders: any[]): number {
+  const cache = _cacheFor(allOrders, lots, pos, shipments);
+  const k = `b|${method}|${order?.number}|${mode}`;
+  if (cache.has(k)) return cache.get(k)!;
+  const v = basisForOrder(method, order, lots, pos, shipments, mode);
+  cache.set(k, v);
+  return v;
+}
+function memoDenominator(method: OperationalAllocationMethod, periodOrders: any[], lots: any[], pos: any[], shipments: any[], mode: MarginMode, allOrders: any[]): number {
+  const cache = _cacheFor(allOrders, lots, pos, shipments);
+  const period = periodOrders.length ? orderPeriod(periodOrders[0]) : "";
+  const k = `d|${method}|${period}|${mode}|${periodOrders.length}`;
+  if (cache.has(k)) return cache.get(k)!;
+  const v = periodOrders.reduce((s: number, o: any) => s + memoBasis(method, o, lots, pos, shipments, mode, allOrders), 0);
+  cache.set(k, v);
+  return v;
 }
 
 export function computeAllocatedOverhead(
@@ -271,8 +302,12 @@ export function computeAllocatedOverhead(
     }
 
     const method = (cost.allocationMethod || "by_revenue") as OperationalAllocationMethod;
-    const denominator = periodOrders.reduce((s: number, o: any) => s + basisForOrder(method, o, lots, pos, shipments, mode), 0);
-    const numerator = basisForOrder(method, order, lots, pos, shipments, mode);
+    // v6.32.0 (R7b-6): memoized — basisForOrder calls computeSOMargin, and the
+    // aggregate Finance view calls this per SO × per cost × per period order
+    // (O(n²·m)). The cache is keyed on the state array REFERENCES, so any React
+    // state update (new array) invalidates it naturally.
+    const denominator = memoDenominator(method, periodOrders, lots, pos, shipments, mode, allOrders);
+    const numerator = memoBasis(method, order, lots, pos, shipments, mode, allOrders);
     if (denominator <= 0 || numerator <= 0) {
       warnings.push(`Overhead "${cost.description || cost.category}" could not be allocated by ${method.replace(/_/g, " ")} because allocation basis is zero.`);
       return;

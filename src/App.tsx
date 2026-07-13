@@ -15,7 +15,7 @@ import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import { primeIdsFrom } from "./ids";
 import Invoices from "./Invoices";
-import { migrateLegacyInvoices } from "./invoicing";
+import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
 
 // Batch 5: migrate older-version stored data forward BEFORE any hook reads it
 // (module scope — runs before the App component's hooks read the stores).
@@ -206,8 +206,23 @@ export default function App() {
       const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts, pos });
       return merged.length !== (prev || []).length ? merged : prev;
     });
+    // v6.33.0 (A3-6): the register is now the sole owner — once this snapshot's
+    // pendingInvoices are folded (idempotent by source tag above), strip them
+    // from the orders. Same-reference return when clean, so no effect loop.
+    setOrders((prev: any[]) => stripPendingInvoices(prev).orders);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, warehouseInvoices, operationalCosts, pos]);
+
+  // v6.33.0 (A3-5 residue): one-shot fold of the legacy Finance creditNotes
+  // array into the canonical notes model (idempotent by source tag), after
+  // which they finally enter the receivable/payable totals (BP-37). The legacy
+  // array is then emptied; importing an old backup re-triggers the fold.
+  useEffect(() => {
+    if (!(creditNotes || []).length) return;
+    setFinanceNotes((prev: any[]) => migrateLegacyCreditNotes({ existing: prev || [], creditNotes }));
+    setCreditNotes([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creditNotes]);
 
   const [activeModule, setActiveModule] = useState("dashboard");
   // One-time reminder for testers to export/back up their data (localStorage only).
@@ -236,7 +251,7 @@ export default function App() {
       case "dashboard":
         return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} creditNotes={creditNotes} setCreditNotes={setCreditNotes} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} />;
       case "pos":
@@ -244,7 +259,7 @@ export default function App() {
       case "lots":
         return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />;
       case "orders":
-        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
+        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "shipments":
         return <Shipments shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} />;
       case "invoices":
