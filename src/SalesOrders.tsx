@@ -1,5 +1,4 @@
 import React, { useState, useMemo } from "react";
-import { handoverSentence } from "./tradeFlow.domain";
 import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
@@ -854,12 +853,6 @@ function PrintModal({ order, onClose }: any) {
         </div>
         <div style={{ padding: 24, overflowY: "auto", background: "#ECECEC" }}>
           <div id="so-print-doc" style={{ background: "#fff", padding: "8mm", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", width: "186mm", margin: "0 auto", boxSizing: "content-box" }}>
-          {order.sellIncoterm && (
-            <div style={{ border: "1.5px solid #111", padding: "6px 10px", margin: "6px 0 10px", fontSize: 12.5 }}>
-              <b>Terms / Warunki: {order.sellIncoterm} {order.destinationText || ((order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client")) === "client" ? (order.client?.address || "") : "")} (Incoterms 2020)</b>
-              <div style={{ fontSize: 11, marginTop: 2 }}>{handoverSentence(order.sellIncoterm, order.destinationText || ((order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client")) === "client" ? (order.client?.name || "client") : ""))}</div>
-            </div>
-          )}
             <SODoc order={order} />
           </div>
         </div>
@@ -884,7 +877,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
   const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nDelivery date: ${formatDMY(order.deliveryDate) || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}${order.importPermitNo ? `\nImport permit no.: ${order.importPermitNo}` : ""}${order.acidNo ? `\nACID no.: ${order.acidNo}` : ""}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
 
   function openPrintForPdf() {
-    const node = document.getElementById("so-print-doc-email");
+    const node = document.getElementById("so-print-doc");
     if (!node) { alert("Print preview not ready — please try again in a moment."); return; }
     const existing = document.getElementById("so-email-print-frame");
     if (existing) existing.remove();
@@ -897,7 +890,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
   @page { size: A4; margin: 12mm; }
   html, body { margin: 0; padding: 0; background: #fff; }
   body { font-family: Calibri, Arial, sans-serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  #so-print-doc-email { width: 186mm; margin: 0 auto; }
+  #so-print-doc { width: 186mm; margin: 0 auto; }
   table { page-break-inside: avoid; border-collapse: collapse; }
   tr { page-break-inside: avoid; }
   img { max-width: 100%; }
@@ -945,7 +938,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
           <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
           <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
           <div style={{ position: "absolute", left: -99999, top: 0 }}>
-            <div id="so-print-doc-email" style={{ width: "186mm" }}>
+            <div id="so-print-doc" style={{ width: "186mm" }}>
               <SODoc order={order} />
             </div>
           </div>

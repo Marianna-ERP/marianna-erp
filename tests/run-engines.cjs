@@ -1233,6 +1233,23 @@ T("intra-EU: Polish producer, German client", () => {
   assert.equal(directionFromCountries("Egypt", ""), ""); // unknown end → no derivation
 });
 
+// ── v6.34.1: per-item CN/HS in the catalog (items 4) ──
+const { setCatalogCnCode, cnCodeForItem, catalogToRows, mergeCatalogRows } = require("./build/productCatalog.js");
+console.log("── catalog CN/HS round-trip ──");
+T("set + lookup per-item CN, case-insensitive", () => {
+  let cat = [{ item: "Apples", varieties: ["Gala"] }];
+  cat = setCatalogCnCode(cat, "Apples", "0808 10");
+  assert.equal(cnCodeForItem(cat, "Apples"), "0808 10");
+  assert.equal(cnCodeForItem(cat, "Pears"), "");
+});
+T("CSV round-trip preserves CN on the item row", () => {
+  let cat = setCatalogCnCode([{ item: "Onions", varieties: [] }], "Onions", "0703 10");
+  const rows = catalogToRows(cat);
+  assert.equal(rows[0].cnCode, "0703 10");
+  const back = mergeCatalogRows([], rows);
+  assert.equal(cnCodeForItem(back, "Onions"), "0703 10");
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
