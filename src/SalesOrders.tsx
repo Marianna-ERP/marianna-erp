@@ -824,10 +824,11 @@ function PrintModal({ order, onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
-      const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the SO
+      const prevTitle = document.title; // v6.34.2: restore on afterprint, not 1s
       document.title = order.number || prevTitle;
-      try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
+      const restore = () => { document.title = prevTitle; iframe.remove(); };
+      try { iframe.contentWindow?.focus(); const w = iframe.contentWindow as any; if (w) w.onafterprint = restore; iframe.contentWindow?.print(); } catch {}
+      setTimeout(() => { if (document.title === (order.number || prevTitle)) restore(); }, 60000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -899,10 +900,11 @@ function EmailModal({ order, contacts = [], onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
-      const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the SO
+      const prevTitle = document.title; // v6.34.2: restore on afterprint, not 1s
       document.title = order.number || prevTitle;
-      try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
+      const restore = () => { document.title = prevTitle; iframe.remove(); };
+      try { iframe.contentWindow?.focus(); const w = iframe.contentWindow as any; if (w) w.onafterprint = restore; iframe.contentWindow?.print(); } catch {}
+      setTimeout(() => { if (document.title === (order.number || prevTitle)) restore(); }, 60000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -1127,8 +1129,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   // "other" = a different place (dropdown or free text).
   const destMode = order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client");
   const setDestMode = (mode) => {
+    // v6.34.2 (module review): "client" fills the registered address; anything else
+    // CLEARS the free-text and any picked place, so a stale client address can't
+    // linger under a CIF/port choice (item: CIF + client address inconsistency).
     if (mode === "client") setOrder(o => ({ ...o, destinationMode: "client", destinationLocationId: null, destinationText: o.client?.address || "" }));
-    else setOrder(o => ({ ...o, destinationMode: "other" }));
+    else setOrder(o => ({ ...o, destinationMode: "other", destinationLocationId: null, destinationText: "" }));
   };
   // v6.11 (#7): destination guidance must match the chosen Incoterm.
   const incotermDestinationHint = (() => {
@@ -1516,7 +1521,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                         : ic === "EXW" ? [whGroup, clientGroup, portGroup]
                         : [clientGroup, portGroup, whGroup];
                       return (
-                        <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
+                        <Sel value={order.destinationLocationId || ""} onChange={e => { const id = parseInt(e.target.value) || null; setOrder(o => ({ ...o, destinationLocationId: id, destinationText: (id && (o.destinationText || "") === (o.client?.address || "")) ? "" : o.destinationText })); }} style={{ marginTop: 8 }}>
                           <option value="">— select a known place —</option>
                           {order2}
                         </Sel>
@@ -2520,12 +2525,12 @@ export default function SalesOrders({
             <div style={{ fontSize: 17, fontWeight: 700, color: "#16A34A", marginTop: 2 }}>{fmtMoney(activeValuePLN, "PLN")}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
-            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERED <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· to invoice</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 2 }}>{deliveredNotInvoicedCount}</div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>AWAITING INVOICE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· delivered</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 2 }} title="Sales orders marked Delivered that have not yet been invoiced — your invoicing backlog.">{deliveredNotInvoicedCount}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
-            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERIES <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· ≤7 days</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 2 }}>{upcomingDeliveryCount}</div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DUE SOON <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· next 7 days</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 2 }} title="Active orders whose delivery date falls within the next 7 days — deliveries to prepare for.">{upcomingDeliveryCount}</div>
           </Card>
         </div>
 
@@ -2544,7 +2549,7 @@ export default function SalesOrders({
         {/* Table */}
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-            {["NUMBER", "CLIENT", "ORDER", "DELIVERY", "STATUS", "TOTAL", "SOURCES"].map((h, i) => (
+            {["SO NUMBER", "CLIENT", "ORDER", "DELIVERY", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>
@@ -2581,12 +2586,12 @@ export default function SalesOrders({
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(netTotal(o.items), o.currency)}</div>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                  {uniqueSources.length === 0 && <span style={{ fontSize: 10.5, color: "#CCC", fontStyle: "italic" }}>unsourced</span>}
-                  {uniqueSources.slice(0, 2).map((s, i) => (
-                    <span key={i} style={{ fontSize: 10, fontFamily: "ui-monospace, Menlo, monospace", color: "#666" }}>{s}</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                  {/* v6.34.2 (module review): list the linked source documents, don't truncate to 2. */}
+                  {uniqueSources.length === 0 && <span style={{ fontSize: 10.5, color: "#CCC", fontStyle: "italic", fontFamily: "inherit" }}>unsourced</span>}
+                  {uniqueSources.map((s, i) => (
+                    <span key={i} style={{ fontSize: 10.5, color: "#475569" }}>{s}</span>
                   ))}
-                  {uniqueSources.length > 2 && <span style={{ fontSize: 10, color: "#AAA" }}>+{uniqueSources.length - 2}</span>}
                 </div>
               </div>
             );

@@ -248,11 +248,6 @@ const STAGE_KIND_TO_POINT: Record<string, string> = {
 };
 
 // Groups for ordered rendering in UI (chips + dropdowns)
-const FLOW_GROUPS = [
-  { id: "EXP", label: "EXPORT", color: "#16A34A" },
-  { id: "IMP", label: "IMPORT", color: "#2563EB" },
-];
-
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"];
 
 const PO_STATUSES: Record<string, any> = {
@@ -695,17 +690,21 @@ function PrintModal({ order, onClose }: any) {
     const fire = () => {
       // v6.18.8 (#1): the browser's "Save as PDF" uses the top document's title for
       // the default filename, so temporarily set it to the PO number, then restore.
+      // v6.34.2: the browser reads the TOP document's title for the Save-as-PDF
+      // filename when the user CONFIRMS the save — long after print() returns. Restore
+      // on afterprint (real dialog close), not a 1s timeout, so the number sticks.
       const prevTitle = document.title;
       document.title = order.number || prevTitle;
+      const restore = () => { document.title = prevTitle; iframe.remove(); };
       try {
         iframe.contentWindow?.focus();
+        const w = iframe.contentWindow as any; if (w) w.onafterprint = restore;
         iframe.contentWindow?.print();
       } catch (e) {
         console.error("Print failed:", e);
         alert("Printing failed. Try opening the artifact in its own window and printing from there.");
       }
-      // Clean up the iframe after a delay (the print dialog needs time to read it)
-      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
+      setTimeout(() => { if (document.title === (order.number || prevTitle)) restore(); }, 60000);
     };
 
     // The image inside the iframe needs to finish loading first
@@ -797,10 +796,11 @@ function EmailModal({ order, contacts = [], onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
-      const prevTitle = document.title; // v6.18.14 (#2): name the saved PDF after the PO here too
+      const prevTitle = document.title; // v6.34.2: restore on afterprint, not 1s
       document.title = order.number || prevTitle;
-      try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
+      const restore = () => { document.title = prevTitle; iframe.remove(); };
+      try { iframe.contentWindow?.focus(); const w = iframe.contentWindow as any; if (w) w.onafterprint = restore; iframe.contentWindow?.print(); } catch {}
+      setTimeout(() => { if (document.title === (order.number || prevTitle)) restore(); }, 60000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -1718,7 +1718,6 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
   // filters
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
-  const [filterFlow, setFilterFlow] = useState("All");
   const [filterSupplier, setFilterSupplier] = useState("All");
 
   // KPIs
@@ -1758,7 +1757,6 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
     return orders.filter(o => {
       if (filterStatus === "Active" && !activeStatuses.has(o.status)) return false;
       if (filterStatus !== "All" && filterStatus !== "Active" && o.status !== filterStatus) return false;
-      if (filterFlow !== "All" && o.flow !== filterFlow) return false;
       if (filterSupplier !== "All" && o.supplier?.name !== filterSupplier) return false;
       if (q) {
         const hay = `${o.number} ${o.supplier?.name || ""} ${o.items.map(i => i.product).join(" ")} ${o.linkedShipments?.join(" ") || ""} ${o.linkedLots?.join(" ") || ""}`.toLowerCase();
@@ -1766,7 +1764,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
       }
       return true;
     });
-  }, [orders, search, filterStatus, filterFlow, filterSupplier]);
+  }, [orders, search, filterStatus, filterSupplier]);
 
   function reflectCancelledPOInInventory(po: any) {
     if (!extSetLots || !po?.number) return;
@@ -2060,14 +2058,6 @@ ${blockNote}`.trim(),
             <option value="Active">Active</option>
             <option value="All">All statuses</option>
             {Object.keys(PO_STATUSES).map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select value={filterFlow} onChange={e => setFilterFlow(e.target.value)} title="Filter by flow" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 240 }}>
-            <option value="All">All flows</option>
-            {FLOW_GROUPS.map(g => (
-              <optgroup key={g.id} label={g.label}>
-                {Object.entries(FLOW_TYPES).filter(([, f]: any) => f.group === g.id).map(([k, f]: any) => <option key={k} value={k}>{f.emoji} {f.short}</option>)}
-              </optgroup>
-            ))}
           </select>
           {(() => {
             const counts: Record<string, number> = {};
