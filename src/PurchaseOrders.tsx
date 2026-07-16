@@ -2100,13 +2100,10 @@ ${blockNote}`.trim(),
                   <div style={{ fontSize: 11, color: "#888" }}>{o.items.map(i => `${i.product}${i.variety ? " — " + i.variety : ""} · ${fmtNum(i.qty)} kg`).join(" / ")}</div>
                 </div>
                 <div><StatusBadge status={o.status} /></div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
-                  {o.requiresSea && (
-                    <span title="Sea freight involved" style={{ background: "#E0F2FE", color: "#0369A1", padding: "0 6px", borderRadius: 3, fontSize: 9.5, fontWeight: 700 }}>⚓ SEA</span>
-                  )}
-                </div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}
+                    {o.requiresSea && <span title="Sea freight involved" style={{ marginLeft: 6, background: "#E0F2FE", color: "#0369A1", padding: "0 5px", borderRadius: 3, fontSize: 9, fontWeight: 700, verticalAlign: "middle" }}>⚓ SEA</span>}
+                  </div>
                   {o.currency !== "PLN" && <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtMoney(totalPLN, "PLN")}</div>}
                   <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtNum(totalKg)} kg</div>
                 </div>

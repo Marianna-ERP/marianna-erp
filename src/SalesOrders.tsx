@@ -120,7 +120,6 @@ function _adaptPOsFromModule(pos) {
     supplierName: po.supplier?.name || po.supplierName || "—",
     country: po.supplier?.country || po.country || "—",
     expectedDelivery: po.expectedDeliveryDate || po.expectedDelivery || "—",
-    requiresSea: !!po.requiresSea,
     items: (po.items || []).map(it => ({
       ...it,
       available: it.available ?? (parseFloat(it.qty) || 0),
@@ -574,7 +573,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{line.product}{(line as any).variety ? " — " + (line as any).variety : ""}</div>
                     <div style={{ fontSize: 11, color: "#888" }}>{line.size} · {line.origin} · {line.packaging}</div>
-                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>Supplier: {line._po.supplierName} · ETA {line._po.expectedDelivery}{line._po.requiresSea ? " ⚓" : ""}</div>
+                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>Supplier: {line._po.supplierName} · ETA {line._po.expectedDelivery}</div>
                     {live.reservations.length > 0 && (
                       <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}

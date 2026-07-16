@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
+import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection, shipmentFulfilsOrder } from "./tradeFlow.domain";
 import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms } from "./shipments.domain";
 import { printHtmlNode } from "./documentService";
 import { SmallButton } from "./ui";
@@ -538,7 +538,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
   // v6.29.0: the shipment owns the trade direction — seeded from the PO's
   // provisional value here, editable on the shipment afterwards.
   const tradeDirection = shipmentTradeDirection(null, po, governingSO, countryOfLocation);
-  const mode = opts.mode || (po.requiresSea ? "Multimodal" : "Road");
+  const mode = opts.mode || "Road"; // v6.34.6: mode is a per-shipment choice; sea being part of the trade no longer forces Multimodal
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
   // v6.32.0 (P1-7, terms-aware): the PO's named place (BP-56) is the HANDOVER
@@ -565,15 +565,22 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
   // The user may load only SOME of the PO's products on this shipment. If
   // opts.selectedItemIds is provided, restrict goods to those line ids; otherwise
   // include all PO items (back-compat).
-  const itemsToLoad = (opts.selectedItemIds && opts.selectedItemIds.length)
-    ? (po.items || []).filter((it, idx) => opts.selectedItemIds.map(String).includes(String(it.id ?? idx + 1)))
-    : (po.items || []);
-  const goods = itemsToLoad.map((it, idx) => {
+  // Keep the TRUE line index/id so per-line qty + poLineId stamping stay correct.
+  const lineQtys = opts.lineQtys || {};
+  const indexedItems = (po.items || []).map((it, idx) => ({ it, idx, id: String(it.id ?? idx + 1) }));
+  const loadable = (opts.selectedItemIds && opts.selectedItemIds.length)
+    ? indexedItems.filter(x => opts.selectedItemIds.map(String).includes(x.id))
+    : indexedItems;
+  const goods = loadable.map(({ it, idx, id }, gi) => {
     const lot = poLotRefs[idx] || poLotRefs[0] || "";
+    // v6.34.4: ship the entered 'ship now' qty when provided, else the full line qty.
+    const entered = lineQtys[id];
+    const qty = (entered === undefined || entered === "") ? parseNum(it.qty) : parseNum(entered);
     return {
-      id: idx + 1,
+      id: gi + 1,
       poRef: po.number,
-    tradeDirection,
+      poLineId: it.id ?? idx + 1,   // v6.34.4: stamp the source line so per-line shipped-kg is countable
+      tradeDirection,
       soRef: soRefForPO,
       lotRef: lot,
       product: it.product || "Goods",
@@ -583,9 +590,9 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
       quality: it.quality || "I",
       size: it.size || "",
       packaging: it.packaging || "",
-      qtyKg: parseNum(it.qty),
+      qtyKg: qty,
       grossKg: parseNum(it.grossKg) || 0,
-      pallets: parseNum(it.pallets) || 0,   // do NOT auto-guess pallets — leave 0 until entered
+      pallets: parseNum(it.pallets) || 0,
       description: `${it.product || "Goods"}${it.variety ? " " + it.variety : ""} ${it.packaging || ""}`.trim(),
     };
   });
@@ -869,6 +876,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   // Which PO line ids are loaded on this shipment (default: all). Lets the user load
   // a subset of a multi-product PO.
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [lineQtys, setLineQtys] = useState<Record<string, string>>({}); // v6.34.4: per-line 'ship now' kg (defaults to remaining)
   const [form, setForm] = useState({
     mode: "Road",
     carrierId: null,
@@ -905,18 +913,57 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   // v6.18.3 (#5): HARD-BLOCK over-shipping a PO. Compare kg already on non-cancelled
   // shipments for this PO, plus what THIS shipment would add (the selected lines'
   // qty), against the PO quantity. No override once it's fully covered or would exceed.
+  const lineShippedKgOuter: Record<string, number> = (() => {
+    const map: Record<string, number> = {};
+    if (sourceType !== "PO" || !selectedPO) return map;
+    (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && shipmentConsumesBudget(s, orders, locById))
+      .forEach((s: any) => (s.goods || []).forEach((g: any) => {
+        if (g.poRef !== selectedPO.number) return;
+        const key = String(g.poLineId ?? g.lineId ?? "");
+        if (key) map[key] = (map[key] || 0) + parseNum(g.qtyKg);
+      }));
+    return map;
+  })();
   const poShipState = (() => {
     if (sourceType !== "PO" || !selectedPO) return null;
-    const existing = (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && s.status !== "Cancelled");
+    const existing = (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && shipmentConsumesBudget(s, orders, locById));
     const poQty = (selectedPO.items || []).reduce((a: number, it: any) => a + parseNum(it.qty), 0);
     const shippedKg = existing.reduce((sum: number, sh: any) => sum + (sh.goods || []).filter((g: any) => g.poRef === selectedPO.number).reduce((a: number, g: any) => a + parseNum(g.qtyKg), 0), 0);
-    const items = (selectedPO.items || []).filter((it: any, idx: number) => selectedItemIds.length === 0 || selectedItemIds.map(String).includes(String(it.id ?? idx + 1)));
-    const thisKg = items.reduce((a: number, it: any) => a + parseNum(it.qty), 0);
+    // v6.34.4: 'this shipment' kg = the per-line entered amounts (default: remaining), not the full line.
+    const enteredFor = (it: any, idx: number) => {
+      const id = String(it.id ?? idx + 1);
+      const rem = Math.max(0, parseNum(it.qty) - (lineShippedKgOuter[id] || 0));
+      const v = lineQtys[id];
+      return (v === undefined || v === "") ? rem : parseNum(v);
+    };
+    const thisKg = (selectedPO.items || []).reduce((a: number, it: any, idx: number) => {
+      const id = String(it.id ?? idx + 1);
+      const on = selectedItemIds.length === 0 || selectedItemIds.map(String).includes(id);
+      return a + (on ? enteredFor(it, idx) : 0);
+    }, 0);
     const projected = shippedKg + thisKg;
     const alreadyFull = poQty > 0 && shippedKg >= poQty - 1;
     const wouldExceed = poQty > 0 && projected > poQty + 1;
     return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), alreadyFull, wouldExceed, exceedBy: Math.max(0, Math.round(projected - poQty)) };
   })();
+
+  // v6.34.4: per-LINE shipped kg (across non-cancelled shipments of this PO), so each
+  // line's remaining-to-ship is correct — a PO line can ship across several trucks.
+  const lineShippedKg = (() => {
+    const map: Record<string, number> = {};
+    if (sourceType !== "PO" || !selectedPO) return map;
+    (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && shipmentConsumesBudget(s, orders, locById))
+      .forEach((s: any) => (s.goods || []).forEach((g: any) => {
+        if (g.poRef !== selectedPO.number) return;
+        const key = String(g.poLineId ?? g.lineId ?? "");
+        if (key) map[key] = (map[key] || 0) + parseNum(g.qtyKg);
+      }));
+    return map;
+  })();
+  const lineRemaining = (it: any, idx: number) => {
+    const id = String(it.id ?? idx + 1);
+    return Math.max(0, parseNum(it.qty) - (lineShippedKg[id] || 0));
+  };
   const needsRef = sourceType !== "Manual" && !ref; // v6.18.14 (#4)
   const blockCreate = needsRef || (!!poShipState && (poShipState.alreadyFull || poShipState.wouldExceed));
   // v6.16 (#4): the PO loading date starts the whole shipment and the SO delivery
@@ -958,7 +1005,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         ? linkedSOList.find(o => o.number === governingSoRef)
         : (governingSoRef === "__none__" ? null : (linkedSOList[0] || null));
       const soRefs = governing ? [governing.number] : [];
-      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds }, shipments, lots, governing);
+      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing);
     }
     else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, form, shipments, lots);
     else sh = buildManualShipment(form, shipments);
@@ -1053,7 +1100,20 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
                       // If user re-selected everything, collapse back to "all" (empty array).
                       setSelectedItemIds(next.length === all.length ? [] : next);
                     }} />
-                    <span><strong>{it.product || "Product"}{it.variety ? " — " + it.variety : ""}</strong>{it.size ? ` · ${it.size}` : ""}{it.packaging ? ` · ${it.packaging}` : ""} · {fmtNum(parseNum(it.qty))} kg</span>
+                    <span><strong>{it.product || "Product"}{it.variety ? " — " + it.variety : ""}</strong>{it.size ? ` · ${it.size}` : ""}{it.packaging ? ` · ${it.packaging}` : ""} · ordered {fmtNum(parseNum(it.qty))} kg</span>
+                    {checked && (() => {
+                      const rem = lineRemaining(it, idx);
+                      const val = lineQtys[id] === undefined ? String(rem) : lineQtys[id];
+                      const over = parseNum(val) > rem + 1;
+                      return (
+                        <span onClick={(e: any) => e.preventDefault()} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginLeft: 4 }}>
+                          <span style={{ fontSize: 11, color: "#64748B" }}>ship now</span>
+                          <input type="text" inputMode="decimal" value={val} onClick={(e: any) => e.stopPropagation()} onChange={e => { const v = e.target.value; setLineQtys(m => ({ ...m, [id]: v })); }}
+                            style={{ width: 78, border: "1px solid", borderColor: over ? "#DC2626" : "#CBD5E1", borderRadius: 6, padding: "3px 6px", fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace", textAlign: "right" }} />
+                          <span style={{ fontSize: 10.5, color: over ? "#DC2626" : "#94A3B8" }}>/ {fmtNum(rem)} left</span>
+                        </span>
+                      );
+                    })()}
                   </label>
                 );
               })}
@@ -1171,17 +1231,41 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
 // shipment's structured customs section, so the clearance cost flows into allocation
 // and Finance like any other cost. Manual customs cost lines (no _customsAuto) are left
 // untouched.
+// v6.34.6: does this shipment consume the PO/SO shipped budget? Delegates to the
+// pure engine rule (sell incoterm + port destination). destIsPort is resolved from
+// the shipment's destination location; the governing sell incoterm from its SO.
+function shipmentConsumesBudget(sh: any, ordersAll: any[], locResolve: (id: any) => any): boolean {
+  const destLoc = locResolve(sh?.destinationLocationId);
+  const destIsPort = !!destLoc && (destLoc.type === "Port" || String(destLoc.legacyType || "").toUpperCase() === "PORT");
+  // governing sell incoterm: from the shipment's governing SO, else any SO it references
+  const govSo = (ordersAll || []).find((o: any) => o.number === sh?.governingSoRef)
+    || (ordersAll || []).find((o: any) => (sh?.soRefs || []).includes(o.number));
+  const sellIncoterm = govSo?.sellIncoterm || "";
+  return shipmentFulfilsOrder(sh, sellIncoterm, destIsPort);
+}
+
 function syncCustomsCostLine(sh: any) {
-  const costs = (sh.costs || []).filter((c: any) => !c._customsAuto);
+  // v6.34.5: ONE auto-managed customs line, identified by a stable source tag (not a
+  // fresh id each save) so it can't duplicate, and preserving the id + any manual
+  // supplier edit of the existing auto-line. Removing it clears customs.applies so it
+  // does not resurrect on the next save.
+  const prevAuto = (sh.costs || []).find((c: any) => c._customsAuto || c.source === "customs-auto");
+  const costs = (sh.costs || []).filter((c: any) => !(c._customsAuto || c.source === "customs-auto"));
   const c = sh.customs || {};
   const amt = parseNum(c.cost);
   if (c.applies && amt > 0) {
     const fx = parseNum(c.fxRate) || 1;
     costs.push({
-      id: nextId(), type: "customs", supplierId: sh.brokerId || null,
+      id: prevAuto?.id ?? nextId(),
+      source: "customs-auto",
+      type: "customs",
+      // broker from the customs section is the single source of truth; fall back to any
+      // manual supplier the user set on the existing auto-line, then the shipment broker.
+      supplierId: sh.brokerId ?? prevAuto?.supplierId ?? null,
       amount: amt, currency: c.currency || "PLN", fxRate: fx,
       amountPLN: Math.round(amt * fx * 100) / 100,
-      invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
+      invoiceStatus: prevAuto?.invoiceStatus || "Expected",
+      invoiceRef: prevAuto?.invoiceRef || "", allocationMethod: "by_kg",
       notes: c.notes || "Customs clearance", _customsAuto: true,
     });
   }
@@ -1259,6 +1343,12 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
   }
   function removeCost(idx) {
     const c = (draft.costs || [])[idx];
+    // v6.34.5: deleting the auto customs line must also switch OFF "customs applies",
+    // otherwise the save-time sync regenerates it (the resurrection bug).
+    if (c && (c._customsAuto || c.source === "customs-auto")) {
+      setDraft((d: any) => ({ ...d, customs: { ...(d.customs || {}), applies: false }, costs: (d.costs || []).filter((_: any, i: number) => i !== idx) }));
+      return;
+    }
     // Freight lines are normally protected — a shipment must keep its freight cost.
     // Exception (v6.18.19): a DAP/DDP purchase ("Bought DAP/DDP" ticked) means the
     // supplier arranges and pays transport, so no freight belongs to us — the line can
@@ -1564,11 +1654,22 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           <SectionTitle>Goods on this shipment</SectionTitle>
           <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>Adjust quantities and pallets here — e.g. if you entered pallets on the SO after creating this shipment, update them here so the transport order shows the right figure.</div>
           {(draft.goods || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No goods lines on this shipment.</div>}
-          {(draft.goods || []).map((g, i) => <div key={g.id || i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 0.8fr 1.4fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
+          {(draft.legs || []).length > 1 && (
+            <div style={{ fontSize: 11, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7, padding: "7px 10px", marginBottom: 10 }}>
+              This shipment has {(draft.legs || []).length} legs / carriers. Assign each goods line to the leg that carries it — each carrier's transport order then lists <strong>only its own goods</strong>.
+            </div>
+          )}
+          {(draft.goods || []).map((g, i) => <div key={g.id || i} style={{ display: "grid", gridTemplateColumns: (draft.legs || []).length > 1 ? "1.8fr 0.9fr 0.9fr 0.7fr 1.1fr" : "2fr 1fr 1fr 0.8fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
             <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
-            <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => updateGood(i, "qtyKg", parseNum(e.target.value))} /></div>
+            <div><Lbl>Net (kg)</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => updateGood(i, "qtyKg", parseNum(e.target.value))} /></div>
+            <div><Lbl>Gross (kg)</Lbl><Inp type="number" value={g.grossKg || ""} onChange={e => updateGood(i, "grossKg", parseNum(e.target.value))} placeholder="0" title="Gross weight incl. packaging — printed on the transport order" /></div>
             <div><Lbl>Pallets</Lbl><Inp type="number" value={g.pallets || ""} onChange={e => updateGood(i, "pallets", parseNum(e.target.value))} placeholder="0" /></div>
-            <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>
+            {(draft.legs || []).length > 1
+              ? <div><Lbl>On leg / carrier</Lbl><Sel value={g.legNo || ""} onChange={e => updateGood(i, "legNo", e.target.value ? parseNum(e.target.value) : null)}>
+                  <option value="">All legs</option>
+                  {(draft.legs || []).map((lg: any, li: number) => { const prov = providerById(lg.carrierId || lg.forwarderId, contacts); return <option key={li} value={li + 1}>Leg {li + 1}{prov ? ` · ${prov.name}` : ` · ${lg.mode}`}</option>; })}
+                </Sel></div>
+              : <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>}
           </div>)}
         </Card>
         <Card>
@@ -1755,9 +1856,19 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
     transportUnitsForLeg(leg).forEach((u: any) => { if (u.lotRef) legGoodsRefs.add(String(u.lotRef)); });
     (leg.goodsRefs || []).forEach((r: any) => legGoodsRefs.add(String(r)));
   });
-  const scopedGoods = legGoodsRefs.size
-    ? (shipment.goods || []).filter((g: any) => legGoodsRefs.has(String(g.lotRef)) || legGoodsRefs.has(String(g.poRef)) || legGoodsRefs.has(String(g.soRef)))
-    : (shipment.goods || []);
+  // v6.34.5 (Problem A): if goods are assigned to legs (legNo), scope to the selected
+  // legs' numbers — each carrier's order lists only its own goods. Fall back to the
+  // ref-based scoping, then to all goods.
+  const selectedLegNos = new Set(selectedLegs.map((lg: any) => {
+    const idx = (shipment.legs || []).indexOf(lg);
+    return idx >= 0 ? idx + 1 : null;
+  }).filter(Boolean).map(String));
+  const anyGoodsAssigned = (shipment.goods || []).some((g: any) => g.legNo != null && g.legNo !== "");
+  const scopedGoods = anyGoodsAssigned
+    ? (shipment.goods || []).filter((g: any) => g.legNo == null || g.legNo === "" || selectedLegNos.has(String(g.legNo)))
+    : (legGoodsRefs.size
+        ? (shipment.goods || []).filter((g: any) => legGoodsRefs.has(String(g.lotRef)) || legGoodsRefs.has(String(g.poRef)) || legGoodsRefs.has(String(g.soRef)))
+        : (shipment.goods || []));
   const units = selectedLegs.flatMap((leg, li) => {
     const rows = transportUnitsForLeg(leg);
     const legExtra = { legBL: leg.blNumber || "", legBooking: leg.bookingNumber || "", legShippingLine: leg.shippingLine || "" };
@@ -1859,15 +1970,30 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
 
       <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Cargo / Ladunek</div>
       <table style={{ marginTop: 3, borderCollapse: "collapse", width: "100%" }}>
-        <thead><tr>{["Product / Produkt", "Origin / Pochodzenie", "Packaging / Opakowanie", "Kg netto", "Pallets / Palety", "PO/SO/Lot"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
+        <thead><tr>{["Product / Produkt", "Origin / Pochodzenie", "Packaging / Opakowanie", "Kg netto / Net", "Kg brutto / Gross", "Pallets / Palety", "PO/SO/Lot"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
         <tbody>{scopedGoods.map((g, i) => <tr key={i}>
           <td style={{ border: "1px solid #D1D5DB", padding: 3, fontWeight: 700 }}>{g.product}{g.variety ? " — " + g.variety : ""}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.origin || "-"}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.packaging || "-"}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td>
+          <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{g.grossKg ? fmtNum(g.grossKg) : "-"}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{g.pallets || "-"}</td>
           <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[g.poRef, g.soRef || soFallback, g.lotRef].filter(Boolean).join(" / ") || "-"}</td>
-        </tr>)}</tbody>
+        </tr>)}
+        {/* v6.34.5: net + gross totals for THIS carrier's cargo (transport order needs both). */}
+        {(() => {
+          const netT = scopedGoods.reduce((s: number, g: any) => s + parseNum(g.qtyKg), 0);
+          const grossT = scopedGoods.reduce((s: number, g: any) => s + (parseNum(g.grossKg) || 0), 0);
+          return (
+            <tr style={{ fontWeight: 800, background: "#F3F4F6" }}>
+              <td style={{ border: "1px solid #D1D5DB", padding: 3 }} colSpan={3}>Total / Razem</td>
+              <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{fmtNum(netT)}</td>
+              <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{grossT ? fmtNum(grossT) : "-"}</td>
+              <td style={{ border: "1px solid #D1D5DB", padding: 3 }} colSpan={2}></td>
+            </tr>
+          );
+        })()}
+        </tbody>
       </table>
 
       <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>{allRoad ? "Truck / driver information · Dane pojazdow i kierowcow" : anyRoad ? "Transport units · Dane jednostek transportowych" : "Container / BL / AWB information · Dane kontenerow"}</div>

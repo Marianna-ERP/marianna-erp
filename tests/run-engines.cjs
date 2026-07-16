@@ -1250,6 +1250,46 @@ T("CSV round-trip preserves CN on the item row", () => {
   assert.equal(cnCodeForItem(back, "Onions"), "0703 10");
 });
 
+// ── v6.34.4: partial line shipment — per-line remaining (the 42000→21000+21000 case) ──
+console.log("── partial PO-line shipment across trucks ──");
+T("a 42000 kg line ships 21000 now, 21000 remaining for the next truck", () => {
+  // simulate the per-line shipped-kg + remaining math the dialog uses
+  const line = { id: 7, qty: 42000 };
+  const existingGoods = [{ poRef: "PO-1", poLineId: 7, qtyKg: 21000 }]; // first shipment
+  const shipped = existingGoods.filter(g => g.poRef === "PO-1" && String(g.poLineId) === "7").reduce((a, g) => a + g.qtyKg, 0);
+  const remaining = Math.max(0, line.qty - shipped);
+  assert.equal(remaining, 21000);
+  // second shipment defaults to remaining and does NOT exceed
+  const thisShip = remaining; // default
+  assert.ok(shipped + thisShip <= line.qty + 1, "second truck of 21000 must not be blocked");
+  assert.equal(shipped + thisShip, 42000);
+});
+
+// ── v6.34.6: consume-guard — incoterm + port decide the fulfilling movement ──
+const { shipmentFulfilsOrder, sellIncotermHasOnwardLeg } = require("./build/tradeFlow.domain.js");
+console.log("── which shipment fulfils (consumes) the order ──");
+T("direct road export (DAP, not a port) consumes and closes the order", () => {
+  assert.equal(shipmentFulfilsOrder({ status: "Booked" }, "DAP", false), true);
+});
+T("FOB sale: truck to the port IS fulfilment → consumes", () => {
+  assert.equal(shipmentFulfilsOrder({ status: "Booked" }, "FOB", true), true);
+});
+T("CIF split: pre-carriage road-to-PORT does NOT consume; the sea leg will", () => {
+  // road leg to port under CIF → exempt
+  assert.equal(shipmentFulfilsOrder({ status: "Booked" }, "CIF", true), false);
+  // the onward sea shipment (its own destination is the client, not a port) → consumes
+  assert.equal(shipmentFulfilsOrder({ status: "Booked" }, "CIF", false), true);
+});
+T("Draft never consumes; Booked+ does", () => {
+  assert.equal(shipmentFulfilsOrder({ status: "Draft" }, "DAP", false), false);
+  assert.equal(shipmentFulfilsOrder({ status: "Cancelled" }, "DAP", false), false);
+  assert.equal(shipmentFulfilsOrder({ status: "Loaded" }, "DAP", false), true);
+});
+T("freight-onward set is exactly CIF/CFR/CPT/CIP", () => {
+  ["CIF","CFR","CPT","CIP"].forEach(i => assert.ok(sellIncotermHasOnwardLeg(i)));
+  ["FOB","FCA","EXW","DAP","DDP",""].forEach(i => assert.ok(!sellIncotermHasOnwardLeg(i)));
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

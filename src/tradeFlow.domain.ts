@@ -256,3 +256,31 @@ export function shipmentTradeDirection(shipment: any, po: any, so: any = null, r
   if (String(po?.flow || "").startsWith("EXP")) return "EXPORT";
   return "IMPORT";
 }
+
+// ── v6.34.6: does a shipment FULFIL its PO/SO (consume the shipped budget)? ──────
+// The fulfilling movement is decided by the SELL INCOTERM + the destination:
+//   • FOB/FCA/EXW sales: our obligation ends at the port/handover — the leg to the
+//     port IS fulfilment → it consumes.
+//   • CIF/CFR/CPT/CIP sales: main carriage is on us, so an ONWARD (sea) leg follows;
+//     the PRE-CARRIAGE road leg to a PORT does NOT consume (the onward leg will) —
+//     otherwise the same goods count twice (5 trucks + 4 containers).
+//   • Anything else (DAP/DDP/road-direct, no port hop): the movement is fulfilment → consumes.
+// A shipment only counts once it is BOOKED or beyond (Draft is still being built).
+const FREIGHT_ONWARD_SELL = new Set(["CIF", "CFR", "CPT", "CIP"]);
+export function sellIncotermHasOnwardLeg(sellIncoterm: any): boolean {
+  return FREIGHT_ONWARD_SELL.has(String(sellIncoterm || "").toUpperCase());
+}
+/**
+ * @param shipment  the shipment being tested
+ * @param sellIncoterm  the governing SO's sell incoterm (for CIF/CFR/CPT/CIP detection)
+ * @param destIsPort  is the shipment's destination a PORT location?
+ */
+export function shipmentFulfilsOrder(shipment: any, sellIncoterm: any, destIsPort: boolean): boolean {
+  if (!shipment) return false;
+  const st = String(shipment.status || "").trim();
+  if (st === "Cancelled" || st === "Draft" || st === "") return false; // Booked+ only
+  // The single carve-out: a pre-carriage road leg to a PORT under a freight-onward
+  // sell incoterm is NOT the fulfilling movement (the onward sea leg is).
+  if (destIsPort && sellIncotermHasOnwardLeg(sellIncoterm)) return false;
+  return true;
+}
