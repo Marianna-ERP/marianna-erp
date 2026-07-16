@@ -11,6 +11,7 @@ import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
+import { shipmentTradeDirection, MOVEMENT_LABELS } from "./tradeFlow.domain";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
@@ -473,22 +474,37 @@ function LocationPill({ locationId }: any) {
     </span>
   );
 }
-function FlowBadge({ flow, compact = false }: any) {
-  const f = FLOW_TYPES[flow];
-  if (!f) return null;
+// v6.34.7 (Step 1 of flow retirement): the lot's movement is DERIVED from its actual
+// shipment (which now owns the trade direction), not from the obsolete PO flow key.
+// An EXW-purchase + CIF-sale lot no longer mislabels itself "IMP · EXWs → our WH".
+function LotDirectionBadge({ lot, shipments = [], orders = [], compact = false }: any) {
+  const shs = shipmentsForLot(lot, shipments);
+  // Prefer an explicit shipment direction; else derive from the lot's PO + governing SO.
+  let dir = "";
+  for (const sh of shs) {
+    const d = sh?.tradeDirection;
+    if (d && MOVEMENT_LABELS[d]) { dir = d; break; }
+  }
+  if (!dir && shs.length) {
+    // derive from the first shipment's PO/SO context
+    const sh = shs[0];
+    const po = null; // PO country not resolved here; fall back to shipment field only
+    dir = shipmentTradeDirection(sh, po);
+  }
+  if (!dir) return null;
+  const lbl = MOVEMENT_LABELS[dir];
+  if (!lbl) return null;
   if (compact) {
-    return <span title={f.desc} style={{ background: "#F9FAFB", border: "1px solid #EBEBEB", padding: "1px 7px", borderRadius: 4, fontSize: 10.5, color: "#555", whiteSpace: "nowrap" }}>{f.emoji} {f.short}</span>;
+    return <span title={lbl.hint} style={{ background: "#fff", border: `1px solid ${lbl.color}33`, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, color: lbl.color, whiteSpace: "nowrap" }}>{lbl.label}</span>;
   }
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 12px", background: "#F9FAFB", border: "1px solid #EBEBEB", borderRadius: 8 }}>
-      <span style={{ fontSize: 14 }}>{f.emoji}</span>
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#111" }}>{f.short}</div>
-        <div style={{ fontSize: 10.5, color: "#888" }}>{f.desc}</div>
-      </div>
-    </div>
+    <span title={lbl.hint} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", background: "#fff", border: `1px solid ${lbl.color}33`, borderRadius: 8, fontSize: 11.5, fontWeight: 700, color: lbl.color }}>
+      {lbl.label}
+      <span style={{ fontWeight: 400, color: "#94A3B8", fontSize: 10.5 }}>· from shipment</span>
+    </span>
   );
 }
+
 function VarianceBadge({ expected, actual }: any) {
   if (!expected || !actual) return null;
   const delta = actual - expected;
@@ -547,7 +563,10 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   // the modal (Record movement vs the red Record quality issue), so there is no
   // in-modal tab toggle anymore.
   const QUALITY_TYPES = ["DAMAGE", "RECLASS", "CLAIM"];
-  const MOVEMENT_MODE_TYPES = ["IN", "TRANSFER", "SHIP_OUT"];
+  // v6.34.7: manual movement is for TRANSFER (relocation) + corrections. Receipts and
+  // dispatches are normally driven by Shipments — IN stays for opening balances /
+  // corrections, SHIP_OUT only for the EXW "client collects with own truck" exception.
+  const MOVEMENT_MODE_TYPES = ["TRANSFER", "IN", "SHIP_OUT"];
   const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
   const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : (isExpectedLike ? "IN" : "TRANSFER")));
   // v6.13 (#15): where the quality problem was detected along the journey.
@@ -608,7 +627,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
         <div style={{ padding: 24 }}>
           {mode === "movement" ? (
             <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
-              <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
+              <strong>Manual movement is for internal transfers and corrections.</strong> Use <strong>Transfer</strong> to relocate stock between your locations (e.g. port → warehouse, warehouse → warehouse). Receipts and dispatches are normally <strong>driven by Shipments</strong> — marking a shipment Delivered posts the receipt (IN) or ship-out for you, with the transport, cost and paperwork linked to the lot. Only use <strong>Ship Out</strong> here for an <strong>EXW sale where the client collects with their own truck</strong> (no transport on our side), and <strong>Receipt</strong> for an opening balance or a stock correction on a manually-created lot.
             </div>
           ) : clientSide ? (
             <div style={{ padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5, marginBottom: 16 }}>
@@ -1151,7 +1170,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{lot.number}</div>
               <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
-              <div style={{ marginTop: 10 }}><FlowBadge flow={lot.flow} /></div>
+              <div style={{ marginTop: 10 }}><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} /></div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Value of physical stock</div>
@@ -2134,7 +2153,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                 <div><StatusBadge status={l.status} /></div>
                 <div>
                   <LocationPill locationId={l.locationId} />
-                  <div style={{ marginTop: 3 }}><FlowBadge flow={l.flow} compact /></div>
+                  <div style={{ marginTop: 3 }}><LotDirectionBadge lot={l} shipments={shipments} orders={liveSOs} compact /></div>
                 </div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} <span style={{ fontSize: 11, color: "#AAA", fontWeight: 400 }}>/ {fmtNum(l.physicalKg || 0)} kg</span></div>

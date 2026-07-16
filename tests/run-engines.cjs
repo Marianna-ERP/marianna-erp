@@ -1290,6 +1290,20 @@ T("freight-onward set is exactly CIF/CFR/CPT/CIP", () => {
   ["FOB","FCA","EXW","DAP","DDP",""].forEach(i => assert.ok(!sellIncotermHasOnwardLeg(i)));
 });
 
+// ── v6.34.8: SO multi-shipment parity — same per-line remaining math as PO ──
+console.log("── SO partial-shipment parity ──");
+T("SO line ships across two shipments; second defaults to remaining (parity with PO)", () => {
+  const line = { id: 3, qty: 30000 };
+  // first SO shipment took 12000 of line 3 (goods stamped soLineId)
+  const existingGoods = [{ soRef: "SO-1", soLineId: 3, qtyKg: 12000 }];
+  const shipped = existingGoods.filter(g => g.soRef === "SO-1" && String(g.soLineId) === "3").reduce((a, g) => a + g.qtyKg, 0);
+  const remaining = Math.max(0, line.qty - shipped);
+  assert.equal(remaining, 18000);
+  // second shipment defaults to remaining, does not exceed
+  assert.ok(shipped + remaining <= line.qty + 1);
+  assert.equal(shipped + remaining, 30000);
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

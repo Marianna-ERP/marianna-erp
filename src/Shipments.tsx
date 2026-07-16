@@ -686,17 +686,24 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
   const destinationLocationId = so.destinationLocationId || opts.destinationLocationId || 10;
   const poRefs = uniq((so.items || []).filter(it => it.sourceType === "PO").map(it => it.sourceRef));
   const lotRefs = uniq((so.items || []).map(it => findLotForLine(lots, it, it.sourceType === "PO" ? it.sourceRef : "")?.number || (it.sourceType === "STOCK" ? it.sourceRef : "")).filter(Boolean));
-  const goods = (so.items || []).map((it, idx) => {
+  // v6.34.8: SO parity with PO — honour selectedItemIds, per-line "ship now" qty
+  // (opts.lineQtys, default full line), and stamp soLineId for per-line shipped-kg counting.
+  const lineQtys = opts.lineQtys || {};
+  const indexedItems = (so.items || []).map((it, idx) => ({ it, idx, id: String(it.id ?? idx + 1) }));
+  const loadable = (opts.selectedItemIds && opts.selectedItemIds.length)
+    ? indexedItems.filter(x => opts.selectedItemIds.map(String).includes(x.id))
+    : indexedItems;
+  const goods = loadable.map(({ it, idx, id }, gi) => {
     const lot = findLotForLine(lots, it, it.sourceType === "PO" ? it.sourceRef : "");
-    // Real pallet count: prefer the SO line's own pallets; else the lot's pallets;
-    // else 0. Do NOT auto-guess from kg (that produced wrong numbers like 39 for a
-    // 19,422 kg line that was really 21 pallets).
     let palletCount = parseNum(it.pallets) || 0;
     if (!palletCount && lot) palletCount = parseNum(lot.pallets) || 0;
+    const entered = lineQtys[id];
+    const qty = (entered === undefined || entered === "") ? parseNum(it.qty) : parseNum(entered);
     return {
-      id: idx + 1,
+      id: gi + 1,
       poRef: it.sourceType === "PO" ? it.sourceRef : lot?.poRef || "",
       soRef: so.number,
+      soLineId: it.id ?? idx + 1,   // v6.34.8: stamp the source SO line
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product || "Goods",
       variety: it.variety || "",
@@ -705,8 +712,8 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
       quality: it.quality || "I",
       size: it.size || "",
       packaging: it.packaging || "",
-      qtyKg: parseNum(it.qty),
-      grossKg: Math.round(parseNum(it.qty) * 1.06),
+      qtyKg: qty,
+      grossKg: Math.round(qty * 1.06),
       pallets: palletCount,
       description: `${it.product || "Goods"}${it.variety ? " " + it.variety : ""} ${it.packaging || ""}`.trim(),
     };
@@ -913,22 +920,31 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   // v6.18.3 (#5): HARD-BLOCK over-shipping a PO. Compare kg already on non-cancelled
   // shipments for this PO, plus what THIS shipment would add (the selected lines'
   // qty), against the PO quantity. No override once it's fully covered or would exceed.
+  // v6.34.8: source-agnostic descriptor so PO and SO share the same guard + progress + partial-qty UI.
+  const srcDoc = sourceType === "PO" ? selectedPO : sourceType === "SO" ? selectedSO : null;
+  const srcItems: any[] = srcDoc?.items || [];
+  const srcRefMatch = (sh2: any) => sourceType === "PO"
+    ? (sh2.poRefs || []).includes(selectedPO?.number)
+    : (sh2.soRefs || []).includes(selectedSO?.number) || (sh2.goods || []).some((g: any) => g.soRef === selectedSO?.number);
+  const srcGoodsMatch = (g: any) => sourceType === "PO" ? g.poRef === selectedPO?.number : g.soRef === selectedSO?.number;
+  const srcLineKey = (g: any) => String((sourceType === "PO" ? (g.poLineId ?? g.lineId) : (g.soLineId ?? g.lineId)) ?? "");
+
   const lineShippedKgOuter: Record<string, number> = (() => {
     const map: Record<string, number> = {};
-    if (sourceType !== "PO" || !selectedPO) return map;
-    (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && shipmentConsumesBudget(s, orders, locById))
+    if (!srcDoc) return map;
+    (shipments || []).filter((s: any) => srcRefMatch(s) && shipmentConsumesBudget(s, orders, locById))
       .forEach((s: any) => (s.goods || []).forEach((g: any) => {
-        if (g.poRef !== selectedPO.number) return;
-        const key = String(g.poLineId ?? g.lineId ?? "");
+        if (!srcGoodsMatch(g)) return;
+        const key = srcLineKey(g);
         if (key) map[key] = (map[key] || 0) + parseNum(g.qtyKg);
       }));
     return map;
   })();
   const poShipState = (() => {
-    if (sourceType !== "PO" || !selectedPO) return null;
-    const existing = (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && shipmentConsumesBudget(s, orders, locById));
-    const poQty = (selectedPO.items || []).reduce((a: number, it: any) => a + parseNum(it.qty), 0);
-    const shippedKg = existing.reduce((sum: number, sh: any) => sum + (sh.goods || []).filter((g: any) => g.poRef === selectedPO.number).reduce((a: number, g: any) => a + parseNum(g.qtyKg), 0), 0);
+    if (!srcDoc) return null;
+    const existing = (shipments || []).filter((s: any) => srcRefMatch(s) && shipmentConsumesBudget(s, orders, locById));
+    const poQty = srcItems.reduce((a: number, it: any) => a + parseNum(it.qty), 0);
+    const shippedKg = existing.reduce((sum: number, s2: any) => sum + (s2.goods || []).filter((g: any) => srcGoodsMatch(g)).reduce((a: number, g: any) => a + parseNum(g.qtyKg), 0), 0);
     // v6.34.4: 'this shipment' kg = the per-line entered amounts (default: remaining), not the full line.
     const enteredFor = (it: any, idx: number) => {
       const id = String(it.id ?? idx + 1);
@@ -936,7 +952,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       const v = lineQtys[id];
       return (v === undefined || v === "") ? rem : parseNum(v);
     };
-    const thisKg = (selectedPO.items || []).reduce((a: number, it: any, idx: number) => {
+    const thisKg = srcItems.reduce((a: number, it: any, idx: number) => {
       const id = String(it.id ?? idx + 1);
       const on = selectedItemIds.length === 0 || selectedItemIds.map(String).includes(id);
       return a + (on ? enteredFor(it, idx) : 0);
@@ -949,17 +965,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
 
   // v6.34.4: per-LINE shipped kg (across non-cancelled shipments of this PO), so each
   // line's remaining-to-ship is correct — a PO line can ship across several trucks.
-  const lineShippedKg = (() => {
-    const map: Record<string, number> = {};
-    if (sourceType !== "PO" || !selectedPO) return map;
-    (shipments || []).filter((s: any) => (s.poRefs || []).includes(selectedPO.number) && shipmentConsumesBudget(s, orders, locById))
-      .forEach((s: any) => (s.goods || []).forEach((g: any) => {
-        if (g.poRef !== selectedPO.number) return;
-        const key = String(g.poLineId ?? g.lineId ?? "");
-        if (key) map[key] = (map[key] || 0) + parseNum(g.qtyKg);
-      }));
-    return map;
-  })();
+  const lineShippedKg = lineShippedKgOuter; // v6.34.8: same source-agnostic map
   const lineRemaining = (it: any, idx: number) => {
     const id = String(it.id ?? idx + 1);
     return Math.max(0, parseNum(it.qty) - (lineShippedKg[id] || 0));
@@ -1007,7 +1013,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       const soRefs = governing ? [governing.number] : [];
       sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing);
     }
-    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, form, shipments, lots);
+    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys }, shipments, lots);
     else sh = buildManualShipment(form, shipments);
     // v6.10 (#11/#14): for a DDP purchase we don't order the carrier and carry no
     // freight cost on the supplier→warehouse leg. Seed the first road leg's unit
@@ -1059,7 +1065,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           return (
             <Card style={{ gridColumn: "1 / 3", background: blocked ? "#FEF2F2" : "#FFFBEB", border: `1px solid ${blocked ? "#FECACA" : "#FDE68A"}` }}>
               <div style={{ fontSize: 12.5, color: blocked ? "#991B1B" : "#92400E", lineHeight: 1.5, marginBottom: 10 }}>
-                {blocked ? "⛔" : "⚠"} <strong>{selectedPO?.number}</strong> already has {poShipState.existing.length} shipment(s){poShipState.existing.length ? `: ${poShipState.existing.map((s: any) => s.number).join(", ")}` : ""}.
+                {blocked ? "⛔" : "⚠"} <strong>{srcDoc?.number}</strong> already has {poShipState.existing.length} shipment(s){poShipState.existing.length ? `: ${poShipState.existing.map((s: any) => s.number).join(", ")}` : ""}.
               </div>
               {/* kg bar: shipped (solid) + this shipment (striped) against PO total */}
               <div style={{ display: "flex", height: 22, borderRadius: 6, overflow: "hidden", border: "1px solid #E5E7EB", background: "#fff", marginBottom: 8 }}>
@@ -1069,31 +1075,31 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
               <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 16, flexWrap: "wrap" }}>
                 <span><span style={{ display: "inline-block", width: 9, height: 9, background: "#3B82F6", borderRadius: 2, marginRight: 4 }} />Already shipped <strong>{fmtNum(poShipState.shippedKg)}</strong></span>
                 <span><span style={{ display: "inline-block", width: 9, height: 9, background: poShipState.wouldExceed ? "#DC2626" : "#22C55E", borderRadius: 2, marginRight: 4 }} />This shipment <strong>{fmtNum(poShipState.thisKg)}</strong></span>
-                <span>PO total <strong>{fmtNum(poShipState.poQty)}</strong> kg</span>
+                <span>{sourceType} total <strong>{fmtNum(poShipState.poQty)}</strong> kg</span>
               </div>
               {blocked && (
                 <div style={{ fontSize: 12.5, color: "#991B1B", fontWeight: 700, marginTop: 10 }}>
                   {poShipState.alreadyFull
-                    ? "This PO is fully shipped — there's nothing left to ship. Creating another shipment is blocked."
-                    : `This shipment would exceed the PO by ${fmtNum(poShipState.exceedBy)} kg. Reduce the lines selected, or it's blocked.`}
+                    ? `This ${sourceType} is fully shipped — there's nothing left to ship. Creating another shipment is blocked.`
+                    : `This shipment would exceed the ${sourceType} by ${fmtNum(poShipState.exceedBy)} kg. Reduce the lines selected, or it's blocked.`}
                 </div>
               )}
             </Card>
           );
         })()}
 
-        {sourceType === "PO" && selectedPO && (selectedPO.items || []).length > 0 && (
+        {srcDoc && srcItems.length > 0 && (
           <Card>
             <SectionTitle>Products to load on this shipment</SectionTitle>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>This PO has {(selectedPO.items || []).length} product line(s). Tick the ones physically loaded on this shipment — only those appear on the transport order and goods. (None ticked = all loaded.)</div>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>This {sourceType} has {srcItems.length} product line(s). Tick the ones physically loaded on this shipment — only those appear on the transport order and goods. (None ticked = all loaded.)</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {(selectedPO.items || []).map((it, idx) => {
+              {srcItems.map((it: any, idx: number) => {
                 const id = String(it.id ?? idx + 1);
                 const checked = selectedItemIds.length === 0 || selectedItemIds.includes(id);
                 return (
                   <label key={id} style={{ display: "inline-flex", gap: 7, alignItems: "center", fontSize: 12.5, border: "1px solid", borderColor: checked ? "#2563EB" : "#E5E7EB", background: checked ? "#EFF6FF" : "#fff", borderRadius: 8, padding: "7px 11px", cursor: "pointer" }}>
                     <input type="checkbox" checked={checked} onChange={() => {
-                      const all = (selectedPO.items || []).map((x, i2) => String(x.id ?? i2 + 1));
+                      const all = srcItems.map((x: any, i2: number) => String(x.id ?? i2 + 1));
                       // If currently "all" (empty), start from the full set, then toggle this id off.
                       const base = selectedItemIds.length === 0 ? all : selectedItemIds;
                       const next = base.includes(id) ? base.filter(x => x !== id) : [...base, id];
@@ -1189,7 +1195,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="green" onClick={() => create()} disabled={blockCreate} title={needsRef ? `Select a ${sourceType} first` : blockCreate ? (poShipState?.alreadyFull ? "This PO is fully shipped — nothing left to ship" : "This shipment would exceed the PO quantity — reduce the lines selected") : ""}>Create shipment</SmallButton>
+        <SmallButton kind="green" onClick={() => create()} disabled={blockCreate} title={needsRef ? `Select a ${sourceType} first` : blockCreate ? (poShipState?.alreadyFull ? `This ${sourceType} is fully shipped — nothing left to ship` : `This shipment would exceed the ${sourceType} quantity — reduce the lines selected`) : ""}>Create shipment</SmallButton>
       </div>
 
       {/* v6.34.0 (BP-61): which SO/client is this truck for? Shown only when the
