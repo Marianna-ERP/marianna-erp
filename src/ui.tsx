@@ -42,6 +42,28 @@ export function SmallButton({ children, onClick, kind = "default", disabled = fa
   return <button disabled={disabled} title={title} onClick={onClick} style={{ padding: "7px 11px", borderRadius: 7, border, background: bg, color, fontSize: 12, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{children}</button>;
 }
 
+
+// ── v6.35.1: system-wide struck-through rendering for cancelled/voided documents ──
+// Documents are soft-cancelled (kept on record), never hard-deleted. Anywhere a doc
+// number is shown as a reference, wrap it in <DocRef> so a cancelled one is visibly
+// voided (red strike-through) rather than looking live.
+export function cancelledDocSet(...lists: any[][]): Set<string> {
+  const s = new Set<string>();
+  lists.forEach(list => (list || []).forEach((d: any) => {
+    if (d && d.status === "Cancelled" && d.number != null) s.add(String(d.number));
+  }));
+  return s;
+}
+
+export function DocRef({ num, cancelledSet, style = {}, prefix = "" }: any) {
+  if (num == null || num === "") return null;
+  const cancelled = cancelledSet && cancelledSet.has(String(num));
+  const struck = cancelled
+    ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px", color: "#B91C1C", opacity: 0.8 }
+    : {};
+  return <span title={cancelled ? "Cancelled — kept on record, no longer active" : undefined} style={{ ...style, ...struck }}>{prefix}{num}</span>;
+}
+
 // ── In-app dialogs (P2-6) ────────────────────────────────────────────────────
 
 function DialogShell({ tone, title, message, buttons }: any) {

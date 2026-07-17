@@ -3,7 +3,7 @@ import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.
 import { computeClaim, nextClaimNumber, buildClaimNote } from "./claim.domain";
 import { buildTraceTree } from "./trace.domain";
 import { fmtNum } from "./format";
-import { Card, Lbl, useConfirm } from "./ui";
+import { Card, Lbl, useConfirm, DocRef, cancelledDocSet } from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
@@ -11,7 +11,7 @@ import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
-import { shipmentTradeDirection, MOVEMENT_LABELS } from "./tradeFlow.domain";
+import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
@@ -121,7 +121,20 @@ const STAGE_KIND_TO_POINT: Record<string, string> = {
   customs_export: "origin_port", transit_sea: "vessel", dest_port: "dest_port",
   customs_import: "dest_port", our_wh: "our_wh", client: "client",
 };
-function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?: number) {
+function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?: number, buyIncoterm?: string, sellIncoterm?: string) {
+  // v6.35.1 (Phase C): compute the stage's transfer point, then prefer REAL incoterms.
+  // Fall back to the flow key only when incoterms are absent (legacy lots).
+  {
+    let point0 = STAGE_KIND_TO_POINT[stageKind] || "supplier";
+    const isTransit0 = stageKind === "transit_road" || stageKind === "transit_sea";
+    if (isTransit0 && Array.isArray(stages) && typeof idx === "number") {
+      for (let j = idx - 1; j >= 0; j--) {
+        const pk = stages[j].kind;
+        if (pk !== "transit_road" && pk !== "transit_sea") { point0 = STAGE_KIND_TO_POINT[pk] || point0; break; }
+      }
+    }
+    if (buyIncoterm || sellIncoterm) return ownershipAtPoint(point0, buyIncoterm, sellIncoterm);
+  }
   const f = FLOW_TYPES[flow];
   if (!f) return "owned";
   if (f.buyOwnershipStart === "never" || f.sellOwnershipEnd === "never") return "not_owned";
@@ -179,6 +192,13 @@ function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) 
 // On-the-fly journey for a lot with no stored journey — derived from real shipments
 // (Phase C), falling back to the flow template only for legacy lots with no shipments.
 function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = []) {
+  // v6.35.1 (Phase C): resolve the REAL incoterms for ownership — buy from the lot (or its
+  // stored value), sell from the governing SO that draws on this lot/PO.
+  const lotBuyIncoterm = lot.buyIncoterm || lot.purchaseIncoterm || "";
+  const govSo = (orders || []).find((o: any) => o.status !== "Cancelled" && (o.items || []).some((it: any) =>
+    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) ||
+    (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
+  const lotSellIncoterm = govSo?.sellIncoterm || "";
   // Phase C: prefer a stored journey, then one DERIVED FROM REAL SHIPMENTS, and only
   // then fall back to the legacy flow template (for old lots with neither).
   const fromShips = (Array.isArray(lot.journey) && lot.journey.length > 0) ? [] : journeyFromShipments(lot, shipments, locById);
@@ -199,7 +219,7 @@ function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = []) {
             plannedDate = new Date(t0 + (t1 - t0) * (i / (n - 1))).toISOString().split("T")[0];
           } else if (i === 0) plannedDate = load;
           else if (i === n - 1) plannedDate = arrive;
-          return { seq: i + 1, kind: st.kind, label: st.label, ownership: ownershipForStage(lot.flow, st.kind, f.stageTemplate, i), plannedDate, actualDate: null, status: "pending" };
+          return { seq: i + 1, kind: st.kind, label: st.label, ownership: ownershipForStage(lot.flow, st.kind, f.stageTemplate, i, lotBuyIncoterm, lotSellIncoterm), plannedDate, actualDate: null, status: "pending" };
         });
       })();
   // Drive each stage's status + actual date from real shipment legs, customs,
@@ -347,14 +367,22 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
 }
 
 // The customs clearances relevant to a lot's flow (export and/or import).
-function customsStagesForFlow(flow: string) {
-  const f = FLOW_TYPES[flow];
-  if (!f || !Array.isArray(f.stageTemplate)) return [];
-  const kinds = f.stageTemplate.map((s: any) => s.kind);
-  const out: string[] = [];
-  if (kinds.includes("customs_export")) out.push("export");
-  if (kinds.includes("customs_import")) out.push("import");
-  return out;
+// v6.35.2 (Phase C step 4): whether a lot has customs stages is now derived from its
+// real shipments — a shipment with customs applied, or one that crosses the EU boundary
+// (import/export direction) — not from the obsolete flow template.
+function customsStagesForLot(lot: any, shipments: any[]): string[] {
+  const shs = shipmentsForLot(lot, shipments || []);
+  const out = new Set<string>();
+  shs.forEach((sh: any) => {
+    if (sh.customs && sh.customs.applies) {
+      const dir = String(sh.tradeDirection || "").toUpperCase();
+      // classify by trade direction; default to import for an inbound movement.
+      if (dir === "EXPORT" || dir === "CROSS_TRADE") out.add("export");
+      if (dir === "IMPORT" || dir === "CROSS_TRADE") out.add("import");
+      if (out.size === 0) out.add("import");
+    }
+  });
+  return Array.from(out);
 }
 
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"]; // Polish convention (Klasa I/IB/II/Industrial)
@@ -566,6 +594,19 @@ function fmtMoney(n, cur = "PLN") {
   if (n === undefined || n === null || isNaN(n)) return "—";
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
 }
+// v6.36.1 (P2): stock age — the first real receipt (non-voided IN) is the arrival.
+function lotArrivalDate(lot: any): string | null {
+  const ins = (lot.movements || []).filter((m: any) => m && !m.voided && m.type === "IN" && m.date).map((m: any) => String(m.date)).sort();
+  return ins[0] || null;
+}
+function lotAgeDays(lot: any): number | null {
+  const d = lotArrivalDate(lot);
+  if (!d) return null;
+  const days = Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
+  return days < 0 ? 0 : days;
+}
+function ageColor(days: number): string { return days <= 7 ? "#16A34A" : days <= 14 ? "#D97706" : "#DC2626"; }
+
 function totalCost(lot) {
   return (lot.costs || []).reduce((s, c) => s + (c.pln || 0), 0);
 }
@@ -596,18 +637,19 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
   // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
   // was 0 kg, making every quantity error out). In edit mode, prefill.
-  const isExpectedLike = lot.status === "Expected" || lot.status === "Direct Expected";
   // v6.11 (#11) / v6.13 (#14): two modes — "movement" (IN / Transfer / Ship Out)
   // and "quality" (Damage / Reclassify). The mode is fixed by which button opened
   // the modal (Record movement vs the red Record quality issue), so there is no
   // in-modal tab toggle anymore.
   const QUALITY_TYPES = ["DAMAGE", "RECLASS", "CLAIM"];
-  // v6.34.7: manual movement is for TRANSFER (relocation) + corrections. Receipts and
-  // dispatches are normally driven by Shipments — IN stays for opening balances /
-  // corrections, SHIP_OUT only for the EXW "client collects with own truck" exception.
-  const MOVEMENT_MODE_TYPES = ["TRANSFER", "IN", "SHIP_OUT"];
+  // v6.35.4: manual movement is TRANSFER ONLY (relocation between our locations).
+  // Receipts (IN) and dispatches (SHIP_OUT) are driven by Shipments — arrival posts the
+  // receipt automatically, and an EXW client-collection posts the ship-out via its
+  // collection shipment. This removes the manual receipt/dispatch that let a lot's state
+  // drift from its shipment (T-20). Quality corrections stay in the separate quality mode.
+  const MOVEMENT_MODE_TYPES = ["TRANSFER"];
   const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
-  const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : (isExpectedLike ? "IN" : "TRANSFER")));
+  const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : "TRANSFER"));
   // v6.13 (#15): where the quality problem was detected along the journey.
   const QUALITY_DETECTED_AT = ["At port of discharge", "At the client (export delivery)", "At our warehouse (on arrival)", "At the client's warehouse (direct delivery)", "At supplier / origin", "Other"];
   const [detectedAt, setDetectedAt] = useState(editing?.detectedAt || QUALITY_DETECTED_AT[0]);
@@ -666,7 +708,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
         <div style={{ padding: 24 }}>
           {mode === "movement" ? (
             <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
-              <strong>Manual movement is for internal transfers and corrections.</strong> Use <strong>Transfer</strong> to relocate stock between your locations (e.g. port → warehouse, warehouse → warehouse). Receipts and dispatches are normally <strong>driven by Shipments</strong> — marking a shipment Delivered posts the receipt (IN) or ship-out for you, with the transport, cost and paperwork linked to the lot. Only use <strong>Ship Out</strong> here for an <strong>EXW sale where the client collects with their own truck</strong> (no transport on our side), and <strong>Receipt</strong> for an opening balance or a stock correction on a manually-created lot.
+              <strong>Manual movement relocates stock between your own locations</strong> (e.g. port → warehouse, warehouse → warehouse). Everything else is automatic: a shipment posts the <strong>receipt</strong> when it arrives and the <strong>ship-out</strong> when it delivers — with transport, cost and paperwork linked to the lot. To receive or dispatch goods, use <strong>Shipments</strong>, not a manual movement. (Quality issues and write-offs are recorded via <em>Record quality issue</em>.)
             </div>
           ) : clientSide ? (
             <div style={{ padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5, marginBottom: 16 }}>
@@ -1193,7 +1235,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
           {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
             <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
           )}
-          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
+          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
 
@@ -1376,7 +1418,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
 
               {/* Customs overlay (v6.1d) — independent clearance events, editable */}
               {(() => {
-                const kinds = customsStagesForFlow(lot.flow);
+                const kinds = customsStagesForLot(lot, shipments);
                 if (kinds.length === 0) return null;
                 return (
                   <Card style={{ marginBottom: 16 }}>
@@ -1761,6 +1803,7 @@ function ClaimModal({ lot, po, existing = null, onCancel, onSave }: any) {
 }
 
 export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
+  const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
@@ -1782,6 +1825,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [showReturn, setShowReturn] = useState(false); // v6.18.12 (#4): return-to-warehouse modal
   const [showInspection, setShowInspection] = useState(false);
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState("default"); // v6.36.1: default | oldest | newest (by arrival)
   const [filterStatus, setFilterStatus] = useState("all"); // all | inPossession | <specific>
   const [filterLocationType, setFilterLocationType] = useState("All");
   const [filterProduct, setFilterProduct] = useState("All");
@@ -1801,7 +1845,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     const q = search.trim().toLowerCase();
     // "In our possession" = anything that hasn't physically left us yet
     const inPossessionStatuses = new Set(["Expected", "In Transit", "Customs", "In Stock"]);
-    return lots.filter(l => {
+    const base = lots.filter(l => {
       const loc = locById(l.locationId);
       if (filterStatus === "inPossession" && !inPossessionStatuses.has(l.status)) return false;
       if (filterStatus !== "all" && filterStatus !== "inPossession" && l.status !== filterStatus) return false;
@@ -1815,7 +1859,10 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       }
       return true;
     });
-  }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality]);
+    if (sortBy === "default") return base;
+    const key = (l: any) => lotArrivalDate(l) || "9999-12-31"; // no arrival sorts last on oldest-first
+    return [...base].sort((a, b) => sortBy === "oldest" ? key(a).localeCompare(key(b)) : key(b).localeCompare(key(a)));
+  }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality, sortBy]);
 
   // v6.18.21 (audit P1): the product filter is derived from the lots actually in
   // inventory (catalog-picked on the PO) instead of a hardcoded list that drifted.
@@ -2146,6 +2193,11 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {/* Filters — compact single row of dropdowns */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot, product, PO/SO, location…" style={{ flex: "1 1 220px", minWidth: 190, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)} title="Sort by stock age (arrival date of the first receipt)" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff" }}>
+            <option value="default">Sort: default</option>
+            <option value="oldest">Oldest stock first</option>
+            <option value="newest">Newest stock first</option>
+          </select>
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             <option value="inPossession">In our possession</option>
             <option value="all">All statuses</option>
@@ -2187,6 +2239,9 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
                   <div style={{ fontSize: 11, color: "#AAA" }}>{l.size || "—"} · {l.origin || "—"} · {l.packaging}</div>
+                  {(() => { const d = lotArrivalDate(l); const age = lotAgeDays(l); return d ? (
+                    <div style={{ fontSize: 10.5, marginTop: 2 }}><span style={{ color: "#94A3B8" }}>arrived {d}</span> <span style={{ fontWeight: 700, color: ageColor(age as number) }}>· {age} d</span></div>
+                  ) : null; })()}
                 </div>
                 <div><QualityBadge quality={l.quality} /></div>
                 <div><StatusBadge status={l.status} /></div>
@@ -2204,7 +2259,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                   <div style={{ fontSize: 10, color: "#AAA" }}>{fmtMoney(cpk)}/kg</div>
                 </div>
                 <div>
-                  {l.poRef && <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}>{l.poRef}</div>}
+                  {l.poRef && <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={l.poRef} cancelledSet={cancelledRefs} /></div>}
                   {soList.slice(0, 2).map(s => (
                     <div key={s.number} style={{ fontSize: 11, color: "#15803D", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}>{s.number}</div>
                   ))}

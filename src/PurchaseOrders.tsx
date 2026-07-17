@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
-import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow } from "./tradeFlow.domain";
-import { Card, Lbl, SectionTitle } from "./ui";
+import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow, ownershipAtPoint, sellIncotermHasOnwardLeg } from "./tradeFlow.domain";
+import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet } from "./ui";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
@@ -930,7 +930,23 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
   const poNum = order.number;
   const hasLinkedSO = (allSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
   const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
-  const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
+  // v6.35.0: a lot whose linked shipments are ALL cancelled must not keep the PO locked —
+  // otherwise cancelling everything to fix the PO leaves it permanently trapped. We treat a
+  // lot as "really received/moved" only if it has a non-cancelled shipment, OR it carries
+  // manual movements that are not shipment-driven receipts.
+  const shipmentsForLot = (lotNo: string) => (allShipments || []).filter((sh: any) =>
+    (sh.lotRefs || []).map(String).includes(String(lotNo)) ||
+    (sh.goods || []).some((g: any) => String(g.lotRef) === String(lotNo)));
+  const lotReceivedOrMoved = (lots || []).some((l: any) => {
+    if (l.poRef !== poNum) return false;
+    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0);
+    if (!received) return false;
+    // If this lot has any linked shipment, only a NON-cancelled one keeps it "live".
+    const shs = shipmentsForLot(l.number);
+    if (shs.length > 0) return shs.some((sh: any) => sh.status !== "Cancelled");
+    // No shipments at all: a lot with real received kg / movements is a genuine manual receipt → still locks.
+    return received;
+  });
   const hasDependents = hasLinkedSO || hasShipment || lotReceivedOrMoved;
   const terminalStatus = ["Arrived", "Shipped", "Closed", "Cancelled", "Invoiced"].includes(order.status);
   const isLocked = !!order.id && (hasDependents || (order.status !== "Draft" && terminalStatus)); // fully locked once anything depends on it
@@ -1167,8 +1183,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </label>
               <div style={{ fontSize: 11, color: "#888", lineHeight: 1.4, flex: 1 }}>
                 Tick if a vessel leg is part of this PO's journey. Drives Shipments to plan a sea leg in addition to road.
-                {order.flow && FLOW_TYPES[order.flow]?.defaultRequiresSea !== !!order.requiresSea && (
-                  <span style={{ color: "#D97706", marginLeft: 6 }}>· typically {FLOW_TYPES[order.flow].defaultRequiresSea ? "ticked" : "unticked"} for this flow</span>
+                {order.buyIncoterm && sellIncotermHasOnwardLeg(order.buyIncoterm) !== !!order.requiresSea && (
+                  <span style={{ color: "#D97706", marginLeft: 6 }}>· typically {sellIncotermHasOnwardLeg(order.buyIncoterm) ? "ticked" : "unticked"} for {order.buyIncoterm}</span>
                 )}
               </div>
             </div>
@@ -1303,7 +1319,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
           {order.status === "Cancelled"
             ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
             : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
-          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
+          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
 
@@ -1583,7 +1599,9 @@ function buildJourneyFromFlow(order) {
       seq: i + 1,
       kind: st.kind,
       label: st.label,
-      ownership: ownershipForStage(order.flow, st.kind, stages, i),
+      ownership: (order.buyIncoterm || order.sellIncoterm)
+        ? ownershipAtPoint(STAGE_KIND_TO_POINT[st.kind] || "supplier", order.buyIncoterm, order.sellIncoterm)
+        : ownershipForStage(order.flow, st.kind, stages, i),
       plannedDate,
       actualDate: null,
       status: "pending",
@@ -1702,7 +1720,25 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
+
+// v6.35.0: render linked document numbers, striking through CANCELLED ones with a red
+// line (kept on record but visibly voided). cancelledSet holds the cancelled numbers.
+function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
+  if (!nums || nums.length === 0) return null;
+  return (
+    <div style={{ color }} title={title}>
+      {icon} {nums.map((n: string, i: number) => (
+        <span key={String(n)}>
+          <DocRef num={n} cancelledSet={cancelledSet} />{i < nums.length - 1 ? ", " : ""}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], productCatalog = [], setProductCatalog }: any = {}) {
+  // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
+  const cancelledRefs = cancelledDocSet(extShipments, extSOs, extPOs);
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
   const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const orders = extPOs ?? localOrders;
@@ -1738,16 +1774,20 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
     });
     return [...seen.values()].sort((a, b) => a.localeCompare(b));
   }, [orders]);
-  const activeCount = orders.filter(o => activeStatuses.has(o.status)).length;
-  const arrivedCount = orders.filter(o => o.status === "Arrived").length;
-  const pendingValue = orders
-    .filter(o => activeStatuses.has(o.status) || o.status === "Arrived")
-    .reduce((s, o) => s + plnTotal(o), 0);
+  // v6.36.1 (P2): KPIs derive from REAL linked state, not from PO statuses that
+  // nothing auto-advances (status often stays "Confirmed" while shipments and lots
+  // move) — the old ARRIVED counter was permanently 0 and overdue-loading kept
+  // flagging POs whose goods had long since shipped.
+  const openPO = (o: any) => o.status !== "Closed" && o.status !== "Cancelled";
+  const goodsReceived = (o: any) => (lots || []).some((l: any) => l.poRef === o.number && (parseFloat(l.receivedKg) > 0 || parseFloat(l.physicalKg) > 0));
+  const hasLiveShipment = (o: any) => (extShipments || []).some((s: any) => (s.poRefs || []).includes(o.number) && s.status !== "Cancelled" && s.status !== "Draft");
+  const activeCount = orders.filter(openPO).length;
+  const arrivedCount = orders.filter(o => openPO(o) && goodsReceived(o)).length;
+  const pendingValue = orders.filter(openPO).reduce((s, o) => s + plnTotal(o), 0);
   const overdueLoading = orders.filter(o => {
-    if (o.status === "Closed" || o.status === "Cancelled" || o.status === "Arrived" || o.status === "Shipped") return false;
+    if (!openPO(o)) return false;
+    if (goodsReceived(o) || hasLiveShipment(o)) return false; // goods moving/moved — not overdue
     if (!o.loadingDate) return false;
-    // v6.4.1 fix: compare to midnight-normalized today — a PO is overdue the day
-    // AFTER its loading date, not on the loading day itself.
     return new Date(o.loadingDate) < todayStart;
   }).length;
 
@@ -1932,7 +1972,23 @@ ${blockNote}`.trim(),
     const poNum = selected.number;
     const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
     const hasShipment = (extShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
-    const lotReceivedOrMoved = (lots || []).some((l: any) => l.poRef === poNum && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0)));
+    // v6.35.0: a lot whose linked shipments are ALL cancelled must not keep the PO locked —
+  // otherwise cancelling everything to fix the PO leaves it permanently trapped. We treat a
+  // lot as "really received/moved" only if it has a non-cancelled shipment, OR it carries
+  // manual movements that are not shipment-driven receipts.
+  const shipmentsForLot = (lotNo: string) => (extShipments || []).filter((sh: any) =>
+    (sh.lotRefs || []).map(String).includes(String(lotNo)) ||
+    (sh.goods || []).some((g: any) => String(g.lotRef) === String(lotNo)));
+  const lotReceivedOrMoved = (lots || []).some((l: any) => {
+    if (l.poRef !== poNum) return false;
+    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0);
+    if (!received) return false;
+    // If this lot has any linked shipment, only a NON-cancelled one keeps it "live".
+    const shs = shipmentsForLot(l.number);
+    if (shs.length > 0) return shs.some((sh: any) => sh.status !== "Cancelled");
+    // No shipments at all: a lot with real received kg / movements is a genuine manual receipt → still locks.
+    return received;
+  });
     if (hasLinkedSO || hasShipment || lotReceivedOrMoved) {
       const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
       alert(`PO ${poNum} can't be cancelled or deleted: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.`);
@@ -2034,15 +2090,15 @@ ${blockNote}`.trim(),
         {/* KPI strip — compact */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
           <Card style={{ padding: "9px 12px" }}>
-            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· Draft→Shipped</span></div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>OPEN <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· not closed / cancelled</span></div>
             <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
-            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ARRIVED <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· not closed</span></div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>GOODS IN <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· lots received</span></div>
             <div style={{ fontSize: 17, fontWeight: 700, color: arrivedCount > 0 ? "#16A34A" : "#111", marginTop: 2 }}>{arrivedCount}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
-            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>PENDING VALUE</div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>OPEN VALUE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· PLN</span></div>
             <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtMoney(pendingValue, "PLN")}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
@@ -2113,7 +2169,7 @@ ${blockNote}`.trim(),
                 </div>
                 <div style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace", lineHeight: 1.5 }}>
                   {/* v6.34.1 (item 3): show the linked DOCUMENT NUMBERS, not counts. */}
-                  {o.linkedShipments?.length > 0 && <div style={{ color: "#0284C7" }} title="Shipments">📦 {o.linkedShipments.join(", ")}</div>}
+                  <LinkedDocNumbers nums={o.linkedShipments} cancelledSet={cancelledRefs} color="#0284C7" icon="📦" title="Shipments" />
                   {o.linkedLots?.length > 0 && <div style={{ color: "#92400E" }} title="Lots">🏷 {o.linkedLots.join(", ")}</div>}
                   {o.linkedInvoices?.length > 0 && <div style={{ color: "#16A34A" }} title="Invoices">📄 {o.linkedInvoices.join(", ")}</div>}
                   {!o.linkedShipments?.length && !o.linkedLots?.length && !o.linkedInvoices?.length && <span style={{ color: "#CCC" }}>—</span>}

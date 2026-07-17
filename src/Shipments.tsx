@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from "react";
 import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection, shipmentFulfilsOrder } from "./tradeFlow.domain";
 import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms } from "./shipments.domain";
+import { recomputeLotFromMovements } from "./inventory.domain";
 import { printHtmlNode } from "./documentService";
-import { SmallButton } from "./ui";
+import { SmallButton, DocRef, cancelledDocSet } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate } from "./fx";
@@ -340,6 +341,32 @@ function providerCosts(shipment, providerId) {
   const costs = (shipment.costs || []).filter(c => String(c.supplierId || "") === pid);
   if (costs.length) return costs;
   return [];
+}
+
+
+// v6.35.5 (A1a/A1b): changing the shipment mode must not strand data. Road stores the
+// provider in carrierId while Sea/Air use forwarderId — so we MIGRATE the selection
+// between the fields instead of losing it. And a single-leg shipment's leg follows the
+// header mode; switching to Multimodal appends a Sea leg so header and legs agree.
+function modeChangePatch(prev: any, newMode: string) {
+  const patch: any = { ...prev, mode: newMode };
+  const usesForwarder = newMode === "Sea" || newMode === "Air";
+  if (usesForwarder && !patch.forwarderId && patch.carrierId) { patch.forwarderId = patch.carrierId; patch.carrierId = null; }
+  if (!usesForwarder && newMode !== "Multimodal" && !patch.carrierId && patch.forwarderId) { patch.carrierId = patch.forwarderId; patch.forwarderId = null; }
+  const legs = prev.legs || [];
+  if (legs.length === 1) {
+    if (newMode === "Multimodal") {
+      if (legs[0].mode !== "Sea") {
+        patch.legs = [
+          { ...legs[0] },
+          { id: (legs[0].id || 1) + 1, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: legs[0].toLocationId ?? null, toCustom: legs[0].toCustom || "", forwarderId: patch.forwarderId || null, plannedPickupDate: legs[0].plannedDeliveryDate || null, plannedDeliveryDate: legs[0].plannedDeliveryDate || null, containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: legs[0].costCurrency || "PLN", costFxRate: legs[0].costFxRate || 1, costPLN: 0, notes: "Sea leg (added on Multimodal)" },
+        ];
+      }
+    } else {
+      patch.legs = [{ ...legs[0], mode: newMode, carrierId: !usesForwarder ? (legs[0].carrierId ?? patch.carrierId ?? null) : legs[0].carrierId, forwarderId: usesForwarder ? (legs[0].forwarderId ?? patch.forwarderId ?? null) : legs[0].forwarderId }];
+    }
+  }
+  return patch;
 }
 
 function blankTransportUnit(mode = "Road") {
@@ -804,9 +831,15 @@ function buildManualShipment__raw(opts, shipments) {
     confirmationSentAt: null,
     billingStatus: "Not ready",
     notes: opts.notes || "Manual shipment",
-    legs: [
-      { id: 1, mode: mode === "Multimodal" ? "Road" : mode, status: "Booked", fromLocationId: parseNum(opts.originLocationId, 1), toLocationId: parseNum(opts.destinationLocationId, 10), carrierId, forwarderId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: opts.notes || "Manual leg" },
-    ],
+    legs: mode === "Multimodal"
+      ? [ // v6.35.5 (A1d): a manual Multimodal shipment starts with BOTH legs, like the
+          // PO/SO builders — road pre-carriage to the (yet unset) port + sea main leg.
+          { id: 1, mode: "Road", status: "Booked", fromLocationId: parseNum(opts.originLocationId, 1), toLocationId: null, toCustom: "", carrierId, forwarderId: null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.loadingDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: "Pre-carriage (manual)" },
+          { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, fromCustom: "", toLocationId: parseNum(opts.destinationLocationId, 10), forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: "Sea leg (manual)" },
+        ]
+      : [
+          { id: 1, mode, status: "Booked", fromLocationId: parseNum(opts.originLocationId, 1), toLocationId: parseNum(opts.destinationLocationId, 10), carrierId, forwarderId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: opts.notes || "Manual leg" },
+        ],
     goods: [
       { id: 1, poRef: opts.poRef || "", soRef: opts.soRef || "", lotRef: opts.lotRef || "", product: opts.product || "Goods", origin: opts.origin || "", quality: opts.quality || "I", size: opts.size || "", packaging: opts.packaging || "", qtyKg, grossKg: Math.round(qtyKg * 1.06), pallets: parseNum(opts.pallets, Math.max(1, Math.round(qtyKg / 900))), description: opts.product || "Goods" },
     ],
@@ -1053,7 +1086,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           <div style={{ display: "grid", gridTemplateColumns: "160px 1fr 160px 160px", gap: 12 }}>
             <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(""); }}><option value="PO">From PO</option><option value="SO">From SO</option><option value="Manual">Manual</option></Sel></div>
             <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{(pos || []).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{(orders || []).filter((o: any) => o.status !== "Draft" && o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
-            <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
+            <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => setForm(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={e => sf("currency", e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
           </div>
         </Card>
@@ -1458,7 +1491,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           <SectionTitle>Header</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)} disabled={draft.status === "Cancelled"} title={draft.status === "Cancelled" ? "This shipment is cancelled — read-only and can't be reactivated." : ""}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
-            <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => sf("mode", e.target.value)}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
+            <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => setDraft(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             <div><Lbl>Trade direction <span style={{ color: "#BBB", fontWeight: 400 }}>· owns the journey</span></Lbl>
               {(() => {
                 const govSO = (orders || []).find((o: any) => o.number === draft.governingSoRef) || null;
@@ -2132,8 +2165,9 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   </div>;
 }
 
-function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory }: any) {
+function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory }: any) {
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
+  const cancelledRefs = cancelledDocSet(pos, orders); // v6.35.1: strike cancelled PO/SO refs
   const missingDocs = (shipment.documents || []).filter(d => ["Required", "Missing"].includes(d.status));
   const containerDocs = (shipment.legs || []).filter(l => l.containerNumber || l.blNumber || l.bookingNumber || transportUnitsForLeg(l).some(u => u.containerNumber || u.blNumber || u.bookingNumber || u.awbNumber));
   const soPills = shipmentSORefs(shipment, orders);
@@ -2144,7 +2178,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
           {/* v6.4.0 header: number · mode · status · billing + document pills only.
               Route, provider and dates live in the cards below — not repeated here. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ fontSize: 22, fontWeight: 850, letterSpacing: "-0.4px" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}>{r}</span>)}{soPills.map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}>{r}</span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}><DocRef num={r} cancelledSet={cancelledRefs} /></span>)}{soPills.map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}><DocRef num={r} cancelledSet={cancelledRefs} /></span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {shipment.status === "Cancelled"
@@ -2157,7 +2191,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], onEdit, onPrint, onEm
             return na ? <SmallButton onClick={() => onQuickStatus(na.to)} kind={na.kind}>{na.label}</SmallButton> : null;
           })()}
           {!["Closed", "Cancelled"].includes(canonicalStatus(shipment.status)) &&
-            <SmallButton onClick={() => onQuickStatus("Cancelled")}>Cancel</SmallButton>}
+            <SmallButton kind="red" onClick={() => onQuickStatus("Cancelled")} title="Cancel this shipment — it stays on record (read-only) but no longer counts toward the PO/SO.">Cancel shipment</SmallButton>}
         </div>
       </div>
     </Card>
@@ -2355,6 +2389,11 @@ export default function Shipments({
   }
 
   function quickStatus(sh, status) {
+    // v6.35.0: destructive transition needs an explicit confirmation (2-step).
+    if (status === "Cancelled") {
+      const ok = window.confirm(`Cancel shipment ${sh.number}?\n\nIt will be kept on record as Cancelled (read-only) and will no longer count toward its PO/SO budget. Any inventory movements it already posted (receipts / ship-outs) will be reversed. This can't be undone.`);
+      if (!ok) return;
+    }
     const today = todayISO();
     const next = updateShipment(sh.id, s => {
       const patch: any = { ...s, status };
@@ -2378,8 +2417,19 @@ export default function Shipments({
     });
     if (next) {
       linkShipmentToDocs(next);
-      if (status === "Delivered") {
+      // v6.35.5: cancellation reverses whatever this shipment posted to inventory.
+      if (status === "Cancelled") {
+        const n = reverseShipmentPostings(next);
+        if (n > 0) setToast(`${next.number} cancelled — inventory postings on ${n} lot(s) reversed.`);
+      }
+      // v6.35.4 (T-20): post the inventory movement as soon as the goods ARRIVE, not only
+      // at Delivered — for an inbound shipment, arrival at the warehouse IS the receipt.
+      // postShipmentToLots is idempotent (its hasMovement guard prevents double-posting),
+      // so running on both Arrived and Delivered is safe.
+      if (status === "Arrived" || status === "Delivered") {
         applyInventoryMovement(next);
+      }
+      if (status === "Delivered") {
         setOrders(prev => prev.map(o => (next.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Shipped" : o.status, linkedShipments: uniq([...(o.linkedShipments || []), next.number]) } : o));
       }
     }
@@ -2406,6 +2456,23 @@ export default function Shipments({
     }));
     updateShipment(sh.id, s => ({ ...s, billingStatus: "Cost allocated" }));
     setToast(`${sh.number} logistics costs allocated to inventory lot costing.`);
+  }
+
+
+  // v6.35.5: cancelling a shipment AFTER its movements were posted must not leave
+  // phantom stock. We VOID the shipment's movements (the reducer ignores voided ones)
+  // and recompute each touched lot — a clean, auditable reversal that keeps history.
+  function reverseShipmentPostings(sh) {
+    const matches = (m) => m && !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(sh.number));
+    let touched = 0;
+    setLots(prev => (prev || []).map(lot => {
+      const has = (lot.movements || []).some(matches);
+      if (!has) return lot;
+      touched++;
+      const movements = (lot.movements || []).map(m => matches(m) ? { ...m, voided: true, voidNote: `Voided — ${sh.number} cancelled` } : m);
+      return recomputeLotFromMovements({ ...lot, movements }, movements, locById);
+    }));
+    return touched;
   }
 
   function applyInventoryMovement(sh) {
@@ -2452,7 +2519,7 @@ export default function Shipments({
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
+          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
         </div>
       </div>
     </div>

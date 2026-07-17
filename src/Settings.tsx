@@ -3,6 +3,7 @@ import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBack
 import { APP_VERSION } from "./version";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
+import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE, WAREHOUSE_CP_LOC_BASE } from "./locations";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -14,6 +15,10 @@ import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVari
 
 function Card({ children, style }: any) {
   return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "20px 22px", ...style }}>{children}</div>;
+}
+
+function Lbl({ children }: any) {
+  return <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 3, textTransform: "uppercase" }}>{children}</div>;
 }
 
 function SectionTitle({ children }: any) {
@@ -38,6 +43,89 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
       fontFamily: "inherit",
       ...style,
     }}>{children}</button>
+  );
+}
+
+
+// ── v6.36.0: PORTS & LOCATIONS manager ──────────────────────────────────────
+// The panel removed in v6.15, rebuilt on the surviving engine. Built-in reference
+// locations can have their real details OVERRIDDEN (name/country/address); custom
+// locations are fully editable; logistics points and counterparty warehouses are
+// listed read-only with a pointer to Parties. Changes reload the app so every
+// module that snapshots LOCATIONS at import picks them up (the documented pattern).
+function LocationsPanel() {
+  const [q, setQ] = React.useState("");
+  const [typeFilter, setTypeFilter] = React.useState("All");
+  const [editingId, setEditingId] = React.useState<any>(null);
+  const [edit, setEdit] = React.useState<any>({});
+  const [add, setAdd] = React.useState<any>({ name: "", type: "Port", country: "", address: "" });
+  const overrides = readLocationOverrides();
+  const locs = allLocations();
+  const sourceOf = (l: any) => Number(l.id) >= WAREHOUSE_CP_LOC_BASE ? "Counterparty" : Number(l.id) >= LOGISTICS_POINT_BASE ? "Logistics point" : Number(l.id) >= CUSTOM_LOCATION_ID_BASE ? "Custom" : "Built-in";
+  const types = ["All", ...Array.from(new Set(locs.map((l: any) => l.type)))];
+  const shown = locs.filter((l: any) => (typeFilter === "All" || l.type === typeFilter) &&
+    (!q.trim() || `${l.name} ${l.country} ${l.address || ""}`.toLowerCase().includes(q.trim().toLowerCase())));
+  const reloadNote = () => { window.alert("Saved. The app will reload so all location pickers see the change."); window.location.reload(); };
+  const startEdit = (l: any) => { setEditingId(l.id); setEdit({ name: l.name, country: l.country || "", address: l.address || "" }); };
+  const saveEdit = (l: any) => {
+    const src = sourceOf(l);
+    if (src === "Custom") updateCustomLocation(Number(l.id), { name: edit.name, country: edit.country, address: edit.address });
+    else if (src === "Built-in") writeLocationOverride(Number(l.id), { name: edit.name, country: edit.country, address: edit.address });
+    reloadNote();
+  };
+  const inp = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: "100%" } as any;
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <SectionTitle>PORTS &amp; LOCATIONS <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· feeds port pickers, the over-ship guard and transport-order addresses</span></SectionTitle>
+      <div style={{ fontSize: 11.5, color: "#64748B", margin: "6px 0 12px" }}>
+        Add your own ports, port/transshipment warehouses or facilities here — they appear in every location picker.
+        Built-in reference locations can be edited too (e.g. put the real transshipment-warehouse address on a port) — shown with an <span style={{ color: "#B45309", fontWeight: 700 }}>edited</span> mark.
+        Relay points from forwarders are managed in <strong>Parties → Logistics points</strong>; warehouse counterparties bring their addresses from their party record.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.1fr 0.9fr 1.6fr auto", gap: 8, alignItems: "end", marginBottom: 12, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: 10 }}>
+        <div><Lbl>Name</Lbl><input style={inp} value={add.name} onChange={e => setAdd((a: any) => ({ ...a, name: e.target.value }))} placeholder="e.g. Luka Koper CFS warehouse" /></div>
+        <div><Lbl>Type</Lbl><select style={inp} value={add.type} onChange={e => setAdd((a: any) => ({ ...a, type: e.target.value }))}>{CUSTOM_LOCATION_TYPE_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}</select></div>
+        <div><Lbl>Country</Lbl><input style={inp} value={add.country} onChange={e => setAdd((a: any) => ({ ...a, country: e.target.value }))} placeholder="Slovenia" /></div>
+        <div><Lbl>Address</Lbl><input style={inp} value={add.address} onChange={e => setAdd((a: any) => ({ ...a, address: e.target.value }))} placeholder="street, city — printed on transport orders" /></div>
+        <button disabled={!add.name.trim()} onClick={() => { addCustomLocation({ name: add.name, country: add.country, type: add.type, address: add.address }); reloadNote(); }}
+          style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: add.name.trim() ? "#111" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: add.name.trim() ? "pointer" : "not-allowed" }}>+ Add</button>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        <input style={{ ...inp, maxWidth: 260 }} value={q} onChange={e => setQ(e.target.value)} placeholder="Search name / country / address…" />
+        <select style={{ ...inp, maxWidth: 180 }} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>{types.map(t => <option key={String(t)}>{String(t)}</option>)}</select>
+        <div style={{ fontSize: 11, color: "#94A3B8", alignSelf: "center" }}>{shown.length} of {locs.length}</div>
+      </div>
+      <div style={{ maxHeight: 340, overflowY: "auto", border: "1px solid #F1F5F9", borderRadius: 8 }}>
+        {shown.map((l: any) => {
+          const src = sourceOf(l);
+          const overridden = src === "Built-in" && !!overrides[String(l.id)];
+          const editable = src === "Custom" || src === "Built-in";
+          const isEd = editingId === l.id;
+          return (
+            <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 0.8fr 1.7fr 0.9fr auto", gap: 8, padding: "7px 10px", borderBottom: "1px solid #F8FAFC", fontSize: 12, alignItems: "center" }}>
+              {isEd ? <input style={inp} value={edit.name} onChange={e => setEdit((x: any) => ({ ...x, name: e.target.value }))} />
+                    : <div style={{ fontWeight: 600 }}>{l.name}{overridden && <span style={{ marginLeft: 6, fontSize: 9.5, color: "#B45309", fontWeight: 700 }}>edited</span>}</div>}
+              <div style={{ color: "#64748B" }}>{l.type}</div>
+              {isEd ? <input style={inp} value={edit.country} onChange={e => setEdit((x: any) => ({ ...x, country: e.target.value }))} /> : <div style={{ color: "#64748B" }}>{l.country}</div>}
+              {isEd ? <input style={inp} value={edit.address} onChange={e => setEdit((x: any) => ({ ...x, address: e.target.value }))} placeholder="address" /> : <div style={{ color: "#94A3B8", fontSize: 11 }}>{l.address || "—"}</div>}
+              <div style={{ fontSize: 10, color: src === "Built-in" ? "#64748B" : src === "Custom" ? "#0369A1" : "#7C3AED" }}>{src}</div>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                {isEd ? (<>
+                  <button onClick={() => saveEdit(l)} style={{ border: "none", background: "#111", color: "#fff", borderRadius: 6, fontSize: 11, padding: "4px 10px", cursor: "pointer", fontWeight: 700 }}>Save</button>
+                  <button onClick={() => setEditingId(null)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>Cancel</button>
+                </>) : (<>
+                  {editable && <button onClick={() => startEdit(l)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Edit</button>}
+                  {overridden && <button title="Restore the built-in details" onClick={() => { clearLocationOverride(Number(l.id)); reloadNote(); }} style={{ border: "1px solid #FDE68A", background: "#fff", color: "#B45309", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Reset</button>}
+                  {src === "Custom" && <button onClick={() => { if (window.confirm(`Remove ${l.name}? Documents that referenced it keep only the plain text.`)) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Remove</button>}
+                  {!editable && <span style={{ fontSize: 10, color: "#CBD5E1" }}>via Parties</span>}
+                </>)}
+              </div>
+            </div>
+          );
+        })}
+        {shown.length === 0 && <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12.5 }}>No locations match.</div>}
+      </div>
+    </Card>
   );
 }
 
@@ -359,6 +447,8 @@ export default function Settings({
         </Card>
 
         <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog} />
+
+        <LocationsPanel />
 
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· invoice sync</span></SectionTitle>

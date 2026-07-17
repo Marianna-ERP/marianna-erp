@@ -284,3 +284,44 @@ export function shipmentFulfilsOrder(shipment: any, sellIncoterm: any, destIsPor
   if (destIsPort && sellIncotermHasOnwardLeg(sellIncoterm)) return false;
   return true;
 }
+
+// ── v6.35.1 (Phase C step 3): ownership boundaries from the REAL incoterms, not the flow key.
+// buyOwnershipStart = the point at which WE take ownership from the supplier (buy incoterm).
+// sellOwnershipEnd  = the point at which we hand ownership to the client (sell incoterm).
+// Points, earliest→latest along a trade: supplier → origin_port → dest_port → our_wh → client.
+export const OWNERSHIP_POINTS = ["supplier", "origin_port", "dest_port", "our_wh", "client"] as const;
+export function buyOwnershipStartFromIncoterm(buyIncoterm: any): string {
+  const ic = String(buyIncoterm || "").toUpperCase();
+  // where WE become owner when buying:
+  if (ic === "EXW" || ic === "FCA") return "supplier";      // we take over at the supplier
+  if (ic === "FOB" || ic === "FAS") return "origin_port";    // we take over at the port of loading
+  if (ic === "CIF" || ic === "CFR" || ic === "CIP" || ic === "CPT") return "dest_port"; // supplier's risk to destination port
+  if (ic === "DAP" || ic === "DPU") return "our_wh";         // supplier delivers to us
+  if (ic === "DDP") return "our_wh";                          // supplier delivers duty-paid to us
+  return "supplier";
+}
+export function sellOwnershipEndFromIncoterm(sellIncoterm: any): string {
+  const ic = String(sellIncoterm || "").toUpperCase();
+  // where WE stop being owner when selling:
+  if (ic === "EXW" || ic === "FCA") return "supplier";       // client collects at origin
+  if (ic === "FOB" || ic === "FAS") return "origin_port";    // handed over at port of loading
+  if (ic === "CIF" || ic === "CFR" || ic === "CIP" || ic === "CPT") return "dest_port"; // our risk to destination port
+  if (ic === "DAP" || ic === "DPU" || ic === "DDP") return "client"; // we deliver to client
+  return "client";
+}
+/**
+ * Ownership state of the goods at a given transfer point, from the real incoterms.
+ * Returns "not_owned" | "owned" | "handed_over".
+ */
+export function ownershipAtPoint(point: string, buyIncoterm: any, sellIncoterm: any): string {
+  const order = OWNERSHIP_POINTS as readonly string[];
+  const start = buyOwnershipStartFromIncoterm(buyIncoterm);
+  const end = sellOwnershipEndFromIncoterm(sellIncoterm);
+  const pI = order.indexOf(point);
+  const sI = order.indexOf(start);
+  const eI = order.indexOf(end);
+  if (pI === -1 || sI === -1 || eI === -1) return "owned";
+  if (pI < sI) return "not_owned";
+  if (pI > eI) return "handed_over";
+  return "owned";
+}

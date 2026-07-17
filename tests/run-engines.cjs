@@ -1304,6 +1304,66 @@ T("SO line ships across two shipments; second defaults to remaining (parity with
   assert.equal(shipped + remaining, 30000);
 });
 
+// ── v6.35.1 (Phase C step 3): ownership from real incoterms ──
+const { ownershipAtPoint, buyOwnershipStartFromIncoterm, sellOwnershipEndFromIncoterm } = require("./build/tradeFlow.domain.js");
+console.log("── ownership from incoterms ──");
+T("EXW buy → we own from supplier onward", () => {
+  assert.equal(buyOwnershipStartFromIncoterm("EXW"), "supplier");
+  assert.equal(ownershipAtPoint("supplier", "EXW", "CIF"), "owned");
+});
+T("CIF buy → supplier's risk until destination port (we own from dest_port)", () => {
+  assert.equal(buyOwnershipStartFromIncoterm("CIF"), "dest_port");
+  assert.equal(ownershipAtPoint("supplier", "CIF", "DDP"), "not_owned");
+  assert.equal(ownershipAtPoint("dest_port", "CIF", "DDP"), "owned");
+});
+T("EXW buy + CIF sell: owned through dest_port, handed over after", () => {
+  // EXW→CIF: own from supplier to dest_port, hand over at dest_port
+  assert.equal(ownershipAtPoint("supplier", "EXW", "CIF"), "owned");
+  assert.equal(ownershipAtPoint("origin_port", "EXW", "CIF"), "owned");
+  assert.equal(ownershipAtPoint("dest_port", "EXW", "CIF"), "owned");
+  assert.equal(ownershipAtPoint("our_wh", "EXW", "CIF"), "handed_over");
+});
+T("DDP sell → we own all the way to the client", () => {
+  assert.equal(sellOwnershipEndFromIncoterm("DDP"), "client");
+  assert.equal(ownershipAtPoint("client", "EXW", "DDP"), "owned");
+});
+
+// ── v6.35.4 (T-20): inbound arrival posts the receipt; idempotent ──
+const { postShipmentToLots: postT20 } = require("./build/shipments.domain.js");
+console.log("── T-20: shipment arrival posts inventory receipt ──");
+T("an INBOUND shipment posts the lot IN (receipt), once", () => {
+  const lot = { number: "LOT-DDP", product: "Apples", locationId: "wh", physicalKg: 0, receivedKg: 0, movements: [] };
+  const sh = { number: "SHP-1", purpose: "INBOUND", legs: [{ fromLocationId: "sup", toLocationId: "wh" }], goods: [{ lotRef: "LOT-DDP", qtyKg: 20000 }] };
+  const deps = { todayISO: () => "2026-07-01", nextId: (() => { let n = 100; return () => ++n; })() };
+  const r1 = postT20(sh, [lot], deps);
+  const l1 = r1.lots.find(l => l.number === "LOT-DDP");
+  assert.equal((l1.movements || []).filter(m => m.type === "IN").length, 1, "one IN posted");
+  // idempotent: posting the same shipment again must NOT add a second IN
+  const r2 = postT20(sh, r1.lots, deps);
+  const l2 = r2.lots.find(l => l.number === "LOT-DDP");
+  assert.equal((l2.movements || []).filter(m => m.type === "IN").length, 1, "still one IN (idempotent)");
+});
+
+// ── v6.35.5: cancelling a posted shipment reverses its stock (void round-trip) ──
+const { postShipmentToLots: postRev } = require("./build/shipments.domain.js");
+const { recomputeLotFromMovements: recompRev } = require("./build/inventory.domain.js");
+console.log("── shipment cancel reverses posted movements ──");
+T("post IN → void the shipment's movements → lot back to Expected/0", () => {
+  const locByIdT = (id) => ({ id, type: "OWN", legacyType: "OWN" });
+  const lot = { number: "LOT-R", product: "Apples", expectedKg: 20000, locationId: "wh", baseLocationId: "wh", physicalKg: 0, receivedKg: 0, movements: [] };
+  const sh = { number: "SHP-C", purpose: "INBOUND", legs: [{ fromLocationId: "sup", toLocationId: "wh" }], goods: [{ lotRef: "LOT-R", qtyKg: 20000 }] };
+  const deps = { todayISO: () => "2026-07-10", nextId: (() => { let n = 0; return () => ++n; })() };
+  const posted = postRev(sh, [lot], deps).lots[0];
+  let r = recompRev(posted, posted.movements, locByIdT);
+  assert.equal(r.physicalKg, 20000, "posted stock present");
+  // cancel: void the shipment's movements (the UI's reverseShipmentPostings logic)
+  const voided = posted.movements.map(m => String(m.shipmentRef) === "SHP-C" ? { ...m, voided: true } : m);
+  r = recompRev({ ...posted, movements: voided }, voided, locByIdT);
+  assert.equal(r.physicalKg, 0, "stock reversed");
+  assert.equal(r.receivedKg, 0, "receipt reversed");
+  assert.equal(r.status, "Expected", "back to Expected");
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -180,12 +180,56 @@ export function removeCustomLocation(id: number): void {
   writeCustomLocations(readCustomLocations().filter(l => Number(l.id) !== Number(id)));
 }
 
+// v6.36.0: edit an existing custom location (name / country / address / type).
+export function updateCustomLocation(id: number, patch: { name?: string; country?: string; address?: string; type?: LocationType }): void {
+  writeCustomLocations(readCustomLocations().map(l => Number(l.id) === Number(id)
+    ? { ...l, ...patch, ...(patch.type ? { legacyType: legacyTypeFor(patch.type) } : {}) }
+    : l));
+}
+
+// ── v6.36.0: BUILT-IN OVERRIDES ─────────────────────────────────────────────
+// The built-in reference ports/warehouses are hardcoded, but their real-world
+// details (esp. the exact transshipment-warehouse address a transport order
+// needs) belong to the user. Overrides are stored per built-in id and applied
+// at module load, before any module snapshots LOCATIONS.
+const LOCATION_OVERRIDES_KEY = "marianna-erp:v1:locationOverrides";
+export function readLocationOverrides(): Record<string, { name?: string; country?: string; address?: string }> {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+  try { const raw = window.localStorage.getItem(LOCATION_OVERRIDES_KEY); const p = raw ? JSON.parse(raw) : {}; return p && typeof p === "object" ? p : {}; }
+  catch { return {}; }
+}
+export function writeLocationOverride(id: number, patch: { name?: string; country?: string; address?: string }): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  const all = readLocationOverrides();
+  all[String(id)] = { ...(all[String(id)] || {}), ...patch };
+  try { window.localStorage.setItem(LOCATION_OVERRIDES_KEY, JSON.stringify(all)); } catch {}
+}
+export function clearLocationOverride(id: number): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  const all = readLocationOverrides(); delete all[String(id)];
+  try { window.localStorage.setItem(LOCATION_OVERRIDES_KEY, JSON.stringify(all)); } catch {}
+}
+
 // Merge custom locations into the canonical list at module load. Modules that
 // snapshot LOCATIONS at import time therefore see customs too; Settings reloads
 // the page after add/remove so every module picks up changes consistently.
 readCustomLocations().forEach(cl => {
   if (!LOCATIONS.find(l => String(l.id) === String(cl.id))) LOCATIONS.push(cl);
 });
+
+// v6.36.0: apply user overrides to built-ins (e.g. the real transshipment
+// warehouse address on Koper) before any module snapshots LOCATIONS.
+(() => {
+  const ov = readLocationOverrides();
+  Object.keys(ov).forEach(id => {
+    const l = LOCATIONS.find(x => String(x.id) === String(id));
+    if (!l) return;
+    const p = ov[id] || {};
+    if (p.name) l.name = p.name;
+    if (p.country !== undefined) l.country = p.country || l.country;
+    if (p.address !== undefined) (l as any).address = p.address || undefined;
+  });
+})();
 
 // ─── LOGISTICS POINTS (v6.12) ───────────────────────────────────────────────
 // The places that are NOT a counterparty's own premises: ports of loading and

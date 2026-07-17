@@ -2,11 +2,12 @@ import React, { useState, useMemo } from "react";
 import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
-import { Card, Lbl, SectionTitle } from "./ui";
+import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet } from "./ui";
 import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
 import { nextId } from "./ids";
+import { defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
@@ -1753,7 +1754,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
   const computedLinks = computedSOLinks(order, { shipments, invoices: [], lots });
@@ -1821,10 +1822,14 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
             <button onClick={onRecordCollection} title="EXW: the client collects — records the pickup and creates a minimal collection shipment (no transport order, no freight on our side)."
               style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0369A1", background: "#F0F9FF", color: "#0369A1", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🚚 Record client collection</button>
           )}
+          {["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status) && onRecordClientClaim && (
+            <button onClick={onRecordClientClaim} title="The client reports a quality problem on delivered goods. Records the claim against the delivery and drafts a credit note — warehouse stock is not touched (those kg already left)."
+              style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #B45309", background: "#FFFBEB", color: "#B45309", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record client claim</button>
+          )}
           {order.status === "Cancelled"
             ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
             : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
-          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
+          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
 
@@ -2065,11 +2070,14 @@ export default function SalesOrders({
   contacts: extContacts,
   operationalCosts: extOperationalCosts = [],
   invoices: extInvoices = null, setInvoices: extSetInvoices = null,
+  financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null,
   userRole = "General Manager",
   userName = "",
   productCatalog = [],
   setProductCatalog,
 }: any = {}) {
+  // v6.35.1: cancelled document numbers (POs, SOs, shipments) for struck-through refs.
+  const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments);
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   // v6.33.0 (A3-6): the Invoices register is the sole owner of invoices — this
@@ -2381,6 +2389,37 @@ export default function SalesOrders({
   // Batch 3b (decision 2): EXW client collection — one click creates the minimal
   // collection shipment (purpose OUTBOUND, responsibility Client, no legs/TO/freight).
   const [collectionFor, setCollectionFor] = useState<any>(null);
+  const [clientClaimFor, setClientClaimFor] = useState<any>(null); // v6.36.2 (P3)
+  const [cc, setCc] = useState<any>({ lotId: "", qty: "", value: "", cur: "PLN", note: "" });
+
+  // v6.36.2 (P3): client claim recorded FROM THE SO — appends a CLAIM movement to the
+  // sourced lot (stock untouched; those kg already left) and drafts an outgoing credit
+  // note, exactly like the Inventory quality-flow path.
+  function saveClientClaim() {
+    const soDoc = clientClaimFor; if (!soDoc) return;
+    const lotsAll = extInvLots || [];
+    const lot = lotsAll.find((l: any) => String(l.id) === String(cc.lotId));
+    const amt = parseFloat(cc.value) || 0;
+    if (!lot || amt <= 0) return;
+    const qty = parseFloat(cc.qty) || 0;
+    const today = domainToday();
+    const mv = { id: nextId(), date: today, type: "CLAIM", qtyKg: qty, soRef: soDoc.number, claimValue: amt, claimCurrency: cc.cur || "PLN", note: cc.note || `Client claim on ${soDoc.number}`, source: `claim:so:${soDoc.id}:${Date.now()}` };
+    if (extSetLots) extSetLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? { ...l, movements: [...(l.movements || []), mv], claimedKg: (parseFloat(l.claimedKg) || 0) + qty } : l));
+    if (extSetFinanceNotes) {
+      const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
+      const cur = cc.cur || inv?.currency || soDoc.currency || "PLN";
+      const fx = defaultFxRate(cur);
+      extSetFinanceNotes((prev: any[]) => [...(prev || []), {
+        id: nextId(), noteType: "CREDIT", direction: "outgoing",
+        invoiceId: inv?.id ?? null, relatedRef: soDoc.number, partyName: inv?.counterparty?.name || soDoc.client?.name || "Client",
+        category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
+        status: "Draft", reason: `Client quality claim — ${qty ? qty + " kg " : ""}on ${lot.number} (${soDoc.number})`,
+        date: today, source: mv.source,
+      }]);
+    }
+    setClientClaimFor(null);
+  }
+
   function recordCollection(info) {
     if (!extSetShipments) { window.alert("Shipments store not available."); return; }
     const built = buildCollectionShipment(collectionFor, extInvLots || [], extShipments, info, { todayISO: domainToday, nextId });
@@ -2497,6 +2536,7 @@ export default function SalesOrders({
           onIssueInvoice={() => setInvoiceOrder(selected)}
           onDelete={deleteOrder}
           onRecordCollection={() => setCollectionFor(selected)}
+          onRecordClientClaim={() => { setClientClaimFor(selected); setCc({ lotId: "", qty: "", value: "", cur: selected.currency || "PLN", note: "" }); }}
         />
       </>
     );
@@ -2588,9 +2628,12 @@ export default function SalesOrders({
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, fontFamily: "ui-monospace, Menlo, monospace" }}>
                   {/* v6.34.2 (module review): list the linked source documents, don't truncate to 2. */}
                   {uniqueSources.length === 0 && <span style={{ fontSize: 10.5, color: "#CCC", fontStyle: "italic", fontFamily: "inherit" }}>unsourced</span>}
-                  {uniqueSources.map((s, i) => (
-                    <span key={i} style={{ fontSize: 10.5, color: "#475569" }}>{s}</span>
-                  ))}
+                  {uniqueSources.map((s, i) => {
+                    // strip any leading icon to test the bare number against the cancelled set
+                    const bare = String(s).replace(/^[^A-Za-z0-9]+/, "");
+                    const icon = String(s).slice(0, String(s).length - bare.length);
+                    return <span key={i} style={{ fontSize: 10.5, color: "#475569" }}>{icon}<DocRef num={bare} cancelledSet={cancelledRefs} /></span>;
+                  })}
                 </div>
               </div>
             );
@@ -2601,6 +2644,41 @@ export default function SalesOrders({
           {filtered.length} of {orders.length} sales orders · Click any row to open
         </div>
       </div>
+      {clientClaimFor && (() => {
+        const soDoc = clientClaimFor;
+        const lotsAll = extInvLots || [];
+        const linked = lotsAll.filter((l: any) =>
+          (l.movements || []).some((m: any) => m && !m.voided && m.type === "SHIP_OUT" && String(m.soRef) === String(soDoc.number)) ||
+          (soDoc.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(l.number)) ||
+          (soDoc.items || []).some((it: any) => it.sourceType === "PO" && l.poRef && String(it.sourceRef) === String(l.poRef)));
+        const pool = linked.length ? linked : lotsAll;
+        const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13 } as any;
+        const canSave = cc.lotId && parseFloat(cc.value) > 0;
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setClientClaimFor(null)}>
+            <div style={{ background: "#fff", borderRadius: 14, padding: 22, width: 480, maxWidth: "92vw" }} onClick={(e: any) => e.stopPropagation()}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>Record client claim — {soDoc.number}</div>
+              <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>Logs the claim against the delivered lot and drafts an outgoing <strong>credit note</strong> (finalise it in Invoices). Warehouse stock is not touched — those kg already left.</div>
+              <Lbl>Lot the claim concerns</Lbl>
+              <select style={inp} value={cc.lotId} onChange={(e: any) => setCc((x: any) => ({ ...x, lotId: e.target.value }))}>
+                <option value="">— select lot —</option>
+                {pool.map((l: any) => <option key={l.id} value={l.id}>{l.number} · {l.product}{l.variety ? " — " + l.variety : ""}</option>)}
+              </select>
+              {!linked.length && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 4 }}>No lot is linked to this SO automatically — pick the delivered lot yourself.</div>}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr", gap: 10, marginTop: 12 }}>
+                <div><Lbl>Affected kg (optional)</Lbl><input style={inp} inputMode="decimal" value={cc.qty} onChange={(e: any) => setCc((x: any) => ({ ...x, qty: e.target.value }))} placeholder="0" /></div>
+                <div><Lbl>Claim value</Lbl><input style={inp} inputMode="decimal" value={cc.value} onChange={(e: any) => setCc((x: any) => ({ ...x, value: e.target.value }))} placeholder="0.00" /></div>
+                <div><Lbl>Currency</Lbl><select style={inp} value={cc.cur} onChange={(e: any) => setCc((x: any) => ({ ...x, cur: e.target.value }))}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
+              </div>
+              <div style={{ marginTop: 12 }}><Lbl>Note</Lbl><input style={inp} value={cc.note} onChange={(e: any) => setCc((x: any) => ({ ...x, note: e.target.value }))} placeholder="What the client reported…" /></div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+                <button onClick={() => setClientClaimFor(null)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                <button disabled={!canSave} onClick={saveClientClaim} style={{ padding: "7px 16px", borderRadius: 7, border: "none", background: canSave ? "#B45309" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: canSave ? "pointer" : "not-allowed" }}>Record claim + draft credit note</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {collectionFor && (
         <CollectionModal so={collectionFor} onClose={() => setCollectionFor(null)} onSave={recordCollection} />
       )}

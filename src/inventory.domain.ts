@@ -29,10 +29,12 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
   let receivedKg = 0, physicalKg = 0, damagedKg = 0, claimedKg = 0;
   let overIssuedKg = 0; // Safeguards 7a: clamped excess, surfaced not swallowed
   let locationId = lot.baseLocationId ?? lot.locationId;
-  let status = lot.expectedKg && movements.length === 0 ? "Expected" : (lot.status || "Expected");
+  // v6.35.5: voided movements must not count toward the status decision — a lot whose
+  // postings were all voided (cancelled shipment) honestly returns to "Expected".
   const ordered = [...movements].filter(m => !m.voided).sort(
     (a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0)
   );
+  let status = lot.expectedKg && ordered.length === 0 ? "Expected" : (lot.status || "Expected");
   let sawIn = false, sawShipOut = false;
   ordered.forEach(m => {
     const q = parseNum(m.qtyKg);
@@ -62,7 +64,7 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
     else if (legacyLocType === "PORT") status = "Customs";
     else if (legacyLocType === "CLIENT") status = "Shipped Out";
     else status = "In Transit";
-  } else if (movements.length === 0 && lot.expectedKg) {
+  } else if (ordered.length === 0 && lot.expectedKg) {
     status = "Expected";
   }
   return { ...lot,

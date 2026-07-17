@@ -914,6 +914,49 @@ export default function Finance({
               </Card>
               <Card>
                 <SectionTitle>TOP PRODUCTS BY NET P/L</SectionTitle>
+            <div style={{ marginBottom: 22 }}>
+              <SectionTitle>CLAIMS <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#94A3B8" }}>· producer claims (CLM) and client claims, with their credit notes</span></SectionTitle>
+              {(() => {
+                // v6.36.2 (P3): the claims REGISTER — one place listing every claim.
+                // Producer claims live on the lot (lot.claims); client claims are CLAIM
+                // movements. Edited where they live: producer → Inventory lot; client →
+                // SO detail ("Record client claim") or the lot's quality flow.
+                const rows: any[] = [];
+                (lots || []).forEach((l: any) => {
+                  (l.claims || []).forEach((c: any) => rows.push({
+                    kind: "Producer", ref: c.number || "(draft)", date: c.date || c.issuedAt || "",
+                    lot: l.number, doc: l.poRef || "", detail: [c.defectPct ? `${c.defectPct}% defect` : "", c.affectedKg ? `${Number(c.affectedKg).toLocaleString("pl-PL")} kg` : ""].filter(Boolean).join(" · "),
+                    status: c.status || "Draft",
+                  }));
+                  (l.movements || []).filter((m: any) => m && !m.voided && m.type === "CLAIM").forEach((m: any) => rows.push({
+                    kind: "Client", ref: `${l.number}`, date: m.date || "",
+                    lot: l.number, doc: m.soRef || "", detail: [m.qtyKg ? `${Number(m.qtyKg).toLocaleString("pl-PL")} kg` : "", m.claimValue ? `${Number(m.claimValue).toLocaleString("pl-PL")} ${m.claimCurrency || "PLN"}` : ""].filter(Boolean).join(" · "),
+                    status: (financeNotes || []).some((n: any) => n.source === m.source) ? "Credit note drafted" : "Recorded",
+                  }));
+                });
+                rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+                if (!rows.length) return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: 16, fontSize: 12.5, color: "#94A3B8" }}>No claims recorded. Producer claims start from the lot (Inventory); client claims from the SO ("Record client claim") or the lot's quality flow.</div>;
+                return (
+                  <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, overflow: "hidden" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "90px 130px 90px 120px 120px 1fr 130px", padding: "8px 14px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+                      {["TYPE", "REF", "DATE", "LOT", "PO / SO", "DETAIL", "STATUS"].map((h, i) => <div key={i} style={{ fontSize: 9.5, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>)}
+                    </div>
+                    {rows.map((r, i) => (
+                      <div key={i} style={{ display: "grid", gridTemplateColumns: "90px 130px 90px 120px 120px 1fr 130px", padding: "8px 14px", borderBottom: i < rows.length - 1 ? "1px solid #F8FAFC" : "none", fontSize: 12, alignItems: "center" }}>
+                        <div><span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: r.kind === "Producer" ? "#FEF3C7" : "#FEE2E2", color: r.kind === "Producer" ? "#B45309" : "#B91C1C" }}>{r.kind}</span></div>
+                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}>{r.ref}</div>
+                        <div style={{ color: "#64748B" }}>{r.date || "—"}</div>
+                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", color: "#7C3AED" }}>{r.lot}</div>
+                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", color: "#2563EB" }}>{r.doc || "—"}</div>
+                        <div style={{ color: "#475569" }}>{r.detail || "—"}</div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: r.status === "Issued" ? "#16A34A" : r.status === "Credit note drafted" ? "#0369A1" : "#64748B" }}>{r.status}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
                 {byProduct.length === 0 ? <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No data yet.</div> : byProduct.map(g => <BarRow key={g.key} label={g.key} value={g.agg.totalNetMarginPLN} maxValue={maxProductNet} marginPct={g.agg.avgNetMarginPct} sub={`${g.agg.orderCount} SO · ${fmtPLNcompact(g.agg.totalRevenuePLN)} revenue · overhead ${fmtPLNcompact(g.agg.totalOverheadPLN)}`} />)}
               </Card>
             </div>
