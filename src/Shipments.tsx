@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from "react";
 import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection, shipmentFulfilsOrder } from "./tradeFlow.domain";
-import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms } from "./shipments.domain";
+import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms, syncLegFreightCostLines, legFreightSource } from "./shipments.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { printHtmlNode } from "./documentService";
 import { SmallButton, DocRef, cancelledDocSet } from "./ui";
-import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs } from "./costAllocation";
+import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
@@ -104,6 +104,7 @@ function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier) {
     const fx = resolveFxRate(leg.costFxRate, cur);
     return {
       id: idx + 1,
+      source: legFreightSource(idx + 1), // v6.37.1: stable identity — the save-time sync manages this line
       type: freightTypeForMode(leg.mode),
       supplierId: leg.carrierId || leg.forwarderId || fallbackSupplier || null,
       amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
@@ -1822,7 +1823,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="dark" onClick={() => onSave(syncCustomsCostLine(draft))}>Save changes</SmallButton>
+        <SmallButton kind="dark" onClick={() => onSave(syncLegFreightCostLines(syncCustomsCostLine(draft)))}>Save changes</SmallButton>
       </div>
     </div>
   </div>;
@@ -2347,7 +2348,14 @@ export default function Shipments({
       setToast(`${clean.number} created.`);
     } else {
       setShipments(prev => prev.map(s => s.id === clean.id ? clean : s));
-      setToast(`${clean.number} saved.`);
+      // v6.37.1 (F-2): a shipment whose costs are already in lot costing re-allocates on
+      // every save, so cost edits flow through automatically (replace-by-source = idempotent).
+      if (clean.billingStatus === "Cost allocated" && engineShipmentLotRefs(clean).length) {
+        setLots(prev => allocateShipmentCostsToLots(clean, prev, { inventoryType: costInventoryType, label: costTypeLabel }));
+        setToast(`${clean.number} saved — lot costing updated.`);
+      } else {
+        setToast(`${clean.number} saved.`);
+      }
     }
     setEditShipment(null);
   }
@@ -2420,7 +2428,18 @@ export default function Shipments({
       // v6.35.5: cancellation reverses whatever this shipment posted to inventory.
       if (status === "Cancelled") {
         const n = reverseShipmentPostings(next);
-        if (n > 0) setToast(`${next.number} cancelled — inventory postings on ${n} lot(s) reversed.`);
+        // v6.37.1 (F-3): also remove this shipment's ALLOCATED COST lines from lots —
+        // a cancelled shipment must not leave phantom landed cost (cost-side mirror of
+        // the v6.35.5 phantom-stock fix).
+        const prefix = shipmentAllocationSourcePrefix(next.number);
+        let costTouched = 0;
+        setLots(prev => (prev || []).map(lot => {
+          const had = (lot.costs || []).some((c: any) => String(c.source || "").startsWith(prefix));
+          if (!had) return lot;
+          costTouched++;
+          return { ...lot, costs: (lot.costs || []).filter((c: any) => !String(c.source || "").startsWith(prefix)) };
+        }));
+        if (n > 0 || costTouched > 0) setToast(`${next.number} cancelled — reversed: ${n} lot posting(s), allocated costs on ${costTouched} lot(s).`);
       }
       // v6.35.4 (T-20): post the inventory movement as soon as the goods ARRIVE, not only
       // at Delivered — for an inbound shipment, arrival at the warehouse IS the receipt.
@@ -2428,6 +2447,11 @@ export default function Shipments({
       // so running on both Arrived and Delivered is safe.
       if (status === "Arrived" || status === "Delivered") {
         applyInventoryMovement(next);
+      }
+      // v6.37.1 (F-2, ruling A): delivery concludes the transaction — costs allocate
+      // automatically into lot costing (idempotent). The manual button remains for earlier use.
+      if (status === "Delivered" && engineShipmentLotRefs(next).length && shipmentCostPLN(next) > 0) {
+        allocateCosts(next);
       }
       if (status === "Delivered") {
         setOrders(prev => prev.map(o => (next.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Shipped" : o.status, linkedShipments: uniq([...(o.linkedShipments || []), next.number]) } : o));

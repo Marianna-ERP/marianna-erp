@@ -140,7 +140,7 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
       documentNo: po.number, date: po.orderDate || "", dueDate: po.paymentDueDate || "",
       amountPLN: r2(total * fx), currency: po.currency || "PLN", amountOrig: r2(total),
       status: classify(po.paymentDueDate, settled.has(ref), today),
-      sourceModule: "Purchase Orders", note: po.flow,
+      sourceModule: "Purchase Orders", note: po.buyIncoterm ? `Buy ${po.buyIncoterm}` : "",
     });
   });
 

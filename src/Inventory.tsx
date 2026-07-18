@@ -61,57 +61,26 @@ const LOT_STATUSES: Record<string, any> = {
 };
 
 // Flow types — 11 flows in two groups (EXP / IMP). Aligned with PurchaseOrders + Shipments.
-const FLOW_TYPES: Record<string, any> = {
-  // EXPORT
-  EXP_EXWS:     { group: "EXP", short: "EXP · EXWs — client pickup",       emoji: "🤝", desc: "Client sends their truck to producer warehouse.", buyOwnershipStart: "never", sellOwnershipEnd: "never", stageTemplate: [{ kind: "supplier", label: "At producer (ready)" }, { kind: "client", label: "Collected by client" }] },
-  EXP_FOB:      { group: "EXP", short: "EXP · FOB — we truck to port",     emoji: "⚓", desc: "We truck to port, client takes over (no sea on our side).", buyOwnershipStart: "supplier", sellOwnershipEnd: "origin_port", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading (handed to client)" }] },
-  EXP_CIF:      { group: "EXP", short: "EXP · CIF — own full logistics",   emoji: "🚢", desc: "Producer → our truck → port → vessel (CIF).", buyOwnershipStart: "supplier", sellOwnershipEnd: "dest_port", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "customs_export", label: "Export customs" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port (handed to client)" }] },
-  EXP_DDP_EU:   { group: "EXP", short: "EXP · DDP intra-EU",               emoji: "🚛", desc: "Producer → our truck → EU client (DDP).", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to client (intra-EU)" }, { kind: "client", label: "Delivered to client" }] },
-  EXP_DDP_XEU:  { group: "EXP", short: "EXP · DDP extra-EU",               emoji: "🛃", desc: "Producer → our truck → export customs → client (DDP).", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to border" }, { kind: "customs_export", label: "Export customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
-  // IMPORT
-  IMP_EXWS_WH:  { group: "IMP", short: "IMP · EXWs → our WH",              emoji: "🔄", desc: "Our truck picks up at supplier → sea (if needed) → customs → our WH.", buyOwnershipStart: "supplier", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to our warehouse" }, { kind: "our_wh", label: "In our warehouse" }] },
-  IMP_EXWS_DIR: { group: "IMP", short: "IMP · EXWs → direct to client",    emoji: "↗️", desc: "Our truck picks up at supplier → sea (if needed) → customs → client.", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At supplier" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
-  IMP_CIF_WH:   { group: "IMP", short: "IMP · CIF → our WH",               emoji: "📦", desc: "Supplier ships CIF → we customs + inland → our WH.", buyOwnershipStart: "dest_port", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier ships)" }, { kind: "transit_sea", label: "Sea freight (supplier's risk)" }, { kind: "dest_port", label: "Destination port (we take over)" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to our warehouse" }, { kind: "our_wh", label: "In our warehouse" }] },
-  IMP_CIF_DIR:  { group: "IMP", short: "IMP · CIF → direct to client",     emoji: "➡️", desc: "Supplier ships CIF → we customs + inland → client.", buyOwnershipStart: "dest_port", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier ships)" }, { kind: "transit_sea", label: "Sea freight (supplier's risk)" }, { kind: "dest_port", label: "Destination port (we take over)" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
-  IMP_DDP_WH:   { group: "IMP", short: "IMP · DDP → our WH",               emoji: "🏭", desc: "Supplier delivers DDP to our warehouse.", buyOwnershipStart: "our_wh", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier delivers)" }, { kind: "transit_road", label: "Supplier's delivery (their risk)" }, { kind: "our_wh", label: "Received in our warehouse" }] },
-  IMP_DDP_DIR:  { group: "IMP", short: "IMP · DDP → direct to client",     emoji: "🎯", desc: "Supplier delivers DDP straight to client.", buyOwnershipStart: "never", sellOwnershipEnd: "never", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier delivers)" }, { kind: "client", label: "Delivered to client (pass-through)" }] },
-};
+// v6.37.0: FLOW_TYPES retired — direction, journey, ownership and customs all derive
+// from shipments/incoterms; legacy stored data was migrated (flowCleanup.migration, schema 2).
 
-const OWNERSHIP_POINT_ORDER = ["supplier", "origin_port", "vessel", "dest_port", "our_wh", "client"];
 
 // v6.1.5: Standard Incoterm-aligned stage wording, derived from the stage kind and the
 // flow's buy/sell Incoterm family. One source of truth → consistent across the app.
-function incotermFamily(flow: string, side: "buy" | "sell") {
-  // Infer the Incoterm family from the flow code.
-  const f = flow || "";
-  if (side === "buy") {
-    if (f.includes("CIF")) return "CIF";
-    if (f.includes("DDP")) return "DDP";
-    if (f.includes("FOB")) return "FOB";
-    return "EXW"; // EXWS / default pickup
-  } else {
-    if (f.startsWith("EXP_EXWS")) return "EXW";
-    if (f.startsWith("EXP_FOB")) return "FOB";
-    if (f.startsWith("EXP_CIF")) return "CIF";
-    if (f.startsWith("EXP_DDP")) return "DDP";
-    if (f.endsWith("_DIR")) return "DDP"; // sold delivered to client
-    return ""; // import to our WH — no onward sale Incoterm at this point
-  }
-}
-function standardStageLabel(kind: string, flow: string) {
-  const buy = incotermFamily(flow, "buy");
+
+// v6.37.0: generic stage labels — a fallback only; stored/baked and shipment-derived
+// journey stages carry their own real labels, which the render prefers.
+function standardStageLabel(kind: string) {
   switch (kind) {
-    case "supplier":
-      return buy === "EXW" ? "EXW — at supplier"
-           : "At supplier";
+    case "supplier": return "At supplier";
     case "transit_road": return "Road carriage";
-    case "transit_sea":  return buy === "CIF" ? "Sea freight (CIF — supplier's risk)" : "Sea freight";
-    case "origin_port":  return buy === "FOB" ? "FOB — loaded on vessel (port of loading)" : "Port of loading";
+    case "transit_sea": return "Sea freight";
+    case "origin_port": return "Port of loading";
     case "customs_export": return "Export customs cleared";
-    case "dest_port":    return buy === "CIF" ? "CIF — arrived at destination port" : "Destination port";
+    case "dest_port": return "Destination port";
     case "customs_import": return "Import customs cleared";
-    case "our_wh":       return "Received into our warehouse";
-    case "client":       return "Delivered to client";
+    case "our_wh": return "Received into our warehouse";
+    case "client": return "Delivered to client";
     default: return kind;
   }
 }
@@ -121,25 +90,9 @@ const STAGE_KIND_TO_POINT: Record<string, string> = {
   customs_export: "origin_port", transit_sea: "vessel", dest_port: "dest_port",
   customs_import: "dest_port", our_wh: "our_wh", client: "client",
 };
-function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?: number, buyIncoterm?: string, sellIncoterm?: string) {
-  // v6.35.1 (Phase C): compute the stage's transfer point, then prefer REAL incoterms.
-  // Fall back to the flow key only when incoterms are absent (legacy lots).
-  {
-    let point0 = STAGE_KIND_TO_POINT[stageKind] || "supplier";
-    const isTransit0 = stageKind === "transit_road" || stageKind === "transit_sea";
-    if (isTransit0 && Array.isArray(stages) && typeof idx === "number") {
-      for (let j = idx - 1; j >= 0; j--) {
-        const pk = stages[j].kind;
-        if (pk !== "transit_road" && pk !== "transit_sea") { point0 = STAGE_KIND_TO_POINT[pk] || point0; break; }
-      }
-    }
-    if (buyIncoterm || sellIncoterm) return ownershipAtPoint(point0, buyIncoterm, sellIncoterm);
-  }
-  const f = FLOW_TYPES[flow];
-  if (!f) return "owned";
-  if (f.buyOwnershipStart === "never" || f.sellOwnershipEnd === "never") return "not_owned";
-  // A transit leg (road/sea) sits BETWEEN two points; its ownership follows the
-  // point it departs FROM — i.e. the nearest preceding non-transit stage's point.
+function ownershipForStage(stageKind: string, stages?: any[], idx?: number, buyIncoterm?: string, sellIncoterm?: string) {
+  // v6.37.0: ownership derives purely from the REAL incoterms (Phase C complete).
+  // A transit leg follows the point it departs FROM (nearest preceding non-transit stage).
   let point = STAGE_KIND_TO_POINT[stageKind] || "supplier";
   const isTransit = stageKind === "transit_road" || stageKind === "transit_sea";
   if (isTransit && Array.isArray(stages) && typeof idx === "number") {
@@ -148,19 +101,13 @@ function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?
       if (pk !== "transit_road" && pk !== "transit_sea") { point = STAGE_KIND_TO_POINT[pk] || point; break; }
     }
   }
-  const sI = OWNERSHIP_POINT_ORDER.indexOf(f.buyOwnershipStart);
-  const eI = OWNERSHIP_POINT_ORDER.indexOf(f.sellOwnershipEnd);
-  const pI = OWNERSHIP_POINT_ORDER.indexOf(point);
-  if (sI === -1 || eI === -1 || pI === -1) return "owned";
-  if (pI < sI) return "not_owned";
-  if (pI > eI) return "handed_over";
-  return "owned";
+  return ownershipAtPoint(point, buyIncoterm, sellIncoterm);
 }
 // v6.34.9 (Phase C): build a lot's journey from its REAL shipment legs, not the
 // obsolete flow template. Each leg becomes a transit stage between its endpoints;
 // the sequence reflects what was actually booked. Falls back to a minimal
 // supplier→warehouse shell only when the lot has no shipments at all.
-function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) => any): any[] {
+function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) => any, buyIncoterm?: string, sellIncoterm?: string): any[] {
   const legs = legsForLot(lot, shipments);
   if (!legs.length) return [];
   const nameOf = (id: any, custom: any) => {
@@ -186,7 +133,8 @@ function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) 
       status: "pending",
     });
   });
-  return stages;
+  // v6.37.0: real ownership per stage from the incoterms (was a placeholder "ours").
+  return stages.map((st: any, i: number) => ({ ...st, ownership: ownershipForStage(st.kind, stages, i, buyIncoterm, sellIncoterm) }));
 }
 
 // On-the-fly journey for a lot with no stored journey — derived from real shipments
@@ -201,27 +149,12 @@ function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = []) {
   const lotSellIncoterm = govSo?.sellIncoterm || "";
   // Phase C: prefer a stored journey, then one DERIVED FROM REAL SHIPMENTS, and only
   // then fall back to the legacy flow template (for old lots with neither).
-  const fromShips = (Array.isArray(lot.journey) && lot.journey.length > 0) ? [] : journeyFromShipments(lot, shipments, locById);
+  const fromShips = (Array.isArray(lot.journey) && lot.journey.length > 0) ? [] : journeyFromShipments(lot, shipments, locById, lotBuyIncoterm, lotSellIncoterm);
   const base = (Array.isArray(lot.journey) && lot.journey.length > 0)
     ? lot.journey
     : fromShips.length > 0
     ? fromShips
-    : (() => {
-        const f = FLOW_TYPES[lot.flow];
-        if (!f || !Array.isArray(f.stageTemplate)) return [];
-        const load = lot.loadingDate || null;
-        const arrive = lot.arrivalDate || null;
-        const n = f.stageTemplate.length;
-        return f.stageTemplate.map((st: any, i: number) => {
-          let plannedDate: string | null = null;
-          if (load && arrive && n > 1) {
-            const t0 = new Date(load).getTime(), t1 = new Date(arrive).getTime();
-            plannedDate = new Date(t0 + (t1 - t0) * (i / (n - 1))).toISOString().split("T")[0];
-          } else if (i === 0) plannedDate = load;
-          else if (i === n - 1) plannedDate = arrive;
-          return { seq: i + 1, kind: st.kind, label: st.label, ownership: ownershipForStage(lot.flow, st.kind, f.stageTemplate, i, lotBuyIncoterm, lotSellIncoterm), plannedDate, actualDate: null, status: "pending" };
-        });
-      })();
+    : []; // v6.37.0: no template fallback — a lot with no stored journey and no shipments shows none
   // Drive each stage's status + actual date from real shipment legs, customs,
   // movements and SO status (mapping legs to stages by mode/sequence).
   return applyProgressToJourney(base, lot, shipments, orders);
@@ -1390,7 +1323,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                       // Black/gray emphasis: stages where goods are OURS render in black;
                       // the supplier's / client's portions render gray.
                       const textColor = owned ? "#111827" : "#9CA3AF";
-                      const labelText = s.label || standardStageLabel(s.kind, lot.flow); // v6.34.9: prefer the real (shipment-derived) stage label
+                      const labelText = s.label || standardStageLabel(s.kind); // v6.34.9: prefer the real (shipment-derived) stage label
                       const last = i === journey.length - 1;
                       return (
                         <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", paddingBottom: last ? 0 : 16, position: "relative" }}>

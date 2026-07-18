@@ -9,7 +9,7 @@
 //   ACTUAL ("settled")
 //     Revenue   = lines that have shipped (via SHIP_OUT movements traceable to this SO).
 //     COGS      = lot costs (PLN) × kg shipped, attributed via SHIP_OUT movements.
-//     Direct    = shipment costs where invoice has actually been received (status "Received" or "Cost allocated").
+//     Direct    = shipment costs, ACCRUAL (v6.37.1): counted once invoiced OR the shipment is Delivered/Closed.
 //     Use when: looking at historical performance, post-mortem on a delivered SO.
 //
 //   FORECAST ("expected")
@@ -333,11 +333,14 @@ function computeDirectCosts(order: any, shipments: any[], mode: MarginMode, lots
       const amountPLN = safe(c.amountPLN) || (safe(c.amount) * safe(c.fxRate || 1));
       // Filter by invoice status depending on mode
       if (mode === "actual") {
-        // Only count costs that are actually invoiced/allocated
+        // v6.37.1 (ruling A — accrual): a cost is REAL once its shipment has concluded
+        // (Delivered/Closed), even if the supplier's invoice hasn't arrived yet — the
+        // trading P/L reflects the concluded transaction. Invoice status keeps tracking
+        // payables separately. Before conclusion, only invoiced costs count.
         const invStatus = c.invoiceStatus || "Expected";
-        if (invStatus === "Expected") {
-          // Skip — not yet a real cost
-          return;
+        const concluded = sh.status === "Delivered" || sh.status === "Closed";
+        if (invStatus === "Expected" && !concluded) {
+          return; // not yet real: neither invoiced nor concluded
         }
       }
       // Defect (b): this cost line already lives on lot landed cost → it reaches

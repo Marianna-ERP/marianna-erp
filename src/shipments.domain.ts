@@ -274,3 +274,56 @@ export function normalizeCustoms(raw: any): any {
     _migratedFrom: typeof raw === "string" ? raw : undefined,
   };
 }
+
+// ── v6.37.1 (Finance direct costs, F-1): the freight MIRROR SYNC ─────────────
+// Legs are the operational entry point for freight (truck rate, sea rate); the
+// financial pipeline (KPIs, billing, allocation, SO margin) reads costs[]. Until
+// now costs[] was a one-time snapshot at creation — edit a leg's cost later and
+// finance never saw it (the reported truck/container loss). This sync runs on
+// every save, exactly like the customs sync (v6.34.5): one managed line per leg
+// with a STABLE identity (source "leg-freight:{n}"), amounts from the leg,
+// preserving the line's id / invoiceStatus / invoiceRef across re-syncs, removed
+// when the leg's cost is cleared. It ADOPTS a legacy unsourced snapshot line of
+// the same freight type (builder-era data) instead of duplicating it. Manually
+// added lines (other types, or extra unsourced lines) are never touched.
+const FREIGHT_TYPE_BY_MODE: Record<string, string> = { Air: "air_freight", Rail: "rail_freight", Road: "road_freight", Sea: "sea_freight" };
+export function legFreightSource(legNo: number): string { return `leg-freight:${legNo}`; }
+export function syncLegFreightCostLines(sh: any): any {
+  const legs = sh?.legs || [];
+  const numv = (v: any) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+  let costs = [...(sh?.costs || [])];
+  legs.forEach((leg: any, i: number) => {
+    const n = i + 1;
+    const src = legFreightSource(n);
+    const type = FREIGHT_TYPE_BY_MODE[leg?.mode] || "sea_freight";
+    const amt = numv(leg?.costAmount);
+    const fx = numv(leg?.costFxRate) || 1;
+    const pln = numv(leg?.costPLN) || Math.round(amt * fx * 100) / 100;
+    let idx = costs.findIndex((c: any) => c && String(c.source || "") === src);
+    if (idx === -1 && amt > 0) {
+      idx = costs.findIndex((c: any) => c && !c.source && !c._customsAuto && c.type === type);
+    }
+    if (amt > 0) {
+      const prev = idx >= 0 ? costs[idx] : null;
+      const line = {
+        id: prev?.id ?? (numv(sh?.id) || 0) * 1000 + 900 + n,
+        source: src, type,
+        supplierId: leg?.carrierId || leg?.forwarderId || prev?.supplierId || null,
+        amount: amt, currency: leg?.costCurrency || "PLN", fxRate: fx, amountPLN: pln,
+        invoiceStatus: prev?.invoiceStatus || "Expected",
+        invoiceRef: prev?.invoiceRef || "",
+        allocationMethod: prev?.allocationMethod || "by_kg",
+        notes: `${leg?.mode || "?"} leg ${n}`,
+      };
+      if (idx >= 0) costs[idx] = line; else costs.push(line);
+    } else if (idx >= 0 && String(costs[idx].source || "") === src) {
+      costs.splice(idx, 1);
+    }
+  });
+  // drop managed lines for legs that no longer exist
+  costs = costs.filter((c: any) => {
+    const m = /^leg-freight:(\d+)$/.exec(String(c?.source || ""));
+    return !m || Number(m[1]) <= legs.length;
+  });
+  return { ...sh, costs };
+}

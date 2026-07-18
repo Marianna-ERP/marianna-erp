@@ -462,48 +462,9 @@ T("cancelled SO doesn't count as sold", () => {
   assert.equal(poSalesLink(po, canc).state, "Unsold");
 });
 
-// ── Batch 4b: trade-flow shim (BP-1 / BP-12) ──
-const { flowToStruct, structToFlow, reconcilePOFlow, isDirectCargoPlan } = require("./build/tradeFlow.domain.js");
-
-console.log("── trade flow: struct ⇄ legacy key ──");
-const ALL_FLOWS = ["EXP_EXWS","EXP_FOB","EXP_CIF","EXP_DDP_EU","EXP_DDP_XEU","IMP_EXWS_WH","IMP_EXWS_DIR","IMP_CIF_WH","IMP_CIF_DIR","IMP_DDP_WH","IMP_DDP_DIR"];
-T("every legacy flow decomposes to structured fields", () => {
-  ALL_FLOWS.forEach(f => {
-    const s = flowToStruct(f);
-    assert.ok(s, `${f} has struct`);
-    assert.ok(["EXPORT","IMPORT"].includes(s.tradeMovement), `${f} movement`);
-  });
-});
-T("round-trip flow → struct → flow is stable for import flows", () => {
-  ["IMP_EXWS_WH","IMP_EXWS_DIR","IMP_CIF_WH","IMP_CIF_DIR","IMP_DDP_WH","IMP_DDP_DIR"].forEach(f => {
-    assert.equal(structToFlow(flowToStruct(f)), f, `${f} round-trips`);
-  });
-});
-T("direct cargo plan flags directFlow", () => {
-  assert.equal(isDirectCargoPlan(flowToStruct("IMP_CIF_DIR")), true);
-  assert.equal(isDirectCargoPlan(flowToStruct("IMP_CIF_WH")), false);
-});
-T("reconcile: structured fields present → flow derived, directFlow set", () => {
-  const po = reconcilePOFlow({ tradeMovement:"IMPORT", purchaseIncoterm:"CIF", handoverPoint:"dest_port", cargoPlan:"DIRECT_TO_CLIENT" });
-  assert.equal(po.flow, "IMP_CIF_DIR");
-  assert.equal(po.directFlow, true);
-});
-T("reconcile: legacy flow only → structured fields backfilled", () => {
-  const po = reconcilePOFlow({ flow:"IMP_DDP_WH" });
-  assert.equal(po.tradeMovement, "IMPORT");
-  assert.equal(po.purchaseIncoterm, "DDP");
-  assert.equal(po.cargoPlan, "OUR_WAREHOUSE");
-});
-T("export client pickup maps to EXP_EXWS", () => {
-  assert.equal(structToFlow({ tradeMovement:"EXPORT", cargoPlan:"CLIENT_PICKUP" }), "EXP_EXWS");
-});
-T("DAP purchase treated like DDP for warehouse plan", () => {
-  assert.equal(structToFlow({ tradeMovement:"IMPORT", purchaseIncoterm:"DAP", cargoPlan:"OUR_WAREHOUSE" }), "IMP_DDP_WH");
-});
-T("unknown flow degrades without throwing", () => {
-  assert.equal(flowToStruct("NONSENSE"), null);
-  assert.equal(reconcilePOFlow({ flow:"NONSENSE" }).flow, "NONSENSE");
-});
+// ── Batch 4b removed (v6.37.0): the trade-flow shim it tested was retired; its
+//    behaviour (flow ⇄ incoterm mapping) lives on as frozen tables inside
+//    flowCleanup.migration, covered by the migration tests. ──
 
 // ── Test round 2 fixes: FB-7 groupage notes + BP-56 handover wording ──
 const { handoverTextForIncoterm, handoverPointForIncoterm } = require("./build/tradeFlow.domain.js");
@@ -732,7 +693,7 @@ T("claim note: incoming CREDIT vs producer, EUR with PLN conversion, reduces pay
 });
 
 // ── Batch 6b: movement matrix + Phase B (BP-56 final / BP-57) ──
-const { movementFromEnds, isEUCountry, handoverSentence, namedPlacePoolForIncoterm, dispositionFromSO, poDirectFromSOs, composePOFlow } = require("./build/tradeFlow.domain.js");
+const { movementFromEnds, isEUCountry, handoverSentence, namedPlacePoolForIncoterm, dispositionFromSO, poDirectFromSOs } = require("./build/tradeFlow.domain.js");
 
 console.log("── 4-class movement matrix ──");
 T("matrix: all four cells", () => {
@@ -770,18 +731,8 @@ T("PO becomes direct when a governing active SO sends goods onward", () => {
   assert.equal(poDirectFromSOs(po, [{ ...soDAP, status: "Draft" }]), false);
   assert.equal(poDirectFromSOs(po, []), false);
 });
-T("composePOFlow: CIF buy + DAP sale → IMP_CIF_DIR; no sale → IMP_CIF_WH", () => {
-  const po = { number: "PO-1", buyIncoterm: "CIF", tradeMovement: "IMPORT" };
-  const soDAP = { number: "SO-1", status: "Confirmed", sellIncoterm: "DAP", items: [{ sourceType: "PO", sourceRef: "PO-1" }] };
-  assert.deepEqual(composePOFlow(po, [soDAP]), { flow: "IMP_CIF_DIR", directFlow: true });
-  assert.deepEqual(composePOFlow(po, []), { flow: "IMP_CIF_WH", directFlow: false });
-});
-T("cross-trade rides the direct branch (never our warehouse)", () => {
-  const po = { number: "PO-2", buyIncoterm: "CIF", tradeMovement: "CROSS_TRADE" };
-  const r = composePOFlow(po, []);
-  assert.equal(r.directFlow, true);
-  assert.equal(r.flow, "IMP_CIF_DIR");
-});
+// (v6.37.0) two composePOFlow tests removed — the shim was retired; the direct-
+// branch behaviour is covered live by poDirectFromSOs tests above and the migration tests.
 
 // ── Batch 6c: quality semantics pinned (BP-33) ──
 const locByIdStub = () => null; // recomputeLotFromMovements already required above
@@ -1362,6 +1313,107 @@ T("post IN → void the shipment's movements → lot back to Expected/0", () => 
   assert.equal(r.physicalKg, 0, "stock reversed");
   assert.equal(r.receivedKg, 0, "receipt reversed");
   assert.equal(r.status, "Expected", "back to Expected");
+});
+
+// ── v6.37.0: flow-cleanup migration (schema 2) ──
+const { migrateFlowCleanup } = require("./build/flowCleanup.migration.js");
+console.log("── flow-cleanup migration ──");
+T("legacy PO without incoterms is backfilled from its flow, then flow dropped", () => {
+  const all = migrateFlowCleanup({ pos: [{ number: "PO-1", flow: "IMP_CIF_WH" }], lots: [], shipments: [] });
+  const p = all.pos[0];
+  assert.equal(p.buyIncoterm, "CIF");
+  assert.equal(p.tradeMovement, "IMPORT");
+  assert.equal(p.directFlow, false);
+  assert.ok(!("flow" in p), "flow removed");
+});
+T("direct legacy flow backfills directFlow=true; existing incoterm never overwritten", () => {
+  const all = migrateFlowCleanup({ pos: [
+    { number: "PO-2", flow: "IMP_DDP_DIR" },
+    { number: "PO-3", flow: "IMP_CIF_WH", buyIncoterm: "EXW" },
+  ], lots: [], shipments: [] });
+  assert.equal(all.pos[0].buyIncoterm, "DDP");
+  assert.equal(all.pos[0].directFlow, true);
+  assert.equal(all.pos[1].buyIncoterm, "EXW", "user-entered incoterm wins");
+  assert.ok(!("flow" in all.pos[1]));
+});
+T("never-shipped legacy lot gets its template journey BAKED; buyIncoterm from PO", () => {
+  const all = migrateFlowCleanup({
+    pos: [{ number: "PO-4", flow: "IMP_CIF_WH" }],
+    lots: [{ number: "LOT-1", poRef: "PO-4", flow: "IMP_CIF_WH", loadingDate: "2026-07-01", arrivalDate: "2026-07-11" }],
+    shipments: [],
+  });
+  const l = all.lots[0];
+  assert.equal(l.buyIncoterm, "CIF");
+  assert.equal((l.journey || []).length, 6, "6 CIF-WH stages baked");
+  assert.equal(l.journey[0].ownership, "not_owned", "supplier stage before dest_port takeover");
+  assert.equal(l.journey.find(st => st.kind === "dest_port").ownership, "owned");
+  assert.equal(l.journey[0].plannedDate, "2026-07-01");
+  assert.equal(l.journey[5].plannedDate, "2026-07-11");
+  assert.ok(!("flow" in l));
+});
+T("lot WITH a shipment is not baked (shipments are its journey); idempotent re-run", () => {
+  const input = {
+    pos: [{ number: "PO-5", flow: "IMP_EXWS_WH" }],
+    lots: [{ number: "LOT-2", poRef: "PO-5", flow: "IMP_EXWS_WH" }],
+    shipments: [{ number: "SHP-1", lotRefs: ["LOT-2"] }],
+  };
+  const once = migrateFlowCleanup(input);
+  assert.ok(!once.lots[0].journey, "no baked journey — shipment-derived at render");
+  assert.ok(!("flow" in once.lots[0]));
+  const twice = migrateFlowCleanup(once);
+  assert.deepEqual(twice.pos, once.pos, "idempotent on pos");
+  assert.deepEqual(twice.lots, once.lots, "idempotent on lots");
+});
+
+// ── v6.37.1: Finance direct costs — mirror sync + accrual (the user's repro) ──
+const { syncLegFreightCostLines } = require("./build/shipments.domain.js");
+const { allocateShipmentCostsToLots: allocFin } = require("./build/costAllocation.js");
+console.log("── direct costs: leg → costs[] → lot → P/L ──");
+T("truck+container entered on LEGS after creation now reach lot landed cost", () => {
+  const lot = { number: "LOT-F", receivedKg: 21000, costs: [{ type: "purchase", label: "Purchase", source: "po", amount: 63000, pln: 63000 }] };
+  const sh = {
+    id: 7, number: "SHP-F", status: "Delivered", soRefs: ["SO-F"], lotRefs: ["LOT-F"],
+    goods: [{ lotRef: "LOT-F", soRef: "SO-F", qtyKg: 21000 }],
+    legs: [
+      { mode: "Road", costAmount: 4500, costCurrency: "PLN", costFxRate: 1, costPLN: 4500 },
+      { mode: "Sea", costAmount: 2000, costCurrency: "USD", costFxRate: 4, costPLN: 8000 },
+    ],
+    costs: [ // creation-time snapshot (legs were 0) + customs auto-line
+      { id: 1, type: "road_freight", amount: 0, amountPLN: 0, invoiceStatus: "Expected" },
+      { id: 9, type: "customs", source: "customs-auto", amount: 1200, amountPLN: 1200, invoiceStatus: "Expected", _customsAuto: true },
+    ],
+  };
+  const synced = syncLegFreightCostLines(sh);
+  const road = synced.costs.find(c => c.source === "leg-freight:1");
+  const sea = synced.costs.find(c => c.source === "leg-freight:2");
+  assert.equal(road.amountPLN, 4500, "truck mirrored");
+  assert.equal(road.id, 1, "legacy snapshot line ADOPTED (id preserved)");
+  assert.equal(sea.amountPLN, 8000, "sea mirrored");
+  assert.ok(synced.costs.some(c => c._customsAuto && c.amountPLN === 1200), "customs untouched");
+  const lots2 = allocFin(synced, [lot], { inventoryType: t => t, label: t => t });
+  const added = lots2[0].costs.filter(c => String(c.source || "").startsWith("SHP-F/"));
+  const plns = added.map(c => c.pln).sort((a, b) => a - b);
+  assert.deepEqual(plns, [1200, 4500, 8000], "truck + container + customs all in lot landed cost");
+});
+T("re-sync preserves invoiceStatus/invoiceRef; clearing the leg cost removes the line", () => {
+  const sh = { id: 3, number: "SHP-R", legs: [{ mode: "Road", costAmount: 4500, costFxRate: 1, costPLN: 4500 }], costs: [] };
+  let s1 = syncLegFreightCostLines(sh);
+  s1.costs[0].invoiceStatus = "Received"; s1.costs[0].invoiceRef = "FV/9/2026";
+  let s2 = syncLegFreightCostLines({ ...s1, legs: [{ mode: "Road", costAmount: 5200, costFxRate: 1, costPLN: 5200 }] });
+  const line = s2.costs.find(c => c.source === "leg-freight:1");
+  assert.equal(line.amountPLN, 5200, "amount follows the leg");
+  assert.equal(line.invoiceStatus, "Received", "status preserved");
+  assert.equal(line.invoiceRef, "FV/9/2026", "ref preserved");
+  const s3 = syncLegFreightCostLines({ ...s2, legs: [{ mode: "Road", costAmount: 0 }] });
+  assert.ok(!s3.costs.some(c => c.source === "leg-freight:1"), "cleared leg cost → managed line removed");
+});
+T("accrual (ruling A): Expected cost counts in ACTUAL P/L once the shipment is Delivered", () => {
+  const order = { number: "SO-A", status: "Delivered", currency: "PLN", fxRate: 1, items: [] };
+  const mk = (status) => [{ number: "SHP-A", status, soRefs: ["SO-A"], goods: [{ soRef: "SO-A", qtyKg: 100 }], costs: [{ id: 1, type: "customs", amountPLN: 1200, invoiceStatus: "Expected" }] }];
+  const delivered = computeSOMargin(order, [], [], mk("Delivered"), "actual");
+  const booked = computeSOMargin(order, [], [], mk("Booked"), "actual");
+  assert.equal(delivered.directCostsPLN, 1200, "concluded shipment's cost is real");
+  assert.equal(booked.directCostsPLN, 0, "unconcluded + uninvoiced still excluded");
 });
 
 console.log("");

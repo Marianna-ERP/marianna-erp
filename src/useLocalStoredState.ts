@@ -1,3 +1,4 @@
+import { migrateFlowCleanup } from "./flowCleanup.migration";
 // ─── Local-storage-backed React state hook ──────────────────────────────────
 //
 // Drop-in replacement for useState. Reads initial value from localStorage if
@@ -18,7 +19,7 @@
 import { useState, useEffect } from "react";
 import { APP_VERSION } from "./version";
 
-export const STORAGE_VERSION = 1;
+export const STORAGE_VERSION = 2; // v6.37.0: flow-model retirement (migration 2)
 const NAMESPACE = "marianna-erp";
 
 function storageKey(name: string): string {
@@ -99,7 +100,9 @@ export function storageUsage(): { perKey: Array<{ key: string; kb: number }>; to
 // current-version keys are absent but an older version's exist, we migrate
 // forward and keep the old keys untouched as a safety copy.
 export const MIGRATIONS: Record<number, (all: Record<string, any>) => Record<string, any>> = {
-  // 2: (all) => ({ ...all, invoices: (all.invoices || []).map(addPaymentEvents) }),
+  // v6.37.0: retire the legacy flow model from stored data (backfill incoterms,
+  // bake template journeys for never-shipped legacy lots, drop the flow key).
+  2: migrateFlowCleanup,
 };
 
 export function runMigrationsIfNeeded(): { migrated: boolean; from?: number } {

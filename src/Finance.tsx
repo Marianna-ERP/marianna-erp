@@ -963,8 +963,8 @@ export default function Finance({
 
             <Card style={{ marginBottom: 18 }}>
               <SectionTitle>P/L BY SALES ORDER</SectionTitle>
-              <div style={{ fontSize: 10.5, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "7px 10px", marginTop: 10 }}>
-                ⚠ Direct transport costs are being reworked (cost ownership — rebuild Batch 3). Until then: an SO linked to a shipment only through its goods rows may <b>under-state</b> freight, and freight already allocated into a lot's landed cost may be <b>counted twice</b> when the shipment is also linked to the SO.
+              <div style={{ fontSize: 10.5, color: "#64748B", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 7, padding: "7px 10px", marginTop: 10 }}>
+                Direct costs flow automatically (v6.37.1): freight entered on shipment legs mirrors into the shipment's costs, delivery allocates them into lot landed cost, and the <b>actual</b> P/L counts a cost once it's invoiced <b>or</b> its shipment is Delivered/Closed (accrual). Costs already in a lot's landed cost arrive here through COGS — never double-counted.
               </div>
               {(() => {
                 const rows = (orders || [])

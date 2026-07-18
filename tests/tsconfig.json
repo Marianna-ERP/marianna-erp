@@ -20,6 +20,7 @@
     "../src/shipments.domain.ts",
     "../src/documents.domain.ts",
     "../src/tradeFlow.domain.ts",
+    "../src/flowCleanup.migration.ts",
     "../src/payments.domain.ts",
     "../src/settlement.domain.ts",
     "../src/claim.domain.ts",

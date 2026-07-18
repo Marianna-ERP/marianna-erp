@@ -15,67 +15,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Legacy flow key → structured fields (for existing POs/lots).
-const FLOW_TO_STRUCT: Record<string, any> = {
-  EXP_EXWS:   { tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "supplier",    cargoPlan: "CLIENT_PICKUP" },
-  EXP_FOB:    { tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "origin_port", cargoPlan: "TO_PORT" },
-  EXP_CIF:    { tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "dest_port",   cargoPlan: "TO_PORT" },
-  EXP_DDP_EU: { tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "client",      cargoPlan: "DIRECT_TO_CLIENT" },
-  EXP_DDP_XEU:{ tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "client",      cargoPlan: "DIRECT_TO_CLIENT" },
-  IMP_EXWS_WH:{ tradeMovement: "IMPORT", purchaseIncoterm: "EXW", handoverPoint: "supplier",    cargoPlan: "OUR_WAREHOUSE" },
-  IMP_EXWS_DIR:{tradeMovement: "IMPORT", purchaseIncoterm: "EXW", handoverPoint: "supplier",    cargoPlan: "DIRECT_TO_CLIENT" },
-  IMP_CIF_WH: { tradeMovement: "IMPORT", purchaseIncoterm: "CIF", handoverPoint: "dest_port",   cargoPlan: "OUR_WAREHOUSE" },
-  IMP_CIF_DIR:{ tradeMovement: "IMPORT", purchaseIncoterm: "CIF", handoverPoint: "dest_port",   cargoPlan: "DIRECT_TO_CLIENT" },
-  IMP_DDP_WH: { tradeMovement: "IMPORT", purchaseIncoterm: "DDP", handoverPoint: "our_wh",      cargoPlan: "OUR_WAREHOUSE" },
-  IMP_DDP_DIR:{ tradeMovement: "IMPORT", purchaseIncoterm: "DDP", handoverPoint: "client",      cargoPlan: "DIRECT_TO_CLIENT" },
-};
+// v6.37.0: the legacy flow-key shim (FLOW_TO_STRUCT / structToFlow / reconcilePOFlow)
+// was retired — stored data was migrated by flowCleanup.migration (schema 2).
 
-export function flowToStruct(flow: string): any {
-  return FLOW_TO_STRUCT[flow] || null;
-}
-
-/**
- * Structured fields → the legacy flow key (BP-12 shim). Deterministic inverse of
- * the table above; picks the closest legacy flow so downstream FLOW_TYPES lookups,
- * journey templates and isExport keep working unchanged.
- */
-export function structToFlow(s: any): string {
-  if (!s || !s.tradeMovement) return "";
-  const inc = String(s.purchaseIncoterm || "EXW").toUpperCase();
-  const direct = s.cargoPlan === "DIRECT_TO_CLIENT";
-  const pickup = s.cargoPlan === "CLIENT_PICKUP";
-  const toPort = s.cargoPlan === "TO_PORT";
-
-  if (s.tradeMovement === "EXPORT") {
-    if (pickup) return "EXP_EXWS";
-    if (toPort) return s.handoverPoint === "dest_port" || s.requiresSea ? "EXP_CIF" : "EXP_FOB";
-    if (direct) return s.crossBorder ? "EXP_DDP_XEU" : "EXP_DDP_EU";
-    return "EXP_CIF";
-  }
-  // IMPORT
-  if (inc === "DDP" || inc === "DAP") return direct ? "IMP_DDP_DIR" : "IMP_DDP_WH";
-  if (inc === "CIF" || inc === "CFR") return direct ? "IMP_CIF_DIR" : "IMP_CIF_WH";
-  // EXW/FCA/FOB purchase
-  return direct ? "IMP_EXWS_DIR" : "IMP_EXWS_WH";
-}
-
-/** Round-trip stability check used by tests: struct→flow→struct preserves the essentials. */
-export function isDirectCargoPlan(s: any): boolean {
-  return s?.cargoPlan === "DIRECT_TO_CLIENT";
-}
-
-
-/** Ensure a PO has both representations in sync (called on load / save). */
-export function reconcilePOFlow(po: any): any {
-  // If structured fields are present, they win and the legacy flow is derived.
-  if (po.tradeMovement) {
-    const flow = structToFlow(po) || po.flow || "";
-    return { ...po, flow, directFlow: isDirectCargoPlan(po) };
-  }
-  // Otherwise derive structured fields from the legacy flow (existing data).
-  const s = flowToStruct(po.flow);
-  if (s) return { ...po, ...s, directFlow: s.cargoPlan === "DIRECT_TO_CLIENT" };
-  return po;
-}
 
 // BP-56 / FB-4: incoterm-specific handover wording (derived, shown read-only).
 export function handoverTextForIncoterm(incoterm: string, tradeMovement: string): string {
@@ -184,18 +126,7 @@ export function poDirectFromSOs(po: any, orders: any[]): boolean {
   });
 }
 
-/** Recompose the PO's internal flow from its terms + the sales reality (Phase B). */
-export function composePOFlow(po: any, orders: any[]): { flow: string; directFlow: boolean } {
-  const direct = poDirectFromSOs(po, orders);
-  const movement = po.tradeMovement || "IMPORT";
-  const st = {
-    tradeMovement: movement === "EXPORT" ? "EXPORT" : "IMPORT", // legacy keys are binary; INTRA_EU/CROSS_TRADE ride the import branch
-    purchaseIncoterm: po.buyIncoterm || po.purchaseIncoterm || "EXW",
-    cargoPlan: (direct || movement === "CROSS_TRADE") ? "DIRECT_TO_CLIENT" : "OUR_WAREHOUSE",
-    handoverPoint: po.handoverPoint,
-  };
-  return { flow: structToFlow(st) || po.flow || "", directFlow: st.cargoPlan === "DIRECT_TO_CLIENT" };
-}
+
 
 // ── v6.34.0: the SHIPMENT resolves direction from its REAL ends ──────────────
 // A shipment's direction is a fact about ITS journey — producer country (from

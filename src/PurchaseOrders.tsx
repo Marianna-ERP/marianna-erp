@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, composePOFlow, ownershipAtPoint, sellIncotermHasOnwardLeg } from "./tradeFlow.domain";
+import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, poDirectFromSOs, sellIncotermHasOnwardLeg } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet } from "./ui";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
@@ -65,187 +65,13 @@ const INCOTERMS_BUY = [
 // Flow types — 11 flows organised in two groups (EXP / IMP).
 // `buyIncoterms` is a soft hint used for the cross-validation warning, not a hard rule.
 // `defaultRequiresSea` pre-fills the per-PO sea-freight toggle; user can override per deal.
-const FLOW_TYPES: Record<string, any> = {
-  // ── EXPORT (we sell, origin in PL/EU) ──────────────────────────────────────
-  // Enrichment fields (v6.1a — additive, drive the lot journey & ownership):
-  //   direction          "EXP" | "IMP"
-  //   landsInOwnWarehouse  true if goods physically pass through OUR warehouse
-  //   buyOwnershipStart   journey point where goods BECOME ours (by buy Incoterm)
-  //   sellOwnershipEnd    journey point where goods STOP being ours (by sell Incoterm)
-  //   stageTemplate       ordered journey stages (kind + label) for this flow
-  // Ownership points use canonical keys: "supplier" | "origin_port" | "vessel" |
-  //   "dest_port" | "our_wh" | "client" | "never". The owned segment runs from
-  //   buyOwnershipStart to sellOwnershipEnd inclusive.
-  EXP_EXWS: {
-    group: "EXP", short: "EXP · EXWs — client pickup", emoji: "🤝",
-    buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
-    desc: "Client sends their truck to producer warehouse. We do paperwork only — no logistics on our side.",
-    direction: "EXP", landsInOwnWarehouse: false,
-    buyOwnershipStart: "never", sellOwnershipEnd: "never",
-    stageTemplate: [
-      { kind: "supplier", label: "At producer (ready)" },
-      { kind: "client", label: "Collected by client" },
-    ],
-  },
-  EXP_FOB: {
-    group: "EXP", short: "EXP · FOB — we truck to port", emoji: "⚓",
-    buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
-    desc: "We truck from producer to port of loading. Client takes over from there (sea + onward). No sea on our side.",
-    direction: "EXP", landsInOwnWarehouse: false,
-    buyOwnershipStart: "supplier", sellOwnershipEnd: "origin_port",
-    stageTemplate: [
-      { kind: "supplier", label: "At producer" },
-      { kind: "transit_road", label: "Road to port of loading" },
-      { kind: "origin_port", label: "Port of loading (handed to client)" },
-    ],
-  },
-  EXP_CIF: {
-    group: "EXP", short: "EXP · CIF — own full logistics", emoji: "🚢",
-    buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: true,
-    desc: "Producer → our truck → port → vessel → destination port (CIF). We handle inland + sea + insurance.",
-    direction: "EXP", landsInOwnWarehouse: false,
-    buyOwnershipStart: "supplier", sellOwnershipEnd: "dest_port",
-    stageTemplate: [
-      { kind: "supplier", label: "At producer" },
-      { kind: "transit_road", label: "Road to port of loading" },
-      { kind: "origin_port", label: "Port of loading" },
-      { kind: "customs_export", label: "Export customs" },
-      { kind: "transit_sea", label: "Sea freight" },
-      { kind: "dest_port", label: "Destination port (handed to client)" },
-    ],
-  },
-  EXP_DDP_EU: {
-    group: "EXP", short: "EXP · DDP intra-EU", emoji: "🚛",
-    buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
-    desc: "Producer → our truck → EU client. No customs (free movement). DDP sale.",
-    direction: "EXP", landsInOwnWarehouse: false,
-    buyOwnershipStart: "supplier", sellOwnershipEnd: "client",
-    stageTemplate: [
-      { kind: "supplier", label: "At producer" },
-      { kind: "transit_road", label: "Road to client (intra-EU)" },
-      { kind: "client", label: "Delivered to client" },
-    ],
-  },
-  EXP_DDP_XEU: {
-    group: "EXP", short: "EXP · DDP extra-EU", emoji: "🛃",
-    buyIncoterms: ["EXW", "FCA"], defaultRequiresSea: false,
-    desc: "Producer → our truck → export customs → non-EU client. DDP sale (we cover everything).",
-    direction: "EXP", landsInOwnWarehouse: false,
-    buyOwnershipStart: "supplier", sellOwnershipEnd: "client",
-    stageTemplate: [
-      { kind: "supplier", label: "At producer" },
-      { kind: "transit_road", label: "Road to border" },
-      { kind: "customs_export", label: "Export customs" },
-      { kind: "transit_road", label: "Road to client" },
-      { kind: "client", label: "Delivered to client" },
-    ],
-  },
-
-  // ── IMPORT (we buy, origin overseas/EU) ────────────────────────────────────
-  IMP_EXWS_WH: {
-    group: "IMP", short: "IMP · EXWs → our WH", emoji: "🔄",
-    buyIncoterms: ["EXW", "FCA", "FOB"], defaultRequiresSea: true,
-    desc: "Our truck picks up at supplier. Sea freight typical for extra-EU origin. Import customs. Lands in our WH for split distribution.",
-    direction: "IMP", landsInOwnWarehouse: true,
-    buyOwnershipStart: "supplier", sellOwnershipEnd: "our_wh",
-    stageTemplate: [
-      { kind: "supplier", label: "At supplier" },
-      { kind: "transit_road", label: "Road to port of loading" },
-      { kind: "origin_port", label: "Port of loading" },
-      { kind: "transit_sea", label: "Sea freight" },
-      { kind: "dest_port", label: "Destination port" },
-      { kind: "customs_import", label: "Import customs" },
-      { kind: "transit_road", label: "Road to our warehouse" },
-      { kind: "our_wh", label: "In our warehouse" },
-    ],
-  },
-  IMP_EXWS_DIR: {
-    group: "IMP", short: "IMP · EXWs → direct to client", emoji: "↗️",
-    buyIncoterms: ["EXW", "FCA", "FOB"], defaultRequiresSea: true,
-    desc: "Our truck picks up at supplier. Sea freight typical for extra-EU origin. Import customs. Delivered straight to client (no WH stop).",
-    direction: "IMP", landsInOwnWarehouse: false,
-    buyOwnershipStart: "supplier", sellOwnershipEnd: "client",
-    stageTemplate: [
-      { kind: "supplier", label: "At supplier" },
-      { kind: "transit_road", label: "Road to port of loading" },
-      { kind: "origin_port", label: "Port of loading" },
-      { kind: "transit_sea", label: "Sea freight" },
-      { kind: "dest_port", label: "Destination port" },
-      { kind: "customs_import", label: "Import customs" },
-      { kind: "transit_road", label: "Road to client" },
-      { kind: "client", label: "Delivered to client" },
-    ],
-  },
-  IMP_CIF_WH: {
-    group: "IMP", short: "IMP · CIF → our WH", emoji: "📦",
-    buyIncoterms: ["CIF", "CFR"], defaultRequiresSea: true,
-    desc: "Supplier ships CIF to our destination port. We handle import customs and inland to our WH for split.",
-    direction: "IMP", landsInOwnWarehouse: true,
-    buyOwnershipStart: "dest_port", sellOwnershipEnd: "our_wh",
-    stageTemplate: [
-      { kind: "supplier", label: "At supplier (supplier ships)" },
-      { kind: "transit_sea", label: "Sea freight (supplier's risk)" },
-      { kind: "dest_port", label: "Destination port (we take over)" },
-      { kind: "customs_import", label: "Import customs" },
-      { kind: "transit_road", label: "Road to our warehouse" },
-      { kind: "our_wh", label: "In our warehouse" },
-    ],
-  },
-  IMP_CIF_DIR: {
-    group: "IMP", short: "IMP · CIF → direct to client", emoji: "➡️",
-    buyIncoterms: ["CIF", "CFR"], defaultRequiresSea: true,
-    desc: "Supplier ships CIF to destination port. We handle customs + inland delivery direct to client.",
-    direction: "IMP", landsInOwnWarehouse: false,
-    buyOwnershipStart: "dest_port", sellOwnershipEnd: "client",
-    stageTemplate: [
-      { kind: "supplier", label: "At supplier (supplier ships)" },
-      { kind: "transit_sea", label: "Sea freight (supplier's risk)" },
-      { kind: "dest_port", label: "Destination port (we take over)" },
-      { kind: "customs_import", label: "Import customs" },
-      { kind: "transit_road", label: "Road to client" },
-      { kind: "client", label: "Delivered to client" },
-    ],
-  },
-  IMP_DDP_WH: {
-    group: "IMP", short: "IMP · DDP → our WH", emoji: "🏭",
-    buyIncoterms: ["DDP", "DAP"], defaultRequiresSea: false,
-    desc: "Supplier delivers DDP to our warehouse. We just receive and sort/repack.",
-    direction: "IMP", landsInOwnWarehouse: true,
-    buyOwnershipStart: "our_wh", sellOwnershipEnd: "our_wh",
-    stageTemplate: [
-      { kind: "supplier", label: "At supplier (supplier delivers)" },
-      { kind: "transit_road", label: "Supplier's delivery (their risk)" },
-      { kind: "our_wh", label: "Received in our warehouse" },
-    ],
-  },
-  IMP_DDP_DIR: {
-    group: "IMP", short: "IMP · DDP → direct to client", emoji: "🎯",
-    buyIncoterms: ["DDP", "DAP"], defaultRequiresSea: false,
-    desc: "Supplier delivers DDP straight to client. Pass-through deal — we do paperwork only.",
-    direction: "IMP", landsInOwnWarehouse: false,
-    buyOwnershipStart: "never", sellOwnershipEnd: "never",
-    stageTemplate: [
-      { kind: "supplier", label: "At supplier (supplier delivers)" },
-      { kind: "client", label: "Delivered to client (pass-through)" },
-    ],
-  },
-};
+// v6.37.0: FLOW_TYPES retired — every behaviour derives from shipments/incoterms;
+// legacy stored data was migrated (flowCleanup.migration, schema 2).
 
 // Canonical ordering of ownership points along any journey, used to compute whether
 // a given stage falls inside the owned segment [buyOwnershipStart .. sellOwnershipEnd].
-const OWNERSHIP_POINT_ORDER = ["supplier", "origin_port", "vessel", "dest_port", "our_wh", "client"];
 // Map a stage kind to the ownership point it sits at (for the owned-segment test).
-const STAGE_KIND_TO_POINT: Record<string, string> = {
-  supplier: "supplier",
-  transit_road: "supplier",      // refined per-position by the journey builder
-  origin_port: "origin_port",
-  customs_export: "origin_port",
-  transit_sea: "vessel",
-  dest_port: "dest_port",
-  customs_import: "dest_port",
-  our_wh: "our_wh",
-  client: "client",
-};
+// v6.37.0: STAGE_KIND_TO_POINT retired with the template journey seed.
 
 // Groups for ordered rendering in UI (chips + dropdowns)
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"];
@@ -337,8 +163,7 @@ function QualityBadge({ quality }: any) {
 function FlowBadge({ flow, order = null, compact = false }: any) {
   // v6.29.0: terms-first vocabulary — old-flow and new POs render identically.
   if (order && (order.buyIncoterm || order.tradeMovement)) {
-    const dir = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? MOVEMENT_LABELS[order.tradeMovement]
-      : (String(order.flow || flow || "").startsWith("EXP") ? MOVEMENT_LABELS.EXPORT : MOVEMENT_LABELS.IMPORT);
+    const dir = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? MOVEMENT_LABELS[order.tradeMovement] : MOVEMENT_LABELS.IMPORT;
     const place = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
     return (
       <span title={handoverSentence(order.buyIncoterm, place)} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
@@ -346,14 +171,9 @@ function FlowBadge({ flow, order = null, compact = false }: any) {
       </span>
     );
   }
-  const f = FLOW_TYPES[flow];
-  if (!f) return null;
-  return (
-    <span title={f.desc} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
-      {f.emoji} {f.short}
-    </span>
-  );
+  return null; // v6.37.0: no incoterm/movement on the PO → nothing to badge (flow key retired)
 }
+
 function VarianceBadge({ variance }: any) {
   if (!variance || !variance.expectedKg || variance.receivedKg == null) return null;
   const delta = variance.receivedKg - variance.expectedKg;
@@ -1004,7 +824,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status || "Draft"} />
-                {order.flow && <FlowBadge order={order} flow={order.flow} />}
+                {(order.buyIncoterm || order.tradeMovement) && <FlowBadge order={order} />}
               </div>
               <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
               <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Locked — commercial terms can't change; downstream records depend on this PO" : order.status !== "Draft" && order.id ? "Confirmed — still editable (nothing depends on it yet); edits re-sync the expected lot" : "Draft — all fields editable"}</div>
@@ -1090,7 +910,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
               {/* ═══ Batch 6b (BP-56 final): PURCHASE TERMS — the contract, not the machinery.
                   Incoterm + named place are THE inputs; movement + handover derive; the
-                  internal flow key is composed by the shim (composePOFlow at save). */}
+                  direct-ness derives live from the governing sale (poDirectFromSOs at save). */}
               <div style={{ gridColumn: "1 / -1", border: "1px solid #E0E7FF", background: "#F5F7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 4 }}>
                 <div style={{ fontSize: 11, fontWeight: 800, color: "#4338CA", letterSpacing: "0.04em", marginBottom: 8 }}>INCOTERM DELIVERY (PURCHASE) <span style={{ fontWeight: 500, color: "#818CF8" }}>· required to confirm / print / send</span></div>
                 <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
@@ -1330,7 +1150,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status} />
-                {order.flow && <FlowBadge order={order} flow={order.flow} />}
+                {(order.buyIncoterm || order.tradeMovement) && <FlowBadge order={order} />}
                 <VarianceBadge variance={order.variance} />
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>
@@ -1506,20 +1326,7 @@ function isInventoryTransferStatus(status) {
   return status && status !== "Draft" && status !== "Cancelled";
 }
 
-function isDirectFlow(flow) {
-  const f = FLOW_TYPES[flow];
-  // v6.1a: prefer the explicit field. "Direct" = does NOT pass through our warehouse.
-  if (f && typeof f.landsInOwnWarehouse === "boolean") return !f.landsInOwnWarehouse;
-  // Fallback to the original string heuristic for any flow lacking the field.
-  const s = String(flow || "");
-  return s.startsWith("EXP_") || s.endsWith("_DIR");
-}
 
-function directFlowLabel(order) {
-  return isDirectFlow(order?.flow)
-    ? "Direct flow · supplier/producer to client/port, not physically received in our warehouse"
-    : "Warehouse/stock flow";
-}
 
 function poInventoryTransferErrors(order) {
   const errors = [];
@@ -1549,65 +1356,7 @@ function nextLotSerial(existingLots, year, offset = 1) {
   return String(max + offset).padStart(4, "0");
 }
 
-// ── v6.1b: Build a lot's planned JOURNEY from its flow's stageTemplate ─────────
-// Each stage gets: kind, label, an ownership tag (not_owned / owned / handed_over)
-// derived from the flow's buy/sell ownership boundaries, a planned date, and a
-// status (all "pending" at creation — actuals fill in later via movements).
-function ownershipForStage(flow, stageKind, stages, idx) {
-  const f = FLOW_TYPES[flow];
-  if (!f) return "owned";
-  const start = f.buyOwnershipStart;
-  const end = f.sellOwnershipEnd;
-  if (start === "never" || end === "never") return "not_owned";
-  let point = STAGE_KIND_TO_POINT[stageKind] || "supplier";
-  const isTransit = stageKind === "transit_road" || stageKind === "transit_sea";
-  if (isTransit && Array.isArray(stages) && typeof idx === "number") {
-    for (let j = idx - 1; j >= 0; j--) {
-      const pk = stages[j].kind;
-      if (pk !== "transit_road" && pk !== "transit_sea") { point = STAGE_KIND_TO_POINT[pk] || point; break; }
-    }
-  }
-  const startIdx = OWNERSHIP_POINT_ORDER.indexOf(start);
-  const endIdx = OWNERSHIP_POINT_ORDER.indexOf(end);
-  const pointIdx = OWNERSHIP_POINT_ORDER.indexOf(point);
-  if (startIdx === -1 || endIdx === -1 || pointIdx === -1) return "owned";
-  if (pointIdx < startIdx) return "not_owned";
-  if (pointIdx > endIdx) return "handed_over";
-  return "owned";
-}
 
-function buildJourneyFromFlow(order) {
-  const f = FLOW_TYPES[order.flow];
-  if (!f || !Array.isArray(f.stageTemplate)) return [];
-  const stages = f.stageTemplate;
-  const loadISO = order.loadingDate || null;
-  const arriveISO = order.expectedDeliveryDate || null;
-  const n = stages.length;
-  return stages.map((st, i) => {
-    let plannedDate = null;
-    if (loadISO && arriveISO && n > 1) {
-      const t0 = new Date(loadISO).getTime();
-      const t1 = new Date(arriveISO).getTime();
-      const frac = i / (n - 1);
-      plannedDate = new Date(t0 + (t1 - t0) * frac).toISOString().split("T")[0];
-    } else if (i === 0) {
-      plannedDate = loadISO;
-    } else if (i === n - 1) {
-      plannedDate = arriveISO;
-    }
-    return {
-      seq: i + 1,
-      kind: st.kind,
-      label: st.label,
-      ownership: (order.buyIncoterm || order.sellIncoterm)
-        ? ownershipAtPoint(STAGE_KIND_TO_POINT[st.kind] || "supplier", order.buyIncoterm, order.sellIncoterm)
-        : ownershipForStage(order.flow, st.kind, stages, i),
-      plannedDate,
-      actualDate: null,
-      status: "pending",
-    };
-  });
-}
 
 function buildExpectedLotsFromPO(order, existingLots = []) {
   const year = lotNumberYear(order);
@@ -1654,17 +1403,14 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
           quality: it.quality || "I",
           size: it.size || "",
           origin: it.origin || order.supplier?.country || "",
-          flow: order.flow || "",
           poLineId: it.id ?? idx + 1,
           locationId: order.destinationLocationId || null,
           destinationText: destinationDisplay(order),
-          directFlow: isDirectFlow(order.flow),
-          custodyType: isDirectFlow(order.flow) ? "Direct" : "Warehouse",
-          flowLabel: directFlowLabel(order),
-          loadingDate: order.loadingDate || null,
+          directFlow: !!order.directFlow,
+                    loadingDate: order.loadingDate || null,
           expectedKg: qty,
           packaging: it.packaging || "",
-          status: isDirectFlow(order.flow) ? "Direct Expected" : "Expected",
+          status: order.directFlow ? "Direct Expected" : "Expected",
           arrivalDate: order.expectedDeliveryDate || null,
           consignment: isConsignment,
           // resync only the purchase cost line; keep any other cost lines (e.g. freight) intact
@@ -1688,21 +1434,18 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
       quality: it.quality || "I",
       size: it.size || "",
       origin: it.origin || order.supplier?.country || "",
-      flow: order.flow || "",
       poRef: order.number,
       poLineId: it.id ?? idx + 1,
       locationId: order.destinationLocationId || null,
       destinationText: destinationDisplay(order),
-      directFlow: isDirectFlow(order.flow),
-      custodyType: isDirectFlow(order.flow) ? "Direct" : "Warehouse",
-      flowLabel: directFlowLabel(order),
-      loadingDate: order.loadingDate || null,
+      directFlow: !!order.directFlow,
+                  loadingDate: order.loadingDate || null,
       expectedKg: qty,
       receivedKg: 0,
       physicalKg: 0,
       damagedKg: 0,
       packaging: it.packaging || "",
-      status: isDirectFlow(order.flow) ? "Direct Expected" : "Expected",
+      status: order.directFlow ? "Direct Expected" : "Expected",
       arrivalDate: order.expectedDeliveryDate || null,
       productionDate: null,
       consignment: isConsignment,
@@ -1711,8 +1454,8 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
         { type: "purchase", label: `Purchase expected (${order.number})`, source: order.number, amount: purchaseAmount, currency: order.currency || "PLN", pln: purchasePLN },
       ],
       movements: [],
-      journey: buildJourneyFromFlow(order),
-      notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg ${isConsignment ? "ON CONSIGNMENT (price settled on sales)" : `at purchase price ${unitPrice} ${order.currency || "PLN"}/kg`}. Destination: ${destinationDisplay(order)}. ${directFlowLabel(order)}.`,
+      journey: [], // v6.37.0: a lot's journey derives from its shipments (v6.34.9); no template seed
+      notes: `Auto-created from confirmed PO ${order.number}. Expected ${qty.toLocaleString("pl-PL")} kg ${isConsignment ? "ON CONSIGNMENT (price settled on sales)" : `at purchase price ${unitPrice} ${order.currency || "PLN"}/kg`}. Destination: ${destinationDisplay(order)}. ${order.directFlow ? "Direct flow · supplier/producer to client/port, not physically received in our warehouse" : "Warehouse/stock flow"}.`,
     });
   });
 
@@ -1852,7 +1595,7 @@ ${blockNote}`.trim(),
     }
     // BP-57 Phase B: the internal flow is composed from the terms + the SALES
     // reality — a governing SO that sends goods onward makes this PO direct.
-    if (o.buyIncoterm) o = { ...o, ...composePOFlow(o, extSOs) };
+    if (o.buyIncoterm) o = { ...o, directFlow: poDirectFromSOs(o, extSOs) }; // v6.37.0: flow key retired — direct-ness derives live from the governing sale
 
     // Guard: prevent duplicate PO numbers (in case the user manually edited it)
     const previous = orders.find(p => p.id === o.id);

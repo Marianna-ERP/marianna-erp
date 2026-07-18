@@ -82,7 +82,6 @@ export interface POrder {
   paymentTermsOther?: string;
   buyIncoterm?: string;
   /** LEGACY flow — replaced by structured fields (BP-1) via the BP-12 shim. */
-  flow?: string;
   supplier?: any;               // counterparty snapshot (id + legal snapshot rule)
   destinationLocationId?: number | string | null;
   destinationText?: string;
@@ -189,10 +188,8 @@ export interface Lot {
   size?: string;
   origin?: string;
   /** LEGACY flow-derived fields — mapped by the BP-12 shim, removed after Batch 4. */
-  flow?: string;
   directFlow?: boolean;
   custodyType?: string;
-  flowLabel?: string;
   destinationText?: string;
   poRef?: string;
   poLineId?: number;
