@@ -25,6 +25,10 @@ const NAMESPACE = "marianna-erp";
 function storageKey(name: string): string {
   return `${NAMESPACE}:v${STORAGE_VERSION}:${name}`;
 }
+// v6.38.0: exported so side-stores (locations.ts) always address the CURRENT
+// version's keys instead of hardcoding "v1" — the bug that made post-migration
+// Settings edits land in the stale safety copy.
+export function dataKey(name: string): string { return storageKey(name); }
 
 function readFromStorage<T>(name: string, fallback: T): T {
   if (typeof window === "undefined" || !window.localStorage) return fallback;
@@ -159,7 +163,7 @@ export const DATA_KEYS = [
   "invoices", "financeNotes",
   // v6.18.16: the controlled Item/Variety product catalog.
   "productCatalog",
-];
+ "auditLog"];
 
 export function exportAllData(): string {
   const data: any = {

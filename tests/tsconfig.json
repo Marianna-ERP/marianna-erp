@@ -21,6 +21,8 @@
     "../src/documents.domain.ts",
     "../src/tradeFlow.domain.ts",
     "../src/flowCleanup.migration.ts",
+    "../src/fakturowniaImport.domain.ts",
+    "../src/auditTrail.domain.ts",
     "../src/payments.domain.ts",
     "../src/settlement.domain.ts",
     "../src/claim.domain.ts",

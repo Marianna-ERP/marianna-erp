@@ -2,13 +2,16 @@ import React, { useMemo, useState } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate } from "./fx";
-import { readFakturowniaConfig, createInvoice } from "./fakturownia";
 import {
   Invoice, FinanceNote, InvoiceCategory, PaymentStatus,
   recomputeInvoiceMoney, isLocked, invoiceDirection,
   buildFakturowniaPayload, noteSignedPLN,
 } from "./invoicing";
+import * as XLSX from "xlsx";
+import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice } from "./fakturownia";
+import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
+import { recordAudit } from "./audit";
 
 const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 
@@ -76,8 +79,210 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
   );
 }
 
+
+// ── v6.39.0: Invoices-owned Fakturownia import (staging + tagging) ───────────
+// Ruling C-1: this replaces the old Finance→Operational-costs import entirely.
+const TAG_LABELS: Record<string, string> = { GOODS: "Goods purchase", FREIGHT: "Freight", CUSTOMS: "Customs", WAREHOUSE: "Warehouse", OVERHEAD: "Overhead", SKIP: "Skip" };
+const OP_CATEGORIES = ["salary", "office_rent", "accountant", "petrol", "software", "bank_fees", "insurance", "phone_internet", "office_supplies", "other"];
+
+function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
+  const [rows, setRows] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [period, setPeriod] = useState("this_month");
+  const [fileName, setFileName] = useState("");
+  const cfg = readFakturowniaConfig();
+  const liveShipments = (shipments || []).filter((sh: any) => sh.status !== "Cancelled");
+  const warehouses = (contacts || []).filter((c: any) => (Array.isArray(c.types) ? c.types : [c.type]).map((t: any) => String(t || "").toLowerCase()).some((t: string) => t.includes("warehouse")) || c.warehouseTariff);
+
+  function stage(raws: any[]) {
+    const staged = raws.map((r: any, i: number) => {
+      const sug = suggestForRow(r, contacts, shipments, pos);
+      const dup = isDuplicateCostInvoice(r.number, invoices);
+      return { ...r, ...sug, dup, include: !dup && (r.net || r.gross) > 0,
+        category: guessCostCategory(`${r.seller} ${r.description || ""}`),
+        warehouseId: warehouses[0]?.id ?? "" };
+    });
+    setRows(staged);
+    if (!staged.length) setError("No cost invoices found.");
+  }
+
+  async function fetchLive() {
+    if (!cfg) { setError("Fakturownia is not configured (Settings)."); return; }
+    setBusy(true); setError("");
+    const r = await fetchInvoices(cfg, { income: 0, period });
+    setBusy(false);
+    if (!r.ok) { setError(r.corsLikely ? "The browser couldn't reach Fakturownia directly (CORS) — use the file export instead." : (r.error || "Fetch failed.")); return; }
+    stage((r.data || []).map(mapInvoice).map((m: any, i: number) => stagedRowFromMapped(m, i)));
+  }
+
+  function onFile(e: any) {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    setFileName(f.name); setError("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const wb = XLSX.read(reader.result as ArrayBuffer, { type: "array", cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const grid: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: "yyyy-mm-dd" });
+        if (!grid.length) { setError("Empty sheet."); return; }
+        const headers = (grid[0] || []).map((h: any) => String(h ?? ""));
+        const body = grid.slice(1).filter(r => (r || []).some(v => String(v ?? "").trim() !== ""));
+        const cNo = findInvoiceNoCol(headers, body);
+        const cSeller = findCol(headers, "sprzedawca", "seller", "kontrahent", "dostawca");
+        const cNet = findCol(headers, "netto", "net");
+        const cGross = findCol(headers, "brutto", "gross");
+        const cDate = findCol(headers, "data wyst", "data sprzed", "issue", "date", "data");
+        const cCur = findCol(headers, "walut", "currency");
+        if (cNo < 0 && cSeller < 0) { setError("Could not recognize columns — expected headers like Numer/Number, Sprzedawca/Seller, Netto/Net."); return; }
+        const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+        stage(body.map((r: any[], i: number) => {
+          const cur = String((cCur >= 0 ? r[cCur] : "") || "PLN").toUpperCase();
+          return {
+            key: `file:${i}`, number: String(cNo >= 0 ? (r[cNo] ?? "") : "").trim(),
+            seller: String(cSeller >= 0 ? (r[cSeller] ?? "") : "").trim(),
+            date: String(cDate >= 0 ? (r[cDate] ?? "") : "").slice(0, 10) || localTodayISO(),
+            net: num(cNet >= 0 ? r[cNet] : 0), gross: num(cGross >= 0 ? r[cGross] : 0),
+            currency: cur, fxRate: 1, description: "",
+          };
+        }).filter((r: any) => r.number || r.seller));
+      } catch (err: any) { setError(`Could not read the file: ${err?.message || err}`); }
+    };
+    reader.readAsArrayBuffer(f);
+  }
+
+  function upd(key: string, patch: any) { setRows(prev => prev.map(r => r.key === key ? { ...r, ...patch } : r)); }
+
+  function post() {
+    const inc = rows.filter(r => r.include && r.tag !== "SKIP");
+    const regs: any[] = []; const flips: any[] = []; const opCosts: any[] = []; const whInvs: any[] = [];
+    inc.forEach(r => {
+      const contact = contactForSeller(r, contacts);
+      if (r.tag === "WAREHOUSE") {
+        const wh = warehouses.find((w: any) => String(w.id) === String(r.warehouseId)) || contact;
+        whInvs.push(warehouseInvoiceFromRow(r, wh));
+        return;
+      }
+      if (r.tag === "OVERHEAD") { opCosts.push(operationalCostFromRow(r, r.category || "other")); }
+      regs.push(buildCostInvoice(r, r.tag, { shipmentNumber: r.shipmentNumber, poNumber: r.poNumber }, contact));
+      if ((r.tag === "FREIGHT" || r.tag === "CUSTOMS") && r.shipmentNumber) {
+        let lineId = r.costLineId;
+        if (lineId == null) {
+          const sh = liveShipments.find((x: any) => x.number === r.shipmentNumber);
+          const want = (c: any) => (c.invoiceStatus || "Expected") === "Expected" && (r.tag === "CUSTOMS" ? c.type === "customs" : FREIGHT_COST_TYPES.has(String(c.type)));
+          lineId = (sh?.costs || []).find(want)?.id;
+        }
+        if (lineId != null) flips.push({ shipmentNumber: r.shipmentNumber, costLineId: lineId, invoiceNumber: r.number });
+      }
+    });
+    onPost({ regs, flips, opCosts, whInvs });
+  }
+
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12 };
+  const included = rows.filter(r => r.include && r.tag !== "SKIP").length;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130, padding: 20 }} onClick={onClose}>
+      <div style={{ width: 1100, maxWidth: "96vw", maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={(e: any) => e.stopPropagation()}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800 }}>Import from Fakturownia</div>
+            <div style={{ fontSize: 11.5, color: "#64748B" }}>Fetch your received cost invoices, tag each one, and post — freight/customs flip the matching shipment cost line to <b>Received</b>; goods link the PO; warehouse and overhead go to their registers. Fakturownia stays the register of record.</div>
+          </div>
+          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Close</button>
+        </div>
+        <div style={{ padding: "12px 22px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid #F3F4F6", flexWrap: "wrap" }}>
+          <select style={inp} value={period} onChange={(e: any) => setPeriod(e.target.value)}>
+            {[["this_month", "This month"], ["last_month", "Last month"], ["this_year", "This year"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <button disabled={busy} onClick={fetchLive} style={{ border: "none", background: "#111", color: "#fff", borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{busy ? "Fetching…" : "⇩ Fetch from API"}</button>
+          <div style={{ color: "#CBD5E1", fontSize: 12 }}>or</div>
+          <label style={{ border: "1px solid #E5E7EB", background: "#F8FAFC", borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            📄 Upload register file (XLS/CSV)
+            <input type="file" accept=".xls,.xlsx,.csv" style={{ display: "none" }} onChange={onFile} />
+          </label>
+          {fileName && <span style={{ fontSize: 11.5, color: "#64748B" }}>{fileName}</span>}
+          {error && <span style={{ fontSize: 12, color: "#DC2626", fontWeight: 600 }}>{error}</span>}
+        </div>
+        {rows.length > 0 && (
+          <div style={{ padding: "10px 22px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "6px 0", borderBottom: "1px solid #F3F4F6" }}>
+              {["", "DATE", "SELLER", "NUMBER", "NET", "TAG", "ROUTE / LINK"].map((h, i) => <div key={i} style={{ fontSize: 9.5, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
+            </div>
+            {rows.map((r: any) => {
+              const rowPLN = Math.round((r.net || r.gross) * (r.fxRate || 1) * 100) / 100;
+              return (
+                <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
+                  <input type="checkbox" checked={r.include} onChange={(e: any) => upd(r.key, { include: e.target.checked })} />
+                  <div style={{ fontSize: 11.5, color: "#64748B" }}>{r.date}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.dup && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: "#B45309", background: "#FFFBEB", padding: "1px 6px", borderRadius: 4 }}>already in register</span>}</div>
+                  <div style={{ fontSize: 11.5, fontFamily: "ui-monospace, Menlo, monospace" }}>{r.number || "—"}</div>
+                  <div style={{ fontSize: 12 }}>{(r.net || r.gross).toLocaleString("pl-PL")} {r.currency}</div>
+                  <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
+                    {IMPORT_TAGS.map((t: string) => <option key={t} value={t}>{TAG_LABELS[t]}</option>)}
+                  </select>
+                  <div style={{ fontSize: 11.5 }}>
+                    {(r.tag === "FREIGHT" || r.tag === "CUSTOMS") && (
+                      <select style={{ ...inp, width: "100%" }} value={r.shipmentNumber || ""} onChange={(e: any) => upd(r.key, { shipmentNumber: e.target.value, costLineId: null })}>
+                        <option value="">— link shipment —</option>
+                        {liveShipments.map((sh: any) => <option key={sh.number} value={sh.number}>{sh.number} · {sh.status}</option>)}
+                      </select>
+                    )}
+                    {r.tag === "GOODS" && (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <select style={{ ...inp, flex: 1 }} value={r.poNumber || ""} onChange={(e: any) => { const po = (pos || []).find((p: any) => p.number === e.target.value); upd(r.key, { poNumber: e.target.value, poPLN: po ? poValuePLN(po) : undefined }); }}>
+                          <option value="">— link PO —</option>
+                          {(pos || []).filter((p: any) => p.status !== "Cancelled").map((p: any) => <option key={p.number} value={p.number}>{p.number} · {p.supplier?.name || ""}</option>)}
+                        </select>
+                        {r.poNumber && <span style={{ color: Math.abs((r.poPLN ?? 0) - rowPLN) <= Math.max(2, rowPLN * 0.01) ? "#16A34A" : "#B45309", whiteSpace: "nowrap" }}>inv {rowPLN.toLocaleString("pl-PL")} vs PO {(r.poPLN ?? 0).toLocaleString("pl-PL")}</span>}
+                      </div>
+                    )}
+                    {r.tag === "WAREHOUSE" && (
+                      <select style={{ ...inp, width: "100%" }} value={r.warehouseId || ""} onChange={(e: any) => upd(r.key, { warehouseId: e.target.value })}>
+                        {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                      </select>
+                    )}
+                    {r.tag === "OVERHEAD" && (
+                      <select style={{ ...inp, width: "100%" }} value={r.category || "other"} onChange={(e: any) => upd(r.key, { category: e.target.value })}>
+                        {OP_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat.replace(/_/g, " ")}</option>)}
+                      </select>
+                    )}
+                    {r.tag === "SKIP" && <span style={{ color: "#CBD5E1" }}>not posted</span>}
+                    {r.reason && <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{r.reason}</div>}
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "14px 0 6px" }}>
+              <button disabled={!included} onClick={post} style={{ border: "none", background: included ? "#16A34A" : "#D1D5DB", color: "#fff", borderRadius: 8, padding: "9px 18px", fontSize: 12.5, fontWeight: 700, cursor: included ? "pointer" : "not-allowed" }}>Post {included} invoice{included === 1 ? "" : "s"}</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Invoices(props: any) {
-  const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [] } = props;
+  const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
+    setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null } = props;
+  const [showImport, setShowImport] = useState(false); // v6.39.0
+  // v6.39.0: everything a posted import touches, in one place.
+  function handleImportPost({ regs, flips, opCosts, whInvs }: any) {
+    if (regs.length) setInvoices((prev: any[]) => [...regs.map((r: any) => recomputeInvoiceMoney(r)), ...(prev || [])]);
+    if (flips.length && setShipments) setShipments((prev: any[]) => (prev || []).map((sh: any) => {
+      const mine = flips.filter((f: any) => f.shipmentNumber === sh.number);
+      return mine.reduce((acc: any, f: any) => applyReceivedCostLine(acc, f.costLineId, f.invoiceNumber), sh);
+    }));
+    if (opCosts.length && setOperationalCosts) setOperationalCosts((prev: any[]) => [...(prev || []), ...opCosts]);
+    if (whInvs.length && setWarehouseInvoices) setWarehouseInvoices((prev: any[]) => [...(prev || []), ...whInvs]);
+    setShowImport(false);
+    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "imported", summary: `Import posted: ${regs.length} invoice(s)${flips.length ? `, ${flips.length} shipment cost line(s) -> Received` : ""}${opCosts.length ? `, ${opCosts.length} operational cost(s)` : ""}${whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : ""}` });
+    window.alert(`Posted: ${regs.length} invoice(s) to the register` +
+      (flips.length ? `, ${flips.length} shipment cost line(s) marked Received` : "") +
+      (opCosts.length ? `, ${opCosts.length} operational cost(s)` : "") +
+      (whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : "") + ".");
+  }
   const [view, setView] = useState<"list" | "form" | "detail" | "note">("list");
   const [selId, setSelId] = useState<number | null>(null);
   const [form, setForm] = useState<any>(null);
@@ -144,6 +349,7 @@ export default function Invoices(props: any) {
         String(p.counterparty?.name || "").trim().toLowerCase() === String(rec.counterparty?.name || "").trim().toLowerCase());
       if (dupe && !window.confirm(`A ${rec.kind === "SALES" ? "sales" : "cost"} invoice "${rec.number}" from ${rec.counterparty?.name || "this counterparty"} already exists. This looks like a duplicate — save anyway?`)) return;
     }
+    recordAudit({ module: "Invoices", docType: "Invoice", docNumber: rec.number || "(draft)", action: rec.id == null ? "created" : "saved", summary: `${rec.kind === "SALES" ? "Sales" : "Cost"} invoice ${rec.id == null ? "created" : "saved"}` });
     setInvoices((prev: Invoice[]) => {
       const exists = prev.find(p => p.id === rec.id);
       if (exists) return prev.map(p => p.id === rec.id ? { ...(rec as Invoice) } : p);
@@ -153,6 +359,7 @@ export default function Invoices(props: any) {
   }
   function markStatus(inv: Invoice, status: PaymentStatus) {
     setInvoices((prev: Invoice[]) => prev.map(p => p.id === inv.id ? { ...p, paymentStatus: status, locked: status === "Sent" ? true : p.locked } : p));
+    recordAudit({ module: "Invoices", docType: "Invoice", docNumber: inv.number || "(draft)", action: status === "Cancelled" ? "cancelled" : "status", summary: `Payment status → ${status}` });
   }
   // Batch 5b (BP-36): payments are dated EVENTS — the modal below replaces the
   // old prompt + single mutable paidAmount.
@@ -251,6 +458,8 @@ export default function Invoices(props: any) {
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button onClick={() => newInvoice("SALES")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Sales invoice</button>
           <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Cost invoice</button>
+          <button onClick={() => setShowImport(true)} title="Fetch received cost invoices from Fakturownia, tag them (goods / freight / customs / warehouse / overhead) and post them where they belong." style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Import from Fakturownia</button>
+          {showImport && <ImportFakturowniaModal invoices={invoices} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
           <button onClick={() => newNote()} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>+ Credit/Debit note</button>
         </div>
       </div>

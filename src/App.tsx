@@ -10,6 +10,9 @@ import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
+import { setAuditSink } from "./audit";
+import { appendAudit } from "./auditTrail.domain";
+import AuditTrail from "./AuditTrail";
 import { convertSettledRefsToEvents } from "./payments.domain";
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
@@ -108,6 +111,7 @@ const NAV_GROUPS: { items: { key: string; icon: string; label: string; short: st
   { items: [
     { key: "invoices", icon: "₣", label: "Invoices", short: "Invoices" },
     { key: "finance", icon: "Σ", label: "Finance", short: "Finance" },
+    { key: "audit", icon: "≡", label: "Audit trail", short: "Audit" },
   ] },
   { items: [
     { key: "contacts", icon: "◻", label: "Counterparties", short: "Parties" },
@@ -180,6 +184,14 @@ export default function App() {
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
   const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
   const [userName, setUserName] = useLocalStoredState("userName", "");
+  // v6.40.0: the audit logbook — passive, capped, exported with everything else.
+  const [auditLog, setAuditLog] = useLocalStoredState("auditLog", []);
+  setAuditSink((e: any) => setAuditLog((prev: any[]) => appendAudit(prev || [], {
+    id: Date.now() * 10 + Math.floor(Math.random() * 10),
+    ts: new Date().toISOString(),
+    user: userName || "user",
+    ...e,
+  })));
 
   function setContactsCascade(update: any) {
     _setContacts(update);
@@ -250,6 +262,8 @@ export default function App() {
     switch (activeModule) {
       case "dashboard":
         return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
+      case "audit":
+        return <AuditTrail auditLog={auditLog} />;
       case "finance":
         return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} />;
       case "contacts":
@@ -263,7 +277,7 @@ export default function App() {
       case "shipments":
         return <Shipments shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} />;
       case "invoices":
-        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} lots={lots} />;
+        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />;
       case "settings":
         return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       default:

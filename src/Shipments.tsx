@@ -9,6 +9,7 @@ import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
+import { recordAudit } from "./audit";
 
 // MARIANNA ERP - Shipments / Logistics module
 // Standalone-friendly: when no props are passed it starts empty (demo seeds moved out of the bundle in v6.32.0).
@@ -2345,6 +2346,7 @@ export default function Shipments({
       setShipments(prev => [clean, ...prev]);
       setSelectedId(clean.id);
       linkShipmentToDocs(clean);
+      recordAudit({ module: "Shipments", docType: "Shipment", docNumber: clean.number, action: "created", summary: `Shipment created (${clean.mode || "?"} · ${clean.status || "Draft"})` });
       setToast(`${clean.number} created.`);
     } else {
       setShipments(prev => prev.map(s => s.id === clean.id ? clean : s));
@@ -2425,6 +2427,7 @@ export default function Shipments({
     });
     if (next) {
       linkShipmentToDocs(next);
+      recordAudit({ module: "Shipments", docType: "Shipment", docNumber: next.number, action: status === "Cancelled" ? "cancelled" : "status", summary: status === "Cancelled" ? "Cancelled — inventory postings & allocated costs reversed" : `Status → ${status}` });
       // v6.35.5: cancellation reverses whatever this shipment posted to inventory.
       if (status === "Cancelled") {
         const n = reverseShipmentPostings(next);
@@ -2479,6 +2482,7 @@ export default function Shipments({
       label: costTypeLabel,
     }));
     updateShipment(sh.id, s => ({ ...s, billingStatus: "Cost allocated" }));
+    recordAudit({ module: "Shipments", docType: "Shipment", docNumber: sh.number, action: "allocated", summary: "Logistics costs allocated into lot landed cost" });
     setToast(`${sh.number} logistics costs allocated to inventory lot costing.`);
   }
 

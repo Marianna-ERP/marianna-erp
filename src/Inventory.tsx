@@ -13,6 +13,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
+import { recordAudit } from "./audit";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 
@@ -1808,6 +1809,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 
   // ── mutations ───────────────────────────────────────────────────────
   function recordMovement({ id, type, qtyKg, fromId, toId, note, date, soRef, detectedAt, claimValue, claimCurrency, partyName }: any) {
+    recordAudit({ module: "Inventory", docType: "Lot", docNumber: selected?.number || "?", action: type === "CLAIM" ? "claim" : "movement", summary: `${type}${qtyKg ? " " + Number(qtyKg).toLocaleString("pl-PL") + " kg" : ""}${note ? " - " + note : ""}` });
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       // Capture a stable base location for replay (origin before any movement).

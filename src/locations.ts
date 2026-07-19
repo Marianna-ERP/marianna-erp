@@ -1,3 +1,4 @@
+import { dataKey } from "./useLocalStoredState";
 // ─── SHARED LOCATIONS (v5.8 trunk, Option B consolidation) ──────────────────
 //
 // Single source of truth for all location lookups across PurchaseOrders,
@@ -110,7 +111,12 @@ export const LOCATIONS: Location[] = [
 // built-in reference list above.
 
 export const CUSTOM_LOCATION_ID_BASE = 10000;
-const CUSTOM_LOCATIONS_KEY = "marianna-erp:v1:customLocations";
+// v6.38.0: these two stores are part of DATA_KEYS, so the v6.37.0 migration moved
+// them to the current version's keys — but this file kept reading/writing "v1"
+// hardcoded. Post-migration adds/edits landed in the stale safety copy (invisible
+// to the live app and to exports). Fixed: address the current version, and adopt
+// the v1 store ONE TIME below (it was the de-facto authoritative store until now).
+const CUSTOM_LOCATIONS_KEY = dataKey("customLocations");
 
 // Options offered in the Settings UI → mapped to (type, legacyType) pairs.
 export const CUSTOM_LOCATION_TYPE_OPTIONS: { key: LocationType; label: string; legacyType: string }[] = [
@@ -127,6 +133,27 @@ function legacyTypeFor(type: LocationType): string {
   const opt = CUSTOM_LOCATION_TYPE_OPTIONS.find(o => o.key === type);
   return opt ? opt.legacyType : "PORT";
 }
+
+
+// ── v6.38.0 one-time adoption of post-migration strays ───────────────────────
+// Until this fix, ALL custom-location / logistics-point writes (adds, edits,
+// removals) went to the v1 keys even after the app's data moved to v2 — so the
+// v1 store is the more current one. Adopt it wholesale into the current key,
+// exactly once (marker-guarded), then the current key is authoritative forever.
+(() => {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    const MARKER = dataKey("locationsKeyFixApplied");
+    if (window.localStorage.getItem(MARKER)) return;
+    // self-contained key pairs (const declarations further down are in their TDZ here)
+    [["marianna-erp:v1:customLocations", dataKey("customLocations")], ["marianna-erp:v1:logisticsPoints", dataKey("logisticsPoints")]].forEach(([legacy, current]) => {
+      if (legacy === current) return; // pre-migration installs: nothing to adopt
+      const legacyRaw = window.localStorage.getItem(legacy);
+      if (legacyRaw != null) window.localStorage.setItem(current, legacyRaw);
+    });
+    window.localStorage.setItem(MARKER, "1");
+  } catch (err) { console.warn("[locations] key-fix adoption failed:", err); }
+})();
 
 export function readCustomLocations(): Location[] {
   if (typeof window === "undefined" || !window.localStorage) return [];
@@ -192,6 +219,8 @@ export function updateCustomLocation(id: number, patch: { name?: string; country
 // details (esp. the exact transshipment-warehouse address a transport order
 // needs) belong to the user. Overrides are stored per built-in id and applied
 // at module load, before any module snapshots LOCATIONS.
+// locationOverrides is NOT in DATA_KEYS (never migrated) — its "v1" name is just
+// its permanent, version-independent name. Deliberately left as-is.
 const LOCATION_OVERRIDES_KEY = "marianna-erp:v1:locationOverrides";
 export function readLocationOverrides(): Record<string, { name?: string; country?: string; address?: string }> {
   if (typeof window === "undefined" || !window.localStorage) return {};
@@ -242,7 +271,7 @@ readCustomLocations().forEach(cl => {
 // bootstrap re-runs, exactly like the legacy custom-locations did.
 
 export const LOGISTICS_POINT_BASE = 800000;
-const LOGISTICS_POINTS_KEY = "marianna-erp:v1:logisticsPoints";
+const LOGISTICS_POINTS_KEY = dataKey("logisticsPoints");
 
 export const LOGISTICS_POINT_KINDS: { key: string; label: string; type: LocationType; legacyType: string }[] = [
   { key: "PortLoading",   label: "Port of loading",       type: "Port",       legacyType: "PORT" },
@@ -463,7 +492,7 @@ export function registerCounterpartyLocations(contacts: any[]): void {
 function readContactsFromStorage(): any[] {
   if (typeof window === "undefined" || !window.localStorage) return [];
   try {
-    const raw = window.localStorage.getItem("marianna-erp:v1:contacts");
+    const raw = window.localStorage.getItem(dataKey("contacts")); // v6.38.0: current version, not the frozen v1 safety copy
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];

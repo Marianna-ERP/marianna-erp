@@ -14,6 +14,7 @@ import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia"
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
+import { recordAudit } from "./audit";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -2360,6 +2361,7 @@ export default function SalesOrders({
       || invoicesForSO(o.number).length > 0; // v6.33.0 (A3-6)
 
     const savedOrder = { ...o, id: o.id ?? nextId() };
+    recordAudit({ module: "Sales orders", docType: "SO", docNumber: savedOrder.number, action: o.id == null ? "created" : "saved", summary: `SO ${o.id == null ? "created" : "saved"} (${savedOrder.status || "Draft"}${savedOrder.sellIncoterm ? " · " + savedOrder.sellIncoterm : ""})` });
     setOrders(prev => {
       const exists = prev.find(p => p.id === savedOrder.id);
       if (exists) return prev.map(p => p.id === savedOrder.id ? savedOrder : p);
@@ -2417,6 +2419,7 @@ export default function SalesOrders({
         date: today, source: mv.source,
       }]);
     }
+    recordAudit({ module: "Sales orders", docType: "SO", docNumber: soDoc.number, action: "claim", summary: `Client claim recorded on ${lot.number} — ${amt.toLocaleString("pl-PL")} ${cc.cur || "PLN"}; credit note drafted` });
     setClientClaimFor(null);
   }
 

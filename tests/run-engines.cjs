@@ -1416,6 +1416,76 @@ T("accrual (ruling A): Expected cost counts in ACTUAL P/L once the shipment is D
   assert.equal(booked.directCostsPLN, 0, "unconcluded + uninvoiced still excluded");
 });
 
+// ── v6.39.0: Fakturownia tagged import (Invoices-owned) ──
+const FKI = require("./build/fakturowniaImport.domain.js");
+console.log("── fakturownia import: suggest / build / flip ──");
+T("carrier invoice suggests FREIGHT and matches the open Expected freight line", () => {
+  const contacts = [{ id: 5, name: "TransPol Sp. z o.o.", types: ["Carrier"] }];
+  const shipments = [{ number: "SHP-9", status: "Delivered", costs: [
+    { id: 11, type: "road_freight", amountPLN: 4500, invoiceStatus: "Expected", supplierId: 5 },
+    { id: 12, type: "customs", amountPLN: 1200, invoiceStatus: "Expected" },
+  ]}];
+  const row = { key: "k", number: "FV/77", seller: "TransPol Sp. z o.o.", date: "2026-07-01", net: 4500, gross: 5535, currency: "PLN", fxRate: 1 };
+  const s = FKI.suggestForRow(row, contacts, shipments, []);
+  assert.equal(s.tag, "FREIGHT");
+  assert.equal(s.shipmentNumber, "SHP-9");
+  assert.equal(s.costLineId, 11);
+});
+T("supplier invoice suggests GOODS with the nearest PO + side-by-side value (C-2)", () => {
+  const contacts = [{ id: 2, name: "Delta Farms", types: ["Supplier"] }];
+  const pos = [
+    { number: "PO-1", status: "Confirmed", supplier: { id: 2, name: "Delta Farms" }, fxRate: 1, items: [{ qty: 21000, price: 3 }] },
+    { number: "PO-2", status: "Confirmed", supplier: { id: 2, name: "Delta Farms" }, fxRate: 1, items: [{ qty: 5000, price: 3 }] },
+  ];
+  const row = { key: "k", number: "FV/9", seller: "Delta Farms", date: "2026-07-01", net: 62500, gross: 65625, currency: "PLN", fxRate: 1 };
+  const s = FKI.suggestForRow(row, contacts, [], pos);
+  assert.equal(s.tag, "GOODS");
+  assert.equal(s.poNumber, "PO-1", "nearest by value (63000 vs 62500)");
+  assert.equal(s.poPLN, 63000);
+});
+T("posting flips the matched cost line to Received + ref; duplicates detected", () => {
+  const sh = { number: "SHP-9", costs: [{ id: 11, type: "road_freight", invoiceStatus: "Expected" }, { id: 12, type: "customs", invoiceStatus: "Expected" }] };
+  const after = FKI.applyReceivedCostLine(sh, 11, "FV/77");
+  assert.equal(after.costs[0].invoiceStatus, "Received");
+  assert.equal(after.costs[0].invoiceRef, "FV/77");
+  assert.equal(after.costs[1].invoiceStatus, "Expected", "other line untouched");
+  assert.ok(FKI.isDuplicateCostInvoice("FV/77", [{ kind: "COST", number: "fv/77", paymentStatus: "Draft" }]));
+  assert.ok(!FKI.isDuplicateCostInvoice("FV/78", [{ kind: "COST", number: "FV/77", paymentStatus: "Draft" }]));
+});
+T("buildCostInvoice: freight → SHIPMENT scope + Shipment link; goods → PO link, no scope", () => {
+  const row = { key: "k", number: "FV/77", seller: "TransPol", date: "2026-07-01", dueDate: "2026-07-15", net: 4500, gross: 5535, currency: "PLN", fxRate: 1 };
+  const f = FKI.buildCostInvoice(row, "FREIGHT", { shipmentNumber: "SHP-9" }, { id: 5, name: "TransPol" });
+  assert.equal(f.kind, "COST");
+  assert.equal(f.costScope, "SHIPMENT");
+  assert.deepEqual(f.links, [{ type: "Shipment", number: "SHP-9" }]);
+  assert.equal(f.vatRate, 23);
+  const g = FKI.buildCostInvoice(row, "GOODS", { poNumber: "PO-1" }, null);
+  assert.equal(g.costScope, undefined);
+  assert.deepEqual(g.links, [{ type: "PO", number: "PO-1" }]);
+  assert.equal(g.counterparty.name, "TransPol");
+});
+
+// ── v6.40.0: audit trail (append-only, capped, passive) ──
+const AUD = require("./build/auditTrail.domain.js");
+console.log("── audit trail ──");
+T("append is ordered and the cap rolls the oldest off", () => {
+  let log = [];
+  for (let i = 1; i <= 5; i++) log = AUD.appendAudit(log, { id: i, ts: `2026-07-0${i}T10:00:00Z`, user: "hazem", module: "Shipments", docType: "Shipment", docNumber: `SHP-${i}`, action: "status", summary: `s${i}` }, 3);
+  assert.equal(log.length, 3, "capped at 3");
+  assert.deepEqual(log.map(e => e.id), [3, 4, 5], "oldest rolled off, order kept");
+});
+T("filterAudit: module + free text, newest first; auditForDoc exact match", () => {
+  const log = [
+    { id: 1, ts: "2026-07-01T08:00:00Z", user: "hazem", module: "Shipments", docType: "Shipment", docNumber: "SHP-1", action: "created", summary: "Shipment created" },
+    { id: 2, ts: "2026-07-02T08:00:00Z", user: "hazem", module: "Invoices", docType: "Invoice", docNumber: "FV/9", action: "status", summary: "Payment status -> Paid" },
+    { id: 3, ts: "2026-07-03T08:00:00Z", user: "anna", module: "Shipments", docType: "Shipment", docNumber: "SHP-1", action: "cancelled", summary: "Cancelled" },
+  ];
+  const ships = AUD.filterAudit(log, { module: "Shipments" });
+  assert.deepEqual(ships.map(e => e.id), [3, 1], "module filter, newest first");
+  assert.deepEqual(AUD.filterAudit(log, { q: "paid" }).map(e => e.id), [2], "free-text");
+  assert.deepEqual(AUD.auditForDoc(log, "shp-1").map(e => e.id), [1, 3], "per-doc, case-insensitive");
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

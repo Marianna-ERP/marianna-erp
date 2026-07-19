@@ -8,6 +8,7 @@ import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./loca
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { cnCodeForItem } from "./productCatalog";
+import { recordAudit } from "./audit";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -772,6 +773,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
   const isLocked = !!order.id && (hasDependents || (order.status !== "Draft" && terminalStatus)); // fully locked once anything depends on it
 
   const setStatus = (newStatus) => {
+    recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: newStatus === "Cancelled" ? "cancelled" : "status", summary: `Status → ${newStatus}` });
     if (hasDependents) {
       const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
       alert(`This PO is locked: it has downstream dependents (${what}).\n\nWhile anything is linked, its status can't be changed (including back to Draft) or cancelled — that would corrupt the linked records. Unlink all downstream documents first, then the PO can be changed or deleted.`);
@@ -1678,6 +1680,7 @@ ${blockNote}`.trim(),
       });
     }
 
+    recordAudit({ module: "Purchase orders", docType: "PO", docNumber: updated.number, action: o.id == null ? "created" : "saved", summary: `PO ${o.id == null ? "created" : "saved"} (${updated.status || "Draft"}${updated.buyIncoterm ? " · " + updated.buyIncoterm : ""})` });
     setOrders(prev => {
       const exists = prev.find(p => p.id === updated.id);
       if (exists) return prev.map(p => p.id === updated.id ? updated : p);

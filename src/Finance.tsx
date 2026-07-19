@@ -2,12 +2,9 @@ import React, { useMemo, useState } from "react";
 import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { computeSOMargin } from "./marginCalculations";
 import { nextId } from "./ids";
-import { defaultFxRate } from "./fx";
 import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO } from "./dates";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
-import * as XLSX from "xlsx";
-import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
 import { buildLedger } from "./ledger";
 import {
   aggregateNetMargins,
@@ -124,336 +121,10 @@ function newCostTemplate(): OperationalCost {
 
 
 
-// ─── v6.7: FAKTUROWNIA COST-REGISTER IMPORT ─────────────────────────────────
-// Reads the cost/expense register exported from Fakturownia (XLS/XLSX/CSV).
-// Column detection is lenient (PL/EN headers). Each row is reviewed: routed to
-// an Operational Cost (category guessed from text, editable) or — when the
-// supplier is a tariffed warehouse — to a Warehouse invoice for reconciliation.
-function guessCostCategory(text: string): string {
-  const t = String(text || "").toLowerCase();
-  if (/paliw|fuel|orlen|petrol|tank/.test(t)) return "petrol";
-  if (/czynsz|najem|rent|landlord/.test(t)) return "office_rent";
-  if (/ksi[eę]gow|account|biuro rachun/.test(t)) return "accountant";
-  if (/energi|pr[aą]d|electric|gaz|water|woda/.test(t)) return "office_rent";
-  if (/telefon|internet|phone|play|orange|t-mobile|plus/.test(t)) return "phone_internet";
-  if (/ubezpiecz|insur|pzu|warta/.test(t)) return "insurance";
-  if (/oprogram|software|subscript|licen|saas|google|microsoft/.test(t)) return "software";
-  if (/bank|prowizj|fee/.test(t)) return "bank_fees";
-  if (/wynagrodz|salary|payroll|zus|p[ił]t/.test(t)) return "salary";
-  if (/t[lł]umacz|translat/.test(t)) return "other";
-  return "other";
-}
+// v6.39.0 (ruling C-1): the Fakturownia import moved to the INVOICES module
+// (tagged staging: goods / freight / customs / warehouse / overhead). The file
+// parser lives on in fakturowniaImport.domain.
 
-function findCol(headers: string[], ...keys: string[]): number {
-  const H = headers.map(h => String(h || "").toLowerCase());
-  for (const k of keys) {
-    const i = H.findIndex(h => h.includes(k));
-    if (i >= 0) return i;
-  }
-  return -1;
-}
-
-// v6.16 (#9): the Fakturownia cost-register export has several "Numer …" columns
-// (accounting no., position no., order no.). Plain substring matching on "numer"
-// grabbed the wrong one and left the real invoice number blank. This prefers the
-// genuine invoice-number headers and skips the lookalikes.
-function findInvoiceNoCol(headers: string[], rows?: any[][]): number {
-  const H = headers.map(h => String(h || "").toLowerCase().trim());
-  const bad = (h: string) => /(ksi[ęe]g|konta|pozycj|zam[óo]w|ewidenc|rachunk|korekt|proform|wewn)/.test(h);
-  const norm = (s: string) => s.replace(/\s+/g, " ").trim();
-
-  // Score how "invoice-number-like" a column's sample values are. A real invoice number
-  // (e.g. FV/79/06/2026, 123/2026, INV-0007) has separators or letters+digits; a row-counter
-  // column ("No." holding 1, 2, 3…) is a plain integer sequence and scores negative. This is
-  // what disambiguates Fakturownia's TWO "No." columns (row counter vs actual invoice number).
-  const score = (col: number): number => {
-    if (!rows || col < 0) return 0;
-    let s = 0, seen = 0;
-    for (let r = 0; r < rows.length && seen < 25; r++) {
-      const v = String((rows[r] || [])[col] ?? "").trim();
-      if (!v) continue;
-      seen++;
-      if (/[/\-]/.test(v) && /\d/.test(v)) s += 2;          // separator + digit  → FV/79/06/2026
-      else if (/[a-z]/i.test(v) && /\d/.test(v)) s += 2;     // letters + digits   → INV0007
-      else if (/^\d+([.,]0+)?$/.test(v)) s -= 1;             // plain integer      → row counter
-    }
-    return seen ? s / seen : 0;
-  };
-
-  const nameHit = (h: string) => !bad(h) && (
-    ["numer faktury", "nr faktury", "numer dokumentu", "nr dokumentu", "numer obcy", "nr obcy",
-     "invoice number", "invoice no", "invoice no.", "numer", "nr", "number", "no", "no."].includes(norm(h))
-    || /numer faktury|nr faktury|numer dokumentu|numer obcy|invoice|faktur/.test(h)
-  );
-
-  // Header-matching candidates; if more than one (e.g. two "No." columns), pick the most
-  // invoice-like by value shape.
-  const candidates: number[] = [];
-  H.forEach((h, i) => { if (nameHit(h)) candidates.push(i); });
-  if (candidates.length === 1) return candidates[0];
-  if (candidates.length > 1) {
-    candidates.sort((a, b) => score(b) - score(a));
-    return candidates[0];
-  }
-
-  // No header matched at all → scan every column for invoice-like values.
-  if (rows && rows.length) {
-    let best = -1, bestScore = 0.5; // require a clear signal
-    for (let c = 0; c < headers.length; c++) {
-      if (bad(H[c] || "")) continue;
-      const sc = score(c);
-      if (sc > bestScore) { bestScore = sc; best = c; }
-    }
-    if (best >= 0) return best;
-  }
-  return -1;
-}
-
-function FakturowniaCostImportModal({ contacts = [], operationalCosts = [], onImport, onClose }: any) {
-  const [rows, setRows] = useState<any[]>([]);
-  const [fileName, setFileName] = useState("");
-  const [error, setError] = useState("");
-  const tariffWarehouses = (contacts || []).filter((c: any) => tariffHasRates(c.warehouseTariff));
-  // v6.18.20: keep the raw sheet + the (auto-detected, user-overridable) column map so the
-  // invoice-no / date column can be re-pointed if Fakturownia labels them unexpectedly.
-  const [aoa, setAoa] = useState<any[][]>([]);
-  const [headers, setHeaders] = useState<string[]>([]);
-  const [cols, setCols] = useState<any>({ no: -1, seller: -1, date: -1, net: -1, gross: -1, cur: -1, desc: -1 });
-
-  function buildRows(grid: any[][], cmap: any) {
-    const existingInvNos = new Set((operationalCosts || []).map((c: any) => String(c.invoiceNo || "").trim().toLowerCase()).filter(Boolean));
-    const num = (v: any) => parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")) || 0;
-    return grid.slice(1).filter(r => (r || []).some(x => String(x || "").trim() !== "")).map((r: any[], i: number) => {
-      const invoiceNo = cmap.no >= 0 ? String(r[cmap.no] || "").trim() : "";
-      const seller = cmap.seller >= 0 ? String(r[cmap.seller] || "").trim() : "";
-      const rawDate = cmap.date >= 0 ? String(r[cmap.date] || "").trim() : "";
-      // Accept ISO (yyyy-mm-dd) and d/m/yyyy or d.m.yyyy, with 1- or 2-digit day/month.
-      const iso = rawDate.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
-      const dmy = rawDate.match(/(\d{1,2})[./](\d{1,2})[./](\d{4})/);
-      const date = iso ? `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`
-        : dmy ? `${dmy[3]}-${dmy[2].padStart(2, "0")}-${dmy[1].padStart(2, "0")}` : "";
-      const net = cmap.net >= 0 ? num(r[cmap.net]) : 0;
-      const gross = cmap.gross >= 0 ? num(r[cmap.gross]) : 0;
-      const amount = net || gross;
-      const currency = cmap.cur >= 0 ? (String(r[cmap.cur] || "PLN").trim().toUpperCase() || "PLN") : "PLN";
-      const desc = cmap.desc >= 0 ? String(r[cmap.desc] || "").trim() : "";
-      const whMatch = tariffWarehouses.find((w: any) => seller && (String(w.name || "").toLowerCase().includes(seller.toLowerCase().slice(0, 12)) || seller.toLowerCase().includes(String(w.name || "").toLowerCase().slice(0, 12))));
-      const dup = invoiceNo && existingInvNos.has(invoiceNo.toLowerCase());
-      return {
-        id: i, include: !dup && amount > 0, dup,
-        invoiceNo, seller, date, amount, currency,
-        fxRate: defaultFxRate(currency),
-        description: desc || `${seller} ${invoiceNo}`.trim(),
-        route: whMatch ? "warehouse" : "cost",
-        warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
-        category: guessCostCategory(`${seller} ${desc}`),
-        allocationMethod: "by_revenue",
-      };
-    });
-  }
-
-  function setCol(key: string, idx: number) {
-    const next = { ...cols, [key]: idx };
-    setCols(next);
-    if (aoa.length) setRows(buildRows(aoa, next));
-  }
-
-  // First non-empty value in a column — shown in the picker so duplicate headers
-  // (e.g. Fakturownia's two "No." columns) can be told apart by a sample value.
-  const colSample = (i: number): string => {
-    for (let r = 1; r < Math.min(aoa.length, 15); r++) {
-      const v = String((aoa[r] || [])[i] ?? "").trim();
-      if (v) return v.length > 22 ? v.slice(0, 22) + "\u2026" : v;
-    }
-    return "";
-  };
-
-  function handleFile(e: any) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setFileName(file.name); setError("");
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const wb = XLSX.read(reader.result as ArrayBuffer, { type: "array", cellDates: true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const grid: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: "yyyy-mm-dd" });
-        if (!grid.length) { setError("File appears empty."); return; }
-        const hdr = (grid[0] || []).map((x: any) => String(x || ""));
-        const detected = {
-          no: findInvoiceNoCol(hdr, grid.slice(1)),
-          seller: findCol(hdr, "sprzedawca", "kontrahent", "seller", "dostawca", "supplier", "nazwa"),
-          date: findCol(hdr, "data wystaw", "issue date", "issue_date", "data sprzeda", "sell date", "data faktury", "data"),
-          net: findCol(hdr, "netto", "net"),
-          gross: findCol(hdr, "brutto", "gross"),
-          cur: findCol(hdr, "walut", "currency"),
-          desc: findCol(hdr, "opis", "description", "tytu", "produkt", "kategoria"),
-        };
-        if (detected.no < 0 && detected.seller < 0) { setError("Could not recognize columns — expected headers like Numer/Number, Sprzedawca/Seller, Netto/Net. Export the cost register from Fakturownia as XLS/CSV and try again."); return; }
-        setAoa(grid); setHeaders(hdr); setCols(detected);
-        const built = buildRows(grid, detected);
-        if (!built.length) setError("No data rows found under the header.");
-        setRows(built);
-      } catch (err: any) {
-        setError("Could not parse the file: " + (err?.message || String(err)));
-      }
-    };
-    reader.onerror = () => setError("Could not read the file.");
-    reader.readAsArrayBuffer(file);
-    e.target.value = "";
-  }
-
-  function setRow(i: number, k: string, v: any) { setRows(prev => prev.map((r, idx) => idx === i ? { ...r, [k]: v } : r)); }
-  const included = rows.filter(r => r.include);
-
-  // v6.8: live read-only fetch of cost invoices (income=0) straight from the API.
-  const fktCfg = readFakturowniaConfig();
-  const [livePeriod, setLivePeriod] = useState("this_month");
-  const [liveBusy, setLiveBusy] = useState(false);
-  async function fetchLive() {
-    if (!fktCfg) return;
-    setLiveBusy(true); setError("");
-    const r = await fetchInvoices(fktCfg, { income: 0, period: livePeriod });
-    setLiveBusy(false);
-    if (!r.ok) {
-      setError(r.corsLikely
-        ? "The browser couldn't reach Fakturownia directly (CORS). Use the file export below instead — live sync will run from the Phase-2 backend."
-        : (r.error || "Fetch failed."));
-      return;
-    }
-    const mapped = (r.data || []).map(mapInvoice);
-    const existingInvNos = new Set((operationalCosts || []).map((c: any) => String(c.invoiceNo || "").trim().toLowerCase()).filter(Boolean));
-    setFileName(`Fakturownia · ${livePeriod}`);
-    setRows(mapped.map((m: any, i: number) => {
-      const dup = m.number && existingInvNos.has(m.number.toLowerCase());
-      const whMatch = tariffWarehouses.find((w: any) => m.sellerName && (String(w.name || "").toLowerCase().includes(m.sellerName.toLowerCase().slice(0, 12)) || m.sellerName.toLowerCase().includes(String(w.name || "").toLowerCase().slice(0, 12))));
-      return {
-        id: i, include: !dup && (m.netTotal || m.grossTotal) > 0, dup,
-        invoiceNo: m.number, seller: m.sellerName, date: m.issueDate || m.sellDate,
-        amount: m.netTotal || m.grossTotal, currency: m.currency,
-        fxRate: defaultFxRate(m.currency),
-        description: m.description || `${m.sellerName} ${m.number}`.trim(),
-        route: whMatch ? "warehouse" : "cost",
-        warehouseId: whMatch ? whMatch.id : (tariffWarehouses[0]?.id ?? ""),
-        category: guessCostCategory(`${m.sellerName} ${m.description}`),
-        allocationMethod: "by_revenue",
-      };
-    }));
-    if (!mapped.length) setError(`No cost invoices found for "${livePeriod}".`);
-  }
-
-  function doImport() {
-    const costs: any[] = []; const whInvoices: any[] = [];
-    included.forEach((r, i) => {
-      const amountPLN = Math.round(r.amount * (parseFloat(r.fxRate) || 1) * 100) / 100;
-      if (r.route === "warehouse" && r.warehouseId) {
-        const wh = tariffWarehouses.find((w: any) => String(w.id) === String(r.warehouseId));
-        whInvoices.push({ id: nextId(), warehouseId: r.warehouseId, warehouseName: wh?.name || r.seller, period: String(r.date || localTodayISO()).slice(0, 7), invoiceNo: r.invoiceNo, date: r.date || localTodayISO(), amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
-      } else {
-        costs.push({ id: nextId(), period: String(r.date || localTodayISO()).slice(0, 7), date: r.date || localTodayISO(), category: r.category, description: r.description, supplierName: r.seller, invoiceNo: r.invoiceNo, amount: r.amount, currency: r.currency, fxRate: parseFloat(r.fxRate) || 1, amountPLN, costCenter: "general", allocationMethod: r.allocationMethod, status: "Received", notes: `Imported from Fakturownia (${fileName})` });
-      }
-    });
-    onImport(costs, whInvoices);
-  }
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130, padding: 20 }}>
-      <div style={{ width: 1020, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
-        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Import cost invoices from Fakturownia</div>
-            <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>In Fakturownia: open your <strong>cost/expense register</strong> (the invoices issued TO you via KSeF) and export it as XLS or CSV, then load the file here. Nothing is retyped — review and confirm below.</div>
-          </div>
-          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 22, color: "#888", cursor: "pointer" }}>×</button>
-        </div>
-        <div style={{ padding: "14px 22px" }}>
-          {fktCfg && (
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12, padding: "10px 12px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 8 }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#15803D" }}>Live sync</span>
-              <select value={livePeriod} onChange={e => setLivePeriod(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 9px", fontSize: 12.5, background: "#fff" }}>
-                <option value="this_month">This month</option>
-                <option value="last_month">Last month</option>
-                <option value="this_year">This year</option>
-              </select>
-              <button onClick={fetchLive} disabled={liveBusy} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: liveBusy ? "#A7F3D0" : "#16A34A", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: liveBusy ? "wait" : "pointer", fontFamily: "inherit" }}>{liveBusy ? "Fetching…" : "Fetch cost invoices from Fakturownia"}</button>
-              <span style={{ fontSize: 11, color: "#16803D" }}>read-only · {fktCfg.subdomain}.fakturownia.pl</span>
-            </div>
-          )}
-          <label style={{ display: "inline-block", padding: "8px 16px", borderRadius: 7, background: "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-            {fktCfg ? "…or choose an exported file" : "Choose Fakturownia export file…"}
-            <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFile} style={{ display: "none" }} />
-          </label>
-          {fileName && <span style={{ fontSize: 12, color: "#666", marginLeft: 10 }}>{fileName} · {rows.length} row(s)</span>}
-          {error && <div style={{ marginTop: 10, padding: "8px 12px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 7, fontSize: 12, color: "#991B1B" }}>{error}</div>}
-          {headers.length > 0 && (
-            <div style={{ marginTop: 10, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", padding: "8px 12px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>Columns</span>
-              <label style={{ fontSize: 11, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>Invoice no.
-                <select value={cols.no} onChange={e => setCol("no", parseInt(e.target.value, 10))} style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #CBD5E1", borderRadius: 5, background: "#fff" }}>
-                  <option value={-1}>— none —</option>
-                  {headers.map((h, i) => { const smp = colSample(i); return <option key={i} value={i}>{(h || `Column ${i + 1}`) + (smp ? ` — e.g. ${smp}` : "")}</option>; })}
-                </select>
-              </label>
-              <label style={{ fontSize: 11, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>Issue date
-                <select value={cols.date} onChange={e => setCol("date", parseInt(e.target.value, 10))} style={{ fontSize: 11, padding: "3px 6px", border: "1px solid #CBD5E1", borderRadius: 5, background: "#fff" }}>
-                  <option value={-1}>— none —</option>
-                  {headers.map((h, i) => { const smp = colSample(i); return <option key={i} value={i}>{(h || `Column ${i + 1}`) + (smp ? ` — e.g. ${smp}` : "")}</option>; })}
-                </select>
-              </label>
-              <span style={{ fontSize: 10.5, color: "#94A3B8" }}>Auto-detected from the file — change either if a column is wrong or blank.</span>
-            </div>
-          )}
-          {rows.length > 0 && (
-            <div style={{ marginTop: 12, overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
-                <thead><tr style={{ textAlign: "left", color: "#888", borderBottom: "1px solid #EEE" }}>
-                  <th style={{ padding: 6 }}></th><th>Invoice</th><th>Supplier</th><th>Date</th><th style={{ textAlign: "right" }}>Amount</th><th>Route to</th><th>Category / Warehouse</th><th>Allocation</th>
-                </tr></thead>
-                <tbody>{rows.map((r, i) => (
-                  <tr key={r.id} style={{ borderBottom: "1px solid #F5F5F5", opacity: r.include ? 1 : 0.45, background: r.dup ? "#FFFBEB" : "transparent" }}>
-                    <td style={{ padding: 6 }}><input type="checkbox" checked={r.include} onChange={e => setRow(i, "include", e.target.checked)} /></td>
-                    <td style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{r.invoiceNo || "—"}{r.dup && <div style={{ fontSize: 9.5, color: "#92400E", fontWeight: 700 }}>already imported</div>}</td>
-                    <td>{r.seller || "—"}</td>
-                    <td>{r.date || "—"}</td>
-                    <td style={{ textAlign: "right", fontWeight: 600 }}>{r.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {r.currency}</td>
-                    <td>
-                      <select value={r.route} onChange={e => setRow(i, "route", e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 5, padding: "3px 6px", fontSize: 11, background: "#fff" }}>
-                        <option value="cost">Operational cost</option>
-                        {tariffWarehouses.length > 0 && <option value="warehouse">Warehouse invoice</option>}
-                      </select>
-                    </td>
-                    <td>
-                      {r.route === "warehouse" ? (
-                        <select value={r.warehouseId} onChange={e => setRow(i, "warehouseId", e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 5, padding: "3px 6px", fontSize: 11, background: "#fff" }}>
-                          {tariffWarehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                        </select>
-                      ) : (
-                        <select value={r.category} onChange={e => setRow(i, "category", e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 5, padding: "3px 6px", fontSize: 11, background: "#fff" }}>
-                          {OPERATIONAL_COST_CATEGORIES.map((c: any) => <option key={c.key} value={c.key}>{c.label}</option>)}
-                        </select>
-                      )}
-                    </td>
-                    <td>
-                      {r.route === "cost" ? (
-                        <select value={r.allocationMethod} onChange={e => setRow(i, "allocationMethod", e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 5, padding: "3px 6px", fontSize: 11, background: "#fff" }}>
-                          {ALLOCATION_METHODS.map((m: any) => <option key={m.key} value={m.key}>{m.label}</option>)}
-                        </select>
-                      ) : <span style={{ fontSize: 10.5, color: "#888" }}>reconciled in Warehouse charges</span>}
-                    </td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
-          )}
-        </div>
-        <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: 11.5, color: "#888" }}>{included.length} of {rows.length} selected · costs import as status "Received" (counted in Actual P/L)</div>
-          <button disabled={!included.length} onClick={doImport} style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: included.length ? "#16A34A" : "#E5E7EB", color: included.length ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: included.length ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Import {included.length} invoice(s)</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 
 // ─── v6.9: RECEIVABLES & PAYABLES VIEW ──────────────────────────────────────
@@ -821,7 +492,6 @@ export default function Finance({
     setOperationalCosts((prev: OperationalCost[]) => (prev || []).filter(c => c.id !== id));
   }
 
-  const [showFktImport, setShowFktImport] = useState(false);
 
   // v6.7: clone the most recent month's costs into the following month as "Expected".
   function copyLastMonth() {
@@ -1054,7 +724,6 @@ export default function Finance({
                     <SectionTitle>OPERATIONAL COST ENTRIES</SectionTitle>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button onClick={copyLastMonth} title="Copy every cost of the most recent month into the next month as Expected — adjust amounts where needed" style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #BFDBFE", background: "#fff", color: "#2563EB", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>⟳ Copy last month</button>
-                      <button onClick={() => setShowFktImport(true)} title="Import the cost-invoice register exported from Fakturownia (XLS/CSV)" style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>📥 Import from Fakturownia</button>
                     </div>
                   </div>
                   {/* v6.10: filter by period and by supplier */}
@@ -1130,19 +799,6 @@ export default function Finance({
           </>
         )}
       </div>
-      {showFktImport && (
-        <FakturowniaCostImportModal
-          contacts={contacts}
-          operationalCosts={operationalCosts}
-          onClose={() => setShowFktImport(false)}
-          onImport={(costs: any[], whInvoices: any[]) => {
-            if (costs.length && setOperationalCosts) setOperationalCosts((prev: any[]) => [...(prev || []), ...costs]);
-            if (whInvoices.length && setWarehouseInvoices) setWarehouseInvoices((prev: any[]) => [...(prev || []), ...whInvoices]);
-            setShowFktImport(false);
-            alert(`Imported ${costs.length} operational cost(s)` + (whInvoices.length ? ` and ${whInvoices.length} warehouse invoice(s) (reconcile them in the Warehouse charges tab)` : "") + ".");
-          }}
-        />
-      )}
     </div>
   );
 }

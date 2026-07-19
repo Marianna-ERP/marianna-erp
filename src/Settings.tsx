@@ -3,7 +3,7 @@ import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBack
 import { APP_VERSION } from "./version";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
-import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE, WAREHOUSE_CP_LOC_BASE } from "./locations";
+import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -60,8 +60,12 @@ function LocationsPanel() {
   const [edit, setEdit] = React.useState<any>({});
   const [add, setAdd] = React.useState<any>({ name: "", type: "Port", country: "", address: "" });
   const overrides = readLocationOverrides();
-  const locs = allLocations();
-  const sourceOf = (l: any) => Number(l.id) >= WAREHOUSE_CP_LOC_BASE ? "Counterparty" : Number(l.id) >= LOGISTICS_POINT_BASE ? "Logistics point" : Number(l.id) >= CUSTOM_LOCATION_ID_BASE ? "Custom" : "Built-in";
+  // v6.38.0: this list manages ONLY built-in and custom locations. Party-derived
+  // addresses (suppliers/clients/warehouses) and logistics points remain in every
+  // picker but are managed in Parties — they don't belong in this list and were
+  // the "can't delete / wrong data" confusion.
+  const locs = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE);
+  const sourceOf = (l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE ? "Custom" : "Built-in";
   const types = ["All", ...Array.from(new Set(locs.map((l: any) => l.type)))];
   const shown = locs.filter((l: any) => (typeFilter === "All" || l.type === typeFilter) &&
     (!q.trim() || `${l.name} ${l.country} ${l.address || ""}`.toLowerCase().includes(q.trim().toLowerCase())));
@@ -80,7 +84,7 @@ function LocationsPanel() {
       <div style={{ fontSize: 11.5, color: "#64748B", margin: "6px 0 12px" }}>
         Add your own ports, port/transshipment warehouses or facilities here — they appear in every location picker.
         Built-in reference locations can be edited too (e.g. put the real transshipment-warehouse address on a port) — shown with an <span style={{ color: "#B45309", fontWeight: 700 }}>edited</span> mark.
-        Relay points from forwarders are managed in <strong>Parties → Logistics points</strong>; warehouse counterparties bring their addresses from their party record.
+        Supplier / client / warehouse addresses and forwarders' relay points are <strong>not listed here</strong> — they live in <strong>Parties</strong> (and still appear in every location picker automatically).
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.1fr 0.9fr 1.6fr auto", gap: 8, alignItems: "end", marginBottom: 12, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: 10 }}>
         <div><Lbl>Name</Lbl><input style={inp} value={add.name} onChange={e => setAdd((a: any) => ({ ...a, name: e.target.value }))} placeholder="e.g. Luka Koper CFS warehouse" /></div>
@@ -117,13 +121,43 @@ function LocationsPanel() {
                   {editable && <button onClick={() => startEdit(l)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Edit</button>}
                   {overridden && <button title="Restore the built-in details" onClick={() => { clearLocationOverride(Number(l.id)); reloadNote(); }} style={{ border: "1px solid #FDE68A", background: "#fff", color: "#B45309", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Reset</button>}
                   {src === "Custom" && <button onClick={() => { if (window.confirm(`Remove ${l.name}? Documents that referenced it keep only the plain text.`)) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Remove</button>}
-                  {!editable && <span style={{ fontSize: 10, color: "#CBD5E1" }}>via Parties</span>}
                 </>)}
               </div>
             </div>
           );
         })}
         {shown.length === 0 && <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12.5 }}>No locations match.</div>}
+      </div>
+    </Card>
+  );
+}
+
+
+// ── v6.38.0 (R1-C): full-screen editor window for the reference-data managers ──
+function FullScreenModal({ title, onClose, children }: any) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 70, display: "flex", alignItems: "stretch", justifyContent: "center", padding: "3vh 3vw" }} onClick={onClose}>
+      <div style={{ background: "#F8FAFC", borderRadius: 14, width: "100%", maxWidth: 1100, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,0.35)" }} onClick={(e: any) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "#fff", borderBottom: "1px solid #E5E7EB" }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#111" }}>{title}</div>
+          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Close</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: 18 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// Compact summary card shown in Settings; the real editing happens in the window.
+function ManageCard({ title, summary, buttonLabel, onManage }: any) {
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#94A3B8", letterSpacing: "0.06em", textTransform: "uppercase" }}>{title}</div>
+          <div style={{ fontSize: 12.5, color: "#64748B", marginTop: 4 }}>{summary}</div>
+        </div>
+        <button onClick={onManage} style={{ flexShrink: 0, border: "none", background: "#111", color: "#fff", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{buttonLabel}</button>
       </div>
     </Card>
   );
@@ -228,6 +262,7 @@ export default function Settings({
   productCatalog?: any[];
   setProductCatalog?: (v: any) => void;
 }) {
+  const [manage, setManage] = React.useState<null | "products" | "locations">(null); // v6.38.0 (R1-C)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
 
@@ -446,9 +481,29 @@ export default function Settings({
           </div>
         </Card>
 
-        <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog} />
-
-        <LocationsPanel />
+        {/* v6.38.0 (R1-C): reference data opens in dedicated editor windows */}
+        <ManageCard
+          title="PRODUCT CATALOG"
+          summary={`${(productCatalog || []).length} item${(productCatalog || []).length === 1 ? "" : "s"} · ${(productCatalog || []).reduce((n: number, it: any) => n + ((it.varieties || []).length), 0)} varieties · controls the Item/Variety pickers and CN codes`}
+          buttonLabel="Manage products…"
+          onManage={() => setManage("products")}
+        />
+        <ManageCard
+          title="PORTS & LOCATIONS"
+          summary={(() => { const ls = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE); const c = ls.filter((l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE).length; return `${ls.length - c} built-in · ${c} custom · feeds port pickers, the over-ship guard and transport-order addresses`; })()}
+          buttonLabel="Manage ports & locations…"
+          onManage={() => setManage("locations")}
+        />
+        {manage === "products" && (
+          <FullScreenModal title="Product catalog" onClose={() => setManage(null)}>
+            <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog} />
+          </FullScreenModal>
+        )}
+        {manage === "locations" && (
+          <FullScreenModal title="Ports & locations" onClose={() => setManage(null)}>
+            <LocationsPanel />
+          </FullScreenModal>
+        )}
 
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· invoice sync</span></SectionTitle>
