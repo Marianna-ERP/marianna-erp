@@ -85,6 +85,12 @@ function clientsFromContacts(contacts) {
 // 4 different functions. The render-time assignment pattern is safe given React's synchronous render model.
 let LOTS: any[] = [];      // Batch 0 (G1): no stub fallback — live props only
 let PO_REFS: any[] = [];   // Batch 0 (G1): no stub fallback — live props only
+// v6.41.0 (A5): raw lots (with .movements) + shipments, for the unshipped-
+// remainder reservation rule. The adapted LOTS above lose .movements, so we
+// keep the raw arrays here for shippedKgByLine.
+let RAW_LOTS: any[] = [];
+let SHIPMENTS_REF: any[] = [];
+function reserveCtx() { return RAW_LOTS.length ? { lots: RAW_LOTS, shipments: SHIPMENTS_REF } : undefined; }
 
 // Convert the lots into the Inventory→SalesOrders interface shape.
 // Inventory stores: { number, product, quality, size, origin, warehouse, physicalKg, ... }
@@ -324,12 +330,12 @@ function validatePOReadinessForSO(items: any[]) {
 // Returns: { liveAvailable, reservations: [{ soNumber, soId, status, qty }] }
 // for a given lot, considering reservations from all SOs except `excludeOrderId`.
 function lotReservations(lot, allOrders, excludeOrderId) {
-  return lotReservationsForPicker(lot, allOrders, excludeOrderId); // engine: salesOrders.domain (Batch 1)
+  return lotReservationsForPicker(lot, allOrders, excludeOrderId, reserveCtx()); // engine: salesOrders.domain (Batch 1)
 }
 
 // Same idea for a PO line — reservations from non-Draft, non-Cancelled SOs.
 function poLineReservations(po, poLine, allOrders, excludeOrderId) {
-  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId); // engine (Batch 1)
+  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId, reserveCtx()); // engine (Batch 1)
 }
 
 // Availability check — for each line, compute how much of its demanded qty is
@@ -365,7 +371,7 @@ function sameSoDuplicateSources(soItems) {
 
 function computeLineAvailability(soItems, allOrders, currentOrderId) {
   // Engine extracted to salesOrders.domain (Batch 1) — LOTS/PO_REFS passed explicitly.
-  return domainComputeLineAvailability(soItems, allOrders, currentOrderId, LOTS, PO_REFS);
+  return domainComputeLineAvailability(soItems, allOrders, currentOrderId, LOTS, PO_REFS, SHIPMENTS_REF);
 }
 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
@@ -2130,6 +2136,8 @@ export default function SalesOrders({
   // downstream of this assignment within the same render pass.
   // In standalone mode (no extInvLots / extPOs), LOTS and PO_REFS retain their seed values.
   if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots);
+  RAW_LOTS = extInvLots || [];
+  SHIPMENTS_REF = extShipments || [];
   if (extPOs)    PO_REFS = _adaptPOsFromModule(extPOs);
   // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields.
   // Backfill them from the originating PO line so sourcing "from stock" is as complete as

@@ -72,7 +72,7 @@ export interface POLine {
 export interface POrder {
   id: number;
   number: string;
-  status: string;               // Draft | Confirmed | ... | Cancelled (reduced by BP-5)
+  status: string;               // Draft | Confirmed | In Production | Shipped | Arrived | Closed | Cancelled — statuses beyond Confirmed are manual-only; KPIs derive from linked state (v6.36.1)
   orderDate?: string;
   loadingDate?: string;
   expectedDeliveryDate?: string;
@@ -81,7 +81,6 @@ export interface POrder {
   paymentTerms?: string;
   paymentTermsOther?: string;
   buyIncoterm?: string;
-  /** LEGACY flow — replaced by structured fields (BP-1) via the BP-12 shim. */
   supplier?: any;               // counterparty snapshot (id + legal snapshot rule)
   destinationLocationId?: number | string | null;
   destinationText?: string;
@@ -123,7 +122,7 @@ export interface SOLine {
 export interface SOrder {
   id: number | null;
   number: string;
-  status: string;               // reduced to Draft/Confirmed/Cancelled by BP-19
+  status: string;               // full lifecycle — see SO_STATUSES below (Draft…Closed, Cancelled)
   createdBy?: string;
   orderDate?: string;
   deliveryDate?: string;
@@ -187,8 +186,12 @@ export interface Lot {
   quality?: string;
   size?: string;
   origin?: string;
-  /** LEGACY flow-derived fields — mapped by the BP-12 shim, removed after Batch 4. */
+  /** LIVE (v6.40.1 truth pass): derived from the governing sale's cargo plan
+   *  (poDirectFromSOs at PO save). The availability engine and shipment posting
+   *  depend on it — do NOT remove. */
   directFlow?: boolean;
+  /** LEGACY read-only compat: old records carry it (isDirectLot ORs it in);
+   *  never written since v6.37.0. */
   custodyType?: string;
   destinationText?: string;
   poRef?: string;
@@ -271,7 +274,9 @@ export interface ShipmentLeg {
   shippingLine?: string;
   temperatureMinC?: number;
   temperatureMaxC?: number;
-  /** LEGACY (BP-50): leg-level cost fields — cost lines are the only cost truth. */
+  /** LIVE (v6.37.1, v6.40.1 truth pass): legs are the freight ENTRY POINT —
+   *  the save-time mirror sync (syncLegFreightCostLines) regenerates the
+   *  shipment's financial cost lines from these fields. Not legacy. */
   costAmount?: number;
   costCurrency?: string;
   costFxRate?: number;
@@ -380,11 +385,10 @@ export const SO_STATUSES: Record<string, any> = {
 // Statuses that reserve stock in the SalesOrders availability engine and are
 // counted as the pre-dispatch pipeline on the Dashboard. (Identical 3-status
 // sets in both files today — centralised without behaviour change.)
+// Pre-dispatch statuses (used for labels and as the legacy full-qty fallback
+// when no remainder context is available). The live reservation rule is the
+// UNSHIPPED-REMAINDER rule in salesOrders.domain (v6.41.0, ruling A5): an open
+// commitment reserves qty minus already-shipped, for every SO that is not
+// Draft/Cancelled/Closed. Inventory and the SalesOrders engine share that one
+// engine — they agree by construction (the old 7-vs-3 divergence is resolved).
 export const SO_PRE_DISPATCH_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
-
-// ⚠ KNOWN DIVERGENCE (Batch 0 finding, resolve in Batch 1 with tests):
-// Inventory's local lotReservations uses a WIDER reserving set
-// (Confirmed…Closed, 7 statuses), so Inventory's availability display and the
-// SalesOrders engine can disagree for Shipped/Delivered/Invoiced/Closed orders.
-// Deliberately NOT unified here — changing either set changes availability
-// behaviour. The Batch 1 engine unification decides the correct semantics.

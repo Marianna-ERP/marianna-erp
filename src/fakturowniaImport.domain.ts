@@ -79,17 +79,23 @@ export function contactForSeller(row: { seller: string; sellerTaxNo?: string }, 
   const name = norm(row.seller);
   const tax = norm(row.sellerTaxNo).replace(/[^0-9a-z]/g, "");
   return (contacts || []).find((c: any) => {
-    const cTax = norm(c.vatNumber || c.taxNo || c.nip).replace(/[^0-9a-z]/g, "");
-    if (tax && cTax && tax === cTax) return true;
+    // v6.40.1 (audit A1): the real tax fields are nip + vatEuId (the previous
+    // vatNumber/taxNo names were phantoms).
+    const cNip = norm(c.nip).replace(/[^0-9a-z]/g, "");
+    const cVatEu = norm(c.vatEuId).replace(/[^0-9a-z]/g, "");
+    if (tax && ((cNip && tax === cNip) || (cVatEu && tax === cVatEu))) return true;
     const cName = norm(c.name);
     return !!cName && (cName === name || (name.length > 4 && (cName.includes(name) || name.includes(cName))));
   }) || null;
 }
 
 function contactTypes(c: any): string[] {
+  // v6.40.1 (audit A1): contacts store type (primary) + additionalTypes[] — the
+  // previously-read "types" field never existed, so additional roles were
+  // invisible to the import suggestions.
   if (!c) return [];
-  if (Array.isArray(c.types)) return c.types.map((t: any) => String(t));
-  return c.type ? [String(c.type)] : [];
+  return [c.type, ...(Array.isArray(c.additionalTypes) ? c.additionalTypes : [])]
+    .filter(Boolean).map((t: any) => String(t));
 }
 
 export function poValuePLN(po: any): number {

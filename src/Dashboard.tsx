@@ -61,20 +61,25 @@ function KpiCard({ label, value, valueColor, tag, sub, items, onClick }: any) {
 
 export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], operationalCosts = [], onNavigate = () => {} }: any) {
   // ── PO summary ─────────────────────────────────────────────────────────
-  const poByStatus = useMemo(() => {
-    const m: any = {};
-    pos.forEach(p => { m[p.status] = (m[p.status] || 0) + 1; });
-    return m;
-  }, [pos]);
-
-  const activePOStatuses = new Set(["Draft", "Confirmed", "In Production", "Shipped", "Arrived"]);
-  const activePOCount = pos.filter(p => activePOStatuses.has(p.status)).length;
-  const activePOValuePLN = pos
-    .filter(p => activePOStatuses.has(p.status))
+  // v6.40.1 (audit A2): DERIVED truth, not statuses — PO statuses beyond
+  // Confirmed are manual-only (nothing auto-advances them; same finding as the
+  // v6.36.1 PO-KPI fix). The widget now derives its buckets from real linked
+  // lots and shipments, like the PO module's own KPIs.
+  const openPOs = pos.filter(p => p.status !== "Closed" && p.status !== "Cancelled");
+  const poGoodsIn = (p: any) => lots.some((l: any) => l.poRef === p.number && ((parseFloat(l.receivedKg) || 0) > 0 || (parseFloat(l.physicalKg) || 0) > 0));
+  const poInTransit = (p: any) => shipments.some((s: any) => (s.poRefs || []).includes(p.number) && s.status !== "Cancelled" && s.status !== "Draft");
+  const activePOCount = openPOs.length;
+  const activePOValuePLN = openPOs
     .reduce((sum, p) => {
       const lineSum = (p.items || []).reduce((s, it) => s + (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0), 0);
       return sum + lineSum * (p.fxRate || 1);
     }, 0);
+  const poBuckets = {
+    draft: openPOs.filter(p => p.status === "Draft").length,
+    awaiting: openPOs.filter(p => p.status !== "Draft" && !poGoodsIn(p) && !poInTransit(p)).length,
+    transit: openPOs.filter(p => p.status !== "Draft" && !poGoodsIn(p) && poInTransit(p)).length,
+    goodsIn: openPOs.filter(p => p.status !== "Draft" && poGoodsIn(p)).length,
+  };
 
   // ── SO summary ─────────────────────────────────────────────────────────
   const soByStatus = useMemo(() => {
@@ -157,6 +162,12 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
     operationalCosts,
     orders
   ), [orders, lots, pos, shipments, operationalCosts, currentMonth]);
+  // v6.40.1 (audit A3): the accrual figure exists since v6.37.1 — show both.
+  const marginActual = useMemo(() => aggregateNetMargins(
+    orders, lots, pos, shipments, "actual",
+    o => o.status !== "Draft" && o.status !== "Cancelled" && String(o.orderDate || "").slice(0, 7) === currentMonth,
+    operationalCosts, orders
+  ), [orders, lots, pos, shipments, operationalCosts, currentMonth]);
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
@@ -182,10 +193,10 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
             valueColor="#2563EB"
             onClick={() => onNavigate && onNavigate("pos")}
             items={[
-              { label: "Draft", val: poByStatus.Draft || 0, color: "#94A3B8" },
-              { label: "Confirmed", val: poByStatus.Confirmed || 0, color: "#2563EB" },
-              { label: "In Production", val: poByStatus["In Production"] || 0, color: "#F59E0B" },
-              { label: "Arrived", val: poByStatus.Arrived || 0, color: "#16A34A" },
+              { label: "Draft", val: poBuckets.draft, color: "#94A3B8" },
+              { label: "Awaiting shipment", val: poBuckets.awaiting, color: "#2563EB" },
+              { label: "In transit", val: poBuckets.transit, color: "#F59E0B" },
+              { label: "Goods received", val: poBuckets.goodsIn, color: "#16A34A" },
             ]}
           />
           <KpiCard
@@ -218,8 +229,8 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
           <KpiCard
             label="MARGIN THIS MONTH"
             value={fmtMoney(marginThisMonth.totalNetMarginPLN, "PLN")}
-            tag={`${marginThisMonth.avgNetMarginPct.toFixed(1)}% net margin`}
-            sub="forecast P/L from active SOs"
+            tag={`${marginThisMonth.avgNetMarginPct.toFixed(1)}% net · forecast`}
+            sub={`actual (accrual): ${fmtMoney(marginActual.totalNetMarginPLN, "PLN")}`}
             valueColor={marginThisMonth.totalNetMarginPLN < 0 ? "#DC2626" : marginThisMonth.avgNetMarginPct < 5 ? "#D97706" : "#16A34A"}
             onClick={() => onNavigate && onNavigate("finance")}
             items={[

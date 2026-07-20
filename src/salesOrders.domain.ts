@@ -6,12 +6,35 @@
 // Pure: no React, no module state; lots/POs/orders are parameters.
 //
 // Semantics (pinned by tests, resolving finding B0-2):
-//   Only PRE-DISPATCH orders reserve stock: Confirmed / Reserved / Loading.
-//   Shipped+ orders already had their kg physically subtracted via SHIP_OUT
-//   movements, so counting them again would double-subtract. Draft/Cancelled
-//   never reserve. Inventory's unused 7-status set was dead code — removed.
+//   An OPEN COMMITMENT reserves its UNSHIPPED REMAINDER (v6.41.0, ruling A5):
+//     reserved(line) = max(0, line.qty - already-shipped-for-that-SO-line)
+//   counted for every SO that is not Draft, not Cancelled, not Closed.
+//   - Pre-dispatch (Confirmed/Reserved/Loading): nothing shipped yet, so the
+//     remainder equals the full qty — identical to the old behaviour.
+//   - Shipped/Delivered/Invoiced with a remainder (e.g. a partial truck loading
+//     under one sale): the remainder stays reserved, so it can't be sold twice.
+//     The shipped portion was already subtracted via SHIP_OUT, so this never
+//     double-subtracts.
+//   - Fully shipped: remainder 0, reserves nothing (unchanged common case).
+//   - Closed: releases everything (an explicit decision to end the deal).
+//   Shipped-per-line is derived from lot SHIP_OUT movements (soRef-tagged;
+//   cancellations void them) via shippedKgByLine — no persisted shippedKg.
 // ─────────────────────────────────────────────────────────────────────────────
 import { SO_PRE_DISPATCH_STATUSES } from "./types";
+
+// v6.41.0 (A5): statuses that still hold an open claim on stock. Everything
+// except Draft (not committed), Cancelled (void) and Closed (deal ended).
+const NON_RESERVING_STATUSES = new Set(["Draft", "Cancelled", "Closed"]);
+export function soReservesStock(status: any): boolean { return !NON_RESERVING_STATUSES.has(String(status)); }
+
+// Shipped kg for one SO line, derived from movements. Memo-free; callers may
+// pass a prebuilt per-order map for efficiency, else it is computed on demand.
+export function shippedForSOLine(order: any, lineIndex: number, lots: any[], shipments: any[]): number {
+  try {
+    const r = shippedKgByLine(order, lots || [], shipments || []);
+    return (r.perLine && r.perLine[lineIndex]) || 0;
+  } catch { return 0; }
+}
 
 export function normalizeProduct(p: any): string {
   return (p || "").toLowerCase().trim();
@@ -47,17 +70,35 @@ export function isPOUsableForConfirmedSO(po: any): boolean {
 /** SO source-picker semantics: STOCK-sourced draws on this lot from other
  *  pre-dispatch orders. (PO-backed demand is handled separately by the PO-line
  *  reservation functions — the picker shows PO rows on their own.) */
-export function lotReservationsForPicker(lot: any, allOrders: any[], excludeOrderId: any): any {
+
+// v6.41.0 (A5): the reserved qty for one SO line under the remainder rule.
+// ctx carries lots+shipments so the shipped portion can be derived; without it
+// we fall back to the legacy pre-dispatch/full-qty rule (safe, unchanged).
+interface ReserveCtx { lots?: any[]; shipments?: any[]; }
+function reservedForLine(o: any, it: any, lineIndex: number, fullQty: number, ctx?: ReserveCtx): number {
+  if (ctx && ctx.lots) {
+    if (!soReservesStock(o.status)) return 0;
+    const shipped = shippedForSOLine(o, lineIndex, ctx.lots, ctx.shipments || []);
+    return Math.max(0, fullQty - shipped);
+  }
+  // legacy path (no remainder context available at this call site)
+  if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return 0;
+  return fullQty;
+}
+
+export function lotReservationsForPicker(lot: any, allOrders: any[], excludeOrderId: any, ctx?: ReserveCtx): any {
   const reservations: any[] = [];
   let totalReserved = 0;
   (allOrders || []).forEach(o => {
     if (o.id === excludeOrderId) return;
-    if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
-    (o.items || []).forEach((it: any) => {
+    if (!(ctx && ctx.lots) && !SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
+    (o.items || []).forEach((it: any, li: number) => {
       if (it.sourceType !== "STOCK") return;
       if (it.sourceRef !== lot.number) return;
       if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
-      const q = parseFloat(it.qty) || 0;
+      const full = parseFloat(it.qty) || 0;
+      if (full <= 0) return;
+      const q = reservedForLine(o, it, li, full, ctx);
       if (q <= 0) return;
       reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
       totalReserved += q;
@@ -72,17 +113,21 @@ export function lotReservationsForPicker(lot: any, allOrders: any[], excludeOrde
 
 /** Inventory stock-view semantics: also counts PO-backed draws against the lot
  *  produced by that PO, and supports the direct-flow availability basis. */
-export function lotReservationsForStock(lot: any, sourceSOs: any[]): any {
+export function lotReservationsForStock(lot: any, sourceSOs: any[], ctx?: ReserveCtx): any {
   const reservations: any[] = [];
   let totalReserved = 0;
   (sourceSOs || []).forEach(o => {
-    if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
-    (o.items || []).forEach((it: any) => {
+    if (!soReservesStock(o.status) && !(ctx && ctx.lots)) {
+      if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
+    }
+    (o.items || []).forEach((it: any, li: number) => {
       const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
       const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product, it.variety, lot.variety);
       if (!matchesStock && !matchesPOBackedLot) return;
       if (!productsMatch(it.product, lot.product, it.variety, lot.variety)) return;
-      const q = parseFloat(it.qty) || 0;
+      const full = parseFloat(it.qty) || 0;
+      if (full <= 0) return;
+      const q = reservedForLine(o, it, li, full, ctx);
       if (q <= 0) return;
       reservations.push({ soNumber: o.number, soId: o.id, status: o.status, clientName: soClientName(o), qty: q, sourceType: it.sourceType });
       totalReserved += q;
@@ -101,18 +146,20 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[]): any {
 }
 
 /** Reservations on one PO line from other pre-dispatch SOs. */
-export function poLineReservations(po: any, poLine: any, allOrders: any[], excludeOrderId: any): any {
+export function poLineReservations(po: any, poLine: any, allOrders: any[], excludeOrderId: any, ctx?: ReserveCtx): any {
   const reservations: any[] = [];
   let totalReserved = 0;
   (allOrders || []).forEach(o => {
     if (o.id === excludeOrderId) return;
-    if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
-    (o.items || []).forEach((it: any) => {
+    if (!(ctx && ctx.lots) && !SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
+    (o.items || []).forEach((it: any, li: number) => {
       if (it.sourceType !== "PO") return;
       if (it.sourceRef !== po.number) return;
       if ((it.sourceLineId ?? 1) !== poLine.id) return;
       if (!productsMatch(it.product, poLine.product, it.variety, poLine.variety)) return;
-      const q = parseFloat(it.qty) || 0;
+      const full = parseFloat(it.qty) || 0;
+      if (full <= 0) return;
+      const q = reservedForLine(o, it, li, full, ctx);
       if (q <= 0) return;
       reservations.push({ soNumber: o.number, soId: o.id, status: o.status, qty: q });
       totalReserved += q;
@@ -131,7 +178,8 @@ export function poLineReservations(po: any, poLine: any, allOrders: any[], exclu
  * wrong-product guards). lots/pos are the picker-adapted shapes
  * (lot.availableKg, poLine.available).
  */
-export function computeLineAvailability(soItems: any[], allOrders: any[], currentOrderId: any, lots: any[], pos: any[]): any[] {
+export function computeLineAvailability(soItems: any[], allOrders: any[], currentOrderId: any, lots: any[], pos: any[], shipments?: any[]): any[] {
+  const _ctx: ReserveCtx | undefined = lots ? { lots, shipments: shipments || [] } : undefined;
   const LOTS = lots || [];
   const PO_REFS = pos || [];
   const committedFromStock: Record<string, number> = {};
@@ -139,10 +187,11 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
 
   (allOrders || []).forEach(o => {
     if (o.id === currentOrderId) return;
-    if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
-    (o.items || []).forEach((it: any) => {
+    if (!(_ctx && _ctx.lots) && !SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
+    (o.items || []).forEach((it: any, _li: number) => {
       if (!it.sourceType || !it.sourceRef) return;
-      const q = parseFloat(it.qty) || 0;
+      const _full = parseFloat(it.qty) || 0;
+      const q = reservedForLine(o, it, _li, _full, _ctx);
       if (q <= 0) return;
       if (it.sourceType === "STOCK") {
         const lot = LOTS.find(l => l.number === it.sourceRef);

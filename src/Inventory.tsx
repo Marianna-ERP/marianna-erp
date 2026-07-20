@@ -380,9 +380,10 @@ const _soClientName = soClientName; // Batch 1
 // Normalize an SO from either the standalone stub shape ({clientName}) or the real SO module
 // shape ({client: {name, ...}}). Returns flat clientName for display.
 
-function lotReservations(lot, sourceSOs) {
+function lotReservations(lot, sourceSOs, ctx) {
   // Engine: salesOrders.domain (Batch 1). G1: no SOS stub fallback — live SOs only.
-  return lotReservationsForStock(lot, sourceSOs ?? []);
+  // v6.41.0 (A5): ctx {lots, shipments} enables the unshipped-remainder rule.
+  return lotReservationsForStock(lot, sourceSOs ?? [], ctx);
 }
 
 // Returns array of SO references this lot has ever been linked to
@@ -566,7 +567,7 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
 }
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
-function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", contacts = [], onCancel, onConfirm }: any) {
+function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", contacts = [], allLots = [], shipments = [], onCancel, onConfirm }: any) {
   const moveLocs = mergedLocations(contacts);
   // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
   // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
@@ -604,7 +605,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   const [claimValue, setClaimValue] = useState(editing?.claimValue != null ? String(editing.claimValue) : "");
   const [claimCurrency, setClaimCurrency] = useState(editing?.claimCurrency || "PLN");
   const effectiveType = clientSide && type === "DAMAGE" ? "CLAIM" : type;
-  const reservationState = lotReservations(lot, liveSOs);
+  const reservationState = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
   // so quantity-reducing movements validate against the expected/direct quantity —
   // consistent with how lotReservations computes availability for direct lots.
@@ -1142,8 +1143,8 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [] }: any) {
-  const res = lotReservations(lot, liveSOs);
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [] }: any) {
+  const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
   const value = valueInStock(lot);
@@ -1972,7 +1973,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   if (view === "detail" && selected) {
     return (
       <>
-        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
+        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} allLots={lots} shipments={shipments} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
 
         {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
           setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: nextId(), type: "SORTING", kg, date, note }] } : l));
@@ -2067,6 +2068,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             if (close) setSettlementLot(null);
           }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
+          allLots={lots}
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
           onMove={() => { setEditingMovement(null); setMovementMode("movement"); setShowMovement(true); }}
@@ -2159,7 +2161,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No lots match the current filters.</div>}
           {filtered.map((l, idx) => {
             const cpk = costPerKg(l);
-            const res = lotReservations(l, liveSOs);
+            const res = lotReservations(l, liveSOs, { lots, shipments });
             const soList = soRefsFor(l, liveSOs, shipments);
             return (
               <div key={l.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 140px 130px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}

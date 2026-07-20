@@ -1420,7 +1420,7 @@ T("accrual (ruling A): Expected cost counts in ACTUAL P/L once the shipment is D
 const FKI = require("./build/fakturowniaImport.domain.js");
 console.log("── fakturownia import: suggest / build / flip ──");
 T("carrier invoice suggests FREIGHT and matches the open Expected freight line", () => {
-  const contacts = [{ id: 5, name: "TransPol Sp. z o.o.", types: ["Carrier"] }];
+  const contacts = [{ id: 5, name: "TransPol Sp. z o.o.", type: "Carrier" }];
   const shipments = [{ number: "SHP-9", status: "Delivered", costs: [
     { id: 11, type: "road_freight", amountPLN: 4500, invoiceStatus: "Expected", supplierId: 5 },
     { id: 12, type: "customs", amountPLN: 1200, invoiceStatus: "Expected" },
@@ -1432,7 +1432,7 @@ T("carrier invoice suggests FREIGHT and matches the open Expected freight line",
   assert.equal(s.costLineId, 11);
 });
 T("supplier invoice suggests GOODS with the nearest PO + side-by-side value (C-2)", () => {
-  const contacts = [{ id: 2, name: "Delta Farms", types: ["Supplier"] }];
+  const contacts = [{ id: 2, name: "Delta Farms", type: "Supplier" }];
   const pos = [
     { number: "PO-1", status: "Confirmed", supplier: { id: 2, name: "Delta Farms" }, fxRate: 1, items: [{ qty: 21000, price: 3 }] },
     { number: "PO-2", status: "Confirmed", supplier: { id: 2, name: "Delta Farms" }, fxRate: 1, items: [{ qty: 5000, price: 3 }] },
@@ -1484,6 +1484,76 @@ T("filterAudit: module + free text, newest first; auditForDoc exact match", () =
   assert.deepEqual(ships.map(e => e.id), [3, 1], "module filter, newest first");
   assert.deepEqual(AUD.filterAudit(log, { q: "paid" }).map(e => e.id), [2], "free-text");
   assert.deepEqual(AUD.auditForDoc(log, "shp-1").map(e => e.id), [1, 3], "per-doc, case-insensitive");
+});
+
+// ── v6.40.1 (audit A1): real contact fields — additionalTypes + vatEuId ──
+console.log("── import matcher: additionalTypes + vatEuId ──");
+T("an ADDITIONAL 'Carrier' role now drives the FREIGHT suggestion", () => {
+  const contacts = [{ id: 7, name: "AgroTrans", type: "Supplier", additionalTypes: ["Carrier"] }];
+  const shipments = [{ number: "SHP-2", status: "Booked", costs: [{ id: 3, type: "road_freight", amountPLN: 3000, invoiceStatus: "Expected", supplierId: 7 }] }];
+  const row = { key: "k", number: "FV/5", seller: "AgroTrans", date: "2026-07-01", net: 3000, gross: 3690, currency: "PLN", fxRate: 1 };
+  const s = FKI.suggestForRow(row, contacts, shipments, []);
+  assert.equal(s.tag, "FREIGHT", "additional Carrier role recognized");
+  assert.equal(s.costLineId, 3);
+});
+T("seller matches by vatEuId (real field), not the phantom vatNumber", () => {
+  const contacts = [{ id: 9, name: "Completely Different Name Sp. z o.o.", type: "Carrier", vatEuId: "PL5252344078" }];
+  const row = { key: "k", number: "FV/6", seller: "ADIFFERENTTRADINGNAME", sellerTaxNo: "PL 525-234-40-78", date: "2026-07-01", net: 100, gross: 123, currency: "PLN", fxRate: 1 };
+  const c = FKI.contactForSeller(row, contacts);
+  assert.ok(c && c.id === 9, "tax-number match wins despite name mismatch");
+});
+
+// ── v6.41.0 (A5): unshipped-remainder reservation rule ──
+const SOD = require("./build/salesOrders.domain.js");
+console.log("── reservations: unshipped remainder ──");
+// A 20 t lot, one SO for 20 t, 12 t already shipped (SHIP_OUT movement soRef-tagged).
+function lot20(physical) {
+  return { number: "LOT-R", product: "Apples", physicalKg: physical, receivedKg: 20000,
+    movements: [{ type: "SHIP_OUT", qtyKg: 12000, soRef: "SO-R", shipmentRef: "SHP-R" }] };
+}
+const so20 = (status) => ({ number: "SO-R", id: 1, status, items: [{ sourceType: "STOCK", sourceRef: "LOT-R", product: "Apples", qty: 20000 }] });
+const ctx = (physical) => ({ lots: [lot20(physical)], shipments: [] });
+
+T("pre-dispatch: full qty reserved (unchanged) — Confirmed, nothing shipped yet", () => {
+  const lot = { number: "LOT-R", product: "Apples", physicalKg: 20000, receivedKg: 20000, movements: [] };
+  const r = SOD.lotReservationsForStock(lot, [{ number: "SO-R", id: 1, status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "LOT-R", product: "Apples", qty: 20000 }] }], { lots: [lot], shipments: [] });
+  assert.equal(r.totalReserved, 20000);
+  assert.equal(r.liveAvailable, 0);
+});
+T("THE BUG FIX: SO advanced to Shipped with 8 t unshipped keeps 8 t reserved", () => {
+  const r = SOD.lotReservationsForStock(lot20(8000), [so20("Shipped")], ctx(8000));
+  assert.equal(r.totalReserved, 8000, "remainder (20 - 12) stays reserved");
+  assert.equal(r.liveAvailable, 0, "physical 8 t is NOT free — it's owed to SO-R");
+});
+T("partial pre-dispatch: reserved shows the remainder, not the inflated full qty", () => {
+  // still Confirmed but 12 t already shipped → reserve 8 t (cosmetic overstatement fixed)
+  const r = SOD.lotReservationsForStock(lot20(8000), [so20("Confirmed")], ctx(8000));
+  assert.equal(r.totalReserved, 8000);
+});
+T("fully shipped SO reserves nothing (remainder 0)", () => {
+  const lot = { number: "LOT-R", product: "Apples", physicalKg: 0, receivedKg: 20000,
+    movements: [{ type: "SHIP_OUT", qtyKg: 20000, soRef: "SO-R", shipmentRef: "SHP-R" }] };
+  const r = SOD.lotReservationsForStock(lot, [so20("Delivered")], { lots: [lot], shipments: [] });
+  assert.equal(r.totalReserved, 0);
+});
+T("Closed releases everything, even with an unshipped remainder", () => {
+  const r = SOD.lotReservationsForStock(lot20(8000), [so20("Closed")], ctx(8000));
+  assert.equal(r.totalReserved, 0, "closing ends the deal");
+  assert.equal(r.liveAvailable, 8000, "the 8 t become free");
+});
+T("Cancelled and Draft never reserve", () => {
+  assert.equal(SOD.lotReservationsForStock(lot20(8000), [so20("Cancelled")], ctx(8000)).totalReserved, 0);
+  assert.equal(SOD.lotReservationsForStock(lot20(8000), [so20("Draft")], ctx(8000)).totalReserved, 0);
+});
+T("voided SHIP_OUT (cancelled shipment) is ignored — remainder returns to full", () => {
+  const lot = { number: "LOT-R", product: "Apples", physicalKg: 20000, receivedKg: 20000,
+    movements: [{ type: "SHIP_OUT", qtyKg: 12000, soRef: "SO-R", shipmentRef: "SHP-R", voided: true }] };
+  const r = SOD.lotReservationsForStock(lot, [so20("Shipped")], { lots: [lot], shipments: [] });
+  assert.equal(r.totalReserved, 20000, "voided movement doesn't count as shipped");
+});
+T("soReservesStock predicate: open commitments vs terminal", () => {
+  ["Confirmed", "Reserved", "Loading", "Shipped", "Delivered", "Invoiced"].forEach(s => assert.ok(SOD.soReservesStock(s), s + " reserves"));
+  ["Draft", "Cancelled", "Closed"].forEach(s => assert.ok(!SOD.soReservesStock(s), s + " does not reserve"));
 });
 
 console.log("");
