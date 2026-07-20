@@ -1,3 +1,4 @@
+import { useConfirm } from "./ui";
 import React, { useMemo, useState } from "react";
 import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { computeSOMargin } from "./marginCalculations";
@@ -129,12 +130,13 @@ function newCostTemplate(): OperationalCost {
 
 // ─── v6.9: RECEIVABLES & PAYABLES VIEW ──────────────────────────────────────
 function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
+  const { alert: lvAlert, dialogNode: lvNode } = useConfirm(); // P2-6
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
   const today = localTodayISO();
   const { items, totals } = buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs, todayISO: today });
 
-  function togglePaid(ref: string) {
+  async function togglePaid(ref: string) {
     // Batch 5d (BP-39): for INVOICES, "mark paid" writes a tagged payment EVENT on
     // the invoice (the flag store is retired for them). PO/PAYOUT commitment rows
     // keep the flag — they have no invoice record to carry events.
@@ -147,7 +149,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
         setInvoices((prev: any[]) => prev.map((x: any) => String(x.id) === id ? markInvoicePaidViaLedger(x, today, () => Date.now() + Math.floor(Math.random() * 1000)) : x));
       } else {
         const un = unmarkLedgerPaid(inv);
-        if (un === null) { window.alert("This invoice is paid by recorded payments — edit them in the Invoices module."); return; }
+        if (un === null) { await lvAlert({ tone: "warn", title: "Paid by recorded payments", message: "This invoice is paid by recorded payments — edit them in the Invoices module." }); return; }
         setInvoices((prev: any[]) => prev.map((x: any) => String(x.id) === id ? un : x));
       }
       return;
@@ -171,6 +173,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
 
   return (
     <>
+      {lvNode}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#DC2626" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
@@ -219,6 +222,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
 
 // ─── v6.5: WAREHOUSE CHARGES — expected vs invoiced, per warehouse per month ─
 function WarehouseChargesView({ lots = [], setLots = null, contacts = [], warehouseInvoices = [], setWarehouseInvoices = null }: any) {
+  const { confirm: wcConfirm, alert: wcAlert, dialogNode: wcNode } = useConfirm(); // P2-6
   const warehouses = (contacts || []).filter((c: any) => tariffHasRates(c.warehouseTariff));
   const [whId, setWhId] = useState<any>(warehouses[0]?.id ?? "");
   const [period, setPeriod] = useState(localMonthISO());
@@ -240,10 +244,10 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     setInv({ invoiceNo: "", amount: "", currency: inv.currency, fxRate: inv.fxRate, date: today, notes: "" });
   }
 
-  function approveInvoice(invoice: any) {
+  async function approveInvoice(invoice: any) {
     if (!setWarehouseInvoices) return;
-    if (!result.rows.length) { window.alert("No expected charges computed for this warehouse/month — nothing to allocate against."); return; }
-    if (!window.confirm(`Approve invoice ${invoice.invoiceNo} (${invoice.amountPLN.toLocaleString("pl-PL")} PLN) and allocate it into the ${result.rows.length} lot(s) of ${period}?\n\nThe amount is split across lots proportionally to their expected charges and becomes part of each lot's landed cost (visible in SO P/L).`)) return;
+    if (!result.rows.length) { await wcAlert({ tone: "warn", title: "Nothing to allocate", message: "No expected charges computed for this warehouse/month — nothing to allocate against." }); return; }
+    if (!(await wcConfirm({ tone: "warn", title: `Approve invoice ${invoice.invoiceNo}?`, message: `${invoice.amountPLN.toLocaleString("pl-PL")} PLN allocated into the ${result.rows.length} lot(s) of ${period}.\n\nThe amount is split across lots proportionally to their expected charges and becomes part of each lot's landed cost (visible in SO P/L).`, confirmLabel: "Approve & allocate" }))) return;
     const totalExpectedPLN = result.totalPLN || 1;
     const allocations = result.rows.map((r: any) => ({ lotNumber: r.lotNumber, amountPLN: Math.round(invoice.amountPLN * (r.totalPLN / totalExpectedPLN) * 100) / 100 }));
     if (setLots) {
@@ -265,15 +269,16 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     setWarehouseInvoices((prev: any[]) => prev.map((i: any) => i.id === invoice.id ? { ...i, status: "Approved", allocatedLots: allocations } : i));
   }
 
-  function deleteInvoice(invoice: any) {
-    if (invoice.status === "Approved") { window.alert("This invoice is approved and already allocated into lot costs — it can't be deleted from here."); return; }
-    if (!window.confirm(`Delete invoice ${invoice.invoiceNo}?`)) return;
+  async function deleteInvoice(invoice: any) {
+    if (invoice.status === "Approved") { await wcAlert({ tone: "warn", title: "Can't delete", message: "This invoice is approved and already allocated into lot costs — it can't be deleted from here." }); return; }
+    if (!(await wcConfirm({ tone: "danger", title: `Delete invoice ${invoice.invoiceNo}?`, confirmLabel: "Delete" }))) return;
     setWarehouseInvoices && setWarehouseInvoices((prev: any[]) => prev.filter((i: any) => i.id !== invoice.id));
   }
 
   const box: any = { background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 14 };
   if (!warehouses.length) return (
     <div style={box}>
+      {wcNode}
       <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Warehouse charges</div>
       <div style={{ fontSize: 12.5, color: "#666", lineHeight: 1.6 }}>
         No warehouse tariffs configured yet. Open <strong>Contacts</strong>, edit your warehouse counterparty (type "Warehouse"),
@@ -412,6 +417,7 @@ export default function Finance({
   setInvoices?: any;
   financeNotes?: any[];
 }) {
+  const { confirm: finConfirm, dialogNode: finNode } = useConfirm(); // P2-6
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
@@ -486,15 +492,15 @@ export default function Finance({
     setForm({ ...c });
   }
 
-  function deleteCost(id: number) {
+  async function deleteCost(id: number) {
     if (!setOperationalCosts) return;
-    if (!window.confirm("Delete this operational cost?")) return;
+    if (!(await finConfirm({ tone: "danger", title: "Delete operational cost?", confirmLabel: "Delete" }))) return;
     setOperationalCosts((prev: OperationalCost[]) => (prev || []).filter(c => c.id !== id));
   }
 
 
   // v6.7: clone the most recent month's costs into the following month as "Expected".
-  function copyLastMonth() {
+  async function copyLastMonth() {
     if (!setOperationalCosts) return;
     const periods = Array.from(new Set((operationalCosts || []).map((c: OperationalCost) => c.period).filter(Boolean))).sort();
     const last = periods[periods.length - 1];
@@ -508,12 +514,13 @@ export default function Finance({
       .filter((c: OperationalCost) => !existingNext.some(e => e.description === c.description && e.category === c.category))
       .map((c: OperationalCost, i: number) => ({ ...c, id: nextId(), period: next, date: `${next}-${String(c.date || "").slice(8, 10) || "15"}`, status: "Expected" as any, invoiceNo: "", allocations: undefined, notes: `Copied from ${last}. ${c.notes || ""}`.trim() }));
     if (!copies.length) { alert(`All ${last} costs already exist in ${next}.`); return; }
-    if (!window.confirm(`Copy ${copies.length} cost line(s) from ${last} into ${next} as "Expected"?`)) return;
+    if (!(await finConfirm({ tone: "warn", title: "Copy cost lines forward?", message: `Copy ${copies.length} cost line(s) from ${last} into ${next} as "Expected"?`, confirmLabel: "Copy" }))) return;
     setOperationalCosts((prev: OperationalCost[]) => [...(prev || []), ...copies]);
   }
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
+      {finNode}
       <div style={{ maxWidth: 1450, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18 }}>
           <div>

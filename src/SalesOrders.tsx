@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
-import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet } from "./ui";
+import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
@@ -2083,6 +2083,7 @@ export default function SalesOrders({
   productCatalog = [],
   setProductCatalog,
 }: any = {}) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode: soDialogNode } = useConfirm(); // P2-6
   // v6.35.1: cancelled document numbers (POs, SOs, shipments) for struck-through refs.
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments);
   // Integration mode: shell owns SO state. Standalone: local state with seed.
@@ -2289,7 +2290,7 @@ export default function SalesOrders({
     }));
   }
 
-  function saveOrder(o) {
+  async function saveOrder(o) {
     // Batch 6b: hard confirm-gate — no SO past Draft without its sell terms.
     const termsMissing = soTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
@@ -2322,11 +2323,12 @@ export default function SalesOrders({
         const lines = conflicts.map(c =>
           `• ${label(c.field)} "${c.value}" already used on ${c.soNumber}${c.shipments.length ? ` (shipment${c.shipments.length > 1 ? "s" : ""} ${c.shipments.join(", ")})` : ""}`
         ).join("\n");
-        const ok = window.confirm(
-          `⚠ DUPLICATE IMPORT DOCUMENT NUMBER\n\n${lines}\n\n` +
-          `Import permits and ACID numbers are normally single-use. Saving this SO with a number that was already used may cause customs rejection at destination.\n\n` +
-          `Press OK to OVERRIDE and save anyway (the override is recorded in the SO notes), or Cancel to go back and change the number.`
-        );
+        const ok = await uiConfirm({
+          tone: "danger",
+          title: "Duplicate import document number",
+          message: `${lines}\n\nImport permits and ACID numbers are normally single-use. Saving this SO with a number that was already used may cause customs rejection at destination.\n\nOverride and save anyway? (the override is recorded in the SO notes)`,
+          confirmLabel: "Override & save", cancelLabel: "Go back",
+        });
         if (!ok) return;
         const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
         const overrideNote = `[${stamp}] OVERRIDE: saved despite duplicate ${conflicts.map(c => `${label(c.field)} "${c.value}" (also on ${c.soNumber})`).join("; ")}.`;
@@ -2431,17 +2433,17 @@ export default function SalesOrders({
     setClientClaimFor(null);
   }
 
-  function recordCollection(info) {
-    if (!extSetShipments) { window.alert("Shipments store not available."); return; }
+  async function recordCollection(info) {
+    if (!extSetShipments) { await uiAlert({ tone: "warn", title: "Unavailable", message: "Shipments store not available." }); return; }
     const built = buildCollectionShipment(collectionFor, extInvLots || [], extShipments, info, { todayISO: domainToday, nextId });
-    if (!built.goods.length) { window.alert("No sourced lines found — source the SO lines from stock or a PO first, then record the collection."); return; }
+    if (!built.goods.length) { await uiAlert({ tone: "warn", title: "Nothing to collect", message: "No sourced lines found — source the SO lines from stock or a PO first, then record the collection." }); return; }
     extSetShipments(prev => [built, ...(prev || [])]);
     setOrders(prev => prev.map(o => o.id === collectionFor.id ? { ...o, linkedShipments: Array.from(new Set([...(o.linkedShipments || []), built.number])) } : o));
     setCollectionFor(null);
   }
 
-  function deleteOrder() {
-    if (!window.confirm(`Cancel SO ${selected.number}? Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.`)) return;
+  async function deleteOrder() {
+    if (!(await uiConfirm({ tone: "danger", title: `Cancel SO ${selected.number}?`, message: "Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.", confirmLabel: "Cancel SO", cancelLabel: "Keep" }))) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     reverseCancelledSOInInventory(cancelled);
     setOrders(prev => prev.map(p => p.id === selected.id ? cancelled : p));
@@ -2473,6 +2475,7 @@ export default function SalesOrders({
   if (view === "form" && form) {
     return (
       <>
+        {soDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
@@ -2509,6 +2512,7 @@ export default function SalesOrders({
   if (view === "detail" && selected) {
     return (
       <>
+        {soDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}

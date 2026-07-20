@@ -1,3 +1,4 @@
+import { useConfirm } from "./ui";
 import React, { useRef, useState } from "react";
 import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
@@ -54,6 +55,7 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
 // listed read-only with a pointer to Parties. Changes reload the app so every
 // module that snapshots LOCATIONS at import picks them up (the documented pattern).
 function LocationsPanel() {
+  const { confirm: lpConfirm, alert: lpAlert, dialogNode: lpNode } = useConfirm(); // P2-6
   const [q, setQ] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState("All");
   const [editingId, setEditingId] = React.useState<any>(null);
@@ -69,7 +71,7 @@ function LocationsPanel() {
   const types = ["All", ...Array.from(new Set(locs.map((l: any) => l.type)))];
   const shown = locs.filter((l: any) => (typeFilter === "All" || l.type === typeFilter) &&
     (!q.trim() || `${l.name} ${l.country} ${l.address || ""}`.toLowerCase().includes(q.trim().toLowerCase())));
-  const reloadNote = () => { window.alert("Saved. The app will reload so all location pickers see the change."); window.location.reload(); };
+  const reloadNote = async () => { await lpAlert({ tone: "info", title: "Saved", message: "The app will reload so all location pickers see the change." }); window.location.reload(); };
   const startEdit = (l: any) => { setEditingId(l.id); setEdit({ name: l.name, country: l.country || "", address: l.address || "" }); };
   const saveEdit = (l: any) => {
     const src = sourceOf(l);
@@ -80,6 +82,7 @@ function LocationsPanel() {
   const inp = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: "100%" } as any;
   return (
     <Card style={{ marginBottom: 16 }}>
+      {lpNode}
       <SectionTitle>PORTS &amp; LOCATIONS <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· feeds port pickers, the over-ship guard and transport-order addresses</span></SectionTitle>
       <div style={{ fontSize: 11.5, color: "#64748B", margin: "6px 0 12px" }}>
         Add your own ports, port/transshipment warehouses or facilities here — they appear in every location picker.
@@ -120,7 +123,7 @@ function LocationsPanel() {
                 </>) : (<>
                   {editable && <button onClick={() => startEdit(l)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Edit</button>}
                   {overridden && <button title="Restore the built-in details" onClick={() => { clearLocationOverride(Number(l.id)); reloadNote(); }} style={{ border: "1px solid #FDE68A", background: "#fff", color: "#B45309", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Reset</button>}
-                  {src === "Custom" && <button onClick={() => { if (window.confirm(`Remove ${l.name}? Documents that referenced it keep only the plain text.`)) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Remove</button>}
+                  {src === "Custom" && <button onClick={async () => { if (await lpConfirm({ tone: "danger", title: `Remove ${l.name}?`, message: "Documents that referenced it keep only the plain text.", confirmLabel: "Remove" })) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Remove</button>}
                 </>)}
               </div>
             </div>
@@ -164,6 +167,7 @@ function ManageCard({ title, summary, buttonLabel, onManage }: any) {
 }
 
 function ProductCatalogPanel({ catalog, setCatalog }: any) {
+  const { confirm: pcConfirm, dialogNode: pcNode } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
   const [vDraft, setVDraft] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
@@ -174,7 +178,7 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
   const addItem = () => { const n = newItem.trim(); if (!n) return; setCatalog((c: any) => addCatalogItem(c || [], n)); setNewItem(""); };
   const addVar = (item: string) => { const v = (vDraft[item] || "").trim(); if (!v) return; setCatalog((c: any) => addCatalogVariety(c || [], item, v)); setVDraft(d => ({ ...d, [item]: "" })); };
   const rmVar = (item: string, v: string) => setCatalog((c: any) => removeCatalogVariety(c || [], item, v));
-  const rmItem = (item: string) => { if (window.confirm(`Remove "${item}" and its varieties from the catalog?`)) setCatalog((c: any) => removeCatalogItem(c || [], item)); };
+  const rmItem = async (item: string) => { if (await pcConfirm({ tone: "danger", title: `Remove "${item}"?`, message: "This removes the item and its varieties from the catalog.", confirmLabel: "Remove" })) setCatalog((c: any) => removeCatalogItem(c || [], item)); };
 
   function parseLine(line: string): string[] {
     const out: string[] = []; let f = "", inQ = false;
@@ -209,6 +213,7 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
 
   return (
     <Card style={{ marginBottom: 16 }}>
+      {pcNode}
       <SectionTitle>PRODUCT CATALOG <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· Item / Variety used on PO &amp; SO lines</span></SectionTitle>
       <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
         The single list everyone picks products from, so the same item is named the same way everywhere. New products added from a PO/SO line land here too. Sizes are not part of this — size stays its own field on the line.
@@ -262,6 +267,7 @@ export default function Settings({
   productCatalog?: any[];
   setProductCatalog?: (v: any) => void;
 }) {
+  const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
   const [manage, setManage] = React.useState<null | "products" | "locations">(null); // v6.38.0 (R1-C)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
@@ -334,7 +340,7 @@ export default function Settings({
     if (!file) return;
     e.target.value = ""; // reset early so the same file can be re-picked later
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const result = reader.result;
       if (typeof result !== "string") {
         setMessage({ kind: "error", text: "Could not read file as text." });
@@ -353,13 +359,12 @@ export default function Settings({
           versionWarn = `\n\n⚠ This file has no app-version stamp (older export). Import only if you know it matches v${APP_VERSION}.`;
         }
       } catch { /* importAllData will report invalid JSON */ }
-      const proceed = window.confirm(
-        "Import will REPLACE all data currently in this browser with the contents of this file.\n\n" +
-        "There is no merge — anything here that isn't in the file will be gone.\n\n" +
-        "A backup of your current data will be saved automatically first, so you can undo it from Settings → Local backups." +
-        versionWarn +
-        "\n\nContinue?"
-      );
+      const proceed = await stConfirm({
+        tone: "danger",
+        title: "Replace all data?",
+        message: "Import will REPLACE all data currently in this browser with the contents of this file.\n\nThere is no merge — anything here that isn't in the file will be gone.\n\nA backup of your current data will be saved automatically first, so you can undo it from Settings → Local backups." + versionWarn,
+        confirmLabel: "Replace & import", cancelLabel: "Cancel",
+      });
       if (!proceed) { setMessage({ kind: "info", text: "Import cancelled — nothing was changed." }); return; }
       const outcome = importAllData(result);
       if (!outcome.ok) {
@@ -382,27 +387,27 @@ export default function Settings({
     setMessage(meta ? { kind: "success", text: "Backup saved locally." } : { kind: "error", text: "Could not save a backup (storage may be full)." });
   }
 
-  function handleRestore(b: BackupMeta) {
-    if (!window.confirm(`Restore the backup from ${new Date(b.createdAt).toLocaleString()}?\n\nThis REPLACES current data. Your current data will itself be backed up first, so this is reversible.`)) return;
+  async function handleRestore(b: BackupMeta) {
+    if (!(await stConfirm({ tone: "danger", title: "Restore this backup?", message: `From ${new Date(b.createdAt).toLocaleString()}.\n\nThis REPLACES current data. Your current data will itself be backed up first, so this is reversible.`, confirmLabel: "Restore" }))) return;
     const outcome = restoreBackup(b.id);
     if (!outcome.ok) { setMessage({ kind: "error", text: outcome.error || "Restore failed." }); return; }
     setMessage({ kind: "success", text: "Backup restored. Reloading…" });
     setTimeout(() => window.location.reload(), 1200);
   }
 
-  function handleDeleteBackup(b: BackupMeta) {
-    if (!window.confirm("Delete this backup permanently?")) return;
+  async function handleDeleteBackup(b: BackupMeta) {
+    if (!(await stConfirm({ tone: "danger", title: "Delete backup?", message: "Delete this backup permanently?", confirmLabel: "Delete" }))) return;
     deleteBackup(b.id);
     refreshBackups();
   }
 
-  function handleReset() {
-    const confirmed = window.confirm(
-      "Start fresh — clear ALL your data?\n\n" +
-      "This wipes contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points, " +
-      "returning the system to a completely empty state.\n\n" +
-      "A backup will be saved automatically first, so you can undo this from Settings → Local backups."
-    );
+  async function handleReset() {
+    const confirmed = await stConfirm({
+      tone: "danger",
+      title: "Start fresh — clear ALL data?",
+      message: "This wipes contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points, returning the system to a completely empty state.\n\nA backup will be saved automatically first, so you can undo this from Settings → Local backups.",
+      confirmLabel: "Clear all data", cancelLabel: "Keep my data",
+    });
     if (!confirmed) return;
     const backup = clearAllData();
     refreshBackups();
@@ -412,6 +417,7 @@ export default function Settings({
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
+      {stNode}
       <div style={{ maxWidth: 800, margin: "0 auto" }}>
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: "#111", letterSpacing: "-0.3px" }}>Settings</div>

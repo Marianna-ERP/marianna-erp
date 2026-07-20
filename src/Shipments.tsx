@@ -3,7 +3,7 @@ import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTr
 import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms, syncLegFreightCostLines, legFreightSource } from "./shipments.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { printHtmlNode } from "./documentService";
-import { SmallButton, DocRef, cancelledDocSet } from "./ui";
+import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate } from "./fx";
@@ -1314,6 +1314,7 @@ function syncCustomsCostLine(sh: any) {
 }
 
 function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [], onSave, onCancel }: any) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode: editDialogNode } = useConfirm(); // P2-6
   const [draft, setDraft] = useState(() => {
     const d = withStandardDocs(JSON.parse(JSON.stringify(shipment)));
     d.customs = normalizeCustoms(d.customs || d.customsClearance); // BP-27 string→object migration on open
@@ -1367,9 +1368,9 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
   function addDoc() {
     setDraft(prev => ({ ...prev, documents: [...(prev.documents || []), { id: nextId(), type: "", ref: "", status: "Missing", date: "", notes: "" }] }));
   }
-  function removeDoc(idx) {
+  async function removeDoc(idx) {
     const d = (draft.documents || [])[idx];
-    if (d && (d.type || d.ref) && !window.confirm(`Remove document row "${d.type || d.ref}"?`)) return;
+    if (d && (d.type || d.ref) && !(await uiConfirm({ tone: "warn", title: "Remove document row", message: `Remove document row "${d.type || d.ref}"?`, confirmLabel: "Remove" }))) return;
     setDraft(prev => ({ ...prev, documents: (prev.documents || []).filter((_, i) => i !== idx) }));
   }
   function addCost() {
@@ -1382,7 +1383,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
       return { ...prev, costs: [...(prev.costs || []), { id: nextId(), type: "other", supplierId: prev.carrierId || prev.forwarderId || 1001, amount: 0, currency: baseCur, fxRate: resolveFxRate(null, baseCur), amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] };
     });
   }
-  function removeCost(idx) {
+  async function removeCost(idx) {
     const c = (draft.costs || [])[idx];
     // v6.34.5: deleting the auto customs line must also switch OFF "customs applies",
     // otherwise the save-time sync regenerates it (the resurrection bug).
@@ -1395,10 +1396,10 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
     // supplier arranges and pays transport, so no freight belongs to us — the line can
     // be erased. This matches the UI, which already shows the ✕ instead of the lock then.
     if (c && isFreightCostType(c.type) && !draft.supplierManagedTransport) {
-      window.alert("Freight lines (road / sea / air / rail freight) can't be deleted here — a shipment must keep its freight cost. Change the amount to 0 if it doesn't apply, or edit the type.\n\nIf the supplier arranges and pays transport, tick \u201cBought DAP/DDP\u201d above and this line can be removed.");
+      await uiAlert({ tone: "warn", title: "Freight line is protected", message: "Freight lines (road / sea / air / rail freight) can't be deleted here — a shipment must keep its freight cost. Change the amount to 0 if it doesn't apply, or edit the type.\n\nIf the supplier arranges and pays transport, tick \u201cBought DAP/DDP\u201d above and this line can be removed." });
       return;
     }
-    if (!window.confirm("Delete this cost line?")) return;
+    if (!(await uiConfirm({ tone: "danger", title: "Delete cost line", message: "Delete this cost line?", confirmLabel: "Delete" }))) return;
     setDraft(prev => ({ ...prev, costs: (prev.costs || []).filter((_, i) => i !== idx) }));
   }
 
@@ -1453,14 +1454,16 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
       };
     });
   }
-  function removeLeg(legIdx) {
+  async function removeLeg(legIdx) {
+    if ((draft.legs || []).length <= 1) { await uiAlert({ tone: "warn", title: "Can't remove leg", message: "A shipment needs at least one leg." }); return; }
     setDraft(prev => {
-      if ((prev.legs || []).length <= 1) { window.alert("A shipment needs at least one leg."); return prev; }
+      if ((prev.legs || []).length <= 1) { return prev; }
       return { ...prev, legs: (prev.legs || []).filter((_, i) => i !== legIdx) };
     });
   }
 
   return <div style={{ position: "fixed", inset: 0, zIndex: 65, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    {editDialogNode}
     <div style={{ width: "min(1400px, calc(100vw - 20px))", height: "calc(100vh - 20px)", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.22)", border: "1px solid #E5E7EB" }}>
       <div style={{ padding: "18px 22px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
@@ -2289,6 +2292,7 @@ export default function Shipments({
   setOrders: extSetOrders,
   onNavigate = () => {},
 }: any = {}) {
+  const { confirm: shConfirm, dialogNode: shDialogNode } = useConfirm(); // P2-6
   const [localShipments, setLocalShipments] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const [localPOs, setLocalPOs] = useState<any[]>([]);
   const [localLots, setLocalLots] = useState<any[]>([]);
@@ -2398,10 +2402,10 @@ export default function Shipments({
     if (next) setPrintShipment(next);
   }
 
-  function quickStatus(sh, status) {
+  async function quickStatus(sh, status) {
     // v6.35.0: destructive transition needs an explicit confirmation (2-step).
     if (status === "Cancelled") {
-      const ok = window.confirm(`Cancel shipment ${sh.number}?\n\nIt will be kept on record as Cancelled (read-only) and will no longer count toward its PO/SO budget. Any inventory movements it already posted (receipts / ship-outs) will be reversed. This can't be undone.`);
+      const ok = await shConfirm({ tone: "danger", title: `Cancel shipment ${sh.number}?`, message: "It will be kept on record as Cancelled (read-only) and will no longer count toward its PO/SO budget. Any inventory movements it already posted (receipts / ship-outs) will be reversed. This can't be undone.", confirmLabel: "Cancel shipment", cancelLabel: "Keep" });
       if (!ok) return;
     }
     const today = todayISO();
@@ -2517,6 +2521,7 @@ export default function Shipments({
 
 
   return <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#FAFAFA" }}>
+    {shDialogNode}
     <div style={{ padding: "22px 28px 12px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>
       <div style={{ maxWidth: 1460, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>

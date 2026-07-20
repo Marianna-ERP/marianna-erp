@@ -901,6 +901,7 @@ function printHtmlNodeInv(nodeId, title) {
 // → our invoice; payout = net − commission. Closing writes the two cost
 // components onto the lot so SO P/L lands at exactly the commission.
 function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, onSave }: any) {
+  const { confirm: stConfirm, dialogNode: stDialogNode } = useConfirm(); // P2-6
   const po = (pos || []).find((p: any) => p.number === lot.poRef);
   const producer = po ? (contacts || []).find((c: any) => normName(c.name) === normName(po.supplier?.name)) : null;
   const seasonPct = producer ? currentCommissionPct(producer, localTodayISO()) : null;
@@ -941,6 +942,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120, padding: 20 }}>
+      {stDialogNode}
       <div style={{ width: 860, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -1047,7 +1049,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
         <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
           {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save</button>}
           {(status === "None" || status === "Draft") && <button onClick={() => save("Sent")} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Mark statement sent</button>}
-          {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={() => { if (window.confirm(`Close settlement for ${lot.number}?\n\nProducer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`)) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
+          {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={async () => { if (await stConfirm({ tone: "warn", title: `Close settlement for ${lot.number}?`, message: `Producer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`, confirmLabel: "Close settlement" })) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
         </div>
       </div>
     </div>

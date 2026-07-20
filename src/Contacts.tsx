@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from "react";
-import { Lbl } from "./ui";
+import { Lbl, useConfirm } from "./ui";
 import { nextId } from "./ids";
 import { contactAddresses, warehouseCpLocId, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
@@ -414,6 +414,7 @@ function PersonEditor({ person, onSave, onCancel }: any) {
 
 // ─── DETAIL PANEL — counterparty header + person list ───────────────────────
 function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany, onClose, onEmail, onSavePerson, onDeletePerson, onSetPrimary }: any) {
+  const { confirm: cdConfirm, dialogNode: cdNode } = useConfirm(); // P2-6
   const [editingPersonId, setEditingPersonId] = useState(null); // person.id | "new" | null
   const typeStyle = TYPE_COLORS[counterparty.type] || TYPE_COLORS["Other"];
 
@@ -424,6 +425,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
 
   return (
     <div style={{ width: 380, background: "#fff", borderLeft: "1px solid #EBEBEB", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
+      {cdNode}
       <div style={{ padding: "16px 20px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <TypeBadge type={counterparty.type} />
         {(counterparty.additionalTypes || []).map(t => (
@@ -536,7 +538,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
                   {!p.isPrimary && <button onClick={() => onSetPrimary(counterparty.id, p.id)} title="Make primary" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>★</button>}
                   <button onClick={() => setEditingPersonId(p.id)} title="Edit contact" style={{ background: "#fff", border: "1px solid #2563EB", borderRadius: 4, fontSize: 11, padding: "2px 8px", cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>✎ Edit contact</button>
                   {counterparty.contacts.length > 1 && (
-                    <button onClick={() => { if (window.confirm(`Remove ${p.name}?`)) onDeletePerson(counterparty.id, p.id); }} title="Delete" style={{ background: "none", border: "1px solid #FECACA", color: "#DC2626", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>🗑</button>
+                    <button onClick={async () => { if (await cdConfirm({ tone: "danger", title: `Remove ${p.name}?`, confirmLabel: "Remove" })) onDeletePerson(counterparty.id, p.id); }} title="Delete" style={{ background: "none", border: "1px solid #FECACA", color: "#DC2626", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>🗑</button>
                   )}
                 </div>
               </div>
@@ -560,7 +562,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
 
       <div style={{ padding: "12px 20px", borderTop: "1px solid #F3F4F6", display: "flex", gap: 8 }}>
         <button onClick={() => onEditCompany(counterparty)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit company</button>
-        <button onClick={() => { if (window.confirm(`Delete ${counterparty.name} and all ${counterparty.contacts.length} contact(s)?`)) { onDeleteCompany(counterparty.id); onClose(); } }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>
+        <button onClick={async () => { if (await cdConfirm({ tone: "danger", title: `Delete ${counterparty.name}?`, message: `This deletes the company and all ${counterparty.contacts.length} contact(s).`, confirmLabel: "Delete" })) { onDeleteCompany(counterparty.id); onClose(); } }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>
       </div>
     </div>
   );
@@ -1698,6 +1700,7 @@ function blankLogisticsPoint() {
   return { id: null, name: "", kind: LOGISTICS_POINT_KINDS[0].key, country: "", address: "", notes: "" };
 }
 function LogisticsPointsView({ points = [], setPoints }: any) {
+  const { confirm: lpConfirm, alert: lpAlert, dialogNode: lpNode } = useConfirm(); // P2-6
   const [form, setForm] = useState<any>(() => blankLogisticsPoint());
   const sf = (k: string, v: any) => setForm((p: any) => ({ ...p, [k]: v }));
   const kindLabel = (key: string) => (LOGISTICS_POINT_KINDS.find(k => k.key === key) || {}).label || key;
@@ -1707,8 +1710,8 @@ function LogisticsPointsView({ points = [], setPoints }: any) {
     setPoints(next);
     if (typeof window !== "undefined") setTimeout(() => window.location.reload(), 30);
   };
-  const save = () => {
-    if (!String(form.name || "").trim()) { window.alert("Enter a name for the location."); return; }
+  const save = async () => {
+    if (!String(form.name || "").trim()) { await lpAlert({ tone: "warn", title: "Name required", message: "Enter a name for the location." }); return; }
     const list = [...(points || [])];
     if (form.id == null) {
       const newPointId = nextId();
@@ -1720,10 +1723,11 @@ function LogisticsPointsView({ points = [], setPoints }: any) {
     persistAndReload(list);
   };
   const edit = (p: any) => setForm({ ...p });
-  const del = (p: any) => { if (window.confirm(`Delete "${p.name}"? Documents already using it keep their saved address.`)) persistAndReload((points || []).filter((x: any) => x.id !== p.id)); };
+  const del = async (p: any) => { if (await lpConfirm({ tone: "danger", title: `Delete "${p.name}"?`, message: "Documents already using it keep their saved address.", confirmLabel: "Delete" })) persistAndReload((points || []).filter((x: any) => x.id !== p.id)); };
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 16 }}>
+      {lpNode}
       <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{form.id == null ? "New logistics point" : "Edit logistics point"}</div>
         <div style={{ fontSize: 11, color: "#888", marginBottom: 12, lineHeight: 1.45 }}>Ports, relay points and forwarder cross-dock warehouses. Supplier / client / warehouse addresses come from their counterparty record — don't re-enter them here.</div>
@@ -1762,8 +1766,11 @@ function LogisticsPointsView({ points = [], setPoints }: any) {
 }
 
 // ─── COMPANIES TABLE ────────────────────────────────────────────────────────
-function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail }: any) {  return (
+function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail }: any) {
+  const { confirm: ctConfirm, dialogNode: ctNode } = useConfirm(); // P2-6
+  return (
     <>
+      {ctNode}
       <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 110px 80px 130px", padding: "10px 20px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
         {["TYPE", "COMPANY", "PRIMARY CONTACT", "COUNTRY", "PEOPLE", "ACTIONS"].map((h, i) => (
           <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
@@ -1811,7 +1818,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
             <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
               {primary?.email && <button onClick={() => onEmail(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Email primary">✉</button>}
               <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Edit">✎ Edit</button>
-              <button onClick={() => { if (window.confirm(`Delete ${c.name} and ${c.contacts.length} contact(s)?`)) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>
+              <button onClick={async () => { if (await ctConfirm({ tone: "danger", title: `Delete ${c.name}?`, message: `This deletes the company and ${c.contacts.length} contact(s).`, confirmLabel: "Delete" })) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>
             </div>
           </div>
         );

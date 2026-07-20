@@ -1,3 +1,4 @@
+import { useConfirm } from "./ui";
 import React, { useMemo, useState } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
 import { nextId } from "./ids";
@@ -264,11 +265,12 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
 }
 
 export default function Invoices(props: any) {
+  const { confirm: invConfirm, alert: invAlert, prompt: invPrompt, dialogNode: invNode } = useConfirm(); // P2-6
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
     setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null } = props;
   const [showImport, setShowImport] = useState(false); // v6.39.0
   // v6.39.0: everything a posted import touches, in one place.
-  function handleImportPost({ regs, flips, opCosts, whInvs }: any) {
+  async function handleImportPost({ regs, flips, opCosts, whInvs }: any) {
     if (regs.length) setInvoices((prev: any[]) => [...regs.map((r: any) => recomputeInvoiceMoney(r)), ...(prev || [])]);
     if (flips.length && setShipments) setShipments((prev: any[]) => (prev || []).map((sh: any) => {
       const mine = flips.filter((f: any) => f.shipmentNumber === sh.number);
@@ -278,10 +280,10 @@ export default function Invoices(props: any) {
     if (whInvs.length && setWarehouseInvoices) setWarehouseInvoices((prev: any[]) => [...(prev || []), ...whInvs]);
     setShowImport(false);
     recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "imported", summary: `Import posted: ${regs.length} invoice(s)${flips.length ? `, ${flips.length} shipment cost line(s) -> Received` : ""}${opCosts.length ? `, ${opCosts.length} operational cost(s)` : ""}${whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : ""}` });
-    window.alert(`Posted: ${regs.length} invoice(s) to the register` +
+    await invAlert({ tone: "info", title: "Import posted", message: `Posted: ${regs.length} invoice(s) to the register` +
       (flips.length ? `, ${flips.length} shipment cost line(s) marked Received` : "") +
       (opCosts.length ? `, ${opCosts.length} operational cost(s)` : "") +
-      (whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : "") + ".");
+      (whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : "") + "." });
   }
   const [view, setView] = useState<"list" | "form" | "detail" | "note">("list");
   const [selId, setSelId] = useState<number | null>(null);
@@ -329,14 +331,14 @@ export default function Invoices(props: any) {
     }));
     setView("form");
   }
-  function editInvoice(inv: Invoice) {
-    if (isLocked(inv)) { window.alert("This invoice has been sent / exported and is locked. To change it, issue a credit or debit note."); return; }
+  async function editInvoice(inv: Invoice) {
+    if (isLocked(inv)) { await invAlert({ tone: "warn", title: "Invoice locked", message: "This invoice has been sent / exported and is locked. To change it, issue a credit or debit note." }); return; }
     setForm({ ...inv }); setView("form");
   }
-  function saveForm() {
+  async function saveForm() {
     const rec = recomputeInvoiceMoney(form) as Invoice;
-    if (!rec.number && rec.kind === "COST") { window.alert("Enter the supplier's invoice number."); return; }
-    if (!rec.counterparty) { window.alert("Select the counterparty."); return; }
+    if (!rec.number && rec.kind === "COST") { await invAlert({ tone: "warn", title: "Invoice number required", message: "Enter the supplier's invoice number." }); return; }
+    if (!rec.counterparty) { await invAlert({ tone: "warn", title: "Counterparty required", message: "Select the counterparty." }); return; }
     // P1-4: guard against entering the same invoice twice (same kind + number +
     // counterparty). A warning, not a hard block — occasionally a number legitimately
     // repeats across counterparties, but same-counterparty + same-number is almost
@@ -347,7 +349,7 @@ export default function Invoices(props: any) {
         p.id !== rec.id && p.kind === rec.kind && p.paymentStatus !== "Cancelled" &&
         String(p.number || "").trim().toLowerCase() === numNorm &&
         String(p.counterparty?.name || "").trim().toLowerCase() === String(rec.counterparty?.name || "").trim().toLowerCase());
-      if (dupe && !window.confirm(`A ${rec.kind === "SALES" ? "sales" : "cost"} invoice "${rec.number}" from ${rec.counterparty?.name || "this counterparty"} already exists. This looks like a duplicate — save anyway?`)) return;
+      if (dupe && !(await invConfirm({ tone: "warn", title: "Possible duplicate", message: `A ${rec.kind === "SALES" ? "sales" : "cost"} invoice "${rec.number}" from ${rec.counterparty?.name || "this counterparty"} already exists. Save anyway?`, confirmLabel: "Save anyway" }))) return;
     }
     recordAudit({ module: "Invoices", docType: "Invoice", docNumber: rec.number || "(draft)", action: rec.id == null ? "created" : "saved", summary: `${rec.kind === "SALES" ? "Sales" : "Cost"} invoice ${rec.id == null ? "created" : "saved"}` });
     setInvoices((prev: Invoice[]) => {
@@ -370,22 +372,22 @@ export default function Invoices(props: any) {
     setInvoices((prev: Invoice[]) => prev.map(p => p.id === paymentFor.id ? applyPaymentEvent(p, evt, nextId) : p));
     setPaymentFor(null);
   }
-  function deletePaymentEvent(inv: Invoice, evtId: any) {
-    if (!window.confirm("Remove this payment event? The invoice's paid amount and status will be recalculated.")) return;
+  async function deletePaymentEvent(inv: Invoice, evtId: any) {
+    if (!(await invConfirm({ tone: "danger", title: "Remove payment event?", message: "The invoice's paid amount and status will be recalculated.", confirmLabel: "Remove" }))) return;
     setInvoices((prev: Invoice[]) => prev.map(p => p.id === inv.id ? removePaymentEvent(p, evtId) : p));
   }
   async function sendToFakturownia(inv: Invoice) {
-    if (inv.kind !== "SALES") { window.alert("Only sales invoices are pushed to Fakturownia."); return; }
+    if (inv.kind !== "SALES") { await invAlert({ tone: "warn", title: "Sales invoices only", message: "Only sales invoices are pushed to Fakturownia." }); return; }
     const cfg = readFakturowniaConfig();
-    if (!cfg) { window.alert("Fakturownia is not configured. Add the account name and API token in Settings first."); return; }
+    if (!cfg) { await invAlert({ tone: "warn", title: "Not configured", message: "Fakturownia is not configured. Add the account name and API token in Settings first." }); return; }
     // v6.18.4 (P0-1): live invoice creation is OFF by default. Until there's a
     // backend with a server-side token, roles and an audit trail, pushing a real
     // invoice from the browser is a legal/accounting action we don't enable silently.
     if (!cfg.liveWriteEnabled) {
-      window.alert("Live invoice creation in Fakturownia is turned OFF (the safe default).\n\nUse “Copy payload” to create this invoice manually in Fakturownia, or enable live write in Settings → Fakturownia for a controlled, authorised test.");
+      await invAlert({ tone: "info", title: "Live write is OFF", message: "Live invoice creation in Fakturownia is turned OFF (the safe default).\n\nUse “Copy payload” to create this invoice manually in Fakturownia, or enable live write in Settings → Fakturownia for a controlled, authorised test." });
       return;
     }
-    if (!window.confirm(`Send ${inv.number || "this invoice"} to Fakturownia?\n\nThis creates a REAL invoice there (Fakturownia assigns the legal number) and locks it here — further changes will need a credit/debit note.`)) return;
+    if (!(await invConfirm({ tone: "danger", title: `Send ${inv.number || "this invoice"} to Fakturownia?`, message: "This creates a REAL invoice there (Fakturownia assigns the legal number) and locks it here — further changes will need a credit/debit note.", confirmLabel: "Send" }))) return;
     setPushState({ id: inv.id, msg: "Sending to Fakturownia…", tone: "#2563EB" });
     const payload = buildFakturowniaPayload(inv, { apiToken: cfg.apiToken, sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false });
     const res = await createInvoice(cfg, payload);
@@ -400,12 +402,12 @@ export default function Invoices(props: any) {
       setPushState({ id: inv.id, msg: `Failed: ${res.error || "unknown error"}`, tone: "#DC2626" });
     }
   }
-  function copyPayload(inv: Invoice) {
+  async function copyPayload(inv: Invoice) {
     const cfg = readFakturowniaConfig();
     const payload = buildFakturowniaPayload(inv, { apiToken: cfg?.apiToken || "API_TOKEN", sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false });
     const text = JSON.stringify(payload, null, 2);
     try { navigator.clipboard?.writeText(text); setPushState({ id: inv.id, msg: "Payload copied to clipboard.", tone: "#2563EB" }); }
-    catch { window.prompt("Copy this payload:", text); }
+    catch { await invPrompt({ title: "Copy this payload", message: "Copy the text below:", defaultValue: text, confirmLabel: "Done" }); }
   }
 
   // ── credit/debit note ──
@@ -418,10 +420,10 @@ export default function Invoices(props: any) {
     });
     setView("note");
   }
-  function saveNote() {
+  async function saveNote() {
     const f = noteForm;
-    if (!(parseFloat(f.amount) > 0)) { window.alert("Enter an amount greater than zero."); return; }
-    if (!String(f.partyName || "").trim()) { window.alert("Enter the counterparty."); return; }
+    if (!(parseFloat(f.amount) > 0)) { await invAlert({ tone: "warn", title: "Amount required", message: "Enter an amount greater than zero." }); return; }
+    if (!String(f.partyName || "").trim()) { await invAlert({ tone: "warn", title: "Counterparty required", message: "Enter the counterparty." }); return; }
     const fx = resolveFxRate(f.fxRate, f.currency);
     const rec: FinanceNote = { ...f, id: f.id ?? nextId(), amount: parseFloat(f.amount) || 0, fxRate: fx, amountPLN: Math.round((parseFloat(f.amount) || 0) * fx * 100) / 100 };
     setNotes((prev: FinanceNote[]) => { const ex = (prev || []).find(p => p.id === rec.id); return ex ? prev.map(p => p.id === rec.id ? rec : p) : [...(prev || []), rec]; });
@@ -433,6 +435,7 @@ export default function Invoices(props: any) {
   if (view === "form" && form) return <InvoiceForm form={form} setForm={setForm} onSave={saveForm} onCancel={() => { setView("list"); setForm(null); }} contacts={contacts} orders={orders} pos={pos} shipments={shipments} lots={lots} />;
   if (view === "note" && noteForm) return <NoteForm form={noteForm} setForm={setNoteForm} onSave={saveNote} onCancel={() => { setView(selected ? "detail" : "list"); setNoteForm(null); }} contacts={contacts} invoices={invoices} orders={orders} pos={pos} shipments={shipments} />;
   if (view === "detail" && selected) return (<>
+      {invNode}
     <InvoiceDetail
       inv={selected} notes={notes}
       onBack={() => { setView("list"); setSelId(null); }}
@@ -453,6 +456,7 @@ export default function Invoices(props: any) {
   // ════════════════ LIST ════════════════
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>
+      {invNode}
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>Invoices</div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>

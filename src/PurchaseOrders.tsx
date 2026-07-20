@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, poDirectFromSOs, sellIncotermHasOnwardLeg } from "./tradeFlow.domain";
-import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet } from "./ui";
+import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
@@ -1482,6 +1482,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
 }
 
 export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], productCatalog = [], setProductCatalog }: any = {}) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode: poDialogNode } = useConfirm(); // P2-6
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
   const cancelledRefs = cancelledDocSet(extShipments, extSOs, extPOs);
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
@@ -1588,7 +1589,7 @@ ${blockNote}`.trim(),
   }
 
   // mutations
-  function saveOrder(o) {
+  async function saveOrder(o) {
     // Batch 6b: hard confirm-gate — no PO past Draft without its terms.
     const termsMissing = poTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
@@ -1607,7 +1608,7 @@ ${blockNote}`.trim(),
     const revertingToDraft = !!previous && previous.status !== "Draft" && o.status === "Draft";
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
     if (dup) {
-      window.alert(`PO number "${o.number}" is already used by another record. Please choose a different number.`);
+      await uiAlert({ tone: "warn", title: "Duplicate PO number", message: `PO number "${o.number}" is already used by another record. Please choose a different number.` });
       return;
     }
 
@@ -1616,7 +1617,7 @@ ${blockNote}`.trim(),
     if (isInventoryTransferStatus(o.status)) {
       const errors = poInventoryTransferErrors(o);
       if (errors.length) {
-        window.alert(`Cannot transfer PO ${o.number} to Inventory while quantity or price is missing/zero:\n\n${errors.join("\n")}`);
+        await uiAlert({ tone: "warn", title: "Incomplete PO lines", message: `Cannot transfer PO ${o.number} to Inventory while quantity or price is missing/zero:\n\n${errors.join("\n")}` });
         return;
       }
     }
@@ -1713,7 +1714,7 @@ ${blockNote}`.trim(),
     setView("form");
   }
 
-  function deleteOrder() {
+  async function deleteOrder() {
     // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
     const poNum = selected.number;
     const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
@@ -1740,7 +1741,7 @@ ${blockNote}`.trim(),
       alert(`PO ${poNum} can't be cancelled or deleted: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.`);
       return;
     }
-    if (!window.confirm(`Cancel PO ${selected.number}? Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.`)) return;
+    if (!(await uiConfirm({ tone: "danger", title: `Cancel PO ${selected.number}?`, message: "Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.", confirmLabel: "Cancel PO", cancelLabel: "Keep" }))) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     setOrders(prev => prev.map(o => o.id === selected.id ? cancelled : o));
     reflectCancelledPOInInventory(cancelled);
@@ -1753,6 +1754,7 @@ ${blockNote}`.trim(),
   if (view === "form" && form) {
     return (
       <>
+        {poDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         <OrderForm
@@ -1791,6 +1793,7 @@ ${blockNote}`.trim(),
   if (view === "detail" && selected) {
     return (
       <>
+        {poDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         <OrderDetail
