@@ -1106,6 +1106,7 @@ function soTermsMissing(o: any): string | null {
 }
 
 function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
+  const { confirm: ofConfirm, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning)
   // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
   // this session shows in the destination picker without a browser refresh.
   const liveLocations = (() => {
@@ -1115,9 +1116,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
     return [...byId.values()];
   })();
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
-  const si = (i, k, v) => setOrder(o => ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
-  const removeItem = (i) => setOrder(o => ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
+  const soFullyLocked = (st: any) => ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(st));
+  const si = (i, k, v) => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
+  const addItem = () => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
+  const removeItem = (i) => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
     setOrder(o => {
@@ -1194,6 +1196,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   // Status lock: once Confirmed+, currency/fx and pricing fields lock to prevent accidental edits
   const lockedStatuses = new Set(["Confirmed", "Reserved", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"]);
   const isLocked = lockedStatuses.has(order.status);
+  // v6.44.0 (test-round #6, ruling): from SHIPPED onward the SO is FULLY locked —
+  // line items, quantities, sourcing and shipping addresses can no longer change
+  // (the goods are on their way; the commercial deal is fixed). A warning is shown
+  // before this lock takes effect (see the banner below).
+  const FULLY_LOCKED_STATUSES = new Set(["Shipped", "Delivered", "Invoiced", "Closed"]);
+  const fullyLocked = FULLY_LOCKED_STATUSES.has(order.status);
 
   // Sourcing rule: every line must be sourced (stock lot OR PO in any status) before
   // the SO can move past Draft. This is a hard business rule — we can't promise goods
@@ -1244,6 +1252,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {ofNode}
       {sourceFor !== null && (
         <SourcePickerModal
           lineItem={order.items[sourceFor]}
@@ -1400,7 +1409,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
               <div style={{ order: -1 }}><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)} disabled={order.status === "Cancelled"}
+                <Sel value={order.status || "Draft"} onChange={async e => {
+                  const nv = e.target.value;
+                  const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status));
+                  const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
+                  if (willLock && !wasLocked) {
+                    const ok = await ofConfirm({ tone: "warn", title: `Move to ${nv}?`, message: `Once this sales order is ${nv}, it becomes LOCKED — line items, quantities, sourcing and the shipping address can no longer be changed. To correct something afterwards you'd issue a credit/debit note or a new order.\n\nProceed?`, confirmLabel: `Yes, move to ${nv}`, cancelLabel: "Not yet" });
+                    if (!ok) return;
+                  }
+                  sf("status", nv);
+                }} disabled={order.status === "Cancelled"}
                   title={order.status === "Cancelled" ? "This SO is cancelled — read-only and can't be reactivated." : ""}
                   style={{ borderLeft: `4px solid ${(SO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (SO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
                   {Object.keys(SO_STATUSES).map(s => {
@@ -1528,7 +1546,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                         : ic === "EXW" ? [whGroup, clientGroup, portGroup]
                         : [clientGroup, portGroup, whGroup];
                       return (
-                        <Sel value={order.destinationLocationId || ""} onChange={e => { const id = parseInt(e.target.value) || null; setOrder(o => ({ ...o, destinationLocationId: id, destinationText: (id && (o.destinationText || "") === (o.client?.address || "")) ? "" : o.destinationText })); }} style={{ marginTop: 8 }}>
+                        <Sel disabled={fullyLocked} value={order.destinationLocationId || ""} onChange={e => { const id = parseInt(e.target.value) || null; setOrder(o => ({ ...o, destinationLocationId: id, destinationText: (id && (o.destinationText || "") === (o.client?.address || "")) ? "" : o.destinationText })); }} style={{ marginTop: 8 }}>
                           <option value="">— select a known place —</option>
                           {order2}
                         </Sel>
@@ -1536,6 +1554,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     })()}
                     <Inp
                       value={order.destinationText || ""}
+                      disabled={fullyLocked}
                       onChange={e => sf("destinationText", e.target.value)}
                       placeholder="…or type the exact delivery address (free text)"
                       style={{ marginTop: 6 }}
@@ -1588,12 +1607,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             </div>
           )}
 
+          {fullyLocked && (
+            <div style={{ margin: "0 0 12px", padding: "10px 14px", borderRadius: 8, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 12, color: "#991B1B", lineHeight: 1.5 }}>
+              🔒 <strong>This sales order is locked.</strong> Once an SO reaches <strong>{order.status}</strong>, its line items, quantities, sourcing and shipping address can no longer be changed — the goods are on their way and the commercial deal is fixed. To correct something, issue a credit/debit note or a new order.
+            </div>
+          )}
           {/* Line items */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle right={<div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => { const idx = order.items.length; addItem(); setTimeout(() => setSourceFor(idx), 0); }} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#0369A1", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }} title="Add a line sourced from a PO or stock — product, variety, packaging, origin, size and quality are copied automatically; you set only price, quantity and pallets.">+ Add from PO / stock</button>
               <button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }} title="Add an empty line to fill in manually">+ Blank line</button>
-            </div>}>LINE ITEMS ({order.items.length})</SectionTitle>
+            </div>}>LINE ITEMS ({order.items.length}){fullyLocked && <span style={{ marginLeft: 8, fontSize: 10, color: "#DC2626", fontWeight: 700 }}>🔒 locked ({order.status})</span>}</SectionTitle>
             <datalist id="so-product-suggestions">
               {productSuggestions.map(p => <option key={p} value={p} />)}
             </datalist>
@@ -1718,11 +1742,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                         ? <div style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F9FAFB", color: "#374151", minHeight: 18 }} title="Inherited from the linked source — clear the source link to change the product">{it.product || "—"}{it.variety ? ` — ${it.variety}` : ""}</div>
                         : <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />}
                     </div>
-                    <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
-                    <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
+                    <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" disabled={fullyLocked} /></div>
+                    <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked} /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
-                    <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" /></div>
+                    <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
                     <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
                     <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
@@ -1730,11 +1754,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
                     <div>
                       <Lbl>Packaging</Lbl>
-                      <Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" />
+                      <Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" disabled={fullyLocked} />
                     </div>
                     <div>
                       <Lbl>Pallets (for this sale)</Lbl>
-                      <Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 12" />
+                      <Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 12" disabled={fullyLocked} />
                     </div>
                   </div>
                 </div>

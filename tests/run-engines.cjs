@@ -1556,6 +1556,38 @@ T("soReservesStock predicate: open commitments vs terminal", () => {
   ["Draft", "Cancelled", "Closed"].forEach(s => assert.ok(!SOD.soReservesStock(s), s + " does not reserve"));
 });
 
+// ── v6.44.0 (test-round #7): packaging tare → gross weight ──
+const PKG = require("./build/packaging.domain.js");
+console.log("── gross weight: per-box tare ──");
+T("apples: 13kg boxes, 1.4kg tare — 4680 kg net → correct gross", () => {
+  const r = PKG.grossForGoodsLine({ qtyKg: 4680, product: "Apples" }, PKG.PACKAGING_SEED);
+  // 4680 / 13 = 360 boxes exactly; gross = 4680 + 360*1.4 = 5184
+  assert.equal(r.boxes, 360, "box count");
+  assert.equal(r.grossKg, 5184, "gross = net + boxes*tare");
+  assert.equal(r.estimated, false);
+});
+T("partial box rounds up (359.x boxes → 360)", () => {
+  const r = PKG.grossForGoodsLine({ qtyKg: 4675, product: "Apples" }, PKG.PACKAGING_SEED);
+  assert.equal(r.boxes, 360, "4675/13 = 359.6 → 360 boxes");
+  assert.equal(r.grossKg, Math.round((4675 + 360 * 1.4) * 1000) / 1000);
+});
+T("explicit packaging id wins over product default", () => {
+  const r = PKG.grossForGoodsLine({ qtyKg: 1000, packagingId: "carton-10" }, PKG.PACKAGING_SEED);
+  assert.equal(r.boxes, 100); assert.equal(r.grossKg, Math.round((1000 + 100 * 0.6) * 1000) / 1000);
+});
+T("unknown product falls back to flat factor, marked estimated", () => {
+  const r = PKG.grossForGoodsLine({ qtyKg: 1000, product: "Dragonfruit" }, PKG.PACKAGING_SEED);
+  assert.equal(r.estimated, true); assert.equal(r.grossKg, 1060);
+});
+T("zero net → zero gross, no boxes", () => {
+  const r = PKG.grossForGoodsLine({ qtyKg: 0, product: "Apples" }, PKG.PACKAGING_SEED);
+  assert.equal(r.grossKg, 0); assert.equal(r.boxes, 0);
+});
+T("onions in 25kg mesh bags", () => {
+  const r = PKG.grossForGoodsLine({ qtyKg: 500, product: "Onions" }, PKG.PACKAGING_SEED);
+  assert.equal(r.boxes, 20); assert.equal(r.grossKg, Math.round((500 + 20 * 0.15) * 1000) / 1000);
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

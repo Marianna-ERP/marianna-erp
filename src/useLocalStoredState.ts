@@ -163,6 +163,8 @@ export const DATA_KEYS = [
   "invoices", "financeNotes",
   // v6.18.16: the controlled Item/Variety product catalog.
   "productCatalog",
+  // v6.44.0 (test-round #7): packaging types (box capacity + tare) for gross weight.
+  "packagingTypes",
  "auditLog"];
 
 export function exportAllData(): string {

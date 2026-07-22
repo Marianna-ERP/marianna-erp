@@ -483,15 +483,19 @@ function LotDirectionBadge({ lot, shipments = [], orders = [], compact = false }
   const shs = shipmentsForLot(lot, shipments);
   // Prefer an explicit shipment direction; else derive from the lot's PO + governing SO.
   let dir = "";
+  // v6.43.0 (test-round #5b): prefer an explicit direction on the shipment header,
+  // then on THIS lot's goods row (where direct-export deals record EXPORT), before
+  // any fallback — so a CIF/CFR export is never mislabelled "Import".
   for (const sh of shs) {
     const d = sh?.tradeDirection;
     if (d && MOVEMENT_LABELS[d]) { dir = d; break; }
+    const g = (sh?.goods || []).find((x: any) => String(x.lotRef || "") === String(lot.number) && x.tradeDirection && MOVEMENT_LABELS[x.tradeDirection]);
+    if (g) { dir = g.tradeDirection; break; }
   }
   if (!dir && shs.length) {
-    // derive from the first shipment's PO/SO context
-    const sh = shs[0];
-    const po = null; // PO country not resolved here; fall back to shipment field only
-    dir = shipmentTradeDirection(sh, po);
+    // last resort: derive from the shipment context (may still fall back to Import
+    // for genuinely inbound flows with no other signal).
+    dir = shipmentTradeDirection(shs[0], null);
   }
   if (!dir) return null;
   const lbl = MOVEMENT_LABELS[dir];

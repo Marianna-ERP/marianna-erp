@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, movementFromEnds, MOVEMENT_LABELS, isEUCountry, poDirectFromSOs, sellIncotermHasOnwardLeg } from "./tradeFlow.domain";
+import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, MOVEMENT_LABELS, poDirectFromSOs } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
@@ -163,12 +163,17 @@ function QualityBadge({ quality }: any) {
 }
 function FlowBadge({ flow, order = null, compact = false }: any) {
   // v6.29.0: terms-first vocabulary — old-flow and new POs render identically.
+  // v6.43.0 (test-round #4/#5b): NO import/export direction is guessed here. Trade
+  // direction is the shipment's truth, not the PO's — defaulting to "Import" showed
+  // the wrong direction on export deals (e.g. CIF/CFR out of the EU). We show the
+  // incoterm + named place only; a direction word appears solely if the PO carries
+  // an explicit tradeMovement (legacy records that stored one).
   if (order && (order.buyIncoterm || order.tradeMovement)) {
-    const dir = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? MOVEMENT_LABELS[order.tradeMovement] : MOVEMENT_LABELS.IMPORT;
+    const dir = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? MOVEMENT_LABELS[order.tradeMovement] : null;
     const place = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
     return (
       <span title={handoverSentence(order.buyIncoterm, place)} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
-        <b style={{ color: dir.color }}>{dir.label}</b>{order.buyIncoterm ? <> · {order.buyIncoterm}{place ? ` ${place}` : ""}</> : null}
+        {dir ? <b style={{ color: dir.color }}>{dir.label} · </b> : null}{order.buyIncoterm ? <>{order.buyIncoterm}{place ? ` ${place}` : ""}</> : null}
       </span>
     );
   }
@@ -844,12 +849,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               🔒 <strong>This PO is locked.</strong> Its commercial terms (product, quantities, supplier, incoterm, flow, pricing) can't be changed because something downstream already depends on it{(() => {
                 const reasons = [hasLinkedSO && "a sales order is sourced from it", hasShipment && "a shipment references it", lotReceivedOrMoved && "its goods have been received or moved"].filter(Boolean);
                 return reasons.length ? ` — ${reasons.join(", ")}` : "";
-              })()}. You can still update operational fields (dates, status, notes). To change the locked details, cancel this PO and raise a new one.
+              })()}. Every field is now locked — the PO is the building block the whole deal is built on, so once anything references it, it's frozen. To change anything, cancel this PO and raise a new one.
             </div>
           )}
           {!isLocked && order.id && order.status !== "Draft" && (
             <div style={{ marginBottom: 16, padding: "11px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 12.5, color: "#1E40AF", lineHeight: 1.5 }}>
-              ✎ <strong>Confirmed, and still editable.</strong> Nothing depends on this PO yet (no sales order, no shipment, goods not received), so you can still change its details — saving will re-sync the expected inventory lot. As soon as you link an SO, create a shipment, or receive goods, the commercial terms lock automatically. Reverting to Draft withdraws the not-yet-received lot.
+              ✎ <strong>Confirmed, and still editable.</strong> Nothing depends on this PO yet (no sales order, no shipment, goods not received), so you can still change its details — saving will re-sync the expected inventory lot. ⚠ As soon as you link a sales order, create a shipment, or receive goods, THIS PO LOCKS COMPLETELY — every field becomes read-only and can't be changed again. Get the details right now. (Reverting to Draft withdraws the not-yet-received lot.)
             </div>
           )}
 
@@ -875,16 +880,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               </div>
               <div>
                 <Lbl>Order date</Lbl>
-                <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" max={localTodayISO()} title="The date the PO was created/agreed with the supplier" />
+                <Inp disabled={isLocked} value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" max={localTodayISO()} title="The date the PO was created/agreed with the supplier" />
               </div>
               <div>
                 <Lbl>Loading date</Lbl>
-                <Inp value={order.loadingDate} onChange={e => sf("loadingDate", e.target.value)} type="date" title="When the supplier loads our truck / container — goods leave origin" />
+                <Inp disabled={isLocked} value={order.loadingDate} onChange={e => sf("loadingDate", e.target.value)} type="date" title="When the supplier loads our truck / container — goods leave origin" />
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods leave origin</div>
               </div>
               <div>
                 <Lbl>Expected delivery date</Lbl>
-                <Inp value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed handover point" />
+                <Inp disabled={isLocked} value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed handover point" />
                 {/* FB-14: 'means' dropdown removed — the handover point (derived from the incoterm) already says where. */}
               </div>
               <div>
@@ -969,25 +974,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   </div>
                 </div>
                 {(() => {
-                  // Derived line: 4-class movement badge (click to flip) + the contractual sentence.
+                  // v6.43.0 (test-round #2): the provisional IMPORT/EXPORT chip is
+                  // removed — trade direction is the shipment's truth, and a flow-era
+                  // guess here was misleading (showed intra-EU on a CIF export). The
+                  // contractual handover sentence stays; it's a fact of the incoterm.
                   const placeName = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
-                  const placeLoc = LOCATIONS.find((l: any) => l.id === order.destinationLocationId);
-                  const placeInEU = order.destinationText ? true : (placeLoc ? placeLoc.type !== "PORT" || isEUCountry("Poland") : true);
-                  const originCountry = order.supplier?.country || (order.items || [])[0]?.origin || "";
-                  const autoMove = movementFromEnds(isEUCountry(originCountry) , placeInEU);
-                  const move = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? order.tradeMovement : autoMove;
-                  const mv = MOVEMENT_LABELS[move] || MOVEMENT_LABELS.IMPORT;
+                  if (!order.buyIncoterm) return null;
                   return (
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF" }}>
-                      {/* v6.29.0: read-only PROVISIONAL chip — direction is not a PO
-                          input; the shipment owns the journey's truth (editable there). */}
-                      <span title={`${mv.hint}. Provisional — the trade direction is set on the shipment, which owns the journey.`}
-                        style={{ border: `1px solid ${mv.color}`, color: mv.color, background: "#fff", borderRadius: 999, padding: "3px 12px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
-                        {mv.label} <span style={{ fontWeight: 500, opacity: 0.7 }}>· provisional</span>
-                      </span>
-                      <div style={{ fontSize: 11.5, color: order.buyIncoterm ? "#4338CA" : "#9CA3AF", lineHeight: 1.45 }}>
-                        {handoverSentence(order.buyIncoterm, placeName)}
-                      </div>
+                    <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF", fontSize: 11.5, color: "#4338CA", lineHeight: 1.45 }}>
+                      {handoverSentence(order.buyIncoterm, placeName)}
                     </div>
                   );
                 })()}
@@ -997,19 +992,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   same stored keys, so nothing is lost). Onward routing belongs to the
                   shipment; disposition to the sale. */}
             </div>
-            {/* Sea freight toggle — separate flag, not tied to flow choice */}
-            <div style={{ marginTop: 14, padding: "10px 14px", background: order.requiresSea ? "#E0F2FE" : "#F9FAFB", border: `1px solid ${order.requiresSea ? "#BAE6FD" : "#F3F4F6"}`, borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: order.requiresSea ? "#0369A1" : "#555" }}>
-                <input type="checkbox" disabled={isLocked} checked={!!order.requiresSea} onChange={e => sf("requiresSea", e.target.checked)} style={{ width: 16, height: 16, cursor: isLocked ? "not-allowed" : "pointer" }} />
-                <span>⚓ Sea freight involved</span>
-              </label>
-              <div style={{ fontSize: 11, color: "#888", lineHeight: 1.4, flex: 1 }}>
-                Tick if a vessel leg is part of this PO's journey. Drives Shipments to plan a sea leg in addition to road.
-                {order.buyIncoterm && sellIncotermHasOnwardLeg(order.buyIncoterm) !== !!order.requiresSea && (
-                  <span style={{ color: "#D97706", marginLeft: 6 }}>· typically {sellIncotermHasOnwardLeg(order.buyIncoterm) ? "ticked" : "unticked"} for {order.buyIncoterm}</span>
-                )}
-              </div>
-            </div>
+            {/* v6.43.0 (test-round #3/#4): the "Sea freight involved" toggle is
+                removed — transport planning (road/sea/multimodal legs) is owned by
+                the Shipment module, not declared on the PO. */}
           </Card>
 
           {/* Pricing */}
@@ -1101,7 +1086,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
           {/* Notes */}
           <Card>
             <SectionTitle>NOTES</SectionTitle>
-            <textarea value={order.notes || ""} onChange={e => sf("notes", e.target.value)} rows={4} placeholder="Special instructions, packing requirements, labels…"
+            <textarea disabled={isLocked} value={order.notes || ""} onChange={e => sf("notes", e.target.value)} rows={4} placeholder="Special instructions, packing requirements, labels…"
               style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} />
           </Card>
         </div>
@@ -1249,9 +1234,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                   <div><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destLabel}</div></div>
                   <div>
                     <div style={{ fontSize: 10, color: "#888" }}>SEA FREIGHT</div>
-                    <div style={{ fontWeight: 600, color: order.requiresSea ? "#0369A1" : "#888" }}>
-                      {order.requiresSea ? "⚓ Yes — vessel leg involved" : "No"}
-                    </div>
+<div style={{ fontWeight: 600, color: "#888" }}>—</div>
                   </div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
@@ -1907,7 +1890,7 @@ ${blockNote}`.trim(),
                 <div><StatusBadge status={o.status} /></div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}
-                    {o.requiresSea && <span title="Sea freight involved" style={{ marginLeft: 6, background: "#E0F2FE", color: "#0369A1", padding: "0 5px", borderRadius: 3, fontSize: 9, fontWeight: 700, verticalAlign: "middle" }}>⚓ SEA</span>}
+
                   </div>
                   {o.currency !== "PLN" && <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtMoney(totalPLN, "PLN")}</div>}
                   <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtNum(totalKg)} kg</div>

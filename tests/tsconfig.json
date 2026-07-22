@@ -18,6 +18,7 @@
     "../src/costAllocation.ts",
     "../src/ledger.ts",
     "../src/shipments.domain.ts",
+    "../src/packaging.domain.ts",
     "../src/documents.domain.ts",
     "../src/tradeFlow.domain.ts",
     "../src/flowCleanup.migration.ts",

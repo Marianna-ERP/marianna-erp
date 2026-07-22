@@ -1,4 +1,4 @@
-import { useConfirm } from "./ui";
+import { useConfirm, SmallButton } from "./ui";
 import React, { useRef, useState } from "react";
 import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
@@ -14,6 +14,7 @@ import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLoca
 // place to add user-facing administration features as we grow (Phase 2:
 // language, currency display preferences, notification settings, etc.)
 
+const INP: any = { width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
 function Card({ children, style }: any) {
   return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "20px 22px", ...style }}>{children}</div>;
 }
@@ -66,8 +67,17 @@ function LocationsPanel() {
   // addresses (suppliers/clients/warehouses) and logistics points remain in every
   // picker but are managed in Parties — they don't belong in this list and were
   // the "can't delete / wrong data" confusion.
-  const locs = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE);
   const sourceOf = (l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE ? "Custom" : "Built-in";
+  // v6.43.0 (test-round #12): this manager is for PORTS only. Built-in party
+  // facilities (rented warehouse / supplier / client / customs) belong to the
+  // Parties module — they were wrongly mixed into the built-in seed here and
+  // couldn't be deleted. We now show only genuine Port-type built-ins; custom
+  // entries the user added stay visible and manageable. Party facilities are
+  // unaffected in storage and still feed the pickers via counterpartyLocations.
+  const PORT_TYPES = new Set(["Port", "PortWarehouse"]);
+  const locs = allLocations().filter((l: any) =>
+    Number(l.id) < LOGISTICS_POINT_BASE &&
+    (sourceOf(l) === "Custom" || PORT_TYPES.has(String(l.type))));
   const types = ["All", ...Array.from(new Set(locs.map((l: any) => l.type)))];
   const shown = locs.filter((l: any) => (typeFilter === "All" || l.type === typeFilter) &&
     (!q.trim() || `${l.name} ${l.country} ${l.address || ""}`.toLowerCase().includes(q.trim().toLowerCase())));
@@ -166,6 +176,83 @@ function ManageCard({ title, summary, buttonLabel, onManage }: any) {
   );
 }
 
+// ─── v6.44.0 (test-round #7): packaging types → gross weight ────────────────
+// Gross weight is driven by packaging, not a flat percentage: a wooden box holds
+// 13 kg of apples and weighs 1.4 kg empty, so gross = net + boxes x tare. This
+// panel maintains that table; shipments derive gross from it.
+function PackagingPanel({ types, setTypes }: any) {
+  const { confirm: pkConfirm, alert: pkAlert, dialogNode: pkNode } = useConfirm(); // P2-6
+  const blank = { id: "", label: "", capacityKg: "", tareKg: "", appliesTo: "" };
+  const [form, setForm] = React.useState<any>(blank);
+  const list = types || [];
+  const sf = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  const save = async () => {
+    const label = String(form.label || "").trim();
+    const cap = parseFloat(form.capacityKg), tare = parseFloat(form.tareKg);
+    if (!label) { await pkAlert({ tone: "warn", title: "Name required", message: "Give the packaging a name, e.g. \u201cWooden box (13 kg)\u201d." }); return; }
+    if (!(cap > 0)) { await pkAlert({ tone: "warn", title: "Capacity required", message: "How many kg of product does one unit hold?" }); return; }
+    if (!(tare >= 0)) { await pkAlert({ tone: "warn", title: "Tare required", message: "How much does the empty unit weigh?" }); return; }
+    const id = String(form.id || "").trim() || label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const appliesTo = String(form.appliesTo || "").split(",").map((x: string) => x.trim()).filter(Boolean);
+    const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, appliesTo }];
+    setTypes(next); setForm(blank);
+  };
+  const edit = (t: any) => setForm({ id: t.id, label: t.label, capacityKg: t.capacityKg, tareKg: t.tareKg, appliesTo: (t.appliesTo || []).join(", ") });
+  const del = async (t: any) => {
+    if (!(await pkConfirm({ tone: "danger", title: `Remove "${t.label}"?`, message: "Shipment lines already using it keep their saved gross weight.", confirmLabel: "Remove" }))) return;
+    setTypes(list.filter((x: any) => x.id !== t.id));
+  };
+
+  return (
+    <div>
+      {pkNode}
+      <div style={{ fontSize: 12.5, color: "#555", lineHeight: 1.6, marginBottom: 14 }}>
+        Gross weight on transport orders is calculated as <strong>net + (number of units x empty-unit weight)</strong>.
+        Apples, for example, travel in wooden boxes holding 13&nbsp;kg with an empty box weighing 1.4&nbsp;kg, so 4&nbsp;680&nbsp;kg net = 360 boxes = 5&nbsp;184&nbsp;kg gross.
+        Set <em>applies to</em> so a product picks its packaging automatically.
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 18 }}>
+        <thead><tr style={{ background: "#F9FAFB", textAlign: "left" }}>
+          <th style={{ padding: "7px 9px" }}>Packaging</th>
+          <th style={{ padding: "7px 9px", textAlign: "right" }}>Holds (kg)</th>
+          <th style={{ padding: "7px 9px", textAlign: "right" }}>Empty (kg)</th>
+          <th style={{ padding: "7px 9px" }}>Applies to</th>
+          <th style={{ padding: "7px 9px" }}></th>
+        </tr></thead>
+        <tbody>
+          {list.map((t: any) => (
+            <tr key={t.id} style={{ borderTop: "1px solid #F1F5F9" }}>
+              <td style={{ padding: "7px 9px", fontWeight: 600 }}>{t.label}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.capacityKg}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.tareKg}</td>
+              <td style={{ padding: "7px 9px", color: "#64748B" }}>{(t.appliesTo || []).join(", ") || "—"}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right", whiteSpace: "nowrap" }}>
+                <SmallButton onClick={() => edit(t)}>Edit</SmallButton>{" "}
+                <SmallButton kind="red" onClick={() => del(t)}>Remove</SmallButton>
+              </td>
+            </tr>
+          ))}
+          {!list.length && <tr><td colSpan={5} style={{ padding: "10px 9px", color: "#9CA3AF" }}>No packaging types yet.</td></tr>}
+        </tbody>
+      </table>
+      <Card>
+        <SectionTitle>{form.id ? "EDIT PACKAGING" : "ADD PACKAGING"}</SectionTitle>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 2fr auto", gap: 10, alignItems: "end", marginTop: 10 }}>
+          <div><Lbl>Name</Lbl><input value={form.label} onChange={e => sf("label", e.target.value)} placeholder="Wooden box (13 kg)" style={INP} /></div>
+          <div><Lbl>Holds (kg)</Lbl><input type="number" value={form.capacityKg} onChange={e => sf("capacityKg", e.target.value)} placeholder="13" style={INP} /></div>
+          <div><Lbl>Empty (kg)</Lbl><input type="number" value={form.tareKg} onChange={e => sf("tareKg", e.target.value)} placeholder="1.4" style={INP} /></div>
+          <div><Lbl>Applies to (comma separated)</Lbl><input value={form.appliesTo} onChange={e => sf("appliesTo", e.target.value)} placeholder="Apples, Pears" style={INP} /></div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <SmallButton kind="dark" onClick={save}>{form.id ? "Save" : "Add"}</SmallButton>
+            {form.id ? <SmallButton onClick={() => setForm(blank)}>Cancel</SmallButton> : null}
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function ProductCatalogPanel({ catalog, setCatalog }: any) {
   const { confirm: pcConfirm, dialogNode: pcNode } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
@@ -258,6 +345,8 @@ export default function Settings({
   setUserName,
   productCatalog = [],
   setProductCatalog,
+  packagingTypes = [],
+  setPackagingTypes,
 }: {
   reloadFromStorage: () => void;
   userRole?: string;
@@ -266,9 +355,11 @@ export default function Settings({
   setUserName?: (n: string) => void;
   productCatalog?: any[];
   setProductCatalog?: (v: any) => void;
+  packagingTypes?: any[];
+  setPackagingTypes?: (v: any) => void;
 }) {
   const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
-  const [manage, setManage] = React.useState<null | "products" | "locations">(null); // v6.38.0 (R1-C)
+  const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
 
@@ -496,10 +587,21 @@ export default function Settings({
         />
         <ManageCard
           title="PORTS & LOCATIONS"
-          summary={(() => { const ls = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE); const c = ls.filter((l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE).length; return `${ls.length - c} built-in · ${c} custom · feeds port pickers, the over-ship guard and transport-order addresses`; })()}
+          summary={(() => { const PORT = new Set(["Port", "PortWarehouse"]); const all = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE); const c = all.filter((l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE).length; const b = all.filter((l: any) => Number(l.id) < CUSTOM_LOCATION_ID_BASE && PORT.has(String(l.type))).length; return `${b} port built-ins · ${c} custom · party facilities are managed in Parties`; })()}
           buttonLabel="Manage ports & locations…"
           onManage={() => setManage("locations")}
         />
+        <ManageCard
+          title="PACKAGING & GROSS WEIGHT"
+          summary={`${(packagingTypes || []).length} type${(packagingTypes || []).length === 1 ? "" : "s"} · box capacity + empty weight drive the gross weight printed on transport orders`}
+          buttonLabel="Manage packaging…"
+          onManage={() => setManage("packaging")}
+        />
+        {manage === "packaging" && (
+          <FullScreenModal title="Packaging & gross weight" onClose={() => setManage(null)}>
+            <PackagingPanel types={packagingTypes} setTypes={setPackagingTypes} />
+          </FullScreenModal>
+        )}
         {manage === "products" && (
           <FullScreenModal title="Product catalog" onClose={() => setManage(null)}>
             <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog} />

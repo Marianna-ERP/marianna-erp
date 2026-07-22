@@ -95,7 +95,14 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     }
 
     // INBOUND
-    const isDirect = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected";
+    // v6.44.0 (test-round core): recognise a DIRECT EXPORT pass-through even when the
+    // lot's directFlow flag was never set — if this shipment's goods for the lot carry
+    // an SO reference (the goods are sold, going straight to the client), it's a
+    // pass-through, not a receipt into our stock. This is what produces the SHIP_OUT
+    // that gives the SO its COGS.
+    const goodsAreSold = relatedGoods.some((g: any) => !!g.soRef) || (sh.soRefs || []).length > 0;
+    const goodsAreExport = relatedGoods.some((g: any) => String(g.tradeDirection || "").toUpperCase() === "EXPORT");
+    const isDirect = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected" || (goodsAreSold && goodsAreExport);
     const notYetReceived = !(num(lot.receivedKg) > 0) && currentPhysical <= 0;
     if (isDirect) {
       // Decision 2 (pass-through pair): goods enter our ownership at the handover
