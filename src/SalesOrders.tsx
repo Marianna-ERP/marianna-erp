@@ -114,6 +114,12 @@ function _adaptLotsFromInventory(invLots) {
     physicalKg: l.physicalKg ?? 0,
     receivedKg: l.receivedKg ?? 0,
     packaging: l.packaging,
+    // v6.45.0 (D): preserved for the engine — poLineId ties a lot to its PO line,
+    // movements let the engine derive shipped kg (remainder rule + shipped-aware
+    // PO supply). The old adapter dropped both, silently degrading the v6.41.0
+    // remainder context inside computeLineAvailability.
+    poLineId: l.poLineId ?? null,
+    movements: l.movements || [],
   }));
 }
 
@@ -808,9 +814,10 @@ function SODoc({ order }: any) {
 
 // ─── PRINT MODAL ──────────────────────────────────────────────────────────
 function PrintModal({ order, onClose }: any) {
+  const { alert: pmAlert, dialogNode: pmNode } = useConfirm(); // P2-6 completion
   function printDoc() {
     const node = document.getElementById("so-print-doc");
-    if (!node) { alert("Print preview not ready"); return; }
+    if (!node) { pmAlert({ tone: "warn", title: "Not ready", message: "Print preview not ready — please try again in a moment." }); return; }
     const existing = document.getElementById("so-print-frame");
     if (existing) existing.remove();
     const iframe = document.createElement("iframe");
@@ -848,6 +855,7 @@ function PrintModal({ order, onClose }: any) {
   }
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+      {pmNode}
       <div style={{ background: "#fff", borderRadius: 14, width: "min(940px, 96vw)", maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -877,6 +885,7 @@ function bestContactEmail(cp: any) {
   return (withEmail && withEmail.email) || (cp && cp.email) || "";
 }
 function EmailModal({ order, contacts = [], onClose }: any) {
+  const { alert: emAlert, dialogNode: emNode } = useConfirm(); // P2-6 completion
   // v6.18.14 (#1): resolve the client email LIVE from Contacts at send time.
   const sid = order && order.client && order.client.id;
   const liveClient = (sid != null) ? (contacts || []).find((c: any) => String(c.id) === String(sid)) : null;
@@ -886,7 +895,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
 
   function openPrintForPdf() {
     const node = document.getElementById("so-print-doc");
-    if (!node) { alert("Print preview not ready — please try again in a moment."); return; }
+    if (!node) { emAlert({ tone: "warn", title: "Not ready", message: "Print preview not ready — please try again in a moment." }); return; }
     const existing = document.getElementById("so-email-print-frame");
     if (existing) existing.remove();
     const iframe = document.createElement("iframe");
@@ -930,6 +939,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+      {emNode}
       <div style={{ background: "#fff", borderRadius: 14, width: 620, maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -1969,6 +1979,28 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                 </table>
               </Card>
 
+              {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
+              {(computedLinks.linkedInvoices?.length > 0 || computedLinks.linkedShipments?.length > 0) && (
+                <Card style={{ marginBottom: 16 }}>
+                  <SectionTitle>LINKED DOCUMENTS</SectionTitle>
+                  {computedLinks.linkedInvoices?.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SALES INVOICES</div>
+                      {computedLinks.linkedInvoices.map(inv => (
+                        <div key={inv} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div>
+                      ))}
+                    </div>
+                  )}
+                  {computedLinks.linkedShipments?.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SHIPMENTS</div>
+                      {computedLinks.linkedShipments.map(s => (
+                        <div key={s} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#F3E8FF", border: "1px solid #DDD6FE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace" }}>{s}</div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              )}
               {order.notes && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>NOTES</SectionTitle>
@@ -2037,27 +2069,7 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                 </Card>
               )}
 
-              {(computedLinks.linkedInvoices?.length > 0 || computedLinks.linkedShipments?.length > 0) && (
-                <Card style={{ marginBottom: 16 }}>
-                  <SectionTitle>LINKED RECORDS</SectionTitle>
-                  {computedLinks.linkedInvoices?.length > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SALES INVOICES</div>
-                      {computedLinks.linkedInvoices.map(inv => (
-                        <div key={inv} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div>
-                      ))}
-                    </div>
-                  )}
-                  {computedLinks.linkedShipments?.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SHIPMENTS</div>
-                      {computedLinks.linkedShipments.map(s => (
-                        <div key={s} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#F3E8FF", border: "1px solid #DDD6FE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace" }}>{s}</div>
-                      ))}
-                    </div>
-                  )}
-                </Card>
-              )}
+
             </div>
           </div>
         </div>
@@ -2318,13 +2330,13 @@ export default function SalesOrders({
     // Batch 6b: hard confirm-gate — no SO past Draft without its sell terms.
     const termsMissing = soTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
-      alert(`This SO cannot move to ${o.status} without ${termsMissing}. "CIF" without "CIF Jeddah" is only half the contract.`);
+      await uiAlert({ tone: "warn", title: "Terms incomplete", message: `This SO cannot move to ${o.status} without ${termsMissing}. "CIF" without "CIF Jeddah" is only half the contract.` });
       return;
     }
 
     // Duplicate number guard
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
-    if (dup) { alert(`SO number ${o.number} already exists.`); return; }
+    if (dup) { await uiAlert({ tone: "warn", title: "Duplicate SO number", message: `SO number ${o.number} already exists.` }); return; }
     // v6.3.0: import-document duplicate guard. Import permits and ACID numbers are
     // single-use — re-using one across orders/shipments risks customs rejection.
     // Block by default; allow an explicit, recorded override.
@@ -2363,13 +2375,13 @@ export default function SalesOrders({
     const src = validateSourcing(o.items);
     const needsSource = !src.allSourced && o.status !== "Draft" && o.status !== "Cancelled";
     if (needsSource) {
-      alert(`Cannot save SO as ${o.status} — ${src.unsourcedIndexes.length} line(s) unsourced. Pick a stock lot or a PO for every line first, or save as Draft.`);
+      await uiAlert({ tone: "warn", title: "Lines unsourced", message: `Cannot save SO as ${o.status} — ${src.unsourcedIndexes.length} line(s) unsourced. Pick a stock lot or a PO for every line first, or save as Draft.` });
       return;
     }
     const poIssues = validatePOReadinessForSO(o.items);
     if (poIssues.length && o.status !== "Draft" && o.status !== "Cancelled") {
       const poDetails = poIssues.map((x: any) => `• Line ${x.idx + 1}: ${x.poRef} (${x.status})`).join("\n");
-      alert(`Cannot save SO as ${o.status} because it refers to a PO that is Draft, Cancelled or missing:\n\n${poDetails}\n\nConfirm the PO first, choose another source, or keep the SO as Draft.`);
+      await uiAlert({ tone: "warn", title: "Source PO not usable", message: `Cannot save SO as ${o.status} because it refers to a PO that is Draft, Cancelled or missing:\n\n${poDetails}\n\nConfirm the PO first, choose another source, or keep the SO as Draft.` });
       return;
     }
     // Availability guard — same hard rule, parallel to sourcing.
@@ -2382,7 +2394,7 @@ export default function SalesOrders({
         .map((a: any, i: number) => a.hasOverage ? `  • Line ${i + 1}: short by ${a.overage.toLocaleString("pl-PL")} kg (demand ${a.lineQty.toLocaleString("pl-PL")} kg, primary source available ${a.primaryAvailable.toLocaleString("pl-PL")} kg)` : null)
         .filter((value: string | null): value is string => typeof value === "string")
         .join("\n");
-      alert(`Cannot save SO as ${o.status} — ${overCount} line(s) exceed available supply:\n\n${details}\n\nReduce qty, switch source, or arrange more procurement.`);
+      await uiAlert({ tone: "warn", title: "Over available supply", message: `Cannot save SO as ${o.status} — ${overCount} line(s) exceed available supply:\n\n${details}\n\nReduce qty, switch source, or arrange more procurement.` });
       return;
     }
     // Detect Shipped transition — compare incoming status with previously-saved one.
@@ -2513,20 +2525,20 @@ export default function SalesOrders({
           setProductCatalog={setProductCatalog}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
-          onPrint={() => {
+          onPrint={async () => {
             if (form.status === "Draft") {
-              alert("Cannot print or share a draft SO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft SO", message: "Cannot print or share a draft SO. Confirm the order first." });
               return;
             }
-            { const _m = soTermsMissing(form); if (_m) { alert(`Cannot print this SO without ${_m} — the client must see the delivery terms.`); return; } }
+            { const _m = soTermsMissing(form); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot print this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setPrintOrder(form);
           }}
-          onEmail={() => {
+          onEmail={async () => {
             if (form.status === "Draft") {
-              alert("Cannot email a draft SO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft SO", message: "Cannot email a draft SO. Confirm the order first." });
               return;
             }
-            { const _m = soTermsMissing(form); if (_m) { alert(`Cannot email this SO without ${_m} — the client must see the delivery terms.`); return; } }
+            { const _m = soTermsMissing(form); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot email this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setEmailOrder(form);
           }}
         />
@@ -2556,20 +2568,20 @@ export default function SalesOrders({
           userName={userName}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => editOrder(selected)}
-          onPrint={() => {
+          onPrint={async () => {
             if (selected.status === "Draft") {
-              alert("Cannot print or share a draft SO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft SO", message: "Cannot print or share a draft SO. Confirm the order first." });
               return;
             }
-            { const _m = soTermsMissing(selected); if (_m) { alert(`Cannot print this SO without ${_m} — the client must see the delivery terms.`); return; } }
+            { const _m = soTermsMissing(selected); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot print this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setPrintOrder(selected);
           }}
-          onEmail={() => {
+          onEmail={async () => {
             if (selected.status === "Draft") {
-              alert("Cannot email a draft SO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft SO", message: "Cannot email a draft SO. Confirm the order first." });
               return;
             }
-            { const _m = soTermsMissing(selected); if (_m) { alert(`Cannot email this SO without ${_m} — the client must see the delivery terms.`); return; } }
+            { const _m = soTermsMissing(selected); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot email this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setEmailOrder(selected);
           }}
           onIssueInvoice={() => setInvoiceOrder(selected)}
@@ -2673,6 +2685,16 @@ export default function SalesOrders({
                     const icon = String(s).slice(0, String(s).length - bare.length);
                     return <span key={i} style={{ fontSize: 10.5, color: "#475569" }}>{icon}<DocRef num={bare} cancelledSet={cancelledRefs} /></span>;
                   })}
+                  {/* v6.45.0: shipments + invoices were missing from this column —
+                      the SO showed only its SOURCE documents even after shipping. */}
+                  {(() => {
+                    const shps = Array.from(new Set([
+                      ...((o.linkedShipments || [])),
+                      ...((extShipments || []).filter((sh: any) => sh.status !== "Cancelled" && ((sh.soRefs || []).includes(o.number) || (sh.goods || []).some((g: any) => g.soRef === o.number))).map((sh: any) => sh.number)),
+                    ]));
+                    return shps.map((n: any, i: number) => <span key={"sh" + i} style={{ fontSize: 10.5, color: "#0284C7" }}>📦<DocRef num={n} cancelledSet={cancelledRefs} /></span>);
+                  })()}
+                  {(o.linkedInvoices || []).map((n: any, i: number) => <span key={"inv" + i} style={{ fontSize: 10.5, color: "#16A34A" }}>📄<DocRef num={n} cancelledSet={cancelledRefs} /></span>)}
                 </div>
               </div>
             );

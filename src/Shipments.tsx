@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection, shipmentFulfilsOrder } from "./tradeFlow.domain";
-import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms, syncLegFreightCostLines, legFreightSource } from "./shipments.domain";
+import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms, syncLegFreightCostLines, legFreightSource, findLotForSOLine } from "./shipments.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { printHtmlNode } from "./documentService";
@@ -522,11 +522,11 @@ function providerName(id, contacts = []) {
   return providerById(id, contacts)?.name || "-";
 }
 
-function costTypeLabel(code) {
+export function costTypeLabel(code) {
   return COST_TYPES.find(t => t.code === code)?.label || code || "Cost";
 }
 
-function costInventoryType(code) {
+export function costInventoryType(code) {
   return COST_TYPES.find(t => t.code === code)?.inventoryType || "freight";
 }
 
@@ -559,13 +559,9 @@ function guessSupplierLocationId(po) {
   return null;
 }
 
-function findLotForLine(lots, line, poRef = "") {
-  if (line?.sourceType === "STOCK" && line?.sourceRef) return (lots || []).find(l => l.number === line.sourceRef) || null;
-  if (poRef) {
-    return (lots || []).find(l => l.poRef === poRef && norm(l.product) === norm(line.product)) || null;
-  }
-  return null;
-}
+// v6.45.0 (B): findLotForLine removed — it matched by product name only and
+// paired every same-product line with the FIRST lot. Use findLotForSOLine
+// (id-aware, claimed-set) from the domain instead.
 
 function norm(v) {
   return String(v || "").trim().toLowerCase();
@@ -718,6 +714,10 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
 }
 
 function buildShipmentFromSO__raw(so, opts, shipments, lots) {
+  // v6.45.0 (B): the shipment owns the trade direction — derived from its
+  // governing SO (the from-PO builder already did this; this one never did,
+  // which is why direct-export lots showed "Import").
+  const tradeDirection = shipmentTradeDirection(null, null, so, countryOfLocation);
   const id = nextId();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
@@ -725,12 +725,16 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
   // road leg unassigned (TBD) rather than forcing a default carrier.
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
-  const firstLine = (so.items || [])[0] || {};
-  const firstLot = findLotForLine(lots, firstLine, firstLine.sourceType === "PO" ? firstLine.sourceRef : "");
+  // v6.45.0 (B): id-aware matching here too — the old matcher gave every
+  // same-product line the FIRST lot, so lotRefs lost the second lot entirely.
+  const _refClaimed = new Set<string>();
+  const _lotForLine = (it: any) => { const l = findLotForSOLine(lots, it, { claimed: _refClaimed }); if (l) _refClaimed.add(String(l.number)); return l; };
+  const _lineLots = (so.items || []).map((it: any) => _lotForLine(it));
+  const firstLot = _lineLots[0] || null;
   const originLocationId = firstLot?.locationId || opts.originLocationId || 1;
   const destinationLocationId = so.destinationLocationId || opts.destinationLocationId || 10;
   const poRefs = uniq((so.items || []).filter(it => it.sourceType === "PO").map(it => it.sourceRef));
-  const lotRefs = uniq((so.items || []).map(it => findLotForLine(lots, it, it.sourceType === "PO" ? it.sourceRef : "")?.number || (it.sourceType === "STOCK" ? it.sourceRef : "")).filter(Boolean));
+  const lotRefs = uniq((so.items || []).map((it: any, i: number) => _lineLots[i]?.number || (it.sourceType === "STOCK" ? it.sourceRef : "")).filter(Boolean));
   // v6.34.8: SO parity with PO — honour selectedItemIds, per-line "ship now" qty
   // (opts.lineQtys, default full line), and stamp soLineId for per-line shipped-kg counting.
   const lineQtys = opts.lineQtys || {};
@@ -738,8 +742,14 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
   const loadable = (opts.selectedItemIds && opts.selectedItemIds.length)
     ? indexedItems.filter(x => opts.selectedItemIds.map(String).includes(x.id))
     : indexedItems;
+  // v6.45.0 (ROOT CAUSE B): the old product-name matcher paired EVERY same-product
+  // line with the FIRST lot of the PO (both SO-2026-0002 lines → LOT-2026-0004).
+  // The id-aware domain matcher pairs each line with ITS lot (sourceLineId ↔
+  // poLineId), and the claimed set stops one lot serving two lines.
+  const _claimedLots = new Set<string>();
   const goods = loadable.map(({ it, idx, id }, gi) => {
-    const lot = findLotForLine(lots, it, it.sourceType === "PO" ? it.sourceRef : "");
+    const lot = findLotForSOLine(lots, it, { claimed: _claimedLots });
+    if (lot) _claimedLots.add(String(lot.number));
     let palletCount = parseNum(it.pallets) || 0;
     if (!palletCount && lot) palletCount = parseNum(lot.pallets) || 0;
     const entered = lineQtys[id];
@@ -749,6 +759,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
       poRef: it.sourceType === "PO" ? it.sourceRef : lot?.poRef || "",
       soRef: so.number,
       soLineId: it.id ?? idx + 1,   // v6.34.8: stamp the source SO line
+      tradeDirection,               // v6.45.0 (B): rows carry the direction for lot badges
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product || "Goods",
       variety: it.variety || "",
@@ -781,6 +792,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
     status: "Booked",
     poRefs,
     soRefs: [so.number],
+    tradeDirection,
     lotRefs,
     carrierId,
     forwarderId,
@@ -2337,6 +2349,9 @@ export default function Shipments({
   onNavigate = () => {},
 }: any = {}) {
   const { confirm: shConfirm, dialogNode: shDialogNode } = useConfirm(); // P2-6
+  // v6.45.0 (A): synchronous mirror of the shipments array for chain-safe updates.
+  const shipmentsMirror = React.useRef(null);
+  React.useEffect(() => { shipmentsMirror.current = shipments; });
   const [localShipments, setLocalShipments] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const [localPOs, setLocalPOs] = useState<any[]>([]);
   const [localLots, setLocalLots] = useState<any[]>([]);
@@ -2417,10 +2432,18 @@ export default function Shipments({
     setEditShipment({ ...sh, __isNew: true });
   }
 
+  // v6.45.0 (ROOT CAUSE A): chain-safe updates. The old version built `updated`
+  // from the RENDER SNAPSHOT of `shipments`, so when one action chained two
+  // updates (status → then allocation, as Delivered/Closed do), the second was
+  // built from the stale pre-status base and CLOBBERED the status back — the
+  // user's "Delivered ×3, stored Loaded" audit trail. The ref mirror below is
+  // updated synchronously, so successive updates in one action always build on
+  // each other; state itself is still set functionally.
   function updateShipment(id, updater) {
-    const base = shipments.find(s => s.id === id);
+    const base = (shipmentsMirror.current || shipments).find(s => s.id === id);
     if (!base) return null;
     const updated = typeof updater === "function" ? updater(base) : { ...base, ...updater };
+    shipmentsMirror.current = (shipmentsMirror.current || shipments).map(s => s.id === id ? updated : s);
     setShipments(prev => prev.map(s => s.id === id ? updated : s));
     return updated;
   }

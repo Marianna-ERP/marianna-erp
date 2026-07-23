@@ -48,8 +48,10 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
   const nextLots = (lots || []).map(lot => {
     const relatedGoods = (sh.goods || []).filter((g: any) => g.lotRef === lot.number);
     if (!relatedGoods.length) return lot;
+    // v6.45.0 (heal): VOIDED movements don't count — a voided posting was undone
+    // (cancellation or heal), so a fresh post must be allowed.
     const hasMovement = (lot.movements || []).some((m: any) =>
-      (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(sh.number)));
+      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(sh.number)));
     if (hasMovement) return lot;
 
     const qty = relatedGoods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
@@ -65,7 +67,15 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     if (purpose === "OUTBOUND") {
       // Decision 2 extension: an EXW/direct collection of a lot that never entered
       // our stock posts the PASS-THROUGH PAIR here too (ownership at handover).
-      const isDirectLot = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected";
+      // v6.45.0 (parity with the v6.44.0 INBOUND fix): a PO-backed lot that was
+      // NEVER received and leaves on a sold shipment is a pass-through by
+      // definition — the goods went producer → client without touching our
+      // stock. The old gate demanded the directFlow flag, which older/mis-built
+      // lots don't carry, so genuine direct exports fell into the plain
+      // SHIP_OUT branch: receivedKg stayed 0 (no weight anywhere) and the
+      // over-issue clamp fired on legitimate goods.
+      const isDirectLot = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected"
+        || (!!lot.poRef && (goodsSoRef || (sh.soRefs || []).length > 0));
       const notYetIn = !(num(lot.receivedKg) > 0) && currentPhysical <= 0;
       if (isDirectLot && notYetIn) {
         const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;

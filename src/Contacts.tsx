@@ -837,6 +837,7 @@ function parseOwnCsv(text: string, existingCounterparties: any[]) {
 }
 
 function ImportModal({ existingCounterparties, onCancel, onImport, source = "fakturownia" }: any) {
+  const { alert: imAlert, dialogNode: imNode } = useConfirm(); // P2-6 completion
   const isCsv = source === "csv";
   const [stage, setStage] = useState("upload"); // upload | parsing | review
   const [filename, setFilename] = useState("");
@@ -859,7 +860,7 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
           setParsedRows(parsed);
           setStage("review");
         } catch (err) {
-          alert("Could not parse CSV: " + (err instanceof Error ? err.message : String(err)));
+          imAlert({ tone: "warn", title: "Import failed", message: "Could not parse CSV: " + (err instanceof Error ? err.message : String(err)) });
           setStage("upload");
         }
       };
@@ -885,7 +886,7 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
         setParsedRows(parsed);
         setStage("review");
       } catch (err) {
-        alert("Could not parse file: " + (err instanceof Error ? err.message : String(err)));
+        imAlert({ tone: "warn", title: "Import failed", message: "Could not parse file: " + (err instanceof Error ? err.message : String(err)) });
         setStage("upload");
       }
     };
@@ -933,6 +934,7 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      {imNode}
       <div style={{ background: "#fff", borderRadius: 14, width: "min(1280px, 98vw)", maxHeight: "94vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,0.18)", overflow: "hidden" }}>
         {/* Header */}
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>

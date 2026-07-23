@@ -465,8 +465,19 @@ function QualityBadge({ quality }: any) {
   const p = palette[quality] || palette["I"];
   return <span style={{ background: p.bg, color: p.color, padding: "1px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
-function LocationPill({ locationId }: any) {
+function LocationPill({ locationId, lot = null }: any) {
   const loc = locById(locationId);
+  // v6.45.0 (test-round): a DIRECT lot never sits in one of our locations — the
+  // goods go producer → client. Say so instead of showing an empty dash.
+  if (!loc && lot) {
+    const direct = !!lot.directFlow || lot.custodyType === "Direct" || /direct/i.test(String(lot.status || ""));
+    if (direct) return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#7C3AED" }}>
+        <span style={{ fontSize: 11 }}>↗</span>
+        <span style={{ fontWeight: 500 }}>Direct · producer → client</span>
+      </span>
+    );
+  }
   if (!loc) return <span style={{ color: "#CCC" }}>—</span>;
   const t = locType(loc.type);
   return (
@@ -870,9 +881,9 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
 
 // ─── v6.6: print helper for the settlement statement (same pattern as Shipments) ─
-function printHtmlNodeInv(nodeId, title) {
+function printHtmlNodeInv(nodeId, title, notify = null) {
   const node = document.getElementById(nodeId);
-  if (!node) { alert("Print preview not ready"); return; }
+  if (!node) { if (notify) notify({ tone: "warn", title: "Not ready", message: "Print preview not ready — please try again in a moment." }); else console.warn("print preview node missing:", nodeId); return; }
   const existing = document.getElementById(`${nodeId}-frame`);
   if (existing) existing.remove();
   const iframe = document.createElement("iframe");
@@ -1522,7 +1533,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                   </div>
                   <div>
                     <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>CURRENT LOCATION</div>
-                    <LocationPill locationId={lot.locationId} />
+                    <LocationPill locationId={lot.locationId} lot={lot} />
                     {lot.directFlow && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4 }}>{lot.destinationText || "Direct destination"}</div>}
                   </div>
                   <div>
@@ -2189,7 +2200,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                 <div><QualityBadge quality={l.quality} /></div>
                 <div><StatusBadge status={l.status} /></div>
                 <div>
-                  <LocationPill locationId={l.locationId} />
+                  <LocationPill locationId={l.locationId} lot={l} />
                   <div style={{ marginTop: 3 }}><LotDirectionBadge lot={l} shipments={shipments} orders={liveSOs} compact /></div>
                 </div>
                 <div>

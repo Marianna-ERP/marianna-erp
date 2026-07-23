@@ -1588,6 +1588,89 @@ T("onions in 25kg mesh bags", () => {
   assert.equal(r.boxes, 20); assert.equal(r.grossKg, Math.round((500 + 20 * 0.15) * 1000) / 1000);
 });
 
+// ── v6.45.0: test-round root causes B, C, D ──
+const HEAL = require("./build/heal.v645.js");
+const SD = require("./build/shipments.domain.js");
+console.log("── v6.45.0: OUTBOUND pass-through, shipped-aware supply, heal ──");
+
+T("OUTBOUND: never-received PO-backed sold lot posts the pass-through pair (no flag needed)", () => {
+  const lot = { number: "L-D", poRef: "PO-X", product: "Apples", receivedKg: 0, physicalKg: 0, directFlow: false, movements: [] };
+  const sh = { number: "SHP-D", status: "Closed", purpose: "OUTBOUND", soRefs: ["SO-X"], legs: [{}],
+    goods: [{ lotRef: "L-D", soRef: "SO-X", qtyKg: 5000 }] };
+  const r = SD.postShipmentToLots(sh, [lot], { todayISO: () => "2026-07-22", nextId: (() => { let i=0; return () => ++i; })() });
+  const l = r.lots[0];
+  assert.equal(l.receivedKg, 5000, "receipt recorded (weight visible)");
+  assert.equal(l.status, "Delivered (direct)");
+  assert.equal((l.movements||[]).filter(m=>m.type==="SHIP_OUT").length, 1);
+  assert.ok(!(l.overIssuedKg > 0), "no over-issue on a legitimate pass-through");
+});
+T("posting guard ignores VOIDED movements (re-post after heal allowed)", () => {
+  const lot = { number: "L-V", poRef: "PO-X", product: "Apples", receivedKg: 0, physicalKg: 0, movements: [
+    { type: "SHIP_OUT", qtyKg: 9999, shipmentRef: "SHP-V", voided: true } ] };
+  const sh = { number: "SHP-V", status: "Closed", purpose: "OUTBOUND", soRefs: ["SO-X"], legs: [{}],
+    goods: [{ lotRef: "L-V", soRef: "SO-X", qtyKg: 5000 }] };
+  const r = SD.postShipmentToLots(sh, [lot], { todayISO: () => "2026-07-22", nextId: (() => { let i=0; return () => ++i; })() });
+  const live = (r.lots[0].movements||[]).filter(m=>!m.voided);
+  assert.equal(live.length, 2, "fresh IN+SHIP_OUT posted despite the voided old movement");
+});
+T("D: a SHIPPED PO line is no longer 'available' to a new SO", () => {
+  // PO line fully shipped via its lot; a NEW SO asks the same line.
+  const po = { number: "PO-S", status: "Confirmed", items: [{ id: 7, product: "Apples", qty: 10000, available: 10000 }] };
+  const lot = { number: "L-S", poRef: "PO-S", poLineId: 7, product: "Apples", receivedKg: 0, physicalKg: 0,
+    movements: [{ type: "SHIP_OUT", qtyKg: 10000, soRef: "SO-OLD", shipmentRef: "S1" }] };
+  const orders = [{ number: "SO-OLD", id: 1, status: "Shipped", items: [{ sourceType: "PO", sourceRef: "PO-S", sourceLineId: 7, product: "Apples", qty: 10000 }] }];
+  const newItems = [{ sourceType: "PO", sourceRef: "PO-S", sourceLineId: 7, product: "Apples", qty: 10000 }];
+  const av = SOD.computeLineAvailability(newItems, orders, 99, [lot], [po], []);
+  assert.equal(av[0].primaryAvailable, 0, "shipped goods are gone — not sellable again");
+  assert.ok(av[0].hasOverage, "overage flagged");
+});
+T("D: partially shipped PO line offers exactly the unshipped remainder", () => {
+  const po = { number: "PO-P", status: "Confirmed", items: [{ id: 3, product: "Apples", qty: 10000, available: 10000 }] };
+  const lot = { number: "L-P", poRef: "PO-P", poLineId: 3, product: "Apples", receivedKg: 0, physicalKg: 0,
+    movements: [{ type: "SHIP_OUT", qtyKg: 4000, soRef: "SO-OLD", shipmentRef: "S1" }] };
+  const orders = [{ number: "SO-OLD", id: 1, status: "Shipped", items: [{ sourceType: "PO", sourceRef: "PO-P", sourceLineId: 3, product: "Apples", qty: 4000 }] }];
+  const av = SOD.computeLineAvailability([{ sourceType: "PO", sourceRef: "PO-P", sourceLineId: 3, product: "Apples", qty: 6000 }], orders, 99, [lot], [po], []);
+  assert.equal(av[0].primaryAvailable, 6000, "10000 - 4000 shipped");
+  assert.ok(!av[0].hasOverage);
+});
+T("HEAL: retags duplicated goods rows, voids the wrong movement, re-posts, re-allocates", () => {
+  const lots = [
+    { number: "L-1", poRef: "PO-H", poLineId: 11, product: "Apples", receivedKg: 0, physicalKg: 0, costs: [], movements: [
+      { id: 1, type: "SHIP_OUT", qtyKg: 8000, soRef: "SO-H", shipmentRef: "SHP-H" } ] },
+    { number: "L-2", poRef: "PO-H", poLineId: 12, product: "Apples", receivedKg: 0, physicalKg: 0, costs: [], movements: [] },
+  ];
+  const orders = [{ number: "SO-H", id: 1, status: "Shipped", items: [
+    { id: 101, sourceType: "PO", sourceRef: "PO-H", sourceLineId: 11, product: "Apples", qty: 4000 },
+    { id: 102, sourceType: "PO", sourceRef: "PO-H", sourceLineId: 12, product: "Apples", qty: 4000 } ] }];
+  const shipments = [{ number: "SHP-H", status: "Closed", purpose: "OUTBOUND", soRefs: ["SO-H"], legs: [{}],
+    costs: [{ id: 5, type: "road_freight", amountPLN: 1000 }],
+    goods: [
+      { lotRef: "L-1", soRef: "SO-H", soLineId: 101, qtyKg: 4000 },
+      { lotRef: "L-1", soRef: "SO-H", soLineId: 102, qtyKg: 4000 } ] }];
+  let i = 500;
+  const res = HEAL.healRound645({ shipments, lots, orders }, { todayISO: () => "2026-07-22", nextId: () => ++i,
+    costMapper: { inventoryType: () => "freight", label: c => c } });
+  assert.ok(res.changed);
+  const sh = res.shipments[0];
+  assert.equal(sh.goods[1].lotRef, "L-2", "second row retagged to its true lot");
+  const l1 = res.lots.find(l => l.number === "L-1"), l2 = res.lots.find(l => l.number === "L-2");
+  assert.ok((l1.movements||[]).some(m => m.voided), "wrong movement voided");
+  assert.equal(l1.receivedKg, 4000); assert.equal(l2.receivedKg, 4000);
+  const alloc = (l) => (l.costs||[]).filter(c => String(c.source||"").startsWith("SHP-H/")).reduce((a,c)=>a+(c.pln||0),0);
+  assert.equal(alloc(l1) + alloc(l2), 1000, "costs re-allocated across BOTH lots");
+});
+T("HEAL: a healthy dataset passes through untouched", () => {
+  const lots = [{ number: "L-OK", poRef: "PO-OK", poLineId: 1, product: "Apples", receivedKg: 5000, physicalKg: 0, costs: [], movements: [
+    { type: "IN", qtyKg: 5000, shipmentRef: "SHP-OK" }, { type: "SHIP_OUT", qtyKg: 5000, soRef: "SO-OK", shipmentRef: "SHP-OK" } ] }];
+  const shipments = [{ number: "SHP-OK", status: "Closed", purpose: "OUTBOUND", soRefs: ["SO-OK"], legs: [{}], costs: [],
+    goods: [{ lotRef: "L-OK", soRef: "SO-OK", soLineId: 1, qtyKg: 5000 }] }];
+  const orders = [{ number: "SO-OK", id: 1, status: "Closed", items: [{ id: 1, sourceType: "PO", sourceRef: "PO-OK", sourceLineId: 1, product: "Apples", qty: 5000 }] }];
+  let i = 800;
+  const res = HEAL.healRound645({ shipments, lots, orders }, { todayISO: () => "2026-07-22", nextId: () => ++i,
+    costMapper: { inventoryType: () => "freight", label: c => c } });
+  assert.equal(res.changed, false, "no false-positive healing");
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

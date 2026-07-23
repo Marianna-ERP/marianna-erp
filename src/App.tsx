@@ -9,9 +9,13 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
+import { healRound645 } from "./heal.v645";
+import { costTypeLabel, costInventoryType } from "./Shipments";
+import { localTodayISO } from "./dates";
+import { nextId as globalNextId } from "./ids";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
-import { setAuditSink } from "./audit";
+import { setAuditSink, recordAudit } from "./audit";
 import { appendAudit } from "./auditTrail.domain";
 import AuditTrail from "./AuditTrail";
 import { convertSettledRefsToEvents } from "./payments.domain";
@@ -181,6 +185,32 @@ export default function App() {
   const [invoices, setInvoices] = useLocalStoredState("invoices", []);
   const [productCatalog, setProductCatalog] = useLocalStoredState("productCatalog", PRODUCT_CATALOG_SEED);
   const [packagingTypes, setPackagingTypes] = useLocalStoredState("packagingTypes", PACKAGING_SEED);
+
+  // ─── v6.45.0 one-time DATA HEAL (test-round root causes B + C) ──────────────
+  // Repairs: (C) shipments closed before the v6.44.0 close-posting fix (their
+  // lots never got movements → COGS/direct costs/weights/integrity wrong), and
+  // (B) goods rows the old matcher pointed at the wrong lot (re-tagged, wrong
+  // movements voided, goods re-posted, costs re-allocated). Runs once per
+  // browser (marker), is idempotent anyway, and records itself in the audit
+  // trail. See src/heal.v645.ts for the full reasoning.
+  React.useEffect(() => {
+    try {
+      const MARK = "marianna:heal:v6.45.0";
+      if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      const res = healRound645({ shipments, lots, orders }, {
+        todayISO: localTodayISO,
+        nextId: globalNextId,
+        costMapper: { inventoryType: costInventoryType, label: costTypeLabel },
+      });
+      window.localStorage.setItem(MARK, new Date().toISOString());
+      if (res.changed) {
+        setShipments(res.shipments);
+        setLots(res.lots);
+        try { recordAudit({ module: "System", docType: "Heal", docNumber: "HEAL-6.45.0", action: "healed", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
+      }
+    } catch (e) { console.error("heal v6.45.0 failed (left data untouched):", e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
   const [logisticsPoints, setLogisticsPoints] = useLocalStoredState("logisticsPoints", []);
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.

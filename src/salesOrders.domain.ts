@@ -221,19 +221,36 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
     const line = po.items.find((l: any) => l.id === (lineId ?? 1));
     if (!line) return 0;
     const k = `${po.number}::${line.id}`;
-    return Math.max(0, line.available - (committedFromPO[k] || 0));
+    // v6.45.0 (D): goods that already arrived or left this line are not supply.
+    return Math.max(0, line.available - (committedFromPO[k] || 0) - (goneKgByPOLine[k] || 0));
   }
 
-  // Decision 1 (Batch 3a, precise partial receipt): kg already received into lots
-  // is subtracted from that PO line's incoming supply — the received part counts
-  // via the lot, the genuine remainder still counts as incoming. A fully received
-  // PO therefore contributes 0 (same as the old v6.18.24 exclusion); a PO arriving
-  // across multiple trucks contributes exactly what is still on the way.
+  // Decision 1 (Batch 3a) + v6.45.0 (ROOT CAUSE D, shipped-aware supply):
+  // kg that already physically ARRIVED (received into a lot) or LEFT (shipped
+  // out of a lot) against a PO line is no longer incoming supply. Per lot we
+  // count max(received, shipped) — a pass-through lot has received == shipped
+  // and must count ONCE; a warehouse receipt counts via received; a pure
+  // ship-out (no receipt posted) counts via shipped. Keyed per PO LINE via the
+  // lot's poLineId; legacy lots without one fall back to the old
+  // product-keyed received map (applied only in the other-sources path).
+  const goneKgByPOLine: Record<string, number> = {};
   const receivedKgByPOProduct: Record<string, number> = {};
   LOTS.forEach((l: any) => {
     if (!l.poRef) return;
-    const k = `${l.poRef}::${productVarietyKey(l)}`;  // FB-12: keyed by product+variety
-    receivedKgByPOProduct[k] = (receivedKgByPOProduct[k] || 0) + Math.max(0, (l.receivedKg ?? 0));
+    const shipped = (l.movements || []).reduce((a: number, m: any) => {
+      if (!m || m.voided) return a;
+      if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
+      if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
+      return a;
+    }, 0);
+    const gone = Math.max(Math.max(0, l.receivedKg ?? 0), Math.max(0, shipped));
+    if (l.poLineId != null) {
+      const k2 = `${l.poRef}::${l.poLineId}`;
+      goneKgByPOLine[k2] = (goneKgByPOLine[k2] || 0) + gone;
+    } else {
+      const k = `${l.poRef}::${productVarietyKey(l)}`;  // FB-12: keyed by product+variety
+      receivedKgByPOProduct[k] = (receivedKgByPOProduct[k] || 0) + Math.max(0, (l.receivedKg ?? 0));
+    }
   });
 
   return (soItems || []).map((it: any) => {
@@ -269,8 +286,10 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
       (po.items || []).forEach((line: any) => {
         if (productVarietyKey(line) !== lineKey) return;  // FB-12: product+variety
         if (it.sourceType === "PO" && it.sourceRef === po.number && (it.sourceLineId ?? 1) === line.id) return;
-        const received = receivedKgByPOProduct[`${po.number}::${productVarietyKey(line)}`] || 0;
-        otherPOKg += Math.max(0, poLineRemaining(po.number, line.id) - received);
+        // v6.45.0 (D): per-line gone kg is already inside poLineRemaining; the
+        // product-keyed received map now only covers legacy lots without poLineId.
+        const legacyReceived = receivedKgByPOProduct[`${po.number}::${productVarietyKey(line)}`] || 0;
+        otherPOKg += Math.max(0, poLineRemaining(po.number, line.id) - legacyReceived);
       });
     });
 

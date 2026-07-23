@@ -450,6 +450,7 @@ function PODoc({ order }: any) {
 
 // ─── PRINT MODAL ────────────────────────────────────────────────────────────
 function PrintModal({ order, onClose }: any) {
+  const { alert: pmAlert, dialogNode: pmNode } = useConfirm(); // P2-6 completion
   // Inject a hidden iframe into the current document, populate it with the
   // A4-styled print HTML, then call print on the iframe's window.
   // This approach is more reliable than window.open + document.write, because
@@ -459,7 +460,7 @@ function PrintModal({ order, onClose }: any) {
   function printDoc() {
     const node = document.getElementById("po-print-doc");
     if (!node) {
-      alert("Print preview not ready — please try again in a moment.");
+      pmAlert({ tone: "warn", title: "Print", message: "Print preview not ready — please try again in a moment." });
       return;
     }
 
@@ -503,7 +504,7 @@ function PrintModal({ order, onClose }: any) {
 
     const doc = iframe.contentDocument || iframe.contentWindow?.document;
     if (!doc) {
-      alert("Unable to open the print preview window. Please try again.");
+      pmAlert({ tone: "warn", title: "Print", message: "Unable to open the print preview window. Please try again." });
       iframe.remove();
       return;
     }
@@ -528,7 +529,7 @@ function PrintModal({ order, onClose }: any) {
         iframe.contentWindow?.print();
       } catch (e) {
         console.error("Print failed:", e);
-        alert("Printing failed. Try opening the artifact in its own window and printing from there.");
+        pmAlert({ tone: "warn", title: "Print", message: "Printing failed. Try opening the artifact in its own window and printing from there." });
       }
       setTimeout(() => { if (document.title === (order.number || prevTitle)) restore(); }, 60000);
     };
@@ -547,6 +548,7 @@ function PrintModal({ order, onClose }: any) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+      {pmNode}
       <div style={{ background: "#fff", borderRadius: 14, width: "min(940px, 96vw)", maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -585,6 +587,7 @@ function liveEmailForOrder(order: any, contacts: any[]) {
 }
 
 function EmailModal({ order, contacts = [], onClose }: any) {
+  const { alert: emAlert, dialogNode: emNode } = useConfirm(); // P2-6 completion
   const resolvedEmail = liveEmailForOrder(order, contacts);
   const [subject, setSubject] = useState(`Purchase Order ${order.number} — ${COMPANY.name}`);
   const [body, setBody] = useState(`Dear ${order.supplier?.name || "Sir/Madam"},\n\nPlease find attached our Purchase Order ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nPurchase Incoterm: ${order.buyIncoterm}\nLoading: ${formatDMY(order.loadingDate)}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}\n\nKindly confirm receipt and the loading schedule.\n\nBest regards,\n${COMPANY.name}`);
@@ -594,7 +597,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
   function openPrintForPdf() {
     const node = document.getElementById("po-print-doc");
     if (!node) {
-      alert("Print preview not ready — please try again in a moment.");
+      emAlert({ tone: "warn", title: "Print", message: "Print preview not ready — please try again in a moment." });
       return;
     }
     const existing = document.getElementById("po-email-print-frame");
@@ -647,6 +650,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+      {emNode}
       <div style={{ background: "#fff", borderRadius: 14, width: 620, maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -743,6 +747,7 @@ function poTermsMissing(o: any): string | null {
 }
 
 function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
+  const { alert: ofAlert, dialogNode: ofPONode } = useConfirm(); // P2-6 completion
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
   // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at origin.
@@ -781,11 +786,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
     recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: newStatus === "Cancelled" ? "cancelled" : "status", summary: `Status → ${newStatus}` });
     if (hasDependents) {
       const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
-      alert(`This PO is locked: it has downstream dependents (${what}).\n\nWhile anything is linked, its status can't be changed (including back to Draft) or cancelled — that would corrupt the linked records. Unlink all downstream documents first, then the PO can be changed or deleted.`);
+      ofAlert({ tone: "warn", title: "PO locked", message: `This PO is locked: it has downstream dependents (${what}).\n\nWhile anything is linked, its status can't be changed (including back to Draft) or cancelled — that would corrupt the linked records. Unlink all downstream documents first, then the PO can be changed or deleted.` });
       return;
     }
     if (SHIP_OR_LATER.includes(newStatus) && order.loadingDate && String(order.loadingDate) > localTodayISO()) {
-      alert(`This PO can't be set to "${newStatus}" yet — the loading date (${order.loadingDate}) hasn't been reached.\n\nGoods can't leave origin before they are loaded. Update the loading date if it has actually changed, or wait until the loading date.`);
+      ofAlert({ tone: "warn", title: "Too early", message: `This PO can't be set to "${newStatus}" yet — the loading date (${order.loadingDate}) hasn't been reached.\n\nGoods can't leave origin before they are loaded. Update the loading date if it has actually changed, or wait until the loading date.` });
       return;
     }
     sf("status", newStatus);
@@ -802,6 +807,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {ofPONode}
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Purchase Orders</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
@@ -1202,6 +1208,18 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                 </table>
               </Card>
 
+              {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
+              <Card style={{ marginBottom: 16 }}>
+                <SectionTitle>LINKED DOCUMENTS</SectionTitle>
+                <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
+                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
+                <LinkRow label="Inventory lots" items={order.linkedLots} color="#92400E" bg="#FEF3C7" />
+                <LinkRow label="Invoices" items={order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
+                <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
+                  Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
+                </div>
+              </Card>
+
               {order.notes && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>NOTES</SectionTitle>
@@ -1262,17 +1280,6 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                 </Card>
               )}
 
-              {/* Linked documents */}
-              <Card>
-                <SectionTitle>LINKED RECORDS</SectionTitle>
-                <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
-                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
-                <LinkRow label="Inventory lots" items={order.linkedLots} color="#92400E" bg="#FEF3C7" />
-                <LinkRow label="Invoices" items={order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
-                <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
-                  Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
-                </div>
-              </Card>
             </div>
           </div>
         </div>
@@ -1576,7 +1583,7 @@ ${blockNote}`.trim(),
     // Batch 6b: hard confirm-gate — no PO past Draft without its terms.
     const termsMissing = poTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
-      alert(`This PO cannot be ${o.status === "Confirmed" ? "confirmed" : "saved as " + o.status} without ${termsMissing}. The purchase terms are the contract — the producer must see them.`);
+      await uiAlert({ tone: "warn", title: "Terms incomplete", message: `This PO cannot be ${o.status === "Confirmed" ? "confirmed" : "saved as " + o.status} without ${termsMissing}. The purchase terms are the contract — the producer must see them.` });
       return;
     }
     // BP-57 Phase B: the internal flow is composed from the terms + the SALES
@@ -1721,7 +1728,7 @@ ${blockNote}`.trim(),
   });
     if (hasLinkedSO || hasShipment || lotReceivedOrMoved) {
       const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
-      alert(`PO ${poNum} can't be cancelled or deleted: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.`);
+      await uiAlert({ tone: "warn", title: "PO has dependents", message: `PO ${poNum} can't be cancelled or deleted: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.` });
       return;
     }
     if (!(await uiConfirm({ tone: "danger", title: `Cancel PO ${selected.number}?`, message: "Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.", confirmLabel: "Cancel PO", cancelLabel: "Keep" }))) return;
@@ -1752,20 +1759,20 @@ ${blockNote}`.trim(),
           setProductCatalog={setProductCatalog}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
-          onPrint={() => {
+          onPrint={async () => {
             if (form.status === "Draft") {
-              alert("Cannot print or share a draft PO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft PO", message: "Cannot print or share a draft PO. Confirm the order first." });
               return;
             }
-            { const _m = poTermsMissing(form); if (_m) { alert(`Cannot print this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
+            { const _m = poTermsMissing(form); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot print this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.` }); return; } }
             setPrintOrder(form);
           }}
-          onEmail={() => {
+          onEmail={async () => {
             if (form.status === "Draft") {
-              alert("Cannot email a draft PO to the supplier. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft PO", message: "Cannot email a draft PO to the supplier. Confirm the order first." });
               return;
             }
-            { const _m = poTermsMissing(form); if (_m) { alert(`Cannot email this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
+            { const _m = poTermsMissing(form); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot email this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.` }); return; } }
             setEmailOrder(form);
           }}
         />
@@ -1786,20 +1793,20 @@ ${blockNote}`.trim(),
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}
           onDelete={deleteOrder}
-          onPrint={() => {
+          onPrint={async () => {
             if (selected.status === "Draft") {
-              alert("Cannot print or share a draft PO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft PO", message: "Cannot print or share a draft PO. Confirm the order first." });
               return;
             }
-            { const _m = poTermsMissing(selected); if (_m) { alert(`Cannot print this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
+            { const _m = poTermsMissing(selected); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot print this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.` }); return; } }
             setPrintOrder(selected);
           }}
-          onEmail={() => {
+          onEmail={async () => {
             if (selected.status === "Draft") {
-              alert("Cannot email a draft PO to the supplier. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft PO", message: "Cannot email a draft PO to the supplier. Confirm the order first." });
               return;
             }
-            { const _m = poTermsMissing(selected); if (_m) { alert(`Cannot email this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.`); return; } }
+            { const _m = poTermsMissing(selected); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot email this PO without ${_m} — it is the contract the producer relies on. Edit the PO and complete the PURCHASE TERMS box.` }); return; } }
             setEmailOrder(selected);
           }}
         />
@@ -1901,10 +1908,13 @@ ${blockNote}`.trim(),
                 </div>
                 <div style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace", lineHeight: 1.5 }}>
                   {/* v6.34.1 (item 3): show the linked DOCUMENT NUMBERS, not counts. */}
+                  {/* v6.45.0: SOs are DERIVED (any order sourcing from this PO) — they
+                      were missing entirely from this column. */}
+                  {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)).map((so: any) => so.number))); return sos.length ? <div style={{ color: "#7C3AED" }} title="Sales orders">🧾 {sos.join(", ")}</div> : null; })()}
                   <LinkedDocNumbers nums={o.linkedShipments} cancelledSet={cancelledRefs} color="#0284C7" icon="📦" title="Shipments" />
                   {o.linkedLots?.length > 0 && <div style={{ color: "#92400E" }} title="Lots">🏷 {o.linkedLots.join(", ")}</div>}
                   {o.linkedInvoices?.length > 0 && <div style={{ color: "#16A34A" }} title="Invoices">📄 {o.linkedInvoices.join(", ")}</div>}
-                  {!o.linkedShipments?.length && !o.linkedLots?.length && !o.linkedInvoices?.length && <span style={{ color: "#CCC" }}>—</span>}
+                  {!o.linkedShipments?.length && !o.linkedLots?.length && !o.linkedInvoices?.length && !(extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)) && <span style={{ color: "#CCC" }}>—</span>}
                 </div>
               </div>
             );
@@ -1912,7 +1922,7 @@ ${blockNote}`.trim(),
         </div>
 
         <div style={{ marginTop: 16, fontSize: 11, color: "#AAA", textAlign: "center" }}>
-          {filtered.length} of {orders.length} POs · Click any row to open · Linked records (shipments, lots, invoices) populate as the PO progresses
+          {filtered.length} of {orders.length} POs · Click any row to open · Linked documents (sales orders, shipments, lots, invoices) populate as the PO progresses
         </div>
       </div>
     </div>

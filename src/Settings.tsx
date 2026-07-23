@@ -254,7 +254,7 @@ function PackagingPanel({ types, setTypes }: any) {
 }
 
 function ProductCatalogPanel({ catalog, setCatalog }: any) {
-  const { confirm: pcConfirm, dialogNode: pcNode } = useConfirm(); // P2-6
+  const { confirm: pcConfirm, alert: pcAlert, dialogNode: pcNode } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
   const [vDraft, setVDraft] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
@@ -278,16 +278,16 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
       try {
         const text = String(e.target?.result || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
         const lines = text.split("\n").filter(l => l.trim());
-        if (!lines.length) { alert("Empty file."); return; }
+        if (!lines.length) { pcAlert({ tone: "warn", title: "Empty file", message: "The file contains no rows." }); return; }
         const hdr = parseLine(lines[0]).map(h => h.trim().toLowerCase());
         const ci = hdr.findIndex(h => h === "cn" || h === "hs" || h === "cncode" || h === "cn/hs" || h === "cn code" || h.includes("cn"));
         const ii = hdr.indexOf("item"), vi = hdr.indexOf("variety");
         const start = ii >= 0 ? 1 : 0;
         const rows = lines.slice(start).map(l => { const cols = parseLine(l); return { item: (ii >= 0 ? cols[ii] : cols[0] || "").trim(), variety: (vi >= 0 ? cols[vi] : cols[1] || "").trim(), cnCode: (ci >= 0 ? cols[ci] || "" : "").trim() }; }).filter(r => r.item);
-        if (!rows.length) { alert("No Item rows found. Use columns: Item, Variety."); return; }
+        if (!rows.length) { pcAlert({ tone: "warn", title: "No rows found", message: "No Item rows found. Use columns: Item, Variety." }); return; }
         setCatalog((c: any) => mergeCatalogRows(c || [], rows));
-        alert(`Imported ${rows.length} row(s) into the catalog.`);
-      } catch (err) { alert("Could not read CSV: " + (err instanceof Error ? err.message : String(err))); }
+        pcAlert({ tone: "info", title: "Imported", message: `Imported ${rows.length} row(s) into the catalog.` });
+      } catch (err) { pcAlert({ tone: "warn", title: "Import failed", message: "Could not read CSV: " + (err instanceof Error ? err.message : String(err)) }); }
     };
     reader.readAsText(file);
   };

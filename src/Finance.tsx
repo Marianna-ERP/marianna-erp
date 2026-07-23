@@ -417,7 +417,7 @@ export default function Finance({
   setInvoices?: any;
   financeNotes?: any[];
 }) {
-  const { confirm: finConfirm, dialogNode: finNode } = useConfirm(); // P2-6
+  const { confirm: finConfirm, alert: finAlert, dialogNode: finNode } = useConfirm(); // P2-6
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
@@ -472,11 +472,11 @@ export default function Finance({
     [filteredCosts]
   );
 
-  function saveCost() {
+  async function saveCost() {
     if (!setOperationalCosts) return;
     const amountPLN = safe(form.amountPLN) || safe(form.amount) * (safe(form.fxRate) || 1);
     if (!form.period || !form.description || amountPLN <= 0) {
-      alert("Please enter period, description and a positive amount.");
+      await finAlert({ tone: "warn", title: "Missing fields", message: "Please enter period, description and a positive amount." });
       return;
     }
     const cost: OperationalCost = { ...form, amount: safe(form.amount), fxRate: safe(form.fxRate) || 1, amountPLN };
@@ -504,7 +504,7 @@ export default function Finance({
     if (!setOperationalCosts) return;
     const periods = Array.from(new Set((operationalCosts || []).map((c: OperationalCost) => c.period).filter(Boolean))).sort();
     const last = periods[periods.length - 1];
-    if (!last) { alert("No costs recorded yet — nothing to copy."); return; }
+    if (!last) { await finAlert({ tone: "warn", title: "Nothing to copy", message: "No costs recorded yet — nothing to copy." }); return; }
     const [y, m] = String(last).split("-").map(Number);
     const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
     const next = `${ny}-${String(nm).padStart(2, "0")}`;
@@ -513,7 +513,7 @@ export default function Finance({
     const copies = source
       .filter((c: OperationalCost) => !existingNext.some(e => e.description === c.description && e.category === c.category))
       .map((c: OperationalCost, i: number) => ({ ...c, id: nextId(), period: next, date: `${next}-${String(c.date || "").slice(8, 10) || "15"}`, status: "Expected" as any, invoiceNo: "", allocations: undefined, notes: `Copied from ${last}. ${c.notes || ""}`.trim() }));
-    if (!copies.length) { alert(`All ${last} costs already exist in ${next}.`); return; }
+    if (!copies.length) { await finAlert({ tone: "info", title: "Already copied", message: `All ${last} costs already exist in ${next}.` }); return; }
     if (!(await finConfirm({ tone: "warn", title: "Copy cost lines forward?", message: `Copy ${copies.length} cost line(s) from ${last} into ${next} as "Expected"?`, confirmLabel: "Copy" }))) return;
     setOperationalCosts((prev: OperationalCost[]) => [...(prev || []), ...copies]);
   }
