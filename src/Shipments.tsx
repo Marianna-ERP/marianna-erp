@@ -53,14 +53,26 @@ const LEG_STATUSES = ["Booked", "Confirmed", "Loaded", "In Transit", "Arrived", 
 // each leg has, by definition, completed. Derive a DISPLAY status that cascades a
 // terminal shipment status onto its legs (stored leg.status is left untouched;
 // this is display-only, consistent with the derived-truth model).
+// v6.50.0: generalised. Marking a shipment Loaded left a sea leg sitting at
+// "Booked" — the whole shipment had moved on but half of it still read as if
+// nothing had happened. A leg may be AHEAD of its shipment (the truck has
+// arrived while the vessel is still sailing) but it can never be BEHIND it, so
+// any leg below the shipment's own stage is displayed at that stage.
+const LEG_RANK: Record<string, number> = { Booked: 0, Confirmed: 1, Loaded: 2, "In Transit": 3, Arrived: 4, Delivered: 5 };
+const SHIPMENT_TO_LEG: Record<string, string> = {
+  Draft: "Booked", Booked: "Booked", Confirmed: "Confirmed", Loaded: "Loaded",
+  "In Transit": "In Transit", Arrived: "Arrived", Delivered: "Delivered", Closed: "Delivered",
+};
 function legDisplayStatus(legStatus: any, shipmentStatus: any): string {
   const ls = String(legStatus || "Booked");
   const ss = String(shipmentStatus || "");
   if (ls === "Cancelled") return ls;
   if (ss === "Cancelled") return "Cancelled";
-  if (ss === "Delivered" || ss === "Closed") return "Delivered";
-  if (ss === "Arrived" && (ls === "Booked" || ls === "Confirmed" || ls === "Loaded")) return "Arrived";
-  return ls;
+  const floor = SHIPMENT_TO_LEG[ss];
+  if (!floor) return ls;
+  const lr = LEG_RANK[ls] ?? 0;
+  const fr = LEG_RANK[floor] ?? 0;
+  return lr < fr ? floor : ls;
 }
 
 const MODE_CONFIG = {
@@ -314,11 +326,26 @@ function shipmentSORefs(shipment, orders = []) {
     [...(shipment.soRefs || []), ...((shipment.goods || []).map((g: any) => g.soRef))]
       .map(x => String(x || "")).filter(Boolean)
   );
-  (orders || []).forEach((o: any) => {
-    if (!o || o.status === "Cancelled") return;
-    const sourcesPO = (o.items || []).some((it: any) => it.sourceType === "PO" && (shipment.poRefs || []).includes(it.sourceRef));
-    if (sourcesPO && o.number) set.add(String(o.number));
-  });
+  // v6.50.0: the PO→SO derivation only makes sense for a shipment that FULFILS a
+  // sale. An INBOUND internal movement (port → our warehouse under a PO) is
+  // governed by the PO alone — whichever SO happens to sell that PO's goods later
+  // has nothing to do with this truck, and showing it made port-to-warehouse
+  // shipments claim sales orders they never carried.
+  // Derivation only ever FILLS A GAP. If the shipment already states which sales
+  // orders it serves — on the header or on its goods rows — that is the truth and
+  // we must not widen it: SHP-…-0006 carries SO-…-0005 and SHP-…-0007 carries
+  // SO-…-0006, yet both drew from one PO, so deriving added the other's order to
+  // each. And an INBOUND internal movement (port → our warehouse under a PO) is
+  // governed by the PO alone, whichever SO happens to sell those goods later.
+  const explicitlyLinked = set.size > 0;
+  const isInbound = String(shipment?.purpose || "").toUpperCase() === "INBOUND";
+  if (!explicitlyLinked && !isInbound) {
+    (orders || []).forEach((o: any) => {
+      if (!o || o.status === "Cancelled") return;
+      const sourcesPO = (o.items || []).some((it: any) => it.sourceType === "PO" && (shipment.poRefs || []).includes(it.sourceRef));
+      if (sourcesPO && o.number) set.add(String(o.number));
+    });
+  }
   // v6.18.18 (#7): a cancelled SO must not linger in a shipment's linked records, even if
   // its number was stored on soRefs / goods before it was cancelled.
   const cancelled = new Set((orders || []).filter((o: any) => o && o.status === "Cancelled").map((o: any) => String(o.number)));
@@ -1557,6 +1584,10 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)} disabled={draft.status === "Cancelled"} title={draft.status === "Cancelled" ? "This shipment is cancelled — read-only and can't be reactivated." : ""}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => setDraft(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
+            {/* v6.50.0 (test round): courier tracking was buried in the documents
+                section; it is checked far too often to hide. It sits in the header now. */}
+            <div><Lbl>Courier tracking nr — originals to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
+            <div><Lbl>Originals sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} max={localTodayISO()} /></div>
             <div><Lbl>Trade direction <span style={{ color: "#BBB", fontWeight: 400 }}>· owns the journey</span></Lbl>
               {(() => {
                 const govSO = (orders || []).find((o: any) => o.number === draft.governingSoRef) || null;
@@ -1766,9 +1797,9 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           {(draft.goods || []).map((g, i) => <div key={g.id || i} style={{ display: "grid", gridTemplateColumns: (draft.legs || []).length > 1 ? "1.8fr 0.9fr 0.9fr 0.7fr 1.1fr" : "2fr 1fr 1fr 0.8fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
             <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
             <div><Lbl>Net (kg)</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => updateGood(i, "qtyKg", parseNum(e.target.value))} /></div>
-            <div><Lbl>Gross (kg)</Lbl><Inp type="number" value={g.grossKg || ""} onChange={e => updateGood(i, "grossKg", parseNum(e.target.value))} placeholder="0" title="Gross weight incl. packaging — printed on the transport order" />
-              {(() => { const gr = grossForGoodsLine({ qtyKg: g.qtyKg, product: g.product, packaging: g.packaging }, packagingTypes.length ? packagingTypes : PACKAGING_SEED); if (!(gr.grossKg > 0)) return null; return <div style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>{gr.boxes ? `${gr.boxes} × ${gr.tareKg}kg tare = ${fmtNum(gr.grossKg)} ` : `≈ ${fmtNum(gr.grossKg)} `}<span onClick={() => autoGross(i)} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>auto</span></div>; })()}
-            </div>
+            {/* v6.50.0: the field itself sits in line with its siblings; the derivation
+                is explained on its own line beneath the whole row (see below). */}
+            <div><Lbl>Gross (kg)</Lbl><Inp type="number" value={g.grossKg || ""} onChange={e => updateGood(i, "grossKg", parseNum(e.target.value))} placeholder="0" title="Gross weight incl. packaging and pallets — printed on the transport order" /></div>
             <div><Lbl>Pallets</Lbl><Inp type="number" value={g.pallets || ""} onChange={e => updateGood(i, "pallets", parseNum(e.target.value))} placeholder="0" /></div>
             {(draft.legs || []).length > 1
               ? <div><Lbl>On leg / carrier</Lbl><Sel value={g.legNo || ""} onChange={e => updateGood(i, "legNo", e.target.value ? parseNum(e.target.value) : null)}>
@@ -1776,6 +1807,19 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   {(draft.legs || []).map((lg: any, li: number) => { const prov = providerById(lg.carrierId || lg.forwarderId, contacts); return <option key={li} value={li + 1}>Leg {li + 1}{prov ? ` · ${prov.name}` : ` · ${lg.mode}`}</option>; })}
                 </Sel></div>
               : <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>}
+            {/* v6.50.0: the gross-weight derivation, on its own line beneath the row so
+                it explains the calculation without knocking the fields out of line. */}
+            {(() => {
+              const gr = grossForGoodsLine({ qtyKg: g.qtyKg, product: g.product, packaging: g.packaging, pallets: g.pallets }, packagingTypes.length ? packagingTypes : PACKAGING_SEED);
+              if (!(gr.grossKg > 0)) return null;
+              const detail = gr.boxes
+                ? `${fmtNum(parseNum(g.qtyKg))} net + ${gr.boxes} × ${gr.tareKg} kg packaging${gr.pallets ? ` + ${gr.pallets} × ${gr.palletTareKg} kg pallets` : ""} = ${fmtNum(gr.grossKg)} kg gross`
+                : `≈ ${fmtNum(gr.grossKg)} kg gross (estimated — packaging unknown)`;
+              return <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#64748B", marginTop: -2 }}>
+                {detail}{" · "}
+                <span onClick={() => autoGross(i)} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use this</span>
+              </div>;
+            })()}
           </div>)}
         </Card>
         <Card>
@@ -1889,8 +1933,8 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                     The standard set (invoice, packing list, EUR.1, phytosanitary, export declaration, BL/AWB) is added automatically. The transport order is tracked from the carrier email; the CMR is per road unit. BL and export-declaration refs fill in on their own. Paste a Dropbox share link for each signed scan — anyone with the link can open it, so keep the links inside the business.
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB", alignItems: "end" }}>
-                    <div><Lbl>Courier tracking nr (DHL) — originals to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
-                    <div><Lbl>Sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} max={localTodayISO()} /></div>
+                    {/* v6.50.0: courier tracking moved up to the shipment header — it is
+                        checked far too often to be buried in the documents section. */}
                     <div style={{ fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Waybill the original document set was sent to the client under.</div>
                   </div>
                 </div>

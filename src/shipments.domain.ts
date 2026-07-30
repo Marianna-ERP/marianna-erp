@@ -334,7 +334,24 @@ export function syncLegFreightCostLines(sh: any): any {
       };
       if (idx >= 0) costs[idx] = line; else costs.push(line);
     } else if (idx >= 0 && String(costs[idx].source || "") === src) {
-      costs.splice(idx, 1);
+      // v6.50.0 (test round): DO NOT silently delete a freight line that carries
+      // real money just because the leg's own cost field is empty. Most freight is
+      // typed straight into the cost line and never onto the leg, so a line that
+      // had once been adopted by a leg vanished on the next save — the reported
+      // "road and sea freight disappear after saving customs" data loss.
+      // The leg simply stops MANAGING the line: we release it (drop the source) so
+      // it survives as an ordinary manual cost line. Only a genuinely empty
+      // managed line is removed.
+      const existing = costs[idx];
+      const carriesMoney = numv(existing?.amount) > 0 || numv(existing?.amountPLN) > 0;
+      if (carriesMoney) {
+        const released = { ...existing };
+        delete released.source;
+        released.notes = String(existing?.notes || "").replace(/^(Road|Sea|Air|Rail|\?) leg \d+$/, "").trim() || existing?.notes || "";
+        costs[idx] = released;
+      } else {
+        costs.splice(idx, 1);
+      }
     }
   });
   // drop managed lines for legs that no longer exist

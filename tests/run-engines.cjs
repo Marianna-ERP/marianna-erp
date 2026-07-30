@@ -2004,6 +2004,44 @@ T("the SO's margin actually moves when a concession is posted", () => {
   assert.ok(after.marginPLN < before.marginPLN, "margin falls by the credit");
 });
 
+// ── v6.50.0: test round on v6.49.0 ──
+console.log("── v6.50.0: freight preserved, leg cascade, SO derivation ──");
+T("FINDING 3: a leg-managed freight line carrying money is RELEASED, never deleted", () => {
+  const sh = { id: 1, legs: [{ mode: "Road", costAmount: 0 }, { mode: "Sea", costAmount: 0 }],
+    costs: [
+      { id: 11, source: "leg-freight:1", type: "road_freight", amount: 7140, amountPLN: 7140, notes: "Road leg 1" },
+      { id: 12, source: "leg-freight:2", type: "sea_freight", amount: 8400, amountPLN: 8400, notes: "Sea leg 2" },
+      { id: 13, source: "customs-auto", type: "customs", amount: 200, amountPLN: 200 },
+    ] };
+  const out = SD.syncLegFreightCostLines(sh);
+  assert.equal(out.costs.length, 3, "nothing lost");
+  const road = out.costs.find(c => c.type === "road_freight");
+  const sea = out.costs.find(c => c.type === "sea_freight");
+  assert.equal(road.amountPLN, 7140, "the money survives");
+  assert.equal(sea.amountPLN, 8400);
+  assert.ok(!road.source && !sea.source, "released to manual lines — the leg stops managing them");
+});
+T("an EMPTY managed line is still cleaned up", () => {
+  const sh = { id: 1, legs: [{ mode: "Road", costAmount: 0 }],
+    costs: [{ id: 11, source: "leg-freight:1", type: "road_freight", amount: 0, amountPLN: 0 }] };
+  assert.equal(SD.syncLegFreightCostLines(sh).costs.length, 0);
+});
+T("a leg WITH a cost still manages its line normally", () => {
+  const sh = { id: 1, legs: [{ mode: "Road", costAmount: 900, costFxRate: 1 }], costs: [] };
+  const out = SD.syncLegFreightCostLines(sh);
+  assert.equal(out.costs.length, 1);
+  assert.equal(out.costs[0].source, "leg-freight:1");
+  assert.equal(out.costs[0].amountPLN, 900);
+});
+T("manual freight typed straight onto the shipment is never touched", () => {
+  const sh = { id: 1, legs: [{ mode: "Road", costAmount: 0 }],
+    costs: [{ id: 5, type: "road_freight", amount: 7140, amountPLN: 7140 }] };
+  const out = SD.syncLegFreightCostLines(sh);
+  assert.equal(out.costs.length, 1);
+  assert.equal(out.costs[0].amountPLN, 7140);
+  assert.ok(!out.costs[0].source);
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
