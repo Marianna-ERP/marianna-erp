@@ -7,6 +7,7 @@ import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
 import { nextId } from "./ids";
+import { nextClaimNumber, blankClaim } from "./claims.domain";
 import { defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
@@ -2108,6 +2109,8 @@ function CollectionModal({ so, onClose, onSave }: any) {
 }
 
 export default function SalesOrders({
+  claims: extClaims = [],
+  setClaims: extSetClaims = null,
   orders: extOrders, setOrders: extSetOrders,
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs, shipments: extShipments = [], setShipments: extSetShipments = null,
   contacts: extContacts,
@@ -2453,6 +2456,31 @@ export default function SalesOrders({
     const today = domainToday();
     const mv = { id: nextId(), date: today, type: "CLAIM", qtyKg: qty, soRef: soDoc.number, claimValue: amt, claimCurrency: cc.cur || "PLN", note: cc.note || `Client claim on ${soDoc.number}`, source: `claim:so:${soDoc.id}:${Date.now()}` };
     if (extSetLots) extSetLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? { ...l, movements: [...(l.movements || []), mv], claimedKg: (parseFloat(l.claimedKg) || 0) + qty } : l));
+    // v6.48.0 (Phase 1): a client claim is now a numbered DOCUMENT, not just a
+    // movement. Previously it had no number, no status and nothing to cite in
+    // correspondence — half the claim population was invisible as documents.
+    if (typeof extSetClaims === "function") {
+      extSetClaims((prev: any[]) => {
+        const list = prev || [];
+        const number = nextClaimNumber(list, new Date(today).getFullYear() || 2026);
+        return [...list, {
+          ...blankClaim(),
+          id: nextId(), number,
+          direction: "CONCESSION",
+          respondent: { kind: "Client", contactId: null, name: soDoc.client?.name || "" },
+          cause: "Quality defect",
+          subjects: [
+            { kind: "LOT", ref: lot.number, affectedKg: qty || undefined },
+            { kind: "SO", ref: soDoc.number },
+          ],
+          date: today,
+          requestedEUR: 0,
+          status: "Submitted",
+          movementRef: mv.id,
+          notes: [cc.note || "", `Credit ${amt} ${cc.cur || "PLN"} requested`].filter(Boolean).join(" · "),
+        }];
+      });
+    }
     if (extSetFinanceNotes) {
       const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
       const cur = cc.cur || inv?.currency || soDoc.currency || "PLN";

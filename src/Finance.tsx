@@ -385,6 +385,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
 // now enter the receivable/payable totals (BP-37).
 
 export default function Finance({
+  claims = [],
   orders = [],
   lots = [],
   setLots = null,
@@ -416,6 +417,7 @@ export default function Finance({
   invoices?: any[];
   setInvoices?: any;
   financeNotes?: any[];
+  claims?: any[];
 }) {
   const { confirm: finConfirm, alert: finAlert, dialogNode: finNode } = useConfirm(); // P2-6
   const [mode, setMode] = useState<MarginMode>("forecast");
@@ -599,13 +601,29 @@ export default function Finance({
                 // movements. Edited where they live: producer → Inventory lot; client →
                 // SO detail ("Record client claim") or the lot's quality flow.
                 const rows: any[] = [];
-                (lots || []).forEach((l: any) => {
-                  (l.claims || []).forEach((c: any) => rows.push({
-                    kind: "Producer", ref: c.number || "(draft)", date: c.date || c.issuedAt || "",
-                    lot: l.number, doc: l.poRef || "", detail: [c.defectPct ? `${c.defectPct}% defect` : "", c.affectedKg ? `${Number(c.affectedKg).toLocaleString("pl-PL")} kg` : ""].filter(Boolean).join(" · "),
+                // v6.48.0: claims are their own documents now — the register reads the
+                // claims store. Every claim has a number, including the client ones
+                // that used to exist only as movements.
+                (claims || []).forEach((c: any) => {
+                  const lotRef = (c.subjects || []).find((x: any) => x.kind === "LOT")?.ref || "";
+                  const other = (c.subjects || []).find((x: any) => x.kind === "PO" || x.kind === "SO" || x.kind === "SHIPMENT")?.ref || "";
+                  const amt = c.acceptedEUR != null && c.acceptedEUR !== "" ? c.acceptedEUR : c.requestedEUR;
+                  rows.push({
+                    kind: c.direction === "CONCESSION" ? "Client" : (c.respondent?.kind || "Supplier"),
+                    ref: c.number || "(draft)", date: c.date || "",
+                    lot: lotRef, doc: other,
+                    detail: [
+                      c.cause || "",
+                      c.defectPct ? `${c.defectPct}% defect` : "",
+                      Number(amt) ? `€${Number(amt).toLocaleString("pl-PL")}${c.acceptedEUR != null && c.acceptedEUR !== "" ? " agreed" : " requested"}` : "",
+                      c.respondent?.name || "",
+                    ].filter(Boolean).join(" · "),
                     status: c.status || "Draft",
-                  }));
-                  (l.movements || []).filter((m: any) => m && !m.voided && m.type === "CLAIM").forEach((m: any) => rows.push({
+                  });
+                });
+                (lots || []).forEach((l: any) => {
+                  const documented = new Set((claims || []).map((c: any) => String(c.movementRef ?? "")).filter(Boolean));
+                  (l.movements || []).filter((m: any) => m && !m.voided && m.type === "CLAIM" && !documented.has(String(m.id))).forEach((m: any) => rows.push({
                     kind: "Client", ref: `${l.number}`, date: m.date || "",
                     lot: l.number, doc: m.soRef || "", detail: [m.qtyKg ? `${Number(m.qtyKg).toLocaleString("pl-PL")} kg` : "", m.claimValue ? `${Number(m.claimValue).toLocaleString("pl-PL")} ${m.claimCurrency || "PLN"}` : ""].filter(Boolean).join(" · "),
                     status: (financeNotes || []).some((n: any) => n.source === m.source) ? "Credit note drafted" : "Recorded",

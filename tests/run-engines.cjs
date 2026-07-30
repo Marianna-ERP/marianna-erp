@@ -1823,6 +1823,95 @@ T("claim evidence: a tick without a scan is not evidence", () => {
   assert.ok(DL.claimEvidenceGaps([{ type: "CMR", status: "Missing" }], ["CMR"])[0].includes("not received"));
 });
 
+// ── v6.48.0: claims re-homed to their own store (Phase 1) ──
+const CL = require("./build/claims.domain.js");
+console.log("── claims: store, numbering, migration ──");
+const _deps = () => { let i = 0; return { todayISO: () => "2026-07-30", nextId: () => ++i }; };
+
+T("D1 FIXED: a lot may now hold SEVERAL claims (the old save wiped them)", () => {
+  const lot = { number: "LOT-1", poRef: "PO-1", claims: [
+    { id: 1, number: "CLM-2026-0001", defectType: "Skin defects", requestedCreditEUR: 6179.93, status: "Issued" },
+    { id: 2, defectType: "Bruising", requestedCreditEUR: 800, status: "Draft" },
+  ], movements: [] };
+  const r = CL.migrateClaims({ lots: [lot], pos: [{ number: "PO-1", supplier: { name: "Konkret" } }] }, _deps());
+  assert.equal(r.claims.length, 2, "BOTH claims survive");
+  assert.equal(r.claims[0].number, "CLM-2026-0001", "existing number kept");
+  assert.equal(r.claims[1].number, "CLM-2026-0001".replace("0001", "0002"), "second gets the next house number");
+  assert.ok(r.claims.every(c => c.respondent.name === "Konkret" && c.direction === "RECOVERY"));
+});
+T("D2 FIXED: numbering reads the CLAIMS store, not a lots snapshot", () => {
+  assert.equal(CL.nextClaimNumber([{ number: "CLM-2026-0003" }], 2026), "CLM-2026-0004");
+  assert.equal(CL.nextClaimNumber([{ number: "CLM-2025-0009" }], 2026), "CLM-2026-0001", "year-scoped");
+  assert.equal(CL.nextClaimNumber([], 2026), "CLM-2026-0001");
+});
+T("unnumbered CLIENT claims become real numbered documents", () => {
+  const lot = { number: "LOT-4", poRef: "PO-2", claims: [], movements: [
+    { id: 9, type: "CLAIM", qtyKg: 500, claimValue: 2400, claimCurrency: "PLN", soRef: "SO-2026-0002", date: "2026-06-01", note: "Client quality complaint" },
+    { id: 10, type: "CLAIM", qtyKg: 100, date: "2026-06-02", note: "producer claim marker" },   // no value → not a client claim
+    { id: 11, type: "CLAIM", qtyKg: 50, claimValue: 100, voided: true },                        // voided → ignored
+  ] };
+  const r = CL.migrateClaims({ lots: [lot], pos: [] }, _deps());
+  assert.equal(r.claims.length, 1, "only the valued, live movement becomes a claim");
+  const c = r.claims[0];
+  assert.equal(c.direction, "CONCESSION");
+  assert.equal(c.respondent.kind, "Client");
+  assert.equal(c.number, "CLM-2026-0001", "it finally HAS a number");
+  assert.equal(c.status, "Settled", "its credit note was already issued");
+  assert.equal(c.movementRef, 9, "still tied to the inventory movement");
+  assert.deepEqual(c.subjects.map(s => s.kind).sort(), ["LOT", "SO"]);
+});
+T("migration is idempotent — a second run adds nothing", () => {
+  const lots = [{ number: "LOT-1", poRef: "PO-1", claims: [{ id: 1, defectType: "x", requestedCreditEUR: 100 }],
+    movements: [{ id: 5, type: "CLAIM", qtyKg: 10, claimValue: 50, soRef: "SO-1" }] }];
+  const pos = [{ number: "PO-1", supplier: { name: "Konkret" } }];
+  const first = CL.migrateClaims({ lots, pos }, _deps());
+  assert.equal(first.claims.length, 2); assert.equal(first.changed, true);
+  const second = CL.migrateClaims({ lots, pos, existing: first.claims }, _deps());
+  assert.equal(second.claims.length, 2, "no duplicates");
+  assert.equal(second.changed, false);
+});
+T("originals are never destroyed by the migration", () => {
+  const lot = { number: "LOT-1", poRef: "PO-1", claims: [{ id: 1, requestedCreditEUR: 100 }], movements: [] };
+  const before = JSON.stringify(lot);
+  CL.migrateClaims({ lots: [lot], pos: [] }, _deps());
+  assert.equal(JSON.stringify(lot), before, "lot.claims left exactly as it was");
+});
+T("queries find claims by lot, SO and shipment", () => {
+  const claims = [
+    CL.blankClaim({ id: 1, number: "CLM-2026-0001", subjects: [{ kind: "LOT", ref: "LOT-4", affectedKg: 500 }, { kind: "SO", ref: "SO-2" }] }),
+    CL.blankClaim({ id: 2, number: "CLM-2026-0002", subjects: [{ kind: "SHIPMENT", ref: "SHP-9" }, { kind: "LOT", ref: "LOT-4", affectedKg: 200 }] }),
+  ];
+  assert.equal(CL.claimsForLot(claims, "LOT-4").length, 2);
+  assert.equal(CL.claimsForSO(claims, "SO-2").length, 1);
+  assert.equal(CL.claimsForShipment(claims, "SHP-9").length, 1);
+  assert.equal(CL.affectedKgForLot(claims[0], "LOT-4"), 500);
+});
+T("incident net: conceded minus recovered, gap reported not flagged", () => {
+  // client conceded 6000; recovered 4000 from the supplier and 1000 from the line
+  const claims = [
+    CL.blankClaim({ id: 1, direction: "CONCESSION", requestedEUR: 6500, acceptedEUR: 6000 }),
+    CL.blankClaim({ id: 2, direction: "RECOVERY", parentClaimId: 1, requestedEUR: 6179.93, acceptedEUR: 4000 }),
+    CL.blankClaim({ id: 3, direction: "RECOVERY", parentClaimId: 1, requestedEUR: 1500, acceptedEUR: 1000 }),
+  ];
+  const n = CL.incidentNet(claims, 1);
+  assert.equal(n.conceded, 6000, "accepted amount wins over requested");
+  assert.equal(n.recovered, 5000, "both recoveries counted");
+  assert.equal(n.net, 1000, "the deliberate commercial gap");
+  assert.equal(n.members.length, 3);
+});
+T("summary: open value, overdue notices, claims with no evidence", () => {
+  const claims = [
+    CL.blankClaim({ id: 1, number: "CLM-1", direction: "RECOVERY", status: "Submitted", requestedEUR: 1000, noticeDeadline: "2026-07-01" }),
+    CL.blankClaim({ id: 2, number: "CLM-2", direction: "CONCESSION", status: "Settled", requestedEUR: 500 }),
+    CL.blankClaim({ id: 3, number: "CLM-3", direction: "RECOVERY", status: "Draft", requestedEUR: 200, evidence: [{ kind: "CMR", ref: "1", link: "https://www.dropbox.com/s/a/b.pdf" }] }),
+  ];
+  const s = CL.claimsSummary(claims, "2026-07-30");
+  assert.equal(s.total, 3); assert.equal(s.open, 2, "Settled is terminal");
+  assert.equal(s.openRecoveryEUR, 1200);
+  assert.deepEqual(s.overdue, ["CLM-1"], "deadline passed and never notified");
+  assert.deepEqual(s.noEvidence, ["CLM-1"], "CLM-3 has a linked scan");
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

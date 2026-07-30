@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
-import { computeClaim, nextClaimNumber, buildClaimNote } from "./claim.domain";
+import { computeClaim, buildClaimNote } from "./claim.domain";
+import { nextClaimNumber, blankClaim, claimsForLot } from "./claims.domain";
 import { buildTraceTree } from "./trace.domain";
 import { fmtNum } from "./format";
 import { Card, Lbl, useConfirm, DocRef, cancelledDocSet } from "./ui";
@@ -1160,7 +1161,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [] }: any) {
+function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [], lotClaims = [] }: any) {
   const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1256,7 +1257,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 </button>
                 {onOpenClaim && (
                   <button onClick={() => onOpenClaim(lot)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#B45309", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="Quantify damage on this consignment and request a credit note from the producer">
-                    {(lot.claims || []).length ? `Producer claim (${lot.claims.length})` : "Producer claim"}
+                    {(lotClaims || []).length ? `Producer claim (${(lotClaims || []).length})` : "Producer claim"}
                   </button>
                 )}
                 <button onClick={() => printHtmlNodeInv("lot-trace-doc", `Trace-${lot.number}`)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #0F766E", background: "#fff", color: "#0F766E", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="One-click recall report: where this lot came from and everywhere it went — supplier, shipments, clients, invoices.">
@@ -1433,7 +1434,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 {(() => {
                   // Batch 6c (BP-33): one place for the lot's quality story —
                   // claims, claimed/damaged totals, quality movements.
-                  const claims = lot.claims || [];
+                  const claims = lotClaims || [];   // v6.48.0: from the claims store
                   const qmoves = (lot.movements || []).filter((m: any) => ["DAMAGE", "RECLASS", "CLAIM"].includes(m.type));
                   if (!claims.length && !qmoves.length && !(lot.claimedKg > 0) && !(lot.damagedKg > 0)) return null;
                   const chip = (s: string) => ({ Draft: "#94A3B8", Issued: "#B45309", Accepted: "#15803D", Rejected: "#DC2626", Settled: "#4338CA" } as any)[s] || "#94A3B8";
@@ -1754,7 +1755,7 @@ function ClaimModal({ lot, po, existing = null, onCancel, onSave }: any) {
   );
 }
 
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], setClaims: extSetClaims = null }: any = {}) {
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
@@ -2002,16 +2003,30 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {claimLot && <ClaimModal
           lot={lots.find(l => l.id === claimLot.id) || claimLot}
           po={(extPOs || []).find((p: any) => p.number === (lots.find(l => l.id === claimLot.id) || claimLot).poRef) || null}
-          existing={((lots.find(l => l.id === claimLot.id) || claimLot).claims || [])[0] || null}
+          {...{} /* v6.48.0: the claim document comes from the claims store now */}
+          existing={(() => {
+            const lotNo = (lots.find(l => l.id === claimLot.id) || claimLot).number;
+            const mine = claimsForLot(extClaims || [], lotNo).filter((c: any) => c.direction === "RECOVERY");
+            const c = mine[0];
+            if (!c) return null;
+            // adapt the stored record back to the shape ClaimModal edits
+            return { id: c.id, number: c.number, date: c.date, lines: c.costLines || [],
+              defectType: c.defectType, defectPct: c.defectPct, soldInMarket: c.soldInMarket,
+              recoveredEGP: c.recoveredEGP, egpPerEur: c.egpPerEur, eurPlnRate: c.plnPerEur,
+              affectedKg: (c.subjects || []).find((x: any) => x.kind === "LOT" && String(x.ref) === String(lotNo))?.affectedKg ?? "",
+              status: c.status === "Draft" ? "Draft" : "Issued", notes: c.notes,
+              requestedCreditEUR: c.requestedEUR };
+          })()}
           onCancel={() => setClaimLot(null)}
           onSave={(claim, comp, issue) => {
             // Batch 6a (BP-55b): issuing assigns the CLM number and drafts the
             // incoming credit note against the producer (idempotent by number).
             if (issue && !claim.number) {
-              claim = { ...claim, number: nextClaimNumber(lots, new Date().getFullYear()) };
+              claim = { ...claim, number: nextClaimNumber(extClaims || [], new Date().getFullYear()) };
             }
             if (issue) claim = { ...claim, status: "Issued", requestedCreditEUR: comp.creditNoteEUR, totalCostEUR: comp.totalCostEUR, defectValueEUR: comp.defectValueEUR, recoveredEUR: comp.recoveredEUR };
             const lotNow = lots.find(l => l.id === claimLot.id) || claimLot;
+            const poForClaim = (extPOs || []).find((p: any) => p.number === lotNow.poRef) || null;
             if (issue && extSetFinanceNotes) {
               const clmNo = claim.number;
               const claimForNote = claim;
@@ -2024,11 +2039,50 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                 return [note, ...(prev || [])];
               });
             }
+            // v6.48.0 (Phase 1): the claim DOCUMENT lives in the claims store now.
+            // The old code wrote it into lot.claims[] with a filter that dropped
+            // every existing claim whenever a new one was saved (defect D1), and a
+            // lot can genuinely carry more than one claim. The lot keeps only what
+            // is inventory truth: the CLAIM movement and claimedKg.
+            const withId = claim.id ? claim : { ...claim, id: nextId() };
+            if (typeof extSetClaims === "function") {
+              const lotNoForClaim = lotNow.number;
+              extSetClaims((prev: any[]) => {
+                const list = prev || [];
+                const idx = list.findIndex((c: any) => String(c.id) === String(withId.id) || (withId.number && String(c.number) === String(withId.number)));
+                const record = {
+                  ...blankClaim(),
+                  ...(idx >= 0 ? list[idx] : {}),
+                  id: idx >= 0 ? list[idx].id : withId.id,
+                  number: withId.number || (idx >= 0 ? list[idx].number : ""),
+                  direction: "RECOVERY",
+                  respondent: { kind: "Supplier", contactId: poForClaim?.supplierId ?? null, name: poForClaim?.supplier?.name || "" },
+                  cause: "Quality defect",
+                  subjects: [
+                    { kind: "LOT", ref: lotNoForClaim, affectedKg: parseFloat(String(withId.affectedKg || "")) || undefined },
+                    ...(lotNow.poRef ? [{ kind: "PO", ref: lotNow.poRef }] : []),
+                  ],
+                  date: withId.date || localTodayISO(),
+                  costLines: withId.lines || [],
+                  defectType: withId.defectType || "",
+                  defectPct: withId.defectPct ?? "",
+                  soldInMarket: withId.soldInMarket ?? null,
+                  recoveredEGP: withId.recoveredEGP ?? "",
+                  egpPerEur: withId.egpPerEur ?? "",
+                  plnPerEur: withId.eurPlnRate ?? "",
+                  totalCostEUR: comp?.totalCostEUR ?? 0,
+                  defectValueEUR: comp?.defectValueEUR ?? 0,
+                  recoveredEUR: comp?.recoveredEUR ?? 0,
+                  requestedEUR: comp?.creditNoteEUR ?? withId.requestedCreditEUR ?? 0,
+                  status: issue ? "Submitted" : "Draft",
+                  notes: withId.notes || "",
+                };
+                return idx >= 0 ? list.map((c: any, i: number) => i === idx ? record : c) : [...list, record];
+              });
+            }
             setLots(prev => prev.map(l => {
               if (l.id !== claimLot.id) return l;
-              const others = (l.claims || []).filter((c: any) => c.id && claim.id ? c.id !== claim.id : false);
-              const withId = claim.id ? claim : { ...claim, id: nextId() };
-              let next = { ...l, claims: [withId, ...others] };
+              let next = { ...l };
               // Batch 6c (BP-33): issuing a claim with an affected quantity logs a
               // CLAIM movement — client-side, NO warehouse stock effect (reducer
               // semantics v6.18.10 #5) — so the lot's claimedKg reflects reality.
@@ -2086,6 +2140,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
           allLots={lots}
+          lotClaims={claimsForLot(extClaims || [], selected?.number).filter((c: any) => c.direction === "RECOVERY")}
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
           onMove={() => { setEditingMovement(null); setMovementMode("movement"); setShowMovement(true); }}

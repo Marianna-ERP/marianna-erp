@@ -165,6 +165,8 @@ export const DATA_KEYS = [
   "productCatalog",
   // v6.44.0 (test-round #7): packaging types (box capacity + tare) for gross weight.
   "packagingTypes",
+  // v6.48.0: claims are their own document now (were nested in lot.claims[]).
+  "claims",
  "auditLog"];
 
 export function exportAllData(): string {
