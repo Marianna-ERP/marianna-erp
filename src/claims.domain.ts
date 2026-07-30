@@ -29,6 +29,19 @@ export type ClaimDirection = "RECOVERY" | "CONCESSION";
 
 export type RespondentKind = "Supplier" | "Carrier" | "Forwarder" | "ShippingLine" | "Warehouse" | "Client";
 
+/**
+ * How the claim's value is arrived at.
+ *  DEFECT — the paper Claim Request Form: consignment cost x defect % less what
+ *           was recovered in the market. Right for quality claims.
+ *  COSTS  — money the counterparty cost us with no cargo damaged at all: a truck
+ *           sent to the wrong terminal, demurrage, storage, re-delivery.
+ *  MIXED  — both at once, which is the normal shape of a transport claim: cargo
+ *           lost in the collapsed pallets PLUS the cost of re-palletising before
+ *           the container could load.
+ */
+export type ClaimBasis = "DEFECT" | "COSTS" | "MIXED";
+export const CLAIM_BASES: ClaimBasis[] = ["DEFECT", "COSTS", "MIXED"];
+
 export type ClaimCause =
   | "Quality defect" | "Transport damage" | "Temperature deviation"
   | "Shortage" | "Delay/demurrage" | "Wrong delivery";
@@ -72,6 +85,12 @@ export interface Claim {
   noticeDeadline: string;
   /** cost lines + defect maths — shapes owned by claim.domain.ts */
   costLines: any[];
+  /** v6.49.0: how this claim is built (see ClaimBasis). */
+  basis: ClaimBasis;
+  /** COSTS/MIXED side — cargo actually lost, and the costs the party caused us. */
+  lostKg: any;
+  lostValueEUR: any;
+  causedCosts: { label: string; amountEUR: any }[];
   defectType: string;
   defectPct: any;
   soldInMarket: boolean | null;
@@ -114,7 +133,8 @@ export function blankClaim(overrides: Partial<Claim> = {}): Claim {
     respondent: { kind: "Supplier", contactId: null, name: "" },
     cause: "Quality defect", subjects: [], parentClaimId: null,
     date: "", notifiedAt: "", noticeDeadline: "",
-    costLines: [], defectType: "", defectPct: "", soldInMarket: null,
+    costLines: [], basis: "DEFECT", lostKg: "", lostValueEUR: "", causedCosts: [],
+    defectType: "", defectPct: "", soldInMarket: null,
     recoveredEGP: "", egpPerEur: "", plnPerEur: "",
     totalCostEUR: 0, defectValueEUR: 0, recoveredEUR: 0,
     requestedEUR: 0, acceptedEUR: null,
@@ -122,6 +142,19 @@ export function blankClaim(overrides: Partial<Claim> = {}): Claim {
     financeNoteId: null, movementRef: null, notes: "",
     ...overrides,
   } as Claim;
+}
+
+/** What the claim asks for, derived from its basis. */
+export function requestedFromBasis(c: any): number {
+  const basis = str(c?.basis) || "DEFECT";
+  const causedEUR = (c?.causedCosts || []).reduce((a: number, x: any) => a + num(x?.amountEUR), 0);
+  const defectEUR = num(c?.defectValueEUR) - num(c?.recoveredEUR);
+  const lostEUR = num(c?.lostValueEUR);
+  let total = 0;
+  if (basis === "DEFECT") total = defectEUR > 0 ? defectEUR : num(c?.requestedEUR);
+  else if (basis === "COSTS") total = lostEUR + causedEUR;
+  else total = (defectEUR > 0 ? defectEUR : 0) + lostEUR + causedEUR;
+  return Math.round(Math.max(0, total) * 100) / 100;
 }
 
 // ── queries ────────────────────────────────────────────────────────────────
@@ -216,6 +249,7 @@ export function migrateClaims(input: { lots?: any[]; orders?: any[]; pos?: any[]
         ],
         date: str(old?.date),
         costLines: old?.lines || old?.costLines || [],
+        basis: "DEFECT",
         defectType: str(old?.defectType),
         defectPct: old?.defectPct ?? "",
         soldInMarket: old?.soldInMarket ?? null,
@@ -283,5 +317,132 @@ export function claimsSummary(claims: any[], todayISO: string) {
     noEvidence: noEvidence.map(c => c.number),
     openRecoveryEUR: Math.round(open.filter(c => c.direction === "RECOVERY").reduce((a, c) => a + amount(c), 0) * 100) / 100,
     openConcessionEUR: Math.round(open.filter(c => c.direction === "CONCESSION").reduce((a, c) => a + amount(c), 0) * 100) / 100,
+  };
+}
+
+
+// ─── v6.49.0  POSTING AN ACCEPTED CLAIM ──────────────────────────────────────
+// Ruling: "the amount accepted after negotiation is different from the amount
+// requested; at the end this will impact the P/L of this SO — whether it is money
+// we get less from the client, or money we pay less to the producer of the PO
+// linked or the shipment SHP linked."
+//
+// So only the ACCEPTED figure ever moves anything, and it routes by respondent:
+//   Client                                   → less REVENUE on the sales order
+//   Supplier / Carrier / Forwarder / Line /
+//   Warehouse                                → less COST on the affected lots
+// Both land as a dated, source-tagged adjustment (`claim:CLM-…`) that is additive
+// and reversible — the original figures are never overwritten, exactly like the
+// shipment cost allocator. A closed deal's margin therefore moves legitimately
+// when a claim settles months later.
+
+export interface ClaimPosting {
+  kind: "LOT_COST" | "SO_REVENUE";
+  ref: string;            // lot number or SO number
+  amountPLN: number;      // NEGATIVE: reduces the cost or the revenue
+  source: string;         // claim:CLM-2026-0001
+  label: string;
+  date: string;
+}
+
+const POSTABLE = new Set<string>(["Accepted", "Partially accepted", "Settled"]);
+export function isPostable(c: any): boolean {
+  return POSTABLE.has(str(c?.status)) && num(c?.acceptedEUR) > 0;
+}
+
+/**
+ * Turn an accepted claim into its P/L adjustments.
+ * Recoveries spread across the claim's lots pro-rata by affected kg (evenly when
+ * no kg are stated). Concessions land on the sales order.
+ */
+export function buildClaimPostings(claim: any, opts: { plnPerEur?: any; todayISO?: string } = {}): { postings: ClaimPosting[]; warnings: string[] } {
+  const warnings: string[] = [];
+  if (!isPostable(claim)) return { postings: [], warnings: ["Claim is not accepted, or the agreed amount is zero"] };
+
+  const rate = num(opts.plnPerEur) || num(claim?.plnPerEur);
+  if (!(rate > 0)) return { postings: [], warnings: ["No EUR→PLN rate on the claim — set one before posting"] };
+
+  const acceptedPLN = Math.round(num(claim.acceptedEUR) * rate * 100) / 100;
+  const source = `claim:${str(claim.number)}`;
+  const date = str(opts.todayISO) || str(claim.resolvedAt) || str(claim.date);
+  const who = str(claim?.respondent?.name) || str(claim?.respondent?.kind);
+
+  if (str(claim.direction) === "CONCESSION") {
+    const sos = subjectRefs(claim, "SO");
+    if (!sos.length) return { postings: [], warnings: ["Concession has no sales order to reduce — link the SO first"] };
+    const each = Math.round((acceptedPLN / sos.length) * 100) / 100;
+    return {
+      postings: sos.map(ref => ({
+        kind: "SO_REVENUE" as const, ref, amountPLN: -each, source,
+        label: `Claim ${claim.number} — credit to ${who || "client"}`, date,
+      })),
+      warnings: sos.length > 1 ? ["Split evenly across the linked sales orders"] : [],
+    };
+  }
+
+  // RECOVERY → reduce the cost carried by the affected lots
+  const lotSubjects = (claim?.subjects || []).filter((s: any) => s?.kind === "LOT" && str(s.ref));
+  if (!lotSubjects.length) return { postings: [], warnings: ["Recovery has no lots to credit — link the affected lot(s) first"] };
+
+  const totalKg = lotSubjects.reduce((a: number, s: any) => a + num(s.affectedKg), 0);
+  const postings = lotSubjects.map((s: any, i: number) => {
+    const share = totalKg > 0 ? num(s.affectedKg) / totalKg : 1 / lotSubjects.length;
+    return {
+      kind: "LOT_COST" as const,
+      ref: str(s.ref),
+      amountPLN: -(Math.round(acceptedPLN * share * 100) / 100),
+      source,
+      label: `Claim ${claim.number} accepted — ${who || "counterparty"}`,
+      date,
+    };
+  });
+  // absorb rounding drift into the first posting so the total is exact
+  const drift = Math.round((-acceptedPLN - postings.reduce((a, p) => a + p.amountPLN, 0)) * 100) / 100;
+  if (drift && postings.length) postings[0].amountPLN = Math.round((postings[0].amountPLN + drift) * 100) / 100;
+  if (!(totalKg > 0)) warnings.push("No affected kg stated — split evenly across the linked lots");
+  return { postings, warnings };
+}
+
+/** Apply LOT_COST postings to lots, replacing any prior posting from the same claim. */
+export function applyPostingsToLots(lots: any[], postings: ClaimPosting[]): any[] {
+  const byLot: Record<string, ClaimPosting[]> = {};
+  postings.filter(p => p.kind === "LOT_COST").forEach(p => { (byLot[p.ref] = byLot[p.ref] || []).push(p); });
+  if (!Object.keys(byLot).length) return lots || [];
+  return (lots || []).map((l: any) => {
+    const mine = byLot[str(l?.number)];
+    if (!mine) return l;
+    const sources = new Set(mine.map(p => p.source));
+    const kept = (l.costs || []).filter((c: any) => !sources.has(str(c?.source)));
+    const added = mine.map(p => ({
+      id: undefined, type: "claim_credit", label: p.label, source: p.source,
+      amount: p.amountPLN, currency: "PLN", fxRate: 1, pln: p.amountPLN, date: p.date,
+    }));
+    return { ...l, costs: [...kept, ...added] };
+  });
+}
+
+/** Apply SO_REVENUE postings to orders, replacing any prior posting from the same claim. */
+export function applyPostingsToOrders(orders: any[], postings: ClaimPosting[]): any[] {
+  const bySO: Record<string, ClaimPosting[]> = {};
+  postings.filter(p => p.kind === "SO_REVENUE").forEach(p => { (bySO[p.ref] = bySO[p.ref] || []).push(p); });
+  if (!Object.keys(bySO).length) return orders || [];
+  return (orders || []).map((o: any) => {
+    const mine = bySO[str(o?.number)];
+    if (!mine) return o;
+    const sources = new Set(mine.map(p => p.source));
+    const kept = (o.claimAdjustments || []).filter((a: any) => !sources.has(str(a?.source)));
+    const added = mine.map(p => ({ source: p.source, label: p.label, amountPLN: p.amountPLN, date: p.date }));
+    return { ...o, claimAdjustments: [...kept, ...added] };
+  });
+}
+
+/** Reverse everything a claim posted (used when an acceptance is undone). */
+export function reverseClaimPostings(claim: any, lots: any[], orders: any[]): { lots: any[]; orders: any[] } {
+  const source = `claim:${str(claim?.number)}`;
+  return {
+    lots: (lots || []).map((l: any) => (l.costs || []).some((c: any) => str(c?.source) === source)
+      ? { ...l, costs: (l.costs || []).filter((c: any) => str(c?.source) !== source) } : l),
+    orders: (orders || []).map((o: any) => (o.claimAdjustments || []).some((a: any) => str(a?.source) === source)
+      ? { ...o, claimAdjustments: (o.claimAdjustments || []).filter((a: any) => str(a?.source) !== source) } : o),
   };
 }

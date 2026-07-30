@@ -2,8 +2,10 @@ import React, { useState, useMemo } from "react";
 import { Card, Lbl, SectionTitle, SmallButton, DocRef, useConfirm } from "./ui";
 import { inspectLink } from "./docLinks.domain";
 import {
-  CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS,
+  CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS, CLAIM_BASES,
   isClaimOpen, claimsSummary, incidentNet, nextClaimNumber, blankClaim,
+  requestedFromBasis, buildClaimPostings, applyPostingsToLots, applyPostingsToOrders,
+  reverseClaimPostings,
 } from "./claims.domain";
 import { localTodayISO } from "./dates";
 import { nextId } from "./ids";
@@ -26,6 +28,11 @@ const DIR_STYLE: any = {
   RECOVERY:   { bg: "#DCFCE7", fg: "#166534", label: "Recovery", hint: "we claim from a counterparty — reduces our cost" },
   CONCESSION: { bg: "#FEF3C7", fg: "#92400E", label: "Concession", hint: "a client claims from us — reduces our revenue" },
 };
+const BASIS_LABEL: any = {
+  DEFECT: "Defect % — the Claim Request Form maths",
+  COSTS:  "Costs caused — no cargo damaged (demurrage, re-delivery, repalletising)",
+  MIXED:  "Both — cargo lost AND costs caused (the usual transport claim)",
+};
 const STATUS_STYLE: any = {
   Draft: "#94A3B8", Notified: "#2563EB", Submitted: "#2563EB", "Under review": "#D97706",
   Accepted: "#16A34A", "Partially accepted": "#16A34A", Rejected: "#DC2626", Settled: "#059669", Closed: "#64748B",
@@ -35,7 +42,7 @@ function Pill({ bg, fg, children, title }: any) {
   return <span title={title} style={{ background: bg, color: fg, borderRadius: 999, padding: "2px 9px", fontSize: 10.5, fontWeight: 800, whiteSpace: "nowrap" }}>{children}</span>;
 }
 
-export default function Claims({ claims = [], setClaims, contacts = [], lots = [], orders = [], pos = [], shipments = [] }: any) {
+export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [] }: any) {
   const { confirm: uiConfirm, dialogNode } = useConfirm();
   const [selectedId, setSelectedId] = useState<any>(null);
   const [q, setQ] = useState("");
@@ -68,6 +75,56 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
       number: nextClaimNumber(claims, new Date(today).getFullYear() || 2026),
       date: today,
       status: "Draft",
+    });
+    setClaims((prev: any[]) => [...(prev || []), c]);
+    setSelectedId(c.id);
+  };
+
+  // has this claim already landed in the P/L?
+  const isPosted = (c: any) => {
+    const src = `claim:${c?.number}`;
+    return (lots || []).some((l: any) => (l.costs || []).some((x: any) => String(x?.source) === src))
+        || (orders || []).some((o: any) => (o.claimAdjustments || []).some((a: any) => String(a?.source) === src));
+  };
+
+  const postClaim = async (c: any) => {
+    const { postings, warnings } = buildClaimPostings(c, { todayISO: today });
+    if (!postings.length) {
+      await uiConfirm({ tone: "warn", title: "Nothing to post", message: warnings.join("\n") || "This claim has no agreed amount yet.", confirmLabel: "OK", cancelLabel: "Close" });
+      return;
+    }
+    const lines = postings.map((p: any) => `${p.kind === "SO_REVENUE" ? "Revenue" : "Lot cost"} ${p.ref}: ${p.amountPLN.toLocaleString("pl-PL")} PLN`).join("\n");
+    const ok = await uiConfirm({
+      tone: "warn", title: `Post ${c.number} to the P/L?`,
+      message: `${lines}\n\nThis changes the margin of the sales order(s) involved — including deals already closed, which is correct: the money really did change. It can be reversed.`,
+      confirmLabel: "Post",
+    });
+    if (!ok) return;
+    if (typeof setLots === "function") setLots((prev: any[]) => applyPostingsToLots(prev || [], postings));
+    if (typeof setOrders === "function") setOrders((prev: any[]) => applyPostingsToOrders(prev || [], postings));
+    patch(c.id, { status: c.status === "Settled" ? "Settled" : "Accepted", resolvedAt: c.resolvedAt || today });
+  };
+
+  const unpostClaim = async (c: any) => {
+    if (!(await uiConfirm({ tone: "danger", title: `Reverse ${c.number}'s posting?`, message: "The adjustment is removed from the lots and sales orders. The claim itself stays.", confirmLabel: "Reverse" }))) return;
+    const r = reverseClaimPostings(c, lots || [], orders || []);
+    if (typeof setLots === "function") setLots(() => r.lots);
+    if (typeof setOrders === "function") setOrders(() => r.orders);
+  };
+
+  // the chain: a concession we granted usually justifies claiming it back
+  const recoverFrom = (parent: any) => {
+    const c = blankClaim({
+      id: nextId(),
+      number: nextClaimNumber(claims, new Date(today).getFullYear() || 2026),
+      direction: "RECOVERY",
+      respondent: { kind: "Supplier", contactId: null, name: "" },
+      cause: parent.cause, basis: parent.basis || "DEFECT",
+      subjects: (parent.subjects || []).filter((s: any) => s.kind !== "SO"),
+      parentClaimId: parent.id,
+      date: today, status: "Draft",
+      plnPerEur: parent.plnPerEur,
+      notes: `Recovery against ${parent.number}`,
     });
     setClaims((prev: any[]) => [...(prev || []), c]);
     setSelectedId(c.id);
@@ -168,6 +225,9 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   <div style={{ fontSize: 15, fontWeight: 800 }}>{selected.number}</div>
                   <Pill bg={ds.bg} fg={ds.fg} title={ds.hint}>{ds.label}</Pill>
                   <div style={{ flex: 1 }} />
+                  {selected.direction === "CONCESSION" && (
+                    <SmallButton kind="green" onClick={() => recoverFrom(selected)} title="Create a linked claim against the party responsible">+ Recover from supplier / carrier</SmallButton>
+                  )}
                   <SmallButton kind="red" onClick={() => removeClaim(selected)}>Delete</SmallButton>
                   <SmallButton onClick={() => setSelectedId(null)}>Close</SmallButton>
                 </div>
@@ -213,6 +273,71 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                     <Lbl>Agreed after negotiation (EUR)</Lbl>
                     <input type="number" value={selected.acceptedEUR ?? ""} onChange={e => patch(selected.id, { acceptedEUR: e.target.value === "" ? null : e.target.value })} placeholder="blank until agreed" style={INP} />
                   </div>
+                </div>
+
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB" }}>
+                  <Lbl>How this claim is built</Lbl>
+                  <select value={selected.basis || "DEFECT"} onChange={e => patch(selected.id, { basis: e.target.value })} style={INP}>
+                    {CLAIM_BASES.map((b: any) => <option key={b} value={b}>{BASIS_LABEL[b]}</option>)}
+                  </select>
+                  {(selected.basis === "COSTS" || selected.basis === "MIXED") && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div><Lbl>Cargo lost (kg)</Lbl><input type="number" value={selected.lostKg ?? ""} onChange={e => patch(selected.id, { lostKg: e.target.value })} style={INP} /></div>
+                        <div><Lbl>Value of the lost cargo (EUR)</Lbl><input type="number" value={selected.lostValueEUR ?? ""} onChange={e => patch(selected.id, { lostValueEUR: e.target.value })} style={INP} /></div>
+                      </div>
+                      <div style={{ marginTop: 10 }}>
+                        <Lbl>Costs this party caused</Lbl>
+                        {(selected.causedCosts || []).map((cc: any, i: number) => (
+                          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 130px auto", gap: 8, marginBottom: 5 }}>
+                            <input value={cc.label || ""} onChange={e => patch(selected.id, { causedCosts: (selected.causedCosts || []).map((x: any, xi: number) => xi === i ? { ...x, label: e.target.value } : x) })} placeholder="Repalletising / demurrage / re-delivery" style={{ ...INP, padding: "6px 8px" }} />
+                            <input type="number" value={cc.amountEUR ?? ""} onChange={e => patch(selected.id, { causedCosts: (selected.causedCosts || []).map((x: any, xi: number) => xi === i ? { ...x, amountEUR: e.target.value } : x) })} placeholder="EUR" style={{ ...INP, padding: "6px 8px" }} />
+                            <SmallButton kind="red" onClick={() => patch(selected.id, { causedCosts: (selected.causedCosts || []).filter((_: any, xi: number) => xi !== i) })}>✕</SmallButton>
+                          </div>
+                        ))}
+                        <SmallButton onClick={() => patch(selected.id, { causedCosts: [...(selected.causedCosts || []), { label: "", amountEUR: "" }] })}>+ Cost</SmallButton>
+                      </div>
+                      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ fontSize: 11.5, color: "#475569" }}>Computed from this basis: <strong>{eur(requestedFromBasis(selected))}</strong></div>
+                        <SmallButton onClick={() => patch(selected.id, { requestedEUR: requestedFromBasis(selected) })}>Use as requested</SmallButton>
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 10 }}>
+                    <Lbl>EUR → PLN rate used when posting</Lbl>
+                    <input type="number" value={selected.plnPerEur ?? ""} onChange={e => patch(selected.id, { plnPerEur: e.target.value })} placeholder="e.g. 4.30" style={{ ...INP, maxWidth: 180 }} />
+                  </div>
+                </div>
+
+                {/* ── posting the agreed amount into the P/L ── */}
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB" }}>
+                  {(() => {
+                    const { postings, warnings } = buildClaimPostings(selected, { todayISO: today });
+                    const posted = isPosted(selected);
+                    return <>
+                      <div style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, marginBottom: 8 }}>
+                        {selected.direction === "CONCESSION"
+                          ? "Posting reduces this sales order's revenue by the agreed amount."
+                          : "Posting reduces the affected lots' cost by the agreed amount, which flows through COGS into the sales order's margin."}
+                        {" "}It is a dated, source-tagged adjustment — the original figures are never rewritten, and it can be reversed.
+                      </div>
+                      {postings.length > 0 && (
+                        <div style={{ background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 11.5, marginBottom: 8 }}>
+                          {postings.map((p: any, i: number) => (
+                            <div key={i}>{p.kind === "SO_REVENUE" ? "Revenue" : "Lot cost"} <strong>{p.ref}</strong> {p.amountPLN.toLocaleString("pl-PL")} PLN</div>
+                          ))}
+                        </div>
+                      )}
+                      {warnings.map((w: string, i: number) => (
+                        <div key={i} style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", fontSize: 11.5, color: "#92400E", marginBottom: 6 }}>{w}</div>
+                      ))}
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <SmallButton kind="dark" onClick={() => postClaim(selected)}>{posted ? "Re-post agreed amount" : "Post agreed amount to P/L"}</SmallButton>
+                        {posted && <SmallButton kind="red" onClick={() => unpostClaim(selected)}>Reverse posting</SmallButton>}
+                        {posted && <span style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>✓ posted</span>}
+                      </div>
+                    </>;
+                  })()}
                 </div>
 
                 {selected.acceptedEUR != null && selected.acceptedEUR !== "" && num(selected.acceptedEUR) !== num(selected.requestedEUR) && (

@@ -160,6 +160,22 @@ function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipment
     totalSO += amountSO;
     lines.push({ label, amountSO, amountPLN: round2(amountSO * safe(order.fxRate || 1)), note });
   });
+  // v6.49.0 (claims Phase 2): an ACCEPTED client concession reduces this order's
+  // revenue. It arrives as a dated, source-tagged adjustment (claim:CLM-…) that is
+  // additive and reversible — the line prices themselves are never rewritten, so a
+  // closed deal's margin moves legitimately when a claim settles later. Adjustments
+  // are held in PLN; convert back to SO currency for the revenue total.
+  const adj = (order.claimAdjustments || []).reduce((s: number, a: any) => s + safe(a?.amountPLN), 0);
+  if (adj) {
+    const fx = safe(order.fxRate) || 1;
+    const adjSO = round2(adj / (fx || 1));
+    totalSO += adjSO;
+    lines.push({
+      label: `Claim credits (${(order.claimAdjustments || []).length})`,
+      amountSO: adjSO, amountPLN: round2(adj),
+      note: (order.claimAdjustments || []).map((a: any) => a?.label).filter(Boolean).join(" · "),
+    } as any);
+  }
   return { lines, totalSO: round2(totalSO), warnings };
 }
 

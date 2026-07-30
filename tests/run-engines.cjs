@@ -1825,6 +1825,7 @@ T("claim evidence: a tick without a scan is not evidence", () => {
 
 // ── v6.48.0: claims re-homed to their own store (Phase 1) ──
 const CL = require("./build/claims.domain.js");
+const MC = require("./build/marginCalculations.js");
 console.log("── claims: store, numbering, migration ──");
 const _deps = () => { let i = 0; return { todayISO: () => "2026-07-30", nextId: () => ++i }; };
 
@@ -1910,6 +1911,97 @@ T("summary: open value, overdue notices, claims with no evidence", () => {
   assert.equal(s.openRecoveryEUR, 1200);
   assert.deepEqual(s.overdue, ["CLM-1"], "deadline passed and never notified");
   assert.deepEqual(s.noEvidence, ["CLM-1"], "CLM-3 has a linked scan");
+});
+
+// ── v6.49.0: claims Phase 2 — basis + posting an accepted amount ──
+console.log("── claims: basis, posting, chain ──");
+T("basis COSTS: a claim with no damaged cargo at all (wrong terminal, demurrage)", () => {
+  const c = CL.blankClaim({ basis: "COSTS", causedCosts: [{ label: "Demurrage", amountEUR: 600 }, { label: "Re-delivery", amountEUR: 200 }] });
+  assert.equal(CL.requestedFromBasis(c), 800, "pure caused costs — no defect %");
+});
+T("basis MIXED: the real transport claim — cargo lost AND cost to repalletise", () => {
+  const c = CL.blankClaim({ basis: "MIXED", lostValueEUR: 1200,
+    causedCosts: [{ label: "Repalletising before loading", amountEUR: 350 }],
+    defectValueEUR: 0, recoveredEUR: 0 });
+  assert.equal(CL.requestedFromBasis(c), 1550);
+});
+T("basis DEFECT still runs the paper form's maths", () => {
+  const c = CL.blankClaim({ basis: "DEFECT", defectValueEUR: 7474.31, recoveredEUR: 1294.38 });
+  assert.equal(CL.requestedFromBasis(c), 6179.93, "matches the signed Claim Request Form");
+});
+T("only an ACCEPTED amount posts anything", () => {
+  const base = { number: "CLM-2026-0001", direction: "RECOVERY", plnPerEur: 4.3,
+    subjects: [{ kind: "LOT", ref: "LOT-1", affectedKg: 1000 }] };
+  assert.equal(CL.buildClaimPostings({ ...base, status: "Submitted", acceptedEUR: 1000 }).postings.length, 0);
+  assert.equal(CL.buildClaimPostings({ ...base, status: "Accepted", acceptedEUR: 0 }).postings.length, 0);
+  assert.equal(CL.buildClaimPostings({ ...base, status: "Accepted", acceptedEUR: 1000 }).postings.length, 1);
+});
+T("RECOVERY from the producer credits the lots pro-rata by affected kg", () => {
+  const c = { number: "CLM-2026-0002", direction: "RECOVERY", status: "Accepted", acceptedEUR: 1000, plnPerEur: 4,
+    respondent: { kind: "Supplier", name: "Konkret" },
+    subjects: [{ kind: "LOT", ref: "LOT-A", affectedKg: 3000 }, { kind: "LOT", ref: "LOT-B", affectedKg: 1000 }] };
+  const { postings } = CL.buildClaimPostings(c);
+  assert.equal(postings.length, 2);
+  assert.equal(postings[0].amountPLN, -3000, "75% of 4000 PLN");
+  assert.equal(postings[1].amountPLN, -1000);
+  assert.equal(Math.round(postings.reduce((a, p) => a + p.amountPLN, 0)), -4000, "totals exactly");
+  assert.ok(postings.every(p => p.kind === "LOT_COST" && p.source === "claim:CLM-2026-0002"));
+});
+T("CONCESSION to the client reduces the sales order's revenue", () => {
+  const c = { number: "CLM-2026-0003", direction: "CONCESSION", status: "Settled", acceptedEUR: 500, plnPerEur: 4.3,
+    respondent: { kind: "Client", name: "Cairo Fruits" }, subjects: [{ kind: "SO", ref: "SO-2026-0002" }] };
+  const { postings } = CL.buildClaimPostings(c);
+  assert.equal(postings.length, 1);
+  assert.equal(postings[0].kind, "SO_REVENUE");
+  assert.equal(postings[0].ref, "SO-2026-0002");
+  assert.equal(postings[0].amountPLN, -2150);
+});
+T("posting a lot credit is source-tagged, additive and re-postable", () => {
+  const lots = [{ number: "LOT-A", costs: [{ type: "purchase", pln: 58266, source: "po:PO-1" }] }];
+  const c = { number: "CLM-2026-0004", direction: "RECOVERY", status: "Accepted", acceptedEUR: 1000, plnPerEur: 4,
+    respondent: { kind: "Carrier", name: "TransPol" }, subjects: [{ kind: "LOT", ref: "LOT-A", affectedKg: 500 }] };
+  const p1 = CL.buildClaimPostings(c).postings;
+  let out = CL.applyPostingsToLots(lots, p1);
+  assert.equal(out[0].costs.length, 2, "original cost untouched, credit added");
+  assert.equal(out[0].costs[1].pln, -4000);
+  assert.equal(out[0].costs[0].pln, 58266, "purchase line never rewritten");
+  // re-post after renegotiation — replaces, never duplicates
+  const p2 = CL.buildClaimPostings({ ...c, acceptedEUR: 800 }).postings;
+  out = CL.applyPostingsToLots(out, p2);
+  assert.equal(out[0].costs.length, 2, "replaced by source");
+  assert.equal(out[0].costs[1].pln, -3200);
+});
+T("reversing a claim removes exactly its own postings", () => {
+  const lots = CL.applyPostingsToLots([{ number: "L1", costs: [{ pln: 100, source: "po:X" }] }],
+    CL.buildClaimPostings({ number: "CLM-9", direction: "RECOVERY", status: "Accepted", acceptedEUR: 10, plnPerEur: 4,
+      subjects: [{ kind: "LOT", ref: "L1", affectedKg: 1 }] }).postings);
+  const orders = CL.applyPostingsToOrders([{ number: "SO-1" }],
+    CL.buildClaimPostings({ number: "CLM-9", direction: "CONCESSION", status: "Accepted", acceptedEUR: 10, plnPerEur: 4,
+      subjects: [{ kind: "SO", ref: "SO-1" }] }).postings);
+  assert.equal(lots[0].costs.length, 2);
+  assert.equal(orders[0].claimAdjustments.length, 1);
+  const rev = CL.reverseClaimPostings({ number: "CLM-9" }, lots, orders);
+  assert.equal(rev.lots[0].costs.length, 1, "only the po:X line remains");
+  assert.equal(rev.orders[0].claimAdjustments.length, 0);
+});
+T("posting refuses when the claim has nothing to land on", () => {
+  const noLots = CL.buildClaimPostings({ number: "C", direction: "RECOVERY", status: "Accepted", acceptedEUR: 100, plnPerEur: 4, subjects: [] });
+  assert.equal(noLots.postings.length, 0);
+  assert.ok(noLots.warnings[0].includes("no lots"));
+  const noRate = CL.buildClaimPostings({ number: "C", direction: "RECOVERY", status: "Accepted", acceptedEUR: 100, subjects: [{ kind: "LOT", ref: "L" }] });
+  assert.ok(noRate.warnings[0].includes("rate"));
+});
+T("the SO's margin actually moves when a concession is posted", () => {
+  const order = { number: "SO-M", status: "Closed", currency: "EUR", fxRate: 4,
+    items: [{ product: "Apples", qty: 1000, unitPrice: 1, sourceType: "STOCK", sourceRef: "LOT-M" }] };
+  const before = MC.computeSOMargin(order, [], [], [], "forecast");
+  const posted = CL.applyPostingsToOrders([order], CL.buildClaimPostings({
+    number: "CLM-M", direction: "CONCESSION", status: "Settled", acceptedEUR: 200, plnPerEur: 4,
+    subjects: [{ kind: "SO", ref: "SO-M" }] }).postings)[0];
+  const after = MC.computeSOMargin(posted, [], [], [], "forecast");
+  assert.equal(before.revenueSO, 1000);
+  assert.equal(after.revenueSO, 800, "1000 - (800 PLN / 4)");
+  assert.ok(after.marginPLN < before.marginPLN, "margin falls by the credit");
 });
 
 console.log("");

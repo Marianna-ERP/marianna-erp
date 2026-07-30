@@ -6,6 +6,7 @@ import { recomputeLotFromMovements } from "./inventory.domain";
 import { printHtmlNode } from "./documentService";
 import LoadingProtocolModal from "./LoadingProtocolModal";
 import { inspectLink, summariseDocs } from "./docLinks.domain";
+import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix } from "./costAllocation";
 import { nextId } from "./ids";
@@ -2243,7 +2244,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   </div>;
 }
 
-function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol }: any) {
+function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim }: any) {
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
   const cancelledRefs = cancelledDocSet(pos, orders); // v6.35.1: strike cancelled PO/SO refs
   const missingDocs = (shipment.documents || []).filter(d => ["Required", "Missing"].includes(d.status));
@@ -2269,6 +2270,10 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onP
               Loading protocol{shipment.loadingProtocol ? ` · ${shipment.loadingProtocol.status}` : ""}
             </SmallButton>
           )}
+          {/* v6.49.0 (claims Phase 2): raise a transport or temperature claim against
+              the carrier, forwarder or shipping line — the case the old design could
+              not express at all, because a claim could only ever name the producer. */}
+          {onRaiseClaim && <SmallButton onClick={onRaiseClaim} kind="red">Raise transport claim</SmallButton>}
           {/* BP-22: only the NEXT logical action, not every status at once. */}
           {(() => {
             const na = nextShipmentAction(shipment);
@@ -2407,6 +2412,7 @@ function ChecklistLine({ ok, label, warnText = "" }: any) {
 export default function Shipments({
   shipments: extShipments,
   packagingTypes = [],
+  setClaims = null,
   setShipments: extSetShipments,
   contacts: extContacts = [],
   // v6.30.2: no `= []` defaults on pos/lots/orders — with them, `??` could never
@@ -2539,6 +2545,55 @@ export default function Shipments({
   function saveOrderTerms(sh, text) {
     const next = updateShipment(sh.id, s => ({ ...s, customOrderTerms: text }));
     if (next) setPrintShipment(next);
+  }
+
+  // v6.49.0: build a RECOVERY claim from this shipment. The respondent defaults to
+  // the leg's carrier/forwarder, the subjects name the shipment and every lot it
+  // carried, and the evidence is pre-linked from what the shipment already holds:
+  // the signed loading protocol and the CMR scan. The basis defaults to MIXED —
+  // a transport claim is normally cargo lost PLUS the cost of putting it right.
+  async function raiseTransportClaim(sh) {
+    if (typeof setClaims !== "function") return;
+    const leg = (sh.legs || [])[0] || {};
+    const providerId = leg.carrierId || leg.forwarderId || sh.carrierId || sh.forwarderId;
+    const provider = (contacts || []).find((c) => String(c.id) === String(providerId));
+    const kind = (leg.forwarderId || sh.forwarderId) ? "Forwarder" : "Carrier";
+    const lotRefs = uniq((sh.goods || []).map((g) => g.lotRef).filter(Boolean));
+    const evidence = [];
+    const lp = sh.loadingProtocol;
+    if (lp) evidence.push({ kind: `Loading protocol ${lp.number}`, ref: lp.number, link: lp.scanLink || "" });
+    (sh.documents || []).filter((d) => ["cmr", "bl", "awb"].includes(String(d.type || "").toLowerCase()))
+      .forEach((d) => evidence.push({ kind: d.type, ref: d.ref || "", link: d.link || "" }));
+    const recorders = (sh.legs || []).flatMap((l) => transportUnitsForLeg(l)).map((u) => u.tempRecorderNo).filter(Boolean);
+    if (recorders.length) evidence.push({ kind: "Temperature recorder", ref: recorders.join(", "), link: "" });
+
+    const today = localTodayISO();
+    setClaims((prev) => {
+      const list = prev || [];
+      return [...list, {
+        ...blankClaim(),
+        id: nextId(),
+        number: nextClaimNumber(list, new Date(today).getFullYear() || 2026),
+        direction: "RECOVERY",
+        respondent: { kind, contactId: providerId ?? null, name: provider?.name || "" },
+        cause: "Transport damage",
+        basis: "MIXED",
+        subjects: [
+          { kind: "SHIPMENT", ref: sh.number },
+          ...lotRefs.map((r) => ({ kind: "LOT", ref: r })),
+          ...uniq(sh.soRefs || []).map((r) => ({ kind: "SO", ref: r })),
+        ],
+        date: today,
+        status: "Draft",
+        evidence,
+        notes: `Raised from ${sh.number}${lp ? ` · loading protocol ${lp.number} ${lp.status === "Returned" ? "signed & returned" : "NOT yet returned"}` : " · no loading protocol on file"}`,
+      }];
+    });
+    await shConfirm({
+      tone: "info", title: "Transport claim drafted",
+      message: `A recovery claim against ${provider?.name || kind.toLowerCase()} has been created in Claims, covering ${sh.number}${lotRefs.length ? ` and ${lotRefs.length} lot(s)` : ""}.\n\nOpen Claims to set the amounts, the notice deadline and the evidence.${lp && lp.status !== "Returned" ? "\n\nNote: the loading protocol for this shipment has not come back signed — without it the carrier can argue the pallets were already damaged." : ""}`,
+      confirmLabel: "OK", cancelLabel: "Close",
+    });
   }
 
   async function quickStatus(sh, status) {
@@ -2691,7 +2746,7 @@ export default function Shipments({
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
+          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
         </div>
       </div>
     </div>
