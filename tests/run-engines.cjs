@@ -1559,21 +1559,49 @@ T("soReservesStock predicate: open commitments vs terminal", () => {
 // ── v6.44.0 (test-round #7): packaging tare → gross weight ──
 const PKG = require("./build/packaging.domain.js");
 console.log("── gross weight: per-box tare ──");
-T("apples: 13kg boxes, 1.4kg tare — 4680 kg net → correct gross", () => {
+T("apples: 13kg boxes, 1.4kg tare, 72/pallet — 4680 kg net", () => {
   const r = PKG.grossForGoodsLine({ qtyKg: 4680, product: "Apples" }, PKG.PACKAGING_SEED);
-  // 4680 / 13 = 360 boxes exactly; gross = 4680 + 360*1.4 = 5184
+  // 4680/13 = 360 boxes; 360/72 = 5 pallets; gross = 4680 + 360*1.4 + 5*25 = 5309
   assert.equal(r.boxes, 360, "box count");
-  assert.equal(r.grossKg, 5184, "gross = net + boxes*tare");
+  assert.equal(r.pallets, 5, "pallet count");
+  assert.equal(r.grossKg, 5309, "gross = net + box tare + PALLET tare");
   assert.equal(r.estimated, false);
+});
+T("v6.46.0: the real signed protocol — 19422 kg = 1494 boxes = 21 pallets", () => {
+  const r = PKG.grossForGoodsLine({ qtyKg: 19422, product: "Apples" }, PKG.PACKAGING_SEED);
+  assert.equal(r.boxes, 1494, "1494 boxes (54 + 20x72)");
+  assert.equal(r.pallets, 21, "21 pallets, matching the paper protocol");
+  assert.equal(r.boxTareTotalKg, 2091.6);
+  assert.equal(r.palletTareTotalKg, 525);
+  assert.equal(r.grossKg, 22038.6, "19422 + 2091.6 + 525");
+});
+T("pallet manifest splits full pallets + remainder like the paper form", () => {
+  const rows = PKG.palletManifest(1494, 72);
+  assert.equal(rows.length, 21);
+  assert.equal(rows.filter(r => r.boxes === 72).length, 20, "20 full pallets");
+  assert.equal(rows[rows.length - 1].boxes, 54, "final part-pallet of 54");
+});
+T("22 full pallets (the all-full case) derives cleanly", () => {
+  const net = 22 * 72 * 13; // 20 592
+  const r = PKG.grossForGoodsLine({ qtyKg: net, product: "Apples" }, PKG.PACKAGING_SEED);
+  assert.equal(r.boxes, 1584); assert.equal(r.pallets, 22);
+  const rows = PKG.palletManifest(1584, 72);
+  assert.equal(rows.length, 22);
+  assert.ok(rows.every(x => x.boxes === 72), "all pallets full");
+});
+T("an explicit pallet count on the line overrides the derivation", () => {
+  const r = PKG.grossForGoodsLine({ qtyKg: 19422, product: "Apples", pallets: 22 }, PKG.PACKAGING_SEED);
+  assert.equal(r.pallets, 22, "returned protocol wins");
+  assert.equal(r.palletTareTotalKg, 550);
 });
 T("partial box rounds up (359.x boxes → 360)", () => {
   const r = PKG.grossForGoodsLine({ qtyKg: 4675, product: "Apples" }, PKG.PACKAGING_SEED);
   assert.equal(r.boxes, 360, "4675/13 = 359.6 → 360 boxes");
-  assert.equal(r.grossKg, Math.round((4675 + 360 * 1.4) * 1000) / 1000);
+  assert.equal(r.grossKg, Math.round((4675 + 360 * 1.4 + 5 * 25) * 1000) / 1000);
 });
 T("explicit packaging id wins over product default", () => {
   const r = PKG.grossForGoodsLine({ qtyKg: 1000, packagingId: "carton-10" }, PKG.PACKAGING_SEED);
-  assert.equal(r.boxes, 100); assert.equal(r.grossKg, Math.round((1000 + 100 * 0.6) * 1000) / 1000);
+  assert.equal(r.boxes, 100); assert.equal(r.grossKg, Math.round((1000 + 100 * 0.6 + 2 * 25) * 1000) / 1000);
 });
 T("unknown product falls back to flat factor, marked estimated", () => {
   const r = PKG.grossForGoodsLine({ qtyKg: 1000, product: "Dragonfruit" }, PKG.PACKAGING_SEED);
@@ -1585,7 +1613,7 @@ T("zero net → zero gross, no boxes", () => {
 });
 T("onions in 25kg mesh bags", () => {
   const r = PKG.grossForGoodsLine({ qtyKg: 500, product: "Onions" }, PKG.PACKAGING_SEED);
-  assert.equal(r.boxes, 20); assert.equal(r.grossKg, Math.round((500 + 20 * 0.15) * 1000) / 1000);
+  assert.equal(r.boxes, 20); assert.equal(r.grossKg, Math.round((500 + 20 * 0.15 + 1 * 25) * 1000) / 1000);
 });
 
 // ── v6.45.0: test-round root causes B, C, D ──
@@ -1669,6 +1697,130 @@ T("HEAL: a healthy dataset passes through untouched", () => {
   const res = HEAL.healRound645({ shipments, lots, orders }, { todayISO: () => "2026-07-22", nextId: () => ++i,
     costMapper: { inventoryType: () => "freight", label: c => c } });
   assert.equal(res.changed, false, "no false-positive healing");
+});
+
+// ── v6.46.0: loading protocol (Karta załadunku) ──
+const LP = require("./build/loadingProtocol.domain.js");
+console.log("── loading protocol ──");
+const _seed = PKG.PACKAGING_SEED;
+
+T("derives the REAL sheet: 19422 kg apples → 21 rows, 20x72 + 54, 13 kg/box", () => {
+  const rows = LP.deriveRows([{ product: "Apples", qtyKg: 19422 }], _seed);
+  assert.equal(rows.length, 21, "21 pallet rows");
+  assert.equal(rows.filter(r => r.boxes === 72).length, 20);
+  assert.equal(rows[20].boxes, 54, "final part-pallet");
+  assert.ok(rows.every(r => r.kgPerBox === 13));
+  assert.equal(rows[0].no, 1); assert.equal(rows[20].no, 21);
+});
+T("calibre is left BLANK for handwriting (ruling: PO can't allocate per pallet)", () => {
+  const rows = LP.deriveRows([{ product: "Apples", qtyKg: 19422 }], _seed);
+  assert.ok(rows.every(r => r.size === ""), "no calibre pre-printed");
+  assert.ok(rows.every(r => r.boxesOk === null && r.goodsOk === null), "conditions unfilled");
+});
+T("totals from a returned sheet reproduce net + box tare + pallet tare", () => {
+  const rows = LP.deriveRows([{ product: "Apples", qtyKg: 19422 }], _seed);
+  const t = LP.protocolTotals({ rows }, _seed, "Apples");
+  assert.equal(t.boxes, 1494); assert.equal(t.pallets, 21);
+  assert.equal(t.netKg, 19422);
+  assert.equal(t.boxTareTotalKg, 2091.6); assert.equal(t.palletTareTotalKg, 525);
+  assert.equal(t.grossKg, 22038.6);
+});
+T("22 full pallets: manual adjustment case derives 22 rows", () => {
+  const rows = LP.deriveRows([{ product: "Apples", qtyKg: 22 * 72 * 13 }], _seed);
+  assert.equal(rows.length, 22);
+  assert.ok(rows.every(r => r.boxes === 72));
+});
+T("build: pre-fills plates, driver, assortment; recorders stay EMPTY", () => {
+  const sh = { number: "SHP-2026-0003", goods: [{ product: "Apples", qtyKg: 19422 }],
+    legs: [{ id: 1, mode: "Road", vehicles: [{ truckPlate: "WR025HP", trailerPlate: "WR0246Y", driverName: "Mikolaj Majewski" }] }] };
+  const p = LP.buildLoadingProtocol({ shipment: sh, supplier: { name: "Konkret", address: "Marysin 36" },
+    receiverName: "MARIANNA HAZEM OSMAN", types: _seed, existingProtocols: [] },
+    { todayISO: () => "2026-07-30", nextId: () => 1 });
+  assert.equal(p.number, "LP-2026-0001", "house numbering convention");
+  assert.equal(p.truckPlate, "WR025HP"); assert.equal(p.trailerPlate, "WR0246Y");
+  assert.equal(p.assortment, "Apples");
+  assert.equal(p.rows.length, 21);
+  assert.equal(p.recorderNos.length, 0, "producer picks recorders at loading — blank when printed");
+  assert.equal(p.status, "Draft");
+});
+T("numbering continues the house sequence", () => {
+  assert.equal(LP.nextProtocolNumber([{ number: "LP-2026-0001" }, { number: "LP-2026-0007" }], 2026), "LP-2026-0008");
+  assert.equal(LP.nextProtocolNumber([{ number: "LP-2025-0009" }], 2026), "LP-2026-0001", "year-scoped");
+});
+T("a clean sheet is clean; damage and non-compliance are flagged", () => {
+  const rows = LP.deriveRows([{ product: "Apples", qtyKg: 936 }], _seed).map(r =>
+    ({ ...r, boxesOk: true, goodsOk: true, remarks: "Brak" }));
+  const clean = { checks: { transportClean: true, chamberClean: true, foreignOdours: false, packagingCompliant: true }, rows };
+  assert.equal(LP.isProtocolClean(clean), true, "all Tak / Brak / ZGODNY = clean");
+  const dirty = { ...clean, rows: rows.map((r, i) => i === 0 ? { ...r, goodsOk: false } : r) };
+  assert.equal(LP.isProtocolClean(dirty), false);
+  assert.ok(LP.protocolExceptions(dirty)[0].includes("Pallet 1"));
+  const odours = { ...clean, checks: { ...clean.checks, foreignOdours: true } };
+  assert.ok(LP.protocolExceptions(odours).some(x => x.includes("odours")));
+});
+T("gaps tell you what must still come back for the sheet to be evidence", () => {
+  const p = LP.buildLoadingProtocol({ shipment: { number: "S", goods: [{ product: "Apples", qtyKg: 936 }], legs: [{ id: 1 }] }, types: _seed },
+    { todayISO: () => "2026-07-30", nextId: () => 1 });
+  const gaps = LP.protocolGaps(p);
+  assert.ok(gaps.some(g => g.includes("Driver signature")));
+  assert.ok(gaps.some(g => g.includes("recorder")));
+  assert.ok(gaps.some(g => g.includes("Calibre")));
+  assert.ok(gaps.some(g => g.includes("Signed scan")), "the signed scan is itself a gap (v6.47.0)");
+  const done = { ...p, driverSignedDate: "2026-05-02", issuerSignedDate: "2026-05-02",
+    recorderNos: ["241002PDF2476186"], chamberTempBeforeC: "2",
+    scanLink: "https://www.dropbox.com/s/abc/protokol.pdf?dl=0",
+    checks: { transportClean: true, chamberClean: true, foreignOdours: false, packagingCompliant: true },
+    rows: p.rows.map(r => ({ ...r, size: "70-80" })) };
+  assert.equal(LP.protocolGaps(done).length, 0, "fully returned + scanned sheet has no gaps");
+});
+
+// ── v6.47.0: document links (Dropbox register) ──
+const DL = require("./build/docLinks.domain.js");
+console.log("── document links ──");
+T("recognises Dropbox and the other usual hosts", () => {
+  assert.equal(DL.inspectLink("https://www.dropbox.com/s/abc/CMR-123.pdf?dl=0").host, "Dropbox");
+  assert.equal(DL.inspectLink("https://www.dropbox.com/scl/fi/xyz/protokol.pdf?rlkey=k").label, "Dropbox");
+  assert.equal(DL.inspectLink("https://drive.google.com/file/d/1a2b/view").host, "Google Drive");
+  assert.equal(DL.inspectLink("https://1drv.ms/b/s!Aabc").host, "OneDrive");
+  assert.equal(DL.inspectLink("https://files.marianna.pl/cmr/123.pdf").host, "Other");
+});
+T("the Dropbox URL is never rewritten (?dl=0 opens their preview, as expected)", () => {
+  const url = "https://www.dropbox.com/s/abc/CMR-123.pdf?dl=0";
+  assert.equal(DL.inspectLink(url).ok, true);
+  // helper classifies only — callers open the link exactly as pasted
+  assert.equal(DL.isUsableLink(url), true);
+});
+T("rejects junk without pretending it works", () => {
+  assert.equal(DL.isUsableLink(""), false);
+  assert.equal(DL.isUsableLink("dropbox.com/s/abc"), false, "no scheme");
+  assert.equal(DL.inspectLink("dropbox.com/s/abc").reason.includes("http"), true);
+  assert.equal(DL.isUsableLink("not a url at all"), false);
+});
+T("register summary separates outstanding from unproduceable", () => {
+  const docs = [
+    { type: "CMR", status: "Have it", link: "https://www.dropbox.com/s/a/cmr.pdf?dl=0" },
+    { type: "Invoice", status: "Have it", link: "" },
+    { type: "EUR.1", status: "Missing", link: "" },
+    { type: "AWB", status: "N/A", link: "" },
+    { type: "Phytosanitary", status: "Have it", link: "www.dropbox.com/broken" },
+  ];
+  const s = DL.summariseDocs(docs);
+  assert.equal(s.total, 5);
+  assert.equal(s.settled, 4, "Have it x3 + N/A");
+  assert.equal(s.outstanding, 1, "only EUR.1 outstanding");
+  assert.equal(s.withFile, 1, "only the CMR has a working link");
+  assert.deepEqual(s.settledWithoutFile.sort(), ["Invoice", "Phytosanitary"], "N/A needs no file");
+  assert.deepEqual(s.badLinks, ["Phytosanitary"]);
+});
+T("claim evidence: a tick without a scan is not evidence", () => {
+  const ticked = [{ type: "CMR", status: "Have it", link: "" }];
+  const gaps = DL.claimEvidenceGaps(ticked, ["CMR"]);
+  assert.equal(gaps.length, 1);
+  assert.ok(gaps[0].includes("no scan linked"));
+  const linked = [{ type: "CMR", status: "Have it", link: "https://www.dropbox.com/s/a/cmr.pdf?dl=0" }];
+  assert.equal(DL.claimEvidenceGaps(linked, ["CMR"]).length, 0);
+  assert.ok(DL.claimEvidenceGaps([], ["CMR"])[0].includes("not on the document list"));
+  assert.ok(DL.claimEvidenceGaps([{ type: "CMR", status: "Missing" }], ["CMR"])[0].includes("not received"));
 });
 
 console.log("");

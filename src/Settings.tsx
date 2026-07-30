@@ -182,7 +182,7 @@ function ManageCard({ title, summary, buttonLabel, onManage }: any) {
 // panel maintains that table; shipments derive gross from it.
 function PackagingPanel({ types, setTypes }: any) {
   const { confirm: pkConfirm, alert: pkAlert, dialogNode: pkNode } = useConfirm(); // P2-6
-  const blank = { id: "", label: "", capacityKg: "", tareKg: "", appliesTo: "" };
+  const blank = { id: "", label: "", capacityKg: "", tareKg: "", boxesPerPallet: "", palletTareKg: "", appliesTo: "" };
   const [form, setForm] = React.useState<any>(blank);
   const list = types || [];
   const sf = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
@@ -195,10 +195,10 @@ function PackagingPanel({ types, setTypes }: any) {
     if (!(tare >= 0)) { await pkAlert({ tone: "warn", title: "Tare required", message: "How much does the empty unit weigh?" }); return; }
     const id = String(form.id || "").trim() || label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const appliesTo = String(form.appliesTo || "").split(",").map((x: string) => x.trim()).filter(Boolean);
-    const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, appliesTo }];
+    const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, boxesPerPallet: parseFloat(form.boxesPerPallet) || 0, palletTareKg: parseFloat(form.palletTareKg) || 0, appliesTo }];
     setTypes(next); setForm(blank);
   };
-  const edit = (t: any) => setForm({ id: t.id, label: t.label, capacityKg: t.capacityKg, tareKg: t.tareKg, appliesTo: (t.appliesTo || []).join(", ") });
+  const edit = (t: any) => setForm({ id: t.id, label: t.label, capacityKg: t.capacityKg, tareKg: t.tareKg, boxesPerPallet: t.boxesPerPallet ?? "", palletTareKg: t.palletTareKg ?? "", appliesTo: (t.appliesTo || []).join(", ") });
   const del = async (t: any) => {
     if (!(await pkConfirm({ tone: "danger", title: `Remove "${t.label}"?`, message: "Shipment lines already using it keep their saved gross weight.", confirmLabel: "Remove" }))) return;
     setTypes(list.filter((x: any) => x.id !== t.id));
@@ -209,7 +209,7 @@ function PackagingPanel({ types, setTypes }: any) {
       {pkNode}
       <div style={{ fontSize: 12.5, color: "#555", lineHeight: 1.6, marginBottom: 14 }}>
         Gross weight on transport orders is calculated as <strong>net + (number of units x empty-unit weight)</strong>.
-        Apples, for example, travel in wooden boxes holding 13&nbsp;kg with an empty box weighing 1.4&nbsp;kg, so 4&nbsp;680&nbsp;kg net = 360 boxes = 5&nbsp;184&nbsp;kg gross.
+        Gross also includes the pallets themselves. Apples travel in wooden boxes holding 13&nbsp;kg (1.4&nbsp;kg empty, 72 to a pallet), so 19&nbsp;422&nbsp;kg net = 1&nbsp;494 boxes on 21 pallets = 22&nbsp;038.6&nbsp;kg gross.
         Set <em>applies to</em> so a product picks its packaging automatically.
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 18 }}>
@@ -217,6 +217,8 @@ function PackagingPanel({ types, setTypes }: any) {
           <th style={{ padding: "7px 9px" }}>Packaging</th>
           <th style={{ padding: "7px 9px", textAlign: "right" }}>Holds (kg)</th>
           <th style={{ padding: "7px 9px", textAlign: "right" }}>Empty (kg)</th>
+          <th style={{ padding: "7px 9px", textAlign: "right" }}>Boxes / pallet</th>
+          <th style={{ padding: "7px 9px", textAlign: "right" }}>Pallet (kg)</th>
           <th style={{ padding: "7px 9px" }}>Applies to</th>
           <th style={{ padding: "7px 9px" }}></th>
         </tr></thead>
@@ -226,6 +228,8 @@ function PackagingPanel({ types, setTypes }: any) {
               <td style={{ padding: "7px 9px", fontWeight: 600 }}>{t.label}</td>
               <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.capacityKg}</td>
               <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.tareKg}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.boxesPerPallet || "—"}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.palletTareKg || "—"}</td>
               <td style={{ padding: "7px 9px", color: "#64748B" }}>{(t.appliesTo || []).join(", ") || "—"}</td>
               <td style={{ padding: "7px 9px", textAlign: "right", whiteSpace: "nowrap" }}>
                 <SmallButton onClick={() => edit(t)}>Edit</SmallButton>{" "}
@@ -233,15 +237,17 @@ function PackagingPanel({ types, setTypes }: any) {
               </td>
             </tr>
           ))}
-          {!list.length && <tr><td colSpan={5} style={{ padding: "10px 9px", color: "#9CA3AF" }}>No packaging types yet.</td></tr>}
+          {!list.length && <tr><td colSpan={7} style={{ padding: "10px 9px", color: "#9CA3AF" }}>No packaging types yet.</td></tr>}
         </tbody>
       </table>
       <Card>
         <SectionTitle>{form.id ? "EDIT PACKAGING" : "ADD PACKAGING"}</SectionTitle>
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 2fr auto", gap: 10, alignItems: "end", marginTop: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 2fr auto", gap: 10, alignItems: "end", marginTop: 10 }}>
           <div><Lbl>Name</Lbl><input value={form.label} onChange={e => sf("label", e.target.value)} placeholder="Wooden box (13 kg)" style={INP} /></div>
           <div><Lbl>Holds (kg)</Lbl><input type="number" value={form.capacityKg} onChange={e => sf("capacityKg", e.target.value)} placeholder="13" style={INP} /></div>
           <div><Lbl>Empty (kg)</Lbl><input type="number" value={form.tareKg} onChange={e => sf("tareKg", e.target.value)} placeholder="1.4" style={INP} /></div>
+          <div><Lbl>Boxes / pallet</Lbl><input type="number" value={form.boxesPerPallet} onChange={e => sf("boxesPerPallet", e.target.value)} placeholder="72" style={INP} /></div>
+          <div><Lbl>Pallet (kg)</Lbl><input type="number" value={form.palletTareKg} onChange={e => sf("palletTareKg", e.target.value)} placeholder="25" style={INP} /></div>
           <div><Lbl>Applies to (comma separated)</Lbl><input value={form.appliesTo} onChange={e => sf("appliesTo", e.target.value)} placeholder="Apples, Pears" style={INP} /></div>
           <div style={{ display: "flex", gap: 6 }}>
             <SmallButton kind="dark" onClick={save}>{form.id ? "Save" : "Add"}</SmallButton>

@@ -4,6 +4,8 @@ import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentActio
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { printHtmlNode } from "./documentService";
+import LoadingProtocolModal from "./LoadingProtocolModal";
+import { inspectLink, summariseDocs } from "./docLinks.domain";
 import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix } from "./costAllocation";
 import { nextId } from "./ids";
@@ -297,7 +299,7 @@ function withStandardDocs(shipment) {
   const have = new Set(existing.map(d => String(d.type || "").trim().toLowerCase()));
   const missing = standardDocTypesFor(shipment)
     .filter(t => !have.has(t.toLowerCase()))
-    .map((t) => ({ id: nextId(), type: t, ref: "", status: "Missing", date: "", notes: "" }));
+    .map((t) => ({ id: nextId(), type: t, ref: "", status: "Missing", date: "", notes: "", link: "" }));
   if (!missing.length) return shipment;
   return { ...shipment, documents: [...existing, ...missing] };
 }
@@ -322,6 +324,17 @@ function shipmentSORefs(shipment, orders = []) {
   return Array.from(set).filter(n => !cancelled.has(String(n)));
 }
 
+// v6.46.0: Polish genitive for the provider role — the transport-order title
+// previously printed "ZLECENIE DLA CARRIER" (Polish sentence, English noun).
+const PROVIDER_ROLE_PL: Record<string, string> = {
+  Carrier: "PRZEWOŹNIKA",
+  Forwarder: "SPEDYTORA",
+  Broker: "AGENCJI CELNEJ",
+  Warehouse: "MAGAZYNU",
+};
+function providerRolePL(role: any): string {
+  return PROVIDER_ROLE_PL[String(role)] || "PRZEWOŹNIKA";
+}
 function providerRoleForLeg(leg, providerId) {
   if (String(leg.carrierId || "") === String(providerId || "")) return "Carrier";
   if (String(leg.forwarderId || "") === String(providerId || "")) return "Forwarder";
@@ -1412,7 +1425,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
     setDraft(prev => ({ ...prev, documents: (prev.documents || []).map((d, i) => i === idx ? { ...d, [k]: v } : d) }));
   }
   function addDoc() {
-    setDraft(prev => ({ ...prev, documents: [...(prev.documents || []), { id: nextId(), type: "", ref: "", status: "Missing", date: "", notes: "" }] }));
+    setDraft(prev => ({ ...prev, documents: [...(prev.documents || []), { id: nextId(), type: "", ref: "", status: "Missing", date: "", notes: "", link: "" }] }));
   }
   async function removeDoc(idx) {
     const d = (draft.documents || [])[idx];
@@ -1851,16 +1864,28 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                     const locked = !!autoRef;
                     const refValue = locked ? autoRef : d.ref;
                     const stateOpts = STATES.includes(d.status) ? STATES : [d.status, ...STATES];
-                    return <div key={d.id || i} style={{ display: "grid", gridTemplateColumns: "1.3fr 1.2fr 0.9fr 32px", gap: 8, marginBottom: 7, alignItems: "end" }}>
+                    const linkInfo = inspectLink(d.link);
+                    return <div key={d.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.85fr 0.85fr 1.5fr 32px", gap: 8, marginBottom: 7, alignItems: "end" }}>
                       <div><Lbl>Type</Lbl><Inp value={d.type} onChange={e => updateDoc(i, "type", e.target.value)} /></div>
                       <div><Lbl>Ref {locked ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· {isBL ? "from leg" : "from clearance"}</span> : null}</Lbl><Inp value={refValue} onChange={e => updateDoc(i, "ref", e.target.value)} disabled={locked} title={isBL ? "Taken from the sea/rail leg's BL number" : (isExportDecl ? "Taken from the lot's export clearance (SAD/MRN) in Inventory" : "")} style={locked ? { background: "#F9FAFB", color: "#666" } : undefined} /></div>
                       <div><Lbl>State</Lbl><Sel value={d.status} onChange={e => updateDoc(i, "status", e.target.value)}>{stateOpts.map((s: string) => <option key={s} value={s}>{s}</option>)}</Sel></div>
+                      <div><Lbl>Received</Lbl><Inp type="date" value={d.date || ""} onChange={e => updateDoc(i, "date", e.target.value)} max={localTodayISO()} title="The date the signed original came back" /></div>
+                      {/* v6.47.0: link to the scan in Dropbox (or Drive/OneDrive). The file
+                          itself can't live here — localStorage would fill up after a few scans. */}
+                      <div>
+                        <Lbl>Link to scan {d.link ? (linkInfo.ok
+                          ? <a href={d.link} target="_blank" rel="noreferrer" style={{ color: "#2563EB", fontWeight: 700, textDecoration: "none" }}>· open {linkInfo.label} ↗</a>
+                          : <span style={{ color: "#DC2626", fontWeight: 400 }}>· {linkInfo.reason}</span>) : null}</Lbl>
+                        <Inp value={d.link || ""} onChange={e => updateDoc(i, "link", e.target.value)} placeholder="https://www.dropbox.com/…"
+                          title="Paste the Dropbox share link for the signed scan"
+                          style={d.link && !linkInfo.ok ? { borderColor: "#FCA5A5", background: "#FEF2F2" } : undefined} />
+                      </div>
                       <button onClick={() => removeDoc(i)} title="Remove this document row"
                         style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
                     </div>;
                   })}
                   <div style={{ fontSize: 10.5, color: "#9CA3AF", marginTop: 8, lineHeight: 1.45 }}>
-                    The standard set (invoice, packing list, EUR.1, phytosanitary, export declaration, BL/AWB) is added automatically. The transport order is tracked from the carrier email; the CMR is per road unit. BL and export-declaration refs fill in on their own.
+                    The standard set (invoice, packing list, EUR.1, phytosanitary, export declaration, BL/AWB) is added automatically. The transport order is tracked from the carrier email; the CMR is per road unit. BL and export-declaration refs fill in on their own. Paste a Dropbox share link for each signed scan — anyone with the link can open it, so keep the links inside the business.
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB", alignItems: "end" }}>
                     <div><Lbl>Courier tracking nr (DHL) — originals to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
@@ -2009,7 +2034,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 13, fontWeight: 850 }}>{providerRole.toUpperCase()} ORDER / ZLECENIE DLA {providerRole.toUpperCase()}</div>
+          <div style={{ fontSize: 13, fontWeight: 850 }}>{providerRole.toUpperCase()} ORDER / ZLECENIE DLA {providerRolePL(providerRole)}</div>
           <div style={{ fontSize: 12, fontWeight: 800 }}>No {docNo}</div>
           <div>Page / Strona: 1/1 · Date / Data: {todayISO()}</div>
         </div>
@@ -2218,7 +2243,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   </div>;
 }
 
-function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory }: any) {
+function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol }: any) {
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
   const cancelledRefs = cancelledDocSet(pos, orders); // v6.35.1: strike cancelled PO/SO refs
   const missingDocs = (shipment.documents || []).filter(d => ["Required", "Missing"].includes(d.status));
@@ -2237,6 +2262,13 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onP
             ? <span style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
             : <SmallButton kind="blue" onClick={onEdit}>✎ Edit</SmallButton>}
           <SmallButton onClick={onPrint} kind="dark">Transport order</SmallButton>
+          {/* v6.46.0: the loading protocol (Karta załadunku) — the signed sheet that
+              makes a later transport claim provable. Road loading only. */}
+          {(shipment.legs || []).some((l: any) => l.mode === "Road") && (
+            <SmallButton onClick={onLoadingProtocol} kind={shipment.loadingProtocol ? (shipment.loadingProtocol.status === "Returned" ? "green" : "blue") : undefined}>
+              Loading protocol{shipment.loadingProtocol ? ` · ${shipment.loadingProtocol.status}` : ""}
+            </SmallButton>
+          )}
           {/* BP-22: only the NEXT logical action, not every status at once. */}
           {(() => {
             const na = nextShipmentAction(shipment);
@@ -2276,7 +2308,20 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onP
         <ChecklistLine ok={(shipment.goods || []).length > 0} label="Goods lines present" />
         <ChecklistLine ok={(shipment.costs || []).some(c => parseNum(c.amountPLN) > 0)} label="Freight cost entered" />
         <ChecklistLine ok={(shipment.confirmationStatus || "") === "Sent" || (shipment.confirmationStatus || "") === "Generated"} label="Transport confirmation generated" />
+        {/* v6.46.0: a signed loading protocol is what makes a transport claim provable. */}
+        {(shipment.legs || []).some((l: any) => l.mode === "Road") && (
+          <ChecklistLine ok={(shipment.loadingProtocol || {}).status === "Returned"} label="Loading protocol signed & returned" />
+        )}
         <ChecklistLine ok={missingDocs.length === 0} label="Required documents received" warnText={missingDocs.length ? `${missingDocs.length} missing` : ""} />
+        {/* v6.47.0: a tick is not evidence — flag anything we say we hold but couldn't produce. */}
+        {(() => {
+          const sum = summariseDocs(shipment.documents || []);
+          if (!sum.settledWithoutFile.length && !sum.badLinks.length) return null;
+          const bits: string[] = [];
+          if (sum.settledWithoutFile.length) bits.push(`no scan: ${sum.settledWithoutFile.join(", ")}`);
+          if (sum.badLinks.length) bits.push(`bad link: ${sum.badLinks.join(", ")}`);
+          return <ChecklistLine ok={false} label="Signed scans on file" warnText={bits.join(" · ")} />;
+        })()}
         <ChecklistLine ok={shipment.billingStatus === "Cost allocated" || shipment.billingStatus === "Closed"} label="Costs allocated to lots" />
         {(() => {
           const recs = (shipment.legs || []).flatMap((l: any) => transportUnitsForLeg(l)).map((u: any) => u.tempRecorderNo).filter(Boolean);
@@ -2314,7 +2359,33 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onP
       </Card>
       <Card>
         <SectionTitle>Documents</SectionTitle>
-        {(shipment.documents || []).map(d => <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, borderBottom: "1px solid #F1F5F9", padding: "8px 0" }}><div><div style={{ fontSize: 12, fontWeight: 700 }}>{d.type} {d.ref ? `- ${d.ref}` : ""}</div><div style={{ fontSize: 11, color: "#888" }}>{d.notes}</div></div><div style={{ fontSize: 11, fontWeight: 800, color: d.status === "N/A" ? "#94A3B8" : ["Received", "Approved", "Generated", "Sent"].includes(d.status) ? "#059669" : "#D97706" }}>{d.status}</div></div>)}
+        {/* v6.47.0: the register now shows WHERE each signed original is. Files can't
+            live in the browser's storage, so each row carries a Dropbox share link. */}
+        {(() => {
+          const sum = summariseDocs(shipment.documents || []);
+          if (!sum.total) return null;
+          return <div style={{ fontSize: 11, color: "#64748B", marginBottom: 8 }}>
+            {sum.settled} of {sum.total} settled · <strong style={{ color: sum.withFile ? "#059669" : "#94A3B8" }}>{sum.withFile} scan{sum.withFile === 1 ? "" : "s"} linked</strong>
+            {sum.outstanding ? ` · ${sum.outstanding} outstanding` : ""}
+          </div>;
+        })()}
+        {(shipment.documents || []).map(d => {
+          const info = inspectLink(d.link);
+          return <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 10, borderBottom: "1px solid #F1F5F9", padding: "8px 0", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700 }}>{d.type} {d.ref ? `- ${d.ref}` : ""}</div>
+              <div style={{ fontSize: 11, color: "#888" }}>{[d.date ? `received ${d.date}` : "", d.notes].filter(Boolean).join(" · ")}</div>
+            </div>
+            <div style={{ fontSize: 11 }}>
+              {d.link
+                ? (info.ok
+                    ? <a href={d.link} target="_blank" rel="noreferrer" style={{ color: "#2563EB", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>📎 {info.label} ↗</a>
+                    : <span title={info.reason} style={{ color: "#DC2626", fontWeight: 700, whiteSpace: "nowrap" }}>⚠ bad link</span>)
+                : <span style={{ color: "#CBD5E1", whiteSpace: "nowrap" }}>no scan</span>}
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 800, minWidth: 62, textAlign: "right", color: d.status === "N/A" ? "#94A3B8" : ["Received", "Approved", "Generated", "Sent", "Have it"].includes(d.status) ? "#059669" : "#D97706" }}>{d.status}</div>
+          </div>;
+        })}
         {(shipment.docsCourierTrackingNo || shipment.docsCourierDate) && (
           <div style={{ marginTop: 10, padding: "8px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7, fontSize: 11.5, color: "#0C4A6E" }}>
             📦 Original documents sent to client — courier tracking <strong style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{shipment.docsCourierTrackingNo || "—"}</strong>{shipment.docsCourierDate ? ` · sent ${shipment.docsCourierDate}` : ""}
@@ -2377,6 +2448,7 @@ export default function Shipments({
   const [showCreate, setShowCreate] = useState(false);
   const [editShipment, setEditShipment] = useState(null);
   const [printShipment, setPrintShipment] = useState(null);
+  const [protocolShipment, setProtocolShipment] = useState<any>(null);
   const [emailShipment, setEmailShipment] = useState(null);
   const [toast, setToast] = useState("");
 
@@ -2619,13 +2691,23 @@ export default function Shipments({
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
+          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
         </div>
       </div>
     </div>
 
     {showCreate && <CreateShipmentModal pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
     {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
+    {protocolShipment && <LoadingProtocolModal
+      shipment={protocolShipment}
+      contacts={contacts}
+      pos={pos}
+      packagingTypes={packagingTypes.length ? packagingTypes : PACKAGING_SEED}
+      allShipments={shipments}
+      companyName={COMPANY.name}
+      onSave={(p: any) => { updateShipment(protocolShipment.id, (sh: any) => ({ ...sh, loadingProtocol: p })); setProtocolShipment((cur: any) => cur ? { ...cur, loadingProtocol: p } : cur); try { recordAudit({ module: "Shipments", docType: "Loading protocol", docNumber: p.number, action: p.status === "Returned" ? "returned" : "saved", summary: `${protocolShipment.number} · ${(p.rows || []).length} pallets · ${p.status}${(p.recorderNos || []).length ? ` · recorders ${(p.recorderNos || []).join(", ")}` : ""}` }); } catch {} }}
+      onClose={() => setProtocolShipment(null)}
+    />}
     {printShipment && <TransportOrderPrintModal shipment={printShipment} contacts={contacts} orders={orders} onSaveTerms={(text) => saveOrderTerms(printShipment, text)} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} onEmail={() => { const sh = printShipment; setPrintShipment(null); setEmailShipment(sh); }} />}
     {emailShipment && <TransportOrderEmailModal shipment={emailShipment} contacts={contacts} orders={orders} onClose={() => setEmailShipment(null)} onMarkSent={() => markConfirmationSent(emailShipment)} />}
   </div>;
