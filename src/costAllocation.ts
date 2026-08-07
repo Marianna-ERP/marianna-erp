@@ -49,6 +49,14 @@ export function shipmentLotRefs(shipment: any): string[] {
  * Untouched lots keep their identity (===) so React state updates stay cheap.
  */
 export function allocateShipmentCostsToLots(shipment: any, lots: any[], mapper: CostTypeMapper): any[] {
+  // v6.51.0: only INBOUND movement builds landed cost. Freight that brings goods
+  // IN is part of what the goods cost us; freight that DELIVERS goods out to a
+  // client is a direct cost of that sale. Allocating an outbound delivery into
+  // the lot both hid it from the sale's direct costs (the margin engine skips
+  // cost lines already allocated to a lot) and inflated the landed cost of goods
+  // that had already been sold.
+  const purpose = String(shipment?.purpose || "").toUpperCase();
+  if (purpose === "OUTBOUND") return lots;
   const lotRefs = shipmentLotRefs(shipment);
   if (!lotRefs.length) return lots;
 

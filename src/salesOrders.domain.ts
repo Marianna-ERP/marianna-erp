@@ -235,10 +235,16 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
   // product-keyed received map (applied only in the other-sources path).
   const goneKgByPOLine: Record<string, number> = {};
   const receivedKgByPOProduct: Record<string, number> = {};
+  // v6.51.0 (ROOT CAUSE B): exclude the sales order being evaluated from the
+  // "already gone" figure. Its own shipped goods are what IT sold — subtracting
+  // them made a shipped SO look at its own PO line and see nothing available
+  // ("1 line exceeds available supply" on a perfectly balanced 42 000 kg PO).
+  const selfSO = String((allOrders || []).find((o: any) => o && o.id === currentOrderId)?.number || "");
   LOTS.forEach((l: any) => {
     if (!l.poRef) return;
     const shipped = (l.movements || []).reduce((a: number, m: any) => {
       if (!m || m.voided) return a;
+      if (selfSO && String(m.soRef || "") === selfSO) return a;   // our own dispatch
       if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
       if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
       return a;

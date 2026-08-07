@@ -1375,10 +1375,45 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 if (kinds.length === 0) return null;
                 return (
                   <Card style={{ marginBottom: 16 }}>
-                    <SectionTitle>CUSTOMS</SectionTitle>
-                    <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.6 }}>
-                      Customs clearance is now managed on the <strong>shipment</strong> that carries this lot (Shipments → open the shipment → <em>Customs clearance</em>) — where it reflects the EU boundary, who clears it (your PL broker, the forwarder, or T1 + local broker) and the customs cost. The journey step above completes automatically when the goods arrive.
-                    </div>
+                    <SectionTitle>CUSTOMS CLEARANCE</SectionTitle>
+                    {/* v6.51.0 (user ruling): was a signpost saying "managed in shipments".
+                        Now it SUMMARISES the clearance facts already held on the shipments
+                        that carried this lot, so the lot answers "was this cleared, by whom,
+                        under what reference, at what cost" without opening each shipment. */}
+                    {(() => {
+                      const carrying = (shipments || []).filter((s: any) => s && s.status !== "Cancelled"
+                        && ((s.goods || []).some((g: any) => String(g.lotRef) === String(lot.number)) || (s.lotRefs || []).includes(lot.number)));
+                      const withCustoms = carrying.filter((s: any) => (s.customs || {}).applies);
+                      const customsCostPLN = (lot.costs || [])
+                        .filter((c: any) => String(c.type || "").toLowerCase().includes("customs"))
+                        .reduce((a: number, c: any) => a + (parseFloat(c.pln) || 0), 0);
+                      if (!withCustoms.length && !customsCostPLN) {
+                        return <div style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6 }}>
+                          No customs clearance recorded on the shipments carrying this lot. Clearance is captured on the shipment (Shipments → <em>Customs clearance</em>) and summarised here.
+                        </div>;
+                      }
+                      const ROLE: any = { our_broker: "Our PL broker", forwarder_abroad: "Forwarder abroad", t1_local_broker: "T1 + local broker", not_required: "Not required" };
+                      const ST: any = { cleared: { t: "Cleared", c: "#059669" }, in_progress: { t: "In progress", c: "#D97706" }, pending: { t: "Pending", c: "#DC2626" } };
+                      return <div>
+                        {withCustoms.map((s: any, i: number) => {
+                          const c = s.customs || {};
+                          const st = ST[String(c.status || "pending")] || ST.pending;
+                          const broker = (contacts || []).find((x: any) => String(x.id) === String(c.brokerId || s.brokerId));
+                          return <div key={i} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "7px 0", borderBottom: "1px solid #F1F5F9", fontSize: 12 }}>
+                            <span style={{ fontWeight: 700, minWidth: 118 }}>{s.number}</span>
+                            <span style={{ color: st.c, fontWeight: 700, minWidth: 82 }}>{st.t}</span>
+                            <span style={{ color: "#64748B" }}>
+                              {[ROLE[c.role] || c.role, broker?.name, c.place, c.t1Transit ? "T1 transit" : "", c.entryRef].filter(Boolean).join(" · ") || "—"}
+                            </span>
+                          </div>;
+                        })}
+                        <div style={{ marginTop: 8, fontSize: 12 }}>
+                          <strong>Customs cost carried by this lot: </strong>
+                          <span style={{ fontWeight: 700 }}>{customsCostPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN</span>
+                          <span style={{ color: "#94A3B8" }}> — part of its landed cost</span>
+                        </div>
+                      </div>;
+                    })()}
                   </Card>
                 );
               })()}
@@ -1548,7 +1583,11 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                         </>
                       ) : (
                         <>
-                          Production: <span style={{ fontWeight: 500 }}>{lot.productionDate || "—"}</span><br />
+                          {/* v6.51.0 (user ruling): the production date is the producer's
+                              harvest/packing date — nothing in the current workflow captures
+                              it, so it was blank on every lot. Hidden from the UI; the field
+                              stays in the data model for when producer documents feed it. */}
+                          {lot.productionDate ? <>Production: <span style={{ fontWeight: 500 }}>{lot.productionDate}</span><br /></> : null}
                           Arrival: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span>
                         </>
                       )}

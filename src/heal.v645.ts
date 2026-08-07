@@ -22,6 +22,71 @@ import { allocateShipmentCostsToLots, shipmentLotRefs } from "./costAllocation";
 import { recomputeLotFromMovements } from "./inventory.domain";
 
 const TERMINAL = new Set(["Delivered", "Closed"]);
+
+// ─── v6.51.0 heal ────────────────────────────────────────────────────────────
+// Two repairs for data created before the v6.51.0 fixes:
+//  A) A further delivery against the same PO line was posted as a TRANSFER, which
+//     adds no stock — so a 42 000 kg PO delivered in two trucks recorded only
+//     21 000 kg received and reported a 50 % shortfall. Such transfers are
+//     converted to receipts and the lot's received/physical figures rebuilt.
+//  B) OUTBOUND delivery freight was allocated into the lot's landed cost, which
+//     hid it from the sale's direct costs and inflated the cost of goods already
+//     sold. Those allocated lines are removed from the lot; the cost stays on the
+//     shipment, where the margin engine now reads it as a direct cost.
+export function healRound651(input: { shipments: any[]; lots: any[] }): { lots: any[]; changed: boolean; notes: string[] } {
+  const notes: string[] = [];
+  let changed = false;
+  const shipByNumber: Record<string, any> = {};
+  (input.shipments || []).forEach((s: any) => { if (s?.number) shipByNumber[String(s.number)] = s; });
+
+  const lots = (input.lots || []).map((lot: any) => {
+    let movements = [...(lot.movements || [])];
+    let touched = false;
+
+    // A — convert mis-posted transfers back into receipts
+    const ordered = num(lot.expectedKg);
+    if (ordered > 0) {
+      let received = movements.filter((m: any) => !m.voided && m.type === "IN")
+        .reduce((a: number, m: any) => a + num(m.qtyKg), 0);
+      movements = movements.map((m: any) => {
+        if (m.voided || m.type !== "TRANSFER") return m;
+        const sh = shipByNumber[String(m.shipmentRef || "")];
+        if (!sh || String(sh.purpose || "").toUpperCase() !== "INBOUND") return m;
+        const outstanding = Math.max(0, ordered - received);
+        if (!(outstanding > 0) || !(num(m.qtyKg) > 0)) return m;
+        const take = Math.min(num(m.qtyKg), outstanding);
+        received += take;
+        touched = true;
+        notes.push(`${lot.number}: ${m.shipmentRef} re-posted as a receipt of ${take} kg (was a transfer)`);
+        return { ...m, type: "IN", qtyKg: take, note: `IN via ${m.shipmentRef} — further delivery (healed v6.51.0)` };
+      });
+    }
+
+    // B — drop outbound-shipment cost lines from the lot's landed cost
+    const keptCosts = (lot.costs || []).filter((c: any) => {
+      const src = String(c?.source || "");
+      const shipNo = src.includes("/") ? src.split("/")[0] : "";
+      const sh = shipNo ? shipByNumber[shipNo] : null;
+      const isOutbound = sh && String(sh.purpose || "").toUpperCase() === "OUTBOUND";
+      if (isOutbound) { touched = true; notes.push(`${lot.number}: removed ${shipNo} delivery cost from landed cost (belongs to the sale)`); }
+      return !isOutbound;
+    });
+
+    if (!touched) return lot;
+    changed = true;
+    const receivedKg = movements.filter((m: any) => !m.voided && m.type === "IN").reduce((a: number, m: any) => a + num(m.qtyKg), 0);
+    const shippedKg = movements.filter((m: any) => !m.voided && m.type === "SHIP_OUT").reduce((a: number, m: any) => a + num(m.qtyKg), 0);
+    const physicalKg = Math.max(0, Math.round((receivedKg - shippedKg) * 1000) / 1000);
+    const overIssuedKg = Math.max(0, Math.round((shippedKg - receivedKg) * 1000) / 1000);
+    return {
+      ...lot, movements, costs: keptCosts,
+      receivedKg: Math.round(receivedKg * 1000) / 1000,
+      physicalKg, overIssuedKg,
+      status: physicalKg <= 0 && shippedKg > 0 ? "Shipped Out" : (receivedKg > 0 ? "In Stock" : lot.status),
+    };
+  });
+  return { lots, changed, notes };
+}
 const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 
 export interface HealDeps {

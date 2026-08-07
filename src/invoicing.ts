@@ -110,7 +110,28 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
     currency: pi.currency || order.currency || "PLN", fxRate: fx,
     netAmount: net, vatRate, vatAmount: vat, grossAmount: gross,
     netPLN: r2(net * fx), grossPLN: r2(gross * fx),
-    positions: arr(order.items).map((it: any) => ({ name: it.product || "", quantity: n(it.qty), unit: it.unit || "kg", vatRate, grossTotal: undefined })),
+    // v6.51.0: an invoice that travels with the cargo has to describe it. The SO
+    // already holds variety, origin, calibre, quality, CN code and the price —
+    // previously only the product name and quantity were copied, so the invoice
+    // showed amounts with no idea what had been sold.
+    positions: arr(order.items).map((it: any) => {
+      const qty = n(it.qty), price = n(it.unitPrice);
+      const lineNet = r2(qty * price);
+      const descr = [it.product, it.variety, it.size ? `cal. ${it.size}` : "", it.quality ? `kl. ${it.quality}` : ""]
+        .filter(Boolean).join(" · ");
+      return {
+        name: descr || it.product || "",
+        product: it.product || "", variety: it.variety || "",
+        size: it.size || "", quality: it.quality || "",
+        origin: it.origin || "", cnCode: it.cnCode || "",
+        packaging: it.packaging || "", pallets: n(it.pallets) || undefined,
+        quantity: qty, unit: it.unit || "kg",
+        unitPrice: price || undefined,
+        netTotal: lineNet || undefined,
+        vatRate,
+        grossTotal: lineNet ? r2(lineNet * (1 + vatRate / 100)) : undefined,
+      };
+    }),
     links: [{ type: "SO", number: order.number }],
     paymentStatus: (pi.paymentStatus as PaymentStatus) || "Draft",
     paidAmount: n(pi.paidAmount),

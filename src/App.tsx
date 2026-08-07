@@ -9,7 +9,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { healRound645 } from "./heal.v645";
+import { healRound645, healRound651 } from "./heal.v645";
 import { migrateClaims } from "./claims.domain";
 import Claims from "./Claims";
 import { costTypeLabel, costInventoryType } from "./Shipments";
@@ -213,6 +213,21 @@ export default function App() {
         try { recordAudit({ module: "System", docType: "Heal", docNumber: "HEAL-6.45.0", action: "healed", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
       }
     } catch (e) { console.error("heal v6.45.0 failed (left data untouched):", e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ─── v6.51.0 heal: mis-posted transfers + outbound costs in landed cost ────
+  React.useEffect(() => {
+    try {
+      const MARK = "marianna:heal:v6.51.0";
+      if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      const res = healRound651({ shipments, lots });
+      window.localStorage.setItem(MARK, new Date().toISOString());
+      if (res.changed) {
+        setLots(res.lots);
+        try { recordAudit({ module: "System", docType: "Heal", docNumber: "HEAL-6.51.0", action: "healed", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
+      }
+    } catch (e) { console.error("heal v6.51.0 failed (left data untouched):", e); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

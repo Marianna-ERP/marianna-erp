@@ -61,7 +61,14 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     const fromId = firstLeg.fromLocationId || lot.locationId;
     const currentPhysical = num(lot.physicalKg);
     const goodsSoRef = relatedGoods.map((g: any) => g.soRef).find(Boolean);
-    const date = sh.actualDeliveryDate || deps.todayISO();
+    // v6.51.0: stamp the movement with the date the goods actually MOVED, not the
+    // day the record was created. Storage days and every date-based report depend
+    // on this. Preference: actual delivery > planned delivery on the last leg >
+    // loading date > pickup on the first leg > today (last resort).
+    const date = sh.actualDeliveryDate
+      || lastLeg.plannedDeliveryDate || sh.expectedDeliveryDate
+      || sh.loadingDate || firstLeg.plannedPickupDate
+      || deps.todayISO();
     changed.push(lot.number);
 
     if (purpose === "OUTBOUND") {
@@ -139,6 +146,32 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000,
         status: "In Stock",
         arrivalDate: sh.actualDeliveryDate || lot.arrivalDate || date,
+        movements: [...(lot.movements || []), movement],
+      };
+    }
+    // v6.51.0 (ROOT CAUSE A): a lot that has already been received is NOT
+    // automatically a transfer target. A PO delivered in several trucks posts a
+    // RECEIPT each time — the reported "Shortfall 21 000 kg (-50 %)" was a
+    // 42 000 kg PO delivered in two loads where only the first counted, because
+    // the second was booked as a warehouse move (which adds no stock).
+    // It is a genuine TRANSFER only when the goods are being relocated: the lot
+    // is already sitting somewhere and this shipment moves it elsewhere WITHOUT
+    // bringing new quantity — i.e. the whole lot travels, or the PO line has no
+    // outstanding quantity left to deliver.
+    const orderedForLine = num(lot.expectedKg) || 0;
+    const receivedSoFar = num(lot.receivedKg);
+    const stillOutstanding = orderedForLine > 0 ? Math.max(0, orderedForLine - receivedSoFar) : 0;
+    const isFurtherDelivery = stillOutstanding > 0 && qty > 0;
+    if (isFurtherDelivery) {
+      const takeQty = Math.min(qty, stillOutstanding);
+      const movement = { id: deps.nextId(), date, type: "IN", qtyKg: takeQty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — further delivery against ${lot.poRef || "the order"}` };
+      return {
+        ...lot,
+        locationId: destId,
+        receivedKg: Math.round((receivedSoFar + takeQty) * 1000) / 1000,
+        physicalKg: Math.round((currentPhysical + takeQty) * 1000) / 1000,
+        status: "In Stock",
+        arrivalDate: lot.arrivalDate || date,
         movements: [...(lot.movements || []), movement],
       };
     }
