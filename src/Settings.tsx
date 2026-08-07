@@ -345,6 +345,7 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
 
 export default function Settings({
   reloadFromStorage,
+  repairInventory = () => null,
   userRole,
   setUserRole,
   userName,
@@ -355,6 +356,7 @@ export default function Settings({
   setPackagingTypes,
 }: {
   reloadFromStorage: () => void;
+  repairInventory?: () => any;
   userRole?: string;
   setUserRole?: (r: string) => void;
   userName?: string;
@@ -496,6 +498,20 @@ export default function Settings({
     if (!(await stConfirm({ tone: "danger", title: "Delete backup?", message: "Delete this backup permanently?", confirmLabel: "Delete" }))) return;
     deleteBackup(b.id);
     refreshBackups();
+  }
+
+  async function runRepair() {
+    try {
+      const res = repairInventory();
+      if (!res || !res.changed) {
+        await stConfirm({ tone: "info", title: "Nothing to repair", message: "Every lot already matches the shipments that served it.", confirmLabel: "OK", cancelLabel: "Close" });
+        return;
+      }
+      await stConfirm({ tone: "info", title: `Repaired ${res.notes.length} record(s)`, message: res.notes.slice(0, 10).join("\n") + (res.notes.length > 10 ? `\n… and ${res.notes.length - 10} more` : ""), confirmLabel: "OK", cancelLabel: "Close" });
+      reloadFromStorage();
+    } catch (e) {
+      await stConfirm({ tone: "warn", title: "Repair failed", message: String(e), confirmLabel: "OK", cancelLabel: "Close" });
+    }
   }
 
   async function handleReset() {
@@ -706,6 +722,21 @@ export default function Settings({
               ))}
             </div>
           )}
+        </Card>
+
+        {/* v6.51.1: a manual repair, so a data fix is never at the mercy of an
+            automatic trigger firing at the right moment. Safe to press at any time —
+            the repair only changes records that are genuinely wrong, and pressing it
+            twice changes nothing the second time. */}
+        <Card style={{ marginBottom: 16, borderLeft: "3px solid #2563EB" }}>
+          <SectionTitle>REPAIR INVENTORY RECORDS</SectionTitle>
+          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+            Re-checks every lot against the shipments that served it and corrects two things older records can get wrong:
+            a second delivery against the same order that was filed as a warehouse move instead of a receipt (which makes a lot
+            look short), and delivery costs that were folded into a lot's landed cost instead of staying with the sale.
+            Nothing else is touched, and running it again changes nothing.
+          </div>
+          <Button onClick={runRepair}>Check and repair inventory records</Button>
         </Card>
 
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>

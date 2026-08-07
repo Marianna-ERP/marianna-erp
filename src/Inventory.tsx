@@ -1392,25 +1392,42 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                           No customs clearance recorded on the shipments carrying this lot. Clearance is captured on the shipment (Shipments → <em>Customs clearance</em>) and summarised here.
                         </div>;
                       }
-                      const ROLE: any = { our_broker: "Our PL broker", forwarder_abroad: "Forwarder abroad", t1_local_broker: "T1 + local broker", not_required: "Not required" };
-                      const ST: any = { cleared: { t: "Cleared", c: "#059669" }, in_progress: { t: "In progress", c: "#D97706" }, pending: { t: "Pending", c: "#DC2626" } };
+                      const ROLE: any = { our_broker: "our Polish broker", forwarder_abroad: "the forwarder abroad", t1_local_broker: "a local broker under T1", not_required: "no clearance required" };
+                      const ST: any = { cleared: { t: "Cleared", c: "#059669", bg: "#DCFCE7" }, in_progress: { t: "Being cleared", c: "#B45309", bg: "#FEF3C7" }, pending: { t: "Not yet cleared", c: "#B91C1C", bg: "#FEE2E2" } };
+                      const allCleared = withCustoms.every((s: any) => String((s.customs || {}).status) === "cleared");
                       return <div>
+                        {/* one plain sentence first — the answer most people want */}
+                        <div style={{ fontSize: 12.5, color: "#334155", lineHeight: 1.6, marginBottom: 10 }}>
+                          {withCustoms.length === 0
+                            ? "No customs clearance was needed for the shipments carrying this lot."
+                            : allCleared
+                              ? <>These goods have been <strong style={{ color: "#059669" }}>cleared through customs</strong>{withCustoms.length > 1 ? ` on all ${withCustoms.length} shipments that carried them` : ""}.</>
+                              : <>Customs is <strong style={{ color: "#B45309" }}>not yet complete</strong> for these goods — see the shipment(s) below.</>}
+                        </div>
                         {withCustoms.map((s: any, i: number) => {
                           const c = s.customs || {};
                           const st = ST[String(c.status || "pending")] || ST.pending;
                           const broker = (contacts || []).find((x: any) => String(x.id) === String(c.brokerId || s.brokerId));
-                          return <div key={i} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "7px 0", borderBottom: "1px solid #F1F5F9", fontSize: 12 }}>
-                            <span style={{ fontWeight: 700, minWidth: 118 }}>{s.number}</span>
-                            <span style={{ color: st.c, fontWeight: 700, minWidth: 82 }}>{st.t}</span>
-                            <span style={{ color: "#64748B" }}>
-                              {[ROLE[c.role] || c.role, broker?.name, c.place, c.t1Transit ? "T1 transit" : "", c.entryRef].filter(Boolean).join(" · ") || "—"}
-                            </span>
+                          const who = ROLE[c.role] || "";
+                          const sentence = [
+                            who ? `Cleared by ${who}` : "",
+                            broker?.name ? `(${broker.name})` : "",
+                            c.place ? `at ${c.place}` : "",
+                            c.t1Transit ? "· moved under T1 transit" : "",
+                            c.entryRef ? `· entry ${c.entryRef}` : "",
+                          ].filter(Boolean).join(" ");
+                          return <div key={i} style={{ padding: "8px 0", borderTop: i ? "1px solid #F1F5F9" : "none", fontSize: 12 }}>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 2 }}>
+                              <span style={{ fontWeight: 700 }}>{s.number}</span>
+                              <span style={{ background: st.bg, color: st.c, borderRadius: 999, padding: "1px 9px", fontSize: 10.5, fontWeight: 800 }}>{st.t}</span>
+                            </div>
+                            <div style={{ color: "#64748B", lineHeight: 1.5 }}>{sentence || "No clearance details recorded on this shipment."}</div>
                           </div>;
                         })}
-                        <div style={{ marginTop: 8, fontSize: 12 }}>
-                          <strong>Customs cost carried by this lot: </strong>
-                          <span style={{ fontWeight: 700 }}>{customsCostPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN</span>
-                          <span style={{ color: "#94A3B8" }}> — part of its landed cost</span>
+                        <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid #E5E7EB", fontSize: 12, color: "#334155", lineHeight: 1.55 }}>
+                          {customsCostPLN > 0
+                            ? <>Customs and duty cost included in this lot's landed cost: <strong>{customsCostPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN</strong>. It is already part of the cost of goods used in every sale from this lot.</>
+                            : <span style={{ color: "#94A3B8" }}>No customs cost has been allocated to this lot.</span>}
                         </div>
                       </div>;
                     })()}

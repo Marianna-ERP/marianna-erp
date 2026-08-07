@@ -216,11 +216,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // v6.51.1: the same repair, runnable on demand from Settings.
+  function repairInventory() {
+    const res = healRound651({ shipments, lots });
+    if (res.changed) {
+      setLots(res.lots);
+      try { recordAudit({ module: "System", docType: "Repair", docNumber: "REPAIR-6.51.1", action: "healed", summary: res.notes.slice(0, 6).join(" | ") }); } catch {}
+    }
+    return res;
+  }
+
   // ─── v6.51.0 heal: mis-posted transfers + outbound costs in landed cost ────
   React.useEffect(() => {
     try {
       const MARK = "marianna:heal:v6.51.0";
       if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      // v6.51.1: DO NOT claim to have healed before there is anything to heal.
+      // The previous version ran once on mount and wrote the marker unconditionally
+      // — so if the stores had not finished loading in that instant, the heal found
+      // nothing, marked itself done and never ran again. It now waits for real data
+      // and only writes the marker once it has actually processed some.
+      if (!(lots || []).length || !(shipments || []).length) return;
       const res = healRound651({ shipments, lots });
       window.localStorage.setItem(MARK, new Date().toISOString());
       if (res.changed) {
@@ -229,7 +245,7 @@ export default function App() {
       }
     } catch (e) { console.error("heal v6.51.0 failed (left data untouched):", e); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [lots.length, shipments.length]);
 
   // ─── v6.48.0 CLAIMS re-home (Phase 1) ──────────────────────────────────────
   // Lifts every existing claim into its own store: the producer claims nested in
@@ -353,7 +369,7 @@ export default function App() {
       case "invoices":
         return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} />;
+        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory} />;
       default:
         return null;
     }
