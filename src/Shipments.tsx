@@ -5,6 +5,7 @@ import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { printHtmlNode } from "./documentService";
 import LoadingProtocolModal from "./LoadingProtocolModal";
+import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } from "./loadingProtocol.domain";
 import { inspectLink, summariseDocs } from "./docLinks.domain";
 import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
@@ -477,6 +478,16 @@ function transportUnitsForLeg(leg) {
   if (Array.isArray(leg.vehicles) && leg.vehicles.length) return leg.vehicles;
   const hasLegacy = ["vehiclePlate", "truckPlate", "trailerPlate", "driverName", "driverPhone", "containerNumber", "sealNumber", "bookingNumber", "blNumber", "awbNumber"].some(k => leg && leg[k]);
   return hasLegacy ? [legacyUnitFromLeg(leg)] : [];
+}
+
+/** v6.53.0: how many ROAD trucks this shipment loads — one loading protocol each.
+ *  A road leg with no units recorded still means one truck, not zero, or a
+ *  shipment would report "0/0 back" and read as complete with nothing on file. */
+function roadTruckCount(shipment) {
+  return (shipment.legs || []).reduce((sum, leg) => {
+    if (leg?.mode !== "Road") return sum;
+    return sum + Math.max(1, transportUnitsForLeg(leg).length);
+  }, 0);
 }
 
 function shipmentVehicleCount(shipment) {
@@ -1780,6 +1791,45 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   <div><Lbl>Price for this unit</Lbl><Inp type="number" value={u.costAmount || ""} onChange={e => updateVehicle(i, ui, "costAmount", parseNum(e.target.value))} placeholder="0" /></div>
                   <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Optional — set this when each truck/container has a different price. The transport order totals all unit prices for the carrier.</div>
                 </div>
+                {/* ── v6.53.0: WHAT THIS UNIT CARRIES ──────────────────────────
+                    Ruling: goods are assigned per unit. The loading protocol for
+                    this truck derives its pallet table from exactly these kilos,
+                    so a line split across two trucks prints two correct sheets
+                    instead of one sheet repeated. Leave every box empty when a
+                    single truck takes the whole shipment — the normal case. */}
+                {uMode === "Road" && (draft.goods || []).length > 0 && <div style={{ marginTop: 11, borderTop: "1px dashed #E2E8F0", paddingTop: 9 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 800, color: "#334155" }}>Loaded on this truck</div>
+                    <div style={{ fontSize: 10.5, color: "#64748B" }}>Leave blank if this truck takes the whole shipment.</div>
+                    <div style={{ flex: 1 }} />
+                    <div><Lbl>Pallet type</Lbl></div>
+                    <select value={u.palletType || "standard"} onChange={e => updateVehicle(i, ui, "palletType", e.target.value)}
+                      style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 7px", fontSize: 12 }}>
+                      <option value="standard">Standard · 26</option>
+                      <option value="euro">Euro · 33</option>
+                    </select>
+                  </div>
+                  {(draft.goods || []).map(g => {
+                    const assigned = ((u.load || []).find(a => String(a.goodsLineId) === String(g.id)) || {}).qtyKg;
+                    const lineTotal = parseNum(g.qtyKg, 0);
+                    const takenElsewhere = transportUnitsForLeg(leg).reduce((s, other, oi) => oi === ui ? s
+                      : s + parseNum(((other.load || []).find(a => String(a.goodsLineId) === String(g.id)) || {}).qtyKg, 0), 0);
+                    const room = Math.max(0, lineTotal - takenElsewhere);
+                    return <div key={g.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1.6fr", gap: 9, alignItems: "center", marginBottom: 5 }}>
+                      <div style={{ fontSize: 11.5, color: "#334155" }}>
+                        {g.product}{g.variety ? ` · ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}
+                      </div>
+                      <Inp type="number" value={assigned || ""} placeholder={`${room}`} onChange={e => {
+                        const v = parseNum(e.target.value);
+                        const rest = (u.load || []).filter(a => String(a.goodsLineId) !== String(g.id));
+                        updateVehicle(i, ui, "load", v > 0 ? [...rest, { goodsLineId: g.id, qtyKg: v }] : rest);
+                      }} />
+                      <div style={{ fontSize: 10.5, color: room > 0 ? "#64748B" : "#B45309" }}>
+                        kg — line {lineTotal.toLocaleString("pl-PL")} kg{takenElsewhere > 0 ? ` · ${takenElsewhere.toLocaleString("pl-PL")} on other trucks` : ""}
+                      </div>
+                    </div>;
+                  })}
+                </div>}
               </div>; })}
               <div style={{ fontSize: 10.5, color: "#64748B" }}>Use several units when one shipment has multiple trucks/containers. Example: 4 sea containers and 5 road trucks at arrival port are recorded as two legs with 4 sea units and 5 road units.</div>
             </div>
@@ -2309,11 +2359,19 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onP
           <SmallButton onClick={onPrint} kind="dark">Transport order</SmallButton>
           {/* v6.46.0: the loading protocol (Karta załadunku) — the signed sheet that
               makes a later transport claim provable. Road loading only. */}
-          {(shipment.legs || []).some((l: any) => l.mode === "Road") && (
-            <SmallButton onClick={onLoadingProtocol} kind={shipment.loadingProtocol ? (shipment.loadingProtocol.status === "Returned" ? "green" : "blue") : undefined}>
-              Loading protocol{shipment.loadingProtocol ? ` · ${shipment.loadingProtocol.status}` : ""}
-            </SmallButton>
-          )}
+          {/* v6.53.0: one sheet per truck — the button reports the whole set, so a
+              shipment with two trucks cannot look complete on the strength of one. */}
+          {(shipment.legs || []).some((l: any) => l.mode === "Road") && (() => {
+            const sheets = protocolsForShipment(shipment);
+            const trucks = roadTruckCount(shipment);
+            const back = sheets.filter((p: any) => p.status === "Returned").length;
+            const kind = !sheets.length ? undefined : (back >= trucks ? "green" : "blue");
+            return (
+              <SmallButton onClick={onLoadingProtocol} kind={kind}>
+                Loading protocol{sheets.length ? (trucks > 1 ? ` · ${back}/${trucks} back` : ` · ${sheets[0].status}`) : ""}
+              </SmallButton>
+            );
+          })()}
           {/* v6.49.0 (claims Phase 2): raise a transport or temperature claim against
               the carrier, forwarder or shipping line — the case the old design could
               not express at all, because a claim could only ever name the producer. */}
@@ -2358,9 +2416,26 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onP
         <ChecklistLine ok={(shipment.costs || []).some(c => parseNum(c.amountPLN) > 0)} label="Freight cost entered" />
         <ChecklistLine ok={(shipment.confirmationStatus || "") === "Sent" || (shipment.confirmationStatus || "") === "Generated"} label="Transport confirmation generated" />
         {/* v6.46.0: a signed loading protocol is what makes a transport claim provable. */}
-        {(shipment.legs || []).some((l: any) => l.mode === "Road") && (
-          <ChecklistLine ok={(shipment.loadingProtocol || {}).status === "Returned"} label="Loading protocol signed & returned" />
-        )}
+        {(shipment.legs || []).some((l: any) => l.mode === "Road") && (() => {
+          // v6.53.0: EVERY truck's sheet has to be back. One returned sheet out of
+          // three is not evidence for the other two loads.
+          const sheets = protocolsForShipment(shipment);
+          const trucks = roadTruckCount(shipment);
+          const back = sheets.filter((p: any) => p.status === "Returned").length;
+          return <ChecklistLine ok={back >= trucks && trucks > 0} label="Loading protocol signed & returned"
+            warnText={trucks > 1 && back < trucks ? `${back}/${trucks} trucks` : ""} />;
+        })()}
+        {/* v6.53.0: once ANY truck has an assignment, silence about the rest is the
+            dangerous state — a sheet would print short and no one would know. */}
+        {(() => {
+          const units = (shipment.legs || []).filter((l: any) => l.mode === "Road").flatMap((l: any) => transportUnitsForLeg(l));
+          const gaps = assignmentCheck(shipment.goods || [], units);
+          if (!gaps.length) return null;
+          const short = gaps.filter((g: any) => g.unassignedKg > 0);
+          const over = gaps.filter((g: any) => g.overKg > 0);
+          return <ChecklistLine ok={false} label="Goods assigned to trucks"
+            warnText={[short.length ? `${short.length} line(s) unassigned` : "", over.length ? `${over.length} over-assigned` : ""].filter(Boolean).join(" · ")} />;
+        })()}
         <ChecklistLine ok={missingDocs.length === 0} label="Required documents received" warnText={missingDocs.length ? `${missingDocs.length} missing` : ""} />
         {/* v6.47.0: a tick is not evidence — flag anything we say we hold but couldn't produce. */}
         {(() => {
@@ -2804,7 +2879,27 @@ export default function Shipments({
       packagingTypes={packagingTypes.length ? packagingTypes : PACKAGING_SEED}
       allShipments={shipments}
       companyName={COMPANY.name}
-      onSave={(p: any) => { updateShipment(protocolShipment.id, (sh: any) => ({ ...sh, loadingProtocol: p })); setProtocolShipment((cur: any) => cur ? { ...cur, loadingProtocol: p } : cur); try { recordAudit({ module: "Shipments", docType: "Loading protocol", docNumber: p.number, action: p.status === "Returned" ? "returned" : "saved", summary: `${protocolShipment.number} · ${(p.rows || []).length} pallets · ${p.status}${(p.recorderNos || []).length ? ` · recorders ${(p.recorderNos || []).join(", ")}` : ""}` }); } catch {} }}
+      company={COMPANY}
+      gateReason={poGateReason(protocolShipment, pos)}
+      onSave={(p: any, unitId: any) => {
+        // v6.53.0: sheets live in an ARRAY, one per truck. The write folds the
+        // legacy single `loadingProtocol` forward on first save and then clears
+        // it, so no shipment ever carries both shapes at once.
+        const withUnit = { ...p, unitId: p.unitId ?? unitId ?? null };
+        const apply = (sh: any) => {
+          const next = upsertProtocol(protocolsForShipment(sh), withUnit);
+          const out = { ...sh, loadingProtocols: next };
+          delete out.loadingProtocol;
+          return out;
+        };
+        updateShipment(protocolShipment.id, apply);
+        setProtocolShipment((cur: any) => cur ? apply(cur) : cur);
+        try {
+          recordAudit({ module: "Shipments", docType: "Loading protocol", docNumber: p.number,
+            action: p.status === "Returned" ? "returned" : "saved",
+            summary: `${protocolShipment.number} · ${(p.rows || []).length} pallets · ${p.status}${p.truckPlate ? ` · ${p.truckPlate}` : ""}${(p.recorderNos || []).length ? ` · recorders ${(p.recorderNos || []).join(", ")}` : ""}` });
+        } catch {}
+      }}
       onClose={() => setProtocolShipment(null)}
     />}
     {printShipment && <TransportOrderPrintModal shipment={printShipment} contacts={contacts} orders={orders} onSaveTerms={(text) => saveOrderTerms(printShipment, text)} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} onEmail={() => { const sh = printShipment; setPrintShipment(null); setEmailShipment(sh); }} />}

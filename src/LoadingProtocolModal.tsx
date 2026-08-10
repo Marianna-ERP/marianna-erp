@@ -4,6 +4,8 @@ import { printHtmlNode } from "./documentService";
 import { inspectLink } from "./docLinks.domain";
 import {
   buildLoadingProtocol, deriveRows, protocolTotals, protocolExceptions, protocolGaps,
+  unitGoodsLines, protocolForUnit, protocolsForShipment, checkTruckLoad, signatureWarnings,
+  PALLET_CAPACITY,
 } from "./loadingProtocol.domain";
 
 // ─── v6.46.0  LOADING PROTOCOL / KARTA ZAŁADUNKU ─────────────────────────────
@@ -26,6 +28,7 @@ const TXT: any = {
   odours:     { pl: "Obecność obcych zapachów", en: "Presence of foreign odours" },
   packaging:  { pl: "Stan opakowań i palet", en: "Condition of packaging and pallets" },
   palletNo:   { pl: "Nr palety", en: "Pallet no." },
+  variety:    { pl: "Odmiana", en: "Variety" },
   qty:        { pl: "Ilość opakowań szt x KG", en: "Packages pcs x kg" },
   size:       { pl: "Rozmiar", en: "Calibre" },
   boxesOk:    { pl: "Skrzynki w dobrym stanie", en: "Boxes in good condition" },
@@ -82,24 +85,67 @@ function TakNie({ value, yes = "TAK", no = "NIE" }: any) {
 
 export default function LoadingProtocolModal({
   shipment, contacts = [], pos = [], packagingTypes = [], allShipments = [],
-  companyName = "", onSave, onClose,
+  companyName = "", company = null, gateReason = "", onSave, onClose,
 }: any) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();
 
-  const existing = shipment?.loadingProtocol || null;
-  const [p, setP] = useState<any>(() => {
-    if (existing) return existing;
-    const leg = (shipment?.legs || [])[0] || {};
+  // ── v6.53.0: ONE SHEET PER TRUCK ──────────────────────────────────────────
+  // The road legs' transport units are the sheets. A shipment with one truck
+  // behaves exactly as before; a shipment with three trucks gets three
+  // independently numbered sheets, each covering only what that truck carries.
+  const trucks = React.useMemo(() => {
+    const out: any[] = [];
+    (shipment?.legs || []).forEach((leg: any) => {
+      if (leg?.mode !== "Road") return;
+      const units = (Array.isArray(leg.vehicles) && leg.vehicles.length)
+        ? leg.vehicles
+        : [{ id: `leg${leg.id}-u1`, truckPlate: leg.vehiclePlate || "", trailerPlate: leg.trailerPlate || "", driverName: leg.driverName || "" }];
+      units.forEach((u: any, i: number) => out.push({ leg, unit: u, label: u.truckPlate || u.vehiclePlate || `Truck ${out.length + 1}`, idx: i }));
+    });
+    return out.length ? out : [{ leg: (shipment?.legs || [])[0] || {}, unit: {}, label: "Truck 1", idx: 0 }];
+  }, [shipment]);
+
+  const [truckIx, setTruckIx] = useState(0);
+  const current = trucks[Math.min(truckIx, trucks.length - 1)] || trucks[0];
+
+  const makeSheet = React.useCallback((t: any, alreadyDrafted: any[]) => {
+    const stored = protocolForUnit(shipment, t.unit?.id);
+    if (stored) return stored;
     const poRef = (shipment?.poRefs || [])[0] || "";
     const po = (pos || []).find((x: any) => x.number === poRef);
     const supplier = po?.supplier || (contacts || []).find((c: any) => String(c.id) === String(po?.supplierId)) || null;
-    const carrier = (contacts || []).find((c: any) => String(c.id) === String(leg.carrierId));
-    const others = (allShipments || []).map((s: any) => s.loadingProtocol).filter(Boolean);
+    const carrier = (contacts || []).find((c: any) => String(c.id) === String(t.leg?.carrierId));
+    // Numbering must not collide with sheets drafted in this session but not
+    // yet saved, or two trucks would print the same LP number.
+    const others = [
+      ...(allShipments || []).flatMap((s: any) => protocolsForShipment(s)),
+      ...alreadyDrafted,
+    ].filter(Boolean);
     return buildLoadingProtocol(
-      { shipment, leg, goods: shipment?.goods, supplier, receiverName: companyName, carrierName: carrier?.name || "", types: packagingTypes, existingProtocols: others },
+      { shipment, leg: t.leg, unit: t.unit, goods: shipment?.goods, supplier, receiverName: companyName,
+        carrierName: carrier?.name || "", types: packagingTypes, existingProtocols: others },
       { todayISO: () => new Date().toISOString().slice(0, 10), nextId: () => Date.now() },
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipment, pos, contacts, allShipments, companyName, packagingTypes]);
+
+  // Each truck's sheet is kept separately, so switching trucks never loses typing.
+  const [sheets, setSheets] = useState<Record<string, any>>(() => {
+    const seed: Record<string, any> = {};
+    const drafted: any[] = [];
+    trucks.forEach((t, i) => {
+      const s = makeSheet(t, drafted);
+      seed[String(i)] = s;
+      drafted.push(s);
+    });
+    return seed;
   });
+
+  const p = sheets[String(truckIx)] || sheets["0"];
+  const setP = (fn: any) => setSheets((all: any) => ({ ...all, [String(truckIx)]: typeof fn === "function" ? fn(all[String(truckIx)]) : fn }));
+
+  /** The goods this truck actually carries — the basis of its pallet table. */
+  const truckGoods = unitGoodsLines(shipment?.goods || [], current?.unit);
 
   const sf = (k: string, v: any) => setP((x: any) => ({ ...x, [k]: v }));
   const sc = (k: string, v: any) => setP((x: any) => ({ ...x, checks: { ...x.checks, [k]: v } }));
@@ -113,16 +159,26 @@ export default function LoadingProtocolModal({
   });
   const removeRow = (i: number) => setP((x: any) => ({ ...x, rows: renumber((x.rows || []).filter((_: any, ri: number) => ri !== i)) }));
   const regenerate = async () => {
-    if (!(await uiConfirm({ tone: "warn", title: "Re-derive the pallet table?", message: "The rows will be rebuilt from this shipment's goods lines. Anything typed into the table (calibres, conditions, remarks) will be lost.", confirmLabel: "Re-derive" }))) return;
-    setP((x: any) => ({ ...x, rows: deriveRows(shipment?.goods || [], packagingTypes) }));
+    if (!(await uiConfirm({ tone: "warn", title: "Re-derive the pallet table?", message: "The rows will be rebuilt from what this truck is assigned to carry. Anything typed into the table (calibres, conditions, remarks) will be lost.", confirmLabel: "Re-derive" }))) return;
+    setP((x: any) => ({ ...x, rows: deriveRows(truckGoods, packagingTypes) }));
   };
 
-  const totals = protocolTotals(p, packagingTypes, (shipment?.goods || [])[0]?.product);
+  const totals = protocolTotals(p, packagingTypes, (truckGoods || [])[0]?.product);
   const exceptions = protocolExceptions(p);
   const gaps = protocolGaps(p);
+  const sigWarnings = signatureWarnings(p);
   const recorderText = (p.recorderNos || []).join(", ");
+  // v6.53.0: a truck fills by floor space or by weight, whichever binds first.
+  const load = checkTruckLoad(totals.pallets, totals.grossKg, p.palletType || "standard");
 
   const save = async (status?: string) => {
+    // v6.53.0: an unconfirmed PO must not put a truck under load. Issuing is
+    // blocked; recording a sheet that has already come back never is — the
+    // paperwork exists whatever the order status now says.
+    if (status === "Sent" && gateReason) {
+      await uiAlert({ tone: "warn", title: "Order not confirmed", message: gateReason });
+      return;
+    }
     const next = status ? { ...p, status, returnedAt: status === "Returned" ? (p.returnedAt || new Date().toISOString().slice(0, 10)) : p.returnedAt } : p;
     if (status === "Returned" && gaps.length) {
       const ok = await uiConfirm({
@@ -132,7 +188,8 @@ export default function LoadingProtocolModal({
       });
       if (!ok) return;
     }
-    onSave(next);
+    setP(next);
+    onSave(next, current?.unit?.id);
     if (status === "Returned") {
       await uiAlert({
         tone: exceptions.length ? "warn" : "info",
@@ -165,12 +222,59 @@ export default function LoadingProtocolModal({
           <SmallButton onClick={onClose}>Close</SmallButton>
         </div>
 
+        {/* ── v6.53.0: one sheet per truck (not printed) ── */}
+        {trucks.length > 1 && (
+          <div style={{ padding: "9px 18px", background: "#fff", borderBottom: "1px solid #E5E7EB", display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: "#334155" }}>Truck</span>
+            {trucks.map((t: any, i: number) => {
+              const s = sheets[String(i)] || {};
+              const on = i === truckIx;
+              const done = s.status === "Returned";
+              return (
+                <button key={i} onClick={() => setTruckIx(i)} style={{
+                  border: on ? "1.5px solid #111827" : "1px solid #E5E7EB", background: done ? "#DCFCE7" : on ? "#F3F4F6" : "#fff",
+                  borderRadius: 999, padding: "4px 12px", fontSize: 11.5, fontWeight: on ? 800 : 600, cursor: "pointer", color: "#111827",
+                }}>
+                  {t.label}{s.number ? ` · ${s.number}` : ""}{s.status && s.status !== "Draft" ? ` · ${s.status}` : ""}
+                </button>
+              );
+            })}
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: 10.5, color: "#64748B" }}>Each truck has its own sheet, signed by its own driver at the dock.</span>
+          </div>
+        )}
+
         {/* ── capture panel (not printed) ── */}
         <div style={{ padding: "14px 18px", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB" }}>
           <div style={{ fontSize: 11.5, color: "#555", lineHeight: 1.5, marginBottom: 10 }}>
             Print this and send it to the producer, who fills it in and has it <strong>signed and stamped by both himself and the driver</strong> at loading.
             Calibre is left blank on purpose — it is only known when the pallets are built. Temperature recorder numbers are picked from the producer's pack at loading,
             so record them here when the signed sheet comes back.
+          </div>
+          {gateReason && (
+            <div style={{ padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E", marginBottom: 10 }}>
+              <strong>Not ready to issue</strong> — {gateReason}
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 10 }}>
+            <div>
+              <Lbl>Pallet type on this truck</Lbl>
+              <select value={p.palletType || "standard"} onChange={e => sf("palletType", e.target.value)} style={INP}>
+                <option value="standard">Standard 1200×1000 — {PALLET_CAPACITY.standard} per truck</option>
+                <option value="euro">Euro 1200×800 — {PALLET_CAPACITY.euro} per truck</option>
+              </select>
+            </div>
+            <div><Lbl>Departed on</Lbl><input type="date" value={p.departedOn || ""} onChange={e => sf("departedOn", e.target.value)} style={INP} /></div>
+            <div style={{ gridColumn: "span 2", display: "flex", alignItems: "flex-end" }}>
+              <div style={{ fontSize: 11.5, padding: "7px 11px", borderRadius: 7, width: "100%",
+                background: load.limit ? "#FEF2F2" : "#F0FDF4", border: `1px solid ${load.limit ? "#FECACA" : "#BBF7D0"}`, color: load.limit ? "#991B1B" : "#166534" }}>
+                {load.limit === "weight"
+                  ? <><strong>Over payload</strong> — {load.grossKg.toLocaleString("pl-PL")} kg gross against {load.maxKg.toLocaleString("pl-PL")} kg. Weight binds before space; this truck could not legally move.</>
+                  : load.limit === "pallets"
+                    ? <><strong>Over floor space</strong> — {load.pallets} pallets against {load.maxPallets}.</>
+                    : <>Fits: {load.pallets}/{load.maxPallets} pallets · {load.grossKg.toLocaleString("pl-PL")}/{load.maxKg.toLocaleString("pl-PL")} kg gross.</>}
+              </div>
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Chamber temp. before loading (°C)</Lbl><input value={p.chamberTempBeforeC || ""} onChange={e => sf("chamberTempBeforeC", e.target.value)} placeholder="e.g. 2" style={INP} /></div>
@@ -235,6 +339,13 @@ export default function LoadingProtocolModal({
             </table>
           </div>
 
+          {sigWarnings.length > 0 && (
+            <div style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#991B1B" }}>
+              <strong>Signature timing</strong> — both parties sign at the dock, before departure.
+              <div style={{ marginTop: 4, lineHeight: 1.5 }}>{sigWarnings.map((w, i) => <div key={i}>· {w}</div>)}</div>
+            </div>
+          )}
+
           {(exceptions.length > 0 || gaps.length > 0) && (
             <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: exceptions.length && gaps.length ? "1fr 1fr" : "1fr", gap: 10 }}>
               {exceptions.length > 0 && (
@@ -258,7 +369,15 @@ export default function LoadingProtocolModal({
           <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
             <tbody>
               <tr>
-                <td style={{ ...TD, width: "26%", textAlign: "center", fontSize: 13, fontWeight: 800, letterSpacing: 0.5 }}>{p.receiverName || "MARIANNA"}</td>
+                {/* v6.53.0 house header: the sheet goes to a producer and is
+                    signed by a carrier's driver — it has to identify us fully,
+                    not by trading name alone. */}
+                <td style={{ ...TD, width: "26%", textAlign: "center" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.5 }}>{company?.name || p.receiverName || "MARIANNA"}</div>
+                  {company?.address1 ? <div style={{ fontSize: 8 }}>{company.address1}</div> : null}
+                  {company?.address2 ? <div style={{ fontSize: 8 }}>{company.address2}</div> : null}
+                  {company?.nip ? <div style={{ fontSize: 8 }}>NIP: {company.nip}</div> : null}
+                </td>
                 <td style={{ ...TD, width: "24%" }}><BL k="version" /></td>
                 <td style={{ ...TD, width: "16%", fontWeight: 700 }}>{p.formVersion}</td>
                 <td style={{ ...TD, width: "34%", fontSize: 8.5 }} rowSpan={2}>
@@ -310,7 +429,8 @@ export default function LoadingProtocolModal({
               <tr>
                 <th style={{ ...TH, width: "7%" }}><BL k="palletNo" align="center" /></th>
                 <th style={{ ...TH, width: "13%" }}><BL k="qty" align="center" /></th>
-                <th style={{ ...TH, width: "12%" }}><BL k="size" align="center" /></th>
+                <th style={{ ...TH, width: "11%" }}><BL k="variety" align="center" /></th>
+                <th style={{ ...TH, width: "10%" }}><BL k="size" align="center" /></th>
                 <th style={{ ...TH, width: "13%" }}><BL k="boxesOk" align="center" /></th>
                 <th style={{ ...TH, width: "13%" }}><BL k="goodsOk" align="center" /></th>
                 <th style={{ ...TH, width: "21%" }}><BL k="remarks" align="center" /></th>
@@ -322,6 +442,7 @@ export default function LoadingProtocolModal({
                 <tr key={i}>
                   <td style={{ ...TD, textAlign: "center", fontWeight: 700 }}>{r.no}</td>
                   <td style={{ ...TD, textAlign: "center" }}>{r.boxes}x{r.kgPerBox}</td>
+                  <td style={{ ...TD, textAlign: "center" }}>{r.variety || ""}</td>
                   <td style={{ ...TD, textAlign: "center", minWidth: 50 }}>{r.size || ""}</td>
                   <td style={{ ...TD, textAlign: "center" }}>{r.boxesOk === true ? "Tak" : r.boxesOk === false ? "Nie" : ""}</td>
                   <td style={{ ...TD, textAlign: "center" }}>{r.goodsOk === true ? "Tak" : r.goodsOk === false ? "Nie" : ""}</td>
@@ -333,7 +454,7 @@ export default function LoadingProtocolModal({
                 <tr>
                   <td style={{ ...TD, fontWeight: 800, textAlign: "center" }}>{totals.pallets}</td>
                   <td style={{ ...TD, fontWeight: 800, textAlign: "center" }}>{totals.boxes} szt</td>
-                  <td style={{ ...TD, fontWeight: 700, fontSize: 8.5 }} colSpan={5}>
+                  <td style={{ ...TD, fontWeight: 700, fontSize: 8.5 }} colSpan={6}>
                     Netto / Net {totals.netKg.toLocaleString("pl-PL")} kg · Brutto / Gross {totals.grossKg.toLocaleString("pl-PL")} kg
                     <span style={{ fontWeight: 400, color: "#555" }}> (opakowania / packaging {totals.boxTareTotalKg.toLocaleString("pl-PL")} kg + palety / pallets {totals.palletTareTotalKg.toLocaleString("pl-PL")} kg)</span>
                   </td>
@@ -372,7 +493,7 @@ export default function LoadingProtocolModal({
           </table>
 
           <div style={{ marginTop: 8, fontSize: 8, color: "#666", display: "flex", justifyContent: "space-between" }}>
-            <span>{p.number} · {p.shipmentRef}</span>
+            <span>{p.number} · {p.shipmentRef}{trucks.length > 1 ? ` · ${current?.label} (${truckIx + 1}/${trucks.length})` : ""}</span>
             <span style={{ fontStyle: "italic" }}>Confidential</span>
           </div>
         </div>

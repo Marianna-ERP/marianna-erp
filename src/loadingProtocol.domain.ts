@@ -29,12 +29,33 @@ import { grossForGoodsLine, palletManifest, findPackaging, defaultPackagingForPr
 
 const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 
+// v6.52.0: a truck fills up by FLOOR SPACE or by WEIGHT, whichever comes first.
+// 26 standard pallets of apples is ~24.3 t net + tare, over a typical 24 t payload —
+// so the count limit alone would let you plan a truck that cannot legally move.
+export type PalletType = "standard" | "euro";
+export const PALLET_CAPACITY: Record<PalletType, number> = { standard: 26, euro: 33 };
+export const DEFAULT_PAYLOAD_KG = 24000;
+
+export interface LoadCheck { pallets: number; maxPallets: number; grossKg: number; maxKg: number; overPallets: boolean; overWeight: boolean; limit: "" | "pallets" | "weight"; }
+
+/** Does this load fit on one truck? Reports whichever ceiling binds first. */
+export function checkTruckLoad(pallets: number, grossKg: number, palletType: PalletType = "standard", payloadKg = DEFAULT_PAYLOAD_KG): LoadCheck {
+  const maxPallets = PALLET_CAPACITY[palletType] || PALLET_CAPACITY.standard;
+  const overPallets = pallets > maxPallets;
+  const overWeight = grossKg > payloadKg;
+  return { pallets, maxPallets, grossKg, maxKg: payloadKg, overPallets, overWeight,
+    limit: overWeight ? "weight" : overPallets ? "pallets" : "" };
+}
+
 /** One row of the pallet table. Mirrors the paper columns 1:1. */
 export interface ProtocolPalletRow {
   no: number;              // Nr palety
   boxes: number;           // Ilość opakowań (szt)
   kgPerBox: number;        // x KG
-  size: string;            // Rozmiar — HANDWRITTEN at loading, blank when printed
+  /** v6.52.0: pre-filled from the PO line so the producer CONFIRMS rather than
+   *  transcribes. They correct only where the actual load differs. */
+  variety: string;         // Odmiana
+  size: string;            // Rozmiar — from the PO line, producer may correct
   boxesOk: boolean | null; // Skrzynki w dobrym stanie (Tak/Nie)
   goodsOk: boolean | null; // Towar nieuszkodzony (Tak/Nie)
   remarks: string;         // Uwagi
@@ -56,6 +77,11 @@ export interface LoadingProtocol {
   number: string;               // house convention, e.g. LP-2026-0001
   shipmentRef: string;
   legId: any;
+  /** v6.52.0: the protocol belongs to ONE TRUCK, not a shipment. */
+  unitId: any;
+  poRef: string;
+  palletType: PalletType;
+  departedOn: string;
   supplierName: string;         // Dostawca (the producer)
   supplierAddress: string;
   receiverName: string;         // Odbiorca (us)
@@ -99,26 +125,139 @@ export function protocolTotals(p: { rows?: ProtocolPalletRow[] }, types: Packagi
 }
 
 /** Derive the pallet rows for a set of goods lines. */
-export function deriveRows(goods: any[], types: PackagingType[]): ProtocolPalletRow[] {
+export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPalletRow[] {
+  // v6.52.0: rows come from the PO/goods LINES, each of which states its product,
+  // variety, calibre and total kilos. The pallet count per line is derived from the
+  // packaging (72 x 13 kg = 936 kg a pallet, so 19 422 kg = 21 pallets with the last
+  // part-filled) — which is why a standard load comes out at 21 without anyone
+  // choosing that number. The producer confirms or corrects each row at loading.
   const rows: ProtocolPalletRow[] = [];
   let no = 1;
-  (goods || []).forEach(g => {
-    const net = num(g.qtyKg);
+  (lines || []).forEach(g => {
+    const net = num(g.qtyKg) || num(g.qty);
     if (net <= 0) return;
     const pk = findPackaging(types, g.packagingId) || findPackaging(types, g.packaging) || defaultPackagingForProduct(types, g.product);
     const capacity = pk && pk.capacityKg > 0 ? num(pk.capacityKg) : 0;
-    if (!capacity) return;                       // unknown packaging → nothing to derive
+    if (!capacity) return;
     const gross = grossForGoodsLine({ qtyKg: net, product: g.product, packaging: g.packaging, packagingId: g.packagingId, pallets: g.pallets }, types);
     const bpp = pk && num(pk.boxesPerPallet) > 0 ? num(pk.boxesPerPallet) : 0;
     palletManifest(gross.boxes, bpp).forEach(m => {
       rows.push({
         no: no++, boxes: m.boxes, kgPerBox: capacity,
-        size: "",                                 // handwritten at loading
+        variety: String(g.variety || "").trim(),
+        size: String(g.size || "").trim(),
         boxesOk: null, goodsOk: null, remarks: "", observations: "",
       });
     });
   });
   return rows;
+}
+
+// ─── v6.53.0  ONE PROTOCOL PER TRUCK ─────────────────────────────────────────
+// Ruling: the sheet is filled AT THE MOMENT OF LOADING, so it can never be
+// issued before a shipment exists — it stays in Shipments and is never raised
+// from a PO. What the PO does govern is permission: an unconfirmed PO must not
+// put a truck under load, so issuing is gated on the linked PO being Confirmed.
+//
+// Ruling: goods are assigned PER UNIT. Each truck states what it carries
+// (unit.load), and its sheet derives rows from that assignment alone. A line
+// can be split across trucks, so the assignment is per line AND per kg.
+
+/** The goods lines as loaded on ONE truck.
+ *  No assignment = the whole shipment travels on this truck — the single-truck
+ *  norm and the meaning of every shipment recorded before v6.53.0. */
+export function unitGoodsLines(goods: any[], unit?: any): any[] {
+  const load = (unit?.load || []).filter((a: any) => num(a?.qtyKg) > 0);
+  if (!load.length) return goods || [];
+  const out: any[] = [];
+  (goods || []).forEach(g => {
+    const a = load.find((x: any) => String(x.goodsLineId) === String(g.id));
+    if (!a) return;
+    // Everything about the line is kept — product, variety, calibre, packaging —
+    // and only the quantity becomes this truck's share.
+    out.push({ ...g, qtyKg: num(a.qtyKg), qty: num(a.qtyKg), pallets: undefined });
+  });
+  return out;
+}
+
+export interface AssignmentCheck { lineId: any; product: string; totalKg: number; assignedKg: number; unassignedKg: number; overKg: number; }
+
+/** Does the per-unit assignment actually account for the shipment's goods?
+ *  Reported rather than enforced: a truck may legitimately be loaded before the
+ *  rest of the shipment is planned. Silence here is the dangerous state. */
+export function assignmentCheck(goods: any[], units: any[]): AssignmentCheck[] {
+  const anyAssigned = (units || []).some((u: any) => (u?.load || []).some((a: any) => num(a?.qtyKg) > 0));
+  if (!anyAssigned) return [];
+  return (goods || []).map(g => {
+    const total = num(g.qtyKg) || num(g.qty);
+    let assigned = 0;
+    (units || []).forEach((u: any) => (u?.load || []).forEach((a: any) => {
+      if (String(a.goodsLineId) === String(g.id)) assigned += num(a.qtyKg);
+    }));
+    return {
+      lineId: g.id, product: String(g.product || ""), totalKg: total, assignedKg: assigned,
+      unassignedKg: Math.max(0, Math.round((total - assigned) * 1000) / 1000),
+      overKg: Math.max(0, Math.round((assigned - total) * 1000) / 1000),
+    };
+  }).filter(r => r.unassignedKg > 0.001 || r.overKg > 0.001);
+}
+
+/** Every protocol on a shipment.
+ *  Reads forward over the pre-v6.53.0 single `loadingProtocol` object rather
+ *  than migrating it — the same fold-forward the legacy leg-level vehicle
+ *  fields already use, so no stored data is rewritten and nothing can be lost
+ *  by a heal that runs before the stores have loaded. */
+export function protocolsForShipment(sh: any): any[] {
+  if (Array.isArray(sh?.loadingProtocols) && sh.loadingProtocols.length) return sh.loadingProtocols;
+  return sh?.loadingProtocol ? [sh.loadingProtocol] : [];
+}
+
+/** The protocol for one truck. A legacy single sheet belongs to the first unit. */
+export function protocolForUnit(sh: any, unitId: any): any {
+  const all = protocolsForShipment(sh);
+  const hit = all.find((p: any) => p && p.unitId != null && String(p.unitId) === String(unitId));
+  if (hit) return hit;
+  const legacy = all.find((p: any) => p && (p.unitId == null || p.unitId === ""));
+  return legacy || null;
+}
+
+/** Replace-or-add one truck's sheet, leaving the other trucks' sheets alone. */
+export function upsertProtocol(existing: any[], p: any): any[] {
+  const list = [...(existing || [])];
+  const i = list.findIndex((x: any) => x && (String(x.id) === String(p.id) ||
+    (p.unitId != null && x.unitId != null && String(x.unitId) === String(p.unitId))));
+  if (i >= 0) list[i] = p; else list.push(p);
+  return list;
+}
+
+/** May a sheet be issued at all? An unconfirmed PO must not put a truck under
+ *  load. Read from the shipment's own PO refs — the document does not move. */
+export function poGateReason(shipment: any, pos: any[]): string {
+  const refs = (shipment?.poRefs || []).filter(Boolean);
+  if (!refs.length) return "";               // nothing linked — nothing to gate on
+  const OPEN = new Set(["Confirmed", "Delivered", "Closed", "Partially delivered"]);
+  const blocking = refs.filter((r: string) => {
+    const po = (pos || []).find((x: any) => String(x?.number) === String(r));
+    return po && !OPEN.has(String(po.status || ""));
+  });
+  if (!blocking.length) return "";
+  return `${blocking.join(", ")} is not confirmed — a truck should not be loaded against an unconfirmed order.`;
+}
+
+/** Add an empty pallet row (producer loaded more than planned). */
+export function addBlankRow(rows: ProtocolPalletRow[], like?: Partial<ProtocolPalletRow>): ProtocolPalletRow[] {
+  const last = (rows || [])[(rows || []).length - 1];
+  const next = [...(rows || []), {
+    no: 0, boxes: like?.boxes ?? last?.boxes ?? 72, kgPerBox: like?.kgPerBox ?? last?.kgPerBox ?? 13,
+    variety: like?.variety ?? last?.variety ?? "", size: like?.size ?? last?.size ?? "",
+    boxesOk: null, goodsOk: null, remarks: "", observations: "",
+  } as ProtocolPalletRow];
+  return next.map((r, i) => ({ ...r, no: i + 1 }));
+}
+
+/** "Loaded exactly as printed" — the common case, in one action. */
+export function confirmAsLoaded(rows: ProtocolPalletRow[]): ProtocolPalletRow[] {
+  return (rows || []).map(r => ({ ...r, boxesOk: true, goodsOk: true, remarks: r.remarks || "Brak" }));
 }
 
 /** Next protocol number, house convention LP-YYYY-NNNN. */
@@ -138,14 +277,17 @@ export interface BuildDeps { todayISO: () => string; nextId: () => any; }
 
 /** Build a fresh protocol from a shipment + its first (loading) leg. */
 export function buildLoadingProtocol(input: {
-  shipment: any; leg?: any; goods?: any[]; supplier?: any; receiverName?: string;
+  shipment: any; leg?: any; unit?: any; goods?: any[]; supplier?: any; receiverName?: string; poRef?: string; palletType?: PalletType;
   carrierName?: string; types?: PackagingType[]; existingProtocols?: any[];
 }, deps: BuildDeps): LoadingProtocol {
   const sh = input.shipment || {};
   const leg = input.leg || (sh.legs || [])[0] || {};
-  const goods = input.goods && input.goods.length ? input.goods : (sh.goods || []);
+  const allGoods = input.goods && input.goods.length ? input.goods : (sh.goods || []);
   const types = input.types || [];
-  const unit = (leg.vehicles || [])[0] || {};
+  const unit = input.unit || (leg.vehicles || [])[0] || {};
+  // v6.53.0: the sheet covers THIS TRUCK's load, not the shipment's. With no
+  // assignment recorded the truck carries everything — the single-truck norm.
+  const goods = unitGoodsLines(allGoods, unit);
   const products = Array.from(new Set((goods || []).map((g: any) => String(g.product || "").trim()).filter(Boolean)));
 
   return {
@@ -153,6 +295,10 @@ export function buildLoadingProtocol(input: {
     number: nextProtocolNumber(input.existingProtocols || [], new Date(deps.todayISO()).getFullYear() || 2026),
     shipmentRef: sh.number || "",
     legId: leg.id ?? 1,
+    unitId: unit.id ?? null,
+    poRef: input.poRef || (sh.poRefs || [])[0] || "",
+    palletType: (input.palletType as PalletType) || (unit.palletType as PalletType) || "standard",
+    departedOn: "",
     supplierName: input.supplier?.name || "",
     supplierAddress: input.supplier?.address || "",
     receiverName: input.receiverName || "",
@@ -163,7 +309,7 @@ export function buildLoadingProtocol(input: {
     chamberTempBeforeC: "",
     checks: { transportClean: null, chamberClean: null, foreignOdours: null, packagingCompliant: null },
     rows: deriveRows(goods, types),
-    recorderNos: [],
+    recorderNos: String(unit.tempRecorderNo || "").trim() ? [String(unit.tempRecorderNo).trim()] : [],
     driverName: unit.driverName || leg.driverName || "",
     driverSignedDate: "",
     issuerSignedDate: "",
@@ -200,17 +346,35 @@ export function isProtocolClean(p: LoadingProtocol | any): boolean {
 }
 
 /** What still has to come back before the protocol can serve as evidence. */
+/** A driver signs AT THE DOCK, before departure. A signature dated after the goods
+ *  left proves nothing about the state they left in — the exact weakness a carrier
+ *  would rely on — so it is surfaced rather than silently accepted. */
+export function signatureWarnings(p: any): string[] {
+  const out: string[] = [];
+  const dep = String(p?.departedOn || "").trim();
+  const drv = String(p?.driverSignedDate || "").trim();
+  const iss = String(p?.issuerSignedDate || "").trim();
+  if (dep && drv && drv > dep) out.push(`Driver signed ${drv}, after the truck left on ${dep} — a signature collected after departure is weak evidence.`);
+  if (dep && iss && iss > dep) out.push(`Producer signed ${iss}, after the truck left on ${dep}.`);
+  if (drv && iss && drv !== iss) out.push(`Driver (${drv}) and producer (${iss}) signed on different days — both sign at the dock.`);
+  return out;
+}
+
+/** Is the returned sheet genuinely usable as evidence? */
+export function isProtocolComplete(p: any): boolean { return protocolGaps(p).length === 0; }
+
 export function protocolGaps(p: LoadingProtocol | any): string[] {
   const gaps: string[] = [];
   if (!String(p?.driverSignedDate || "").trim()) gaps.push("Driver signature date missing");
   if (!String(p?.issuerSignedDate || "").trim()) gaps.push("Producer (wydawca) signature date missing");
   if (!(p?.recorderNos || []).filter(Boolean).length) gaps.push("Temperature recorder number(s) not recorded");
   if (!String(p?.chamberTempBeforeC || "").trim()) gaps.push("Cold-chamber temperature before loading missing");
-  if (!String(p?.scanLink || "").trim()) gaps.push("Signed scan not linked (Dropbox)");
+  if (!String(p?.scanLink || "").trim()) gaps.push("Signed scan not linked — the stamped original is the evidence");
   const c = p?.checks || {};
   if (c.transportClean === null || c.chamberClean === null || c.foreignOdours === null || c.packagingCompliant === null) {
     gaps.push("One or more condition checks not filled in");
   }
-  if ((p?.rows || []).some((r: any) => !String(r.size || "").trim())) gaps.push("Calibre (Rozmiar) not written on every pallet");
+  if ((p?.rows || []).some((r: any) => !String(r.size || "").trim())) gaps.push("Calibre (Rozmiar) missing on some pallets");
+  if ((p?.rows || []).some((r: any) => r.boxesOk === null || r.goodsOk === null)) gaps.push("Pallet condition not confirmed on every row");
   return gaps;
 }

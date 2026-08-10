@@ -1505,6 +1505,7 @@ T("seller matches by vatEuId (real field), not the phantom vatNumber", () => {
 
 // ── v6.41.0 (A5): unshipped-remainder reservation rule ──
 const SOD = require("./build/salesOrders.domain.js");
+const CA = require("./build/costAllocation.js");
 console.log("── reservations: unshipped remainder ──");
 // A 20 t lot, one SO for 20 t, 12 t already shipped (SHIP_OUT movement soRef-tagged).
 function lot20(physical) {
@@ -1670,7 +1671,7 @@ T("HEAL: retags duplicated goods rows, voids the wrong movement, re-posts, re-al
   const orders = [{ number: "SO-H", id: 1, status: "Shipped", items: [
     { id: 101, sourceType: "PO", sourceRef: "PO-H", sourceLineId: 11, product: "Apples", qty: 4000 },
     { id: 102, sourceType: "PO", sourceRef: "PO-H", sourceLineId: 12, product: "Apples", qty: 4000 } ] }];
-  const shipments = [{ number: "SHP-H", status: "Closed", purpose: "OUTBOUND", soRefs: ["SO-H"], legs: [{}],
+  const shipments = [{ number: "SHP-H", status: "Closed", purpose: "INBOUND", soRefs: ["SO-H"], legs: [{}],
     costs: [{ id: 5, type: "road_freight", amountPLN: 1000 }],
     goods: [
       { lotRef: "L-1", soRef: "SO-H", soLineId: 101, qtyKg: 4000 },
@@ -1685,7 +1686,13 @@ T("HEAL: retags duplicated goods rows, voids the wrong movement, re-posts, re-al
   assert.ok((l1.movements||[]).some(m => m.voided), "wrong movement voided");
   assert.equal(l1.receivedKg, 4000); assert.equal(l2.receivedKg, 4000);
   const alloc = (l) => (l.costs||[]).filter(c => String(c.source||"").startsWith("SHP-H/")).reduce((a,c)=>a+(c.pln||0),0);
-  assert.equal(alloc(l1) + alloc(l2), 1000, "costs re-allocated across BOTH lots");
+  assert.equal(alloc(l1) + alloc(l2), 1000, "inbound costs re-allocated across BOTH lots");
+});
+T("v6.51.0: an OUTBOUND delivery never allocates into a lot's landed cost", () => {
+  const lots = [{ number: "L-O", costs: [{ pln: 100, source: "po:X" }] }];
+  const sh = { number: "SHP-O", purpose: "OUTBOUND", goods: [{ lotRef: "L-O", qtyKg: 1000 }], costs: [{ id: 1, type: "road_freight", amountPLN: 900 }] };
+  const out = CA.allocateShipmentCostsToLots(sh, lots, { inventoryType: () => "freight", label: c => c });
+  assert.equal(out[0].costs.length, 1, "the lot is untouched — delivery freight is a cost of the SALE");
 });
 T("HEAL: a healthy dataset passes through untouched", () => {
   const lots = [{ number: "L-OK", poRef: "PO-OK", poLineId: 1, product: "Apples", receivedKg: 5000, physicalKg: 0, costs: [], movements: [
@@ -1770,8 +1777,8 @@ T("gaps tell you what must still come back for the sheet to be evidence", () => 
     recorderNos: ["241002PDF2476186"], chamberTempBeforeC: "2",
     scanLink: "https://www.dropbox.com/s/abc/protokol.pdf?dl=0",
     checks: { transportClean: true, chamberClean: true, foreignOdours: false, packagingCompliant: true },
-    rows: p.rows.map(r => ({ ...r, size: "70-80" })) };
-  assert.equal(LP.protocolGaps(done).length, 0, "fully returned + scanned sheet has no gaps");
+    rows: LP.confirmAsLoaded(p.rows.map(r => ({ ...r, size: "70-80" }))) };
+  assert.equal(LP.protocolGaps(done).length, 0, "fully returned + confirmed + scanned sheet has no gaps");
 });
 
 // ── v6.47.0: document links (Dropbox register) ──
@@ -2040,6 +2047,152 @@ T("manual freight typed straight onto the shipment is never touched", () => {
   assert.equal(out.costs.length, 1);
   assert.equal(out.costs[0].amountPLN, 7140);
   assert.ok(!out.costs[0].source);
+});
+
+console.log("── v6.52.0: per-truck loading protocol ──");
+T("21 pallets falls out of the arithmetic, not a default", () => {
+  const rows = LP.deriveRows([{ product: "Apples", variety: "Gala", size: "70-80", qtyKg: 19422 }], PKG.PACKAGING_SEED);
+  assert.equal(rows.length, 21, "19422 / 936 = 20.75 → 21 pallets");
+  assert.equal(rows[20].boxes, 54, "last pallet part-filled");
+  assert.ok(rows.every(r => r.variety === "Gala" && r.size === "70-80"), "variety+calibre pre-filled from the line");
+});
+T("two PO lines produce their own pallets, each carrying its own variety", () => {
+  const rows = LP.deriveRows([
+    { product: "Apples", variety: "Gala", size: "70-80", qtyKg: 936 * 3 },
+    { product: "Apples", variety: "Idared", size: "65-70", qtyKg: 936 * 2 },
+  ], PKG.PACKAGING_SEED);
+  assert.equal(rows.length, 5);
+  assert.deepEqual(rows.map(r => r.variety), ["Gala","Gala","Gala","Idared","Idared"]);
+  assert.deepEqual(rows.map(r => r.no), [1,2,3,4,5], "numbered continuously across lines");
+});
+T("truck capacity: weight bites before floor space for apples", () => {
+  const c = LP.checkTruckLoad(26, 26 * 936 * 1.13, "standard");
+  assert.equal(c.overPallets, false, "26 standard pallets is within the count limit");
+  assert.equal(c.overWeight, true);
+  assert.equal(c.limit, "weight", "the payload ceiling binds first");
+});
+T("euro pallets allow 33; over that the count binds", () => {
+  assert.equal(LP.checkTruckLoad(33, 5000, "euro").limit, "");
+  assert.equal(LP.checkTruckLoad(34, 5000, "euro").limit, "pallets");
+  assert.equal(LP.checkTruckLoad(27, 5000, "standard").limit, "pallets");
+});
+T("confirm-as-loaded ticks every row in one action", () => {
+  const rows = LP.confirmAsLoaded(LP.deriveRows([{ product: "Apples", qtyKg: 936 * 2 }], PKG.PACKAGING_SEED));
+  assert.ok(rows.every(r => r.boxesOk === true && r.goodsOk === true && r.remarks === "Brak"));
+});
+T("adding a pallet renumbers and inherits the previous row", () => {
+  const rows = LP.addBlankRow(LP.deriveRows([{ product: "Apples", variety: "Gala", qtyKg: 936 }], PKG.PACKAGING_SEED));
+  assert.equal(rows.length, 2);
+  assert.equal(rows[1].no, 2);
+  assert.equal(rows[1].variety, "Gala", "inherits so the producer types less");
+});
+T("a signature dated after departure is flagged", () => {
+  const w = LP.signatureWarnings({ departedOn: "2026-05-02", driverSignedDate: "2026-05-04", issuerSignedDate: "2026-05-02" });
+  assert.equal(w.length, 2, "late driver signature + mismatched days");
+  assert.ok(w[0].includes("after the truck left"));
+  assert.equal(LP.signatureWarnings({ departedOn: "2026-05-02", driverSignedDate: "2026-05-02", issuerSignedDate: "2026-05-02" }).length, 0);
+});
+T("a sheet is complete only with scan, recorder and both signatures", () => {
+  const base = LP.deriveRows([{ product: "Apples", variety: "Gala", size: "70-80", qtyKg: 936 }], PKG.PACKAGING_SEED);
+  const p = { rows: LP.confirmAsLoaded(base), chamberTempBeforeC: "2",
+    checks: { transportClean: true, chamberClean: true, foreignOdours: false, packagingCompliant: true },
+    driverSignedDate: "2026-05-02", issuerSignedDate: "2026-05-02", recorderNos: ["241002PDF2476186"],
+    scanLink: "https://www.dropbox.com/s/a/p.pdf?dl=0" };
+  assert.equal(LP.isProtocolComplete(p), true);
+  assert.ok(LP.protocolGaps({ ...p, scanLink: "" })[0].includes("scan"));
+  assert.ok(LP.protocolGaps({ ...p, recorderNos: [] }).some(g => g.includes("recorder")));
+});
+
+console.log("");
+console.log("── loadingProtocol.domain: one protocol per truck (v6.53.0) ──");
+
+T("no assignment → the truck carries the whole shipment (single-truck norm)", () => {
+  const goods = [{ id: 1, product: "Apples", variety: "Gala", qtyKg: 19422 }];
+  const lines = LP.unitGoodsLines(goods, { id: 7 });
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].qtyKg, 19422, "unassigned unit takes everything, as before v6.53.0");
+});
+
+T("a line split across two trucks yields two correct sheets, not one repeated", () => {
+  const goods = [{ id: 1, product: "Apples", variety: "Gala", size: "70-80", qtyKg: 42000 }];
+  const t1 = { id: "A", load: [{ goodsLineId: 1, qtyKg: 21000 }] };
+  const t2 = { id: "B", load: [{ goodsLineId: 1, qtyKg: 21000 }] };
+  const r1 = LP.deriveRows(LP.unitGoodsLines(goods, t1), PKG.PACKAGING_SEED);
+  const r2 = LP.deriveRows(LP.unitGoodsLines(goods, t2), PKG.PACKAGING_SEED);
+  const kg1 = r1.reduce((a, r) => a + r.boxes * r.kgPerBox, 0);
+  // Boxes are whole: 21 000 kg is 1 615.4 boxes of 13 kg, so the sheet prints
+  // 1 616 boxes = 21 008 kg. The half must be its own half — never the PO total.
+  assert.ok(kg1 >= 21000 && kg1 < 21013, `truck 1 prints its own half (got ${kg1})`);
+  assert.equal(r1.length, r2.length);
+  assert.ok(r1.length < 46, "each sheet is one truck's pallets, not the whole order's");
+  assert.equal(r1[0].variety, "Gala", "variety survives the split");
+  assert.equal(r1[0].size, "70-80", "calibre survives the split");
+});
+
+T("a truck carrying only one of two lines gets only that line's pallets", () => {
+  const goods = [
+    { id: 1, product: "Apples", variety: "Gala", qtyKg: 936 },
+    { id: 2, product: "Apples", variety: "Idared", qtyKg: 936 },
+  ];
+  const rows = LP.deriveRows(LP.unitGoodsLines(goods, { id: "A", load: [{ goodsLineId: 2, qtyKg: 936 }] }), PKG.PACKAGING_SEED);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].variety, "Idared", "the other truck's variety must not appear");
+});
+
+T("unassigned and over-assigned kilos are both reported", () => {
+  const goods = [{ id: 1, product: "Apples", qtyKg: 42000 }];
+  const short = LP.assignmentCheck(goods, [{ load: [{ goodsLineId: 1, qtyKg: 21000 }] }]);
+  assert.equal(short.length, 1);
+  assert.equal(short[0].unassignedKg, 21000);
+  const over = LP.assignmentCheck(goods, [
+    { load: [{ goodsLineId: 1, qtyKg: 30000 }] }, { load: [{ goodsLineId: 1, qtyKg: 20000 }] }]);
+  assert.equal(over[0].overKg, 8000, "more loaded than the line holds");
+  assert.equal(LP.assignmentCheck(goods, [{}, {}]).length, 0, "no assignment anywhere = nothing to report");
+});
+
+T("a legacy single sheet reads forward without being migrated", () => {
+  const sh = { loadingProtocol: { number: "LP-2026-0001", status: "Returned" } };
+  assert.equal(LP.protocolsForShipment(sh).length, 1);
+  assert.equal(LP.protocolForUnit(sh, "anything").number, "LP-2026-0001", "the old sheet still answers for its truck");
+  assert.equal(LP.protocolsForShipment({}).length, 0);
+});
+
+T("saving one truck's sheet leaves the other truck's sheet alone", () => {
+  let list = LP.upsertProtocol([], { id: 1, unitId: "A", status: "Sent" });
+  list = LP.upsertProtocol(list, { id: 2, unitId: "B", status: "Draft" });
+  assert.equal(list.length, 2);
+  list = LP.upsertProtocol(list, { id: 1, unitId: "A", status: "Returned" });
+  assert.equal(list.length, 2, "replaced, not appended");
+  assert.equal(list.find(p => p.unitId === "A").status, "Returned");
+  assert.equal(list.find(p => p.unitId === "B").status, "Draft", "truck B untouched");
+});
+
+T("issuing is gated on the linked PO being confirmed", () => {
+  const pos = [{ number: "PO-1", status: "Draft" }, { number: "PO-2", status: "Confirmed" }];
+  assert.ok(LP.poGateReason({ poRefs: ["PO-1"] }, pos).includes("not confirmed"));
+  assert.equal(LP.poGateReason({ poRefs: ["PO-2"] }, pos), "", "confirmed order — no block");
+  assert.equal(LP.poGateReason({ poRefs: [] }, pos), "", "nothing linked, nothing to gate on");
+  assert.equal(LP.poGateReason({ poRefs: ["PO-9"] }, pos), "", "unknown ref cannot block loading");
+});
+
+T("the sheet is built for its truck: plate, driver and pallet type", () => {
+  const sh = { number: "SHP-1", poRefs: ["PO-1"], goods: [{ id: 1, product: "Apples", qtyKg: 936 }],
+    legs: [{ id: 1, mode: "Road", vehicles: [{ id: "A", truckPlate: "WX 111" }, { id: "B", truckPlate: "WX 222" }] }] };
+  const unit = { id: "B", truckPlate: "WX 222", driverName: "Nowak", palletType: "euro", tempRecorderNo: "TR-1",
+    load: [{ goodsLineId: 1, qtyKg: 936 }] };
+  const p = LP.buildLoadingProtocol({ shipment: sh, leg: sh.legs[0], unit, types: PKG.PACKAGING_SEED },
+    { todayISO: () => "2026-05-02", nextId: () => 1 });
+  assert.equal(p.unitId, "B");
+  assert.equal(p.truckPlate, "WX 222");
+  assert.equal(p.driverName, "Nowak");
+  assert.equal(p.palletType, "euro", "pallet footprint follows the truck");
+  assert.deepEqual(p.recorderNos, ["TR-1"], "a recorder already on the unit is carried onto the sheet");
+  assert.equal(p.rows.length, 1);
+});
+
+T("euro and standard pallet ceilings bind differently on the same load", () => {
+  assert.equal(LP.checkTruckLoad(30, 5000, "standard").limit, "pallets");
+  assert.equal(LP.checkTruckLoad(30, 5000, "euro").limit, "", "30 euro pallets fit where 30 standard do not");
 });
 
 console.log("");

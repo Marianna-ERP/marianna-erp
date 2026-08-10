@@ -234,6 +234,17 @@ export interface TransportUnit {
   shippingLine?: string;
   tempRecorderNo?: string;
   notes?: string;
+  /** v6.53.0 — WHAT THIS TRUCK CARRIES (ruling: assign per unit).
+   *  A shipment's goods are split across its trucks by explicit assignment, not
+   *  proportionally and not at protocol time: the loading protocol for a truck
+   *  derives its pallet rows from this list. A line may be split across trucks
+   *  (a 42 000 kg PO delivered in two trucks), so the assignment is per LINE and
+   *  per KG, never whole lines only.
+   *  Empty / absent = this unit carries the whole shipment — the single-truck
+   *  norm, and what every pre-v6.53.0 shipment means. */
+  load?: Array<{ goodsLineId: any; qtyKg: number }>;
+  /** v6.53.0: pallet footprint for THIS truck — standard 26 or euro 33. */
+  palletType?: "standard" | "euro";
 }
 
 export interface ShipmentLeg {
