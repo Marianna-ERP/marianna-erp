@@ -1460,6 +1460,11 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
 // line (kept on record but visibly voided). cancelledSet holds the cancelled numbers.
 function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   if (!nums || nums.length === 0) return null;
+  // v6.54.0: say how many of these actually COUNT. A PO listing three shipments
+  // of which two are cancelled reads as "three shipments" while every guard and
+  // total sees one — the disagreement that makes people go looking for a record
+  // to delete. Struck-through refs alone are easy to miss in a long list.
+  const dead = (nums || []).filter((n: string) => cancelledSet && cancelledSet.has(String(n))).length;
   return (
     <div style={{ color }} title={title}>
       {icon} {nums.map((n: string, i: number) => (
@@ -1467,6 +1472,12 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
           <DocRef num={n} cancelledSet={cancelledSet} />{i < nums.length - 1 ? ", " : ""}
         </span>
       ))}
+      {dead > 0 && (
+        <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 4, padding: "1px 5px" }}
+          title={`${dead} cancelled — kept on record but counting toward nothing. ${nums.length - dead} of ${nums.length} are live.`}>
+          {nums.length - dead}/{nums.length} live
+        </span>
+      )}
     </div>
   );
 }

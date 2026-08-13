@@ -107,7 +107,10 @@ export interface LoadingProtocol {
 
 /** Totals for a protocol — the honest source of net/gross once it comes back. */
 export function protocolTotals(p: { rows?: ProtocolPalletRow[] }, types: PackagingType[] = [], product?: any) {
-  const rows = p.rows || [];
+  // v6.57.0: the sheet always prints 21 lines, so the BLANK padding must never
+  // reach the arithmetic — a 6-pallet truck reporting 21 pallets would break the
+  // gross weight, the tare and the truck capacity check all at once.
+  const rows = (p.rows || []).filter(r => !isBlankRow(r));
   const boxes = rows.reduce((a, r) => a + num(r.boxes), 0);
   const netKg = rows.reduce((a, r) => a + num(r.boxes) * num(r.kgPerBox), 0);
   const pallets = rows.length;
@@ -150,7 +153,38 @@ export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPallet
       });
     });
   });
-  return rows;
+  return padToSheet(rows);
+}
+
+/** v6.57.0: THE SHEET IS ALWAYS 21 LINES.
+ *  Your paper form has 21 numbered rows whatever the truck carries, because the
+ *  producer writes on the paper at the dock — a sheet printed with 6 lines for a
+ *  6-pallet load leaves him nowhere to record the 7th pallet he actually put on.
+ *  Derived rows fill from the top; the rest print empty and numbered. A load
+ *  larger than 21 pallets simply runs longer: the 21 is a floor, never a cap. */
+export const SHEET_MIN_ROWS = 21;
+
+export function padToSheet(rows: ProtocolPalletRow[], min: number = SHEET_MIN_ROWS): ProtocolPalletRow[] {
+  const out = [...(rows || [])];
+  let no = out.length + 1;
+  while (out.length < min) {
+    out.push({ no: no++, boxes: 0, kgPerBox: 0, variety: "", size: "", boxesOk: null, goodsOk: null, remarks: "", observations: "" });
+  }
+  return out;
+}
+
+/** A row nobody has filled in — blank padding rather than a real pallet.
+ *  Totals, completeness and the capacity check must all ignore these, or a
+ *  6-pallet truck would report 21 pallets and 15 missing conditions. */
+export function isBlankRow(r: any): boolean {
+  return !r || (num(r.boxes) <= 0 && !String(r.variety || "").trim() && !String(r.size || "").trim()
+    && !String(r.remarks || "").trim() && !String(r.observations || "").trim()
+    && r.boxesOk == null && r.goodsOk == null);
+}
+
+/** The rows that actually carry goods. */
+export function filledRows(rows: any[]): any[] {
+  return (rows || []).filter(r => !isBlankRow(r));
 }
 
 // ─── v6.53.0  ONE PROTOCOL PER TRUCK ─────────────────────────────────────────
@@ -246,7 +280,11 @@ export function poGateReason(shipment: any, pos: any[]): string {
 
 /** Add an empty pallet row (producer loaded more than planned). */
 export function addBlankRow(rows: ProtocolPalletRow[], like?: Partial<ProtocolPalletRow>): ProtocolPalletRow[] {
-  const last = (rows || [])[(rows || []).length - 1];
+  // v6.57.0: inherit from the last row that actually carries goods, not from the
+  // blank padding at the bottom of the sheet — otherwise an added pallet arrives
+  // with no variety and no calibre and the producer has to retype both.
+  const real = filledRows(rows);
+  const last = real[real.length - 1] || (rows || [])[(rows || []).length - 1];
   const next = [...(rows || []), {
     no: 0, boxes: like?.boxes ?? last?.boxes ?? 72, kgPerBox: like?.kgPerBox ?? last?.kgPerBox ?? 13,
     variety: like?.variety ?? last?.variety ?? "", size: like?.size ?? last?.size ?? "",
@@ -257,7 +295,10 @@ export function addBlankRow(rows: ProtocolPalletRow[], like?: Partial<ProtocolPa
 
 /** "Loaded exactly as printed" — the common case, in one action. */
 export function confirmAsLoaded(rows: ProtocolPalletRow[]): ProtocolPalletRow[] {
-  return (rows || []).map(r => ({ ...r, boxesOk: true, goodsOk: true, remarks: r.remarks || "Brak" }));
+  // v6.57.0: ticks only the rows carrying goods. Ticking the blank padding would
+  // make 15 empty lines read as inspected-and-sound pallets — the exact false
+  // completeness this sheet exists to prevent.
+  return (rows || []).map(r => isBlankRow(r) ? r : ({ ...r, boxesOk: true, goodsOk: true, remarks: r.remarks || "Brak" }));
 }
 
 /** Next protocol number, house convention LP-YYYY-NNNN. */
@@ -333,7 +374,7 @@ export function protocolExceptions(p: LoadingProtocol | any): string[] {
   if (c.chamberClean === false) out.push("Cold chamber not clean / komora chłodnicza niezgodna");
   if (c.foreignOdours === true) out.push("Foreign odours present / obecne obce zapachy");
   if (c.packagingCompliant === false) out.push("Packaging or pallets non-compliant / stan opakowań NIEZGODNY");
-  (p?.rows || []).forEach((r: any) => {
+  filledRows(p?.rows || []).forEach((r: any) => {
     if (r.boxesOk === false) out.push(`Pallet ${r.no}: boxes damaged / skrzynki uszkodzone`);
     if (r.goodsOk === false) out.push(`Pallet ${r.no}: goods damaged / towar uszkodzony`);
     if (String(r.remarks || "").trim() && String(r.remarks).trim().toLowerCase() !== "brak") out.push(`Pallet ${r.no}: ${r.remarks}`);
@@ -374,7 +415,11 @@ export function protocolGaps(p: LoadingProtocol | any): string[] {
   if (c.transportClean === null || c.chamberClean === null || c.foreignOdours === null || c.packagingCompliant === null) {
     gaps.push("One or more condition checks not filled in");
   }
-  if ((p?.rows || []).some((r: any) => !String(r.size || "").trim())) gaps.push("Calibre (Rozmiar) missing on some pallets");
-  if ((p?.rows || []).some((r: any) => r.boxesOk === null || r.goodsOk === null)) gaps.push("Pallet condition not confirmed on every row");
+  // v6.57.0: only rows that carry goods are judged. The sheet prints 21 lines by
+  // design, and empty padding is not an unconfirmed pallet — treating it as one
+  // would make every sheet permanently incomplete.
+  const real = filledRows(p?.rows || []);
+  if (real.some((r: any) => !String(r.size || "").trim())) gaps.push("Calibre (Rozmiar) missing on some pallets");
+  if (real.some((r: any) => r.boxesOk === null || r.goodsOk === null)) gaps.push("Pallet condition not confirmed on every row");
   return gaps;
 }

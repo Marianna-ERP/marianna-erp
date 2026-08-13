@@ -1995,9 +1995,16 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                   {computedLinks.linkedShipments?.length > 0 && (
                     <div>
                       <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SHIPMENTS</div>
-                      {computedLinks.linkedShipments.map(s => (
-                        <div key={s} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#F3E8FF", border: "1px solid #DDD6FE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace" }}>{s}</div>
-                      ))}
+                      {/* v6.54.0: these chips were plain text and so escaped the
+                          cancelled-ref styling every other module applies — a
+                          cancelled shipment read here exactly like a live one. */}
+                      {computedLinks.linkedShipments.map(s => {
+                        const dead = cancelledDocSet(shipments).has(String(s));
+                        return (
+                          <div key={s} title={dead ? "Cancelled — kept on record, no longer active" : undefined}
+                            style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: dead ? "#FEF2F2" : "#F3E8FF", border: `1px solid ${dead ? "#FECACA" : "#DDD6FE"}`, borderRadius: 5, fontSize: 11, fontWeight: 600, color: dead ? "#B91C1C" : "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace", ...(dead ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px" } : {}) }}>{s}</div>
+                        );
+                      })}
                     </div>
                   )}
                 </Card>

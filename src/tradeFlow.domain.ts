@@ -201,20 +201,15 @@ const FREIGHT_ONWARD_SELL = new Set(["CIF", "CFR", "CPT", "CIP"]);
 export function sellIncotermHasOnwardLeg(sellIncoterm: any): boolean {
   return FREIGHT_ONWARD_SELL.has(String(sellIncoterm || "").toUpperCase());
 }
-/**
- * @param shipment  the shipment being tested
- * @param sellIncoterm  the governing SO's sell incoterm (for CIF/CFR/CPT/CIP detection)
- * @param destIsPort  is the shipment's destination a PORT location?
- */
-export function shipmentFulfilsOrder(shipment: any, sellIncoterm: any, destIsPort: boolean): boolean {
-  if (!shipment) return false;
-  const st = String(shipment.status || "").trim();
-  if (st === "Cancelled" || st === "Draft" || st === "") return false; // Booked+ only
-  // The single carve-out: a pre-carriage road leg to a PORT under a freight-onward
-  // sell incoterm is NOT the fulfilling movement (the onward sea leg is).
-  if (destIsPort && sellIncotermHasOnwardLeg(sellIncoterm)) return false;
-  return true;
-}
+// v6.55.0: shipmentFulfilsOrder() REMOVED, together with the carve-out it held.
+// It existed to stop a pre-carriage road leg to a port under CIF/CFR/CPT/CIP
+// from consuming a purchase order twice. That was a patch on a wrong premise —
+// shipments do not consume purchase orders at all — and it only ever covered
+// that one shape: it still double-counted a truck to a customs point where the
+// client transships, and cargo loaded straight into a container at the
+// producer. Consumption is a sales-order question (salesOrders.domain).
+// sellIncotermHasOnwardLeg() is kept: it describes a real fact about incoterms
+// and is used elsewhere.
 
 // ── v6.35.1 (Phase C step 3): ownership boundaries from the REAL incoterms, not the flow key.
 // buyOwnershipStart = the point at which WE take ownership from the supplier (buy incoterm).

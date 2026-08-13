@@ -167,6 +167,8 @@ export const DATA_KEYS = [
   "packagingTypes",
   // v6.48.0: claims are their own document now (were nested in lot.claims[]).
   "claims",
+  // v6.56.0: load plans — real data, must travel with export/import and backup.
+  "loadPlans",
  "auditLog"];
 
 export function exportAllData(): string {

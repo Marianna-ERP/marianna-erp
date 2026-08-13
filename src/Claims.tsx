@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
-import { Card, Lbl, SectionTitle, SmallButton, DocRef, useConfirm } from "./ui";
+import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
+import { claimBlockReason, staleClaimWarnings } from "./cancellation.domain";
 import { inspectLink } from "./docLinks.domain";
 import {
   CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS, CLAIM_BASES,
@@ -43,6 +44,17 @@ function Pill({ bg, fg, children, title }: any) {
 }
 
 export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [] }: any) {
+  // v6.54.0: "a cancelled document never happened, so there are no claims on it".
+  const cancelledRefs = cancelledDocSet(shipments, orders, pos);
+  // Resolve a claim subject ref to the actual document, whichever module owns it.
+  // Wrapped in useCallback so the memo below has a stable, honest dependency.
+  const lookupSubject = React.useCallback((s: any) => {
+    const ref = String(s?.ref || "");
+    return (shipments || []).find((x: any) => String(x.number) === ref)
+      || (orders || []).find((x: any) => String(x.number) === ref)
+      || (pos || []).find((x: any) => String(x.number) === ref) || null;
+  }, [shipments, orders, pos]);
+  const staleClaims = useMemo(() => staleClaimWarnings(claims, lookupSubject), [claims, lookupSubject]);
   const { confirm: uiConfirm, dialogNode } = useConfirm();
   const [selectedId, setSelectedId] = useState<any>(null);
   const [q, setQ] = useState("");
@@ -182,6 +194,23 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
         {/* ── register ── */}
         <Card>
           <SectionTitle>REGISTER ({rows.length})</SectionTitle>
+          {/* v6.54.0: a live claim whose subject was cancelled AFTER it was raised.
+              Never auto-voided — it may already be with the counterparty — but it
+              cannot sit silently, because it now rests on a movement that never
+              happened. Someone withdraws the claim or un-cancels the document. */}
+          {staleClaims.length > 0 && (
+            <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#991B1B" }}>
+              <strong>{staleClaims.length} claim{staleClaims.length === 1 ? "" : "s"} rest{staleClaims.length === 1 ? "s" : ""} on a cancelled document</strong>
+              <div style={{ marginTop: 4, lineHeight: 1.5 }}>
+                {staleClaims.map(w => (
+                  <div key={w.claimNumber}>
+                    · {w.claimNumber} —{" "}
+                    {claimBlockReason(w.deadRefs.map(r => ({ kind: "shipment" as const, ref: r })), (s: any) => lookupSubject(s))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {!rows.length && (
             <div style={{ fontSize: 12.5, color: "#94A3B8", padding: "10px 0" }}>
               No claims match. Producer claims still start from a lot in Inventory; client claims from the sales order — both now appear here as numbered documents.
@@ -355,13 +384,22 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
               <Card>
                 <SectionTitle>WHAT IT COVERS</SectionTitle>
                 {!(selected.subjects || []).length && <div style={{ fontSize: 12, color: "#94A3B8" }}>Nothing linked yet.</div>}
-                {(selected.subjects || []).map((s: any, i: number) => (
-                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: "1px solid #F1F5F9", fontSize: 12 }}>
-                    <span style={{ fontSize: 10, fontWeight: 800, color: "#64748B", minWidth: 66 }}>{s.kind}</span>
-                    <DocRef num={s.ref} />
-                    {s.affectedKg ? <span style={{ color: "#64748B" }}>· {num(s.affectedKg).toLocaleString("pl-PL")} kg affected</span> : null}
-                  </div>
-                ))}
+                {(selected.subjects || []).map((s: any, i: number) => {
+                  // v6.54.0: a subject cancelled AFTER the claim was raised. The
+                  // claim is not voided automatically — it may already be with the
+                  // counterparty — but it must not look sound while resting on a
+                  // movement that never happened.
+                  const dead = cancelledRefs.has(String(s.ref));
+                  return (
+                    <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 0", borderBottom: "1px solid #F1F5F9", fontSize: 12 }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: "#64748B", minWidth: 66 }}>{s.kind}</span>
+                      <DocRef num={s.ref} cancelledSet={cancelledRefs} />
+                      {s.affectedKg ? <span style={{ color: "#64748B" }}>· {num(s.affectedKg).toLocaleString("pl-PL")} kg affected</span> : null}
+                      {dead && <span style={{ fontSize: 10, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 4, padding: "1px 6px" }}
+                        title="This document was cancelled after the claim was raised. A cancelled document never happened — withdraw the claim, or un-cancel the document.">cancelled — resolve</span>}
+                    </div>
+                  );
+                })}
                 <div style={{ marginTop: 8, fontSize: 10.5, color: "#94A3B8", lineHeight: 1.5 }}>
                   A claim can cover several lots — one reefer failure damages a whole container, not one pallet. Phase 2 adds raising a claim straight from a shipment.
                 </div>

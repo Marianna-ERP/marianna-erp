@@ -1216,31 +1216,18 @@ T("a 42000 kg line ships 21000 now, 21000 remaining for the next truck", () => {
   assert.equal(shipped + thisShip, 42000);
 });
 
-// ── v6.34.6: consume-guard — incoterm + port decide the fulfilling movement ──
-const { shipmentFulfilsOrder, sellIncotermHasOnwardLeg } = require("./build/tradeFlow.domain.js");
-console.log("── which shipment fulfils (consumes) the order ──");
-T("direct road export (DAP, not a port) consumes and closes the order", () => {
-  assert.equal(shipmentFulfilsOrder({ status: "Booked" }, "DAP", false), true);
-});
-T("FOB sale: truck to the port IS fulfilment → consumes", () => {
-  assert.equal(shipmentFulfilsOrder({ status: "Booked" }, "FOB", true), true);
-});
-T("CIF split: pre-carriage road-to-PORT does NOT consume; the sea leg will", () => {
-  // road leg to port under CIF → exempt
-  assert.equal(shipmentFulfilsOrder({ status: "Booked" }, "CIF", true), false);
-  // the onward sea shipment (its own destination is the client, not a port) → consumes
-  assert.equal(shipmentFulfilsOrder({ status: "Booked" }, "CIF", false), true);
-});
-T("Draft never consumes; Booked+ does", () => {
-  assert.equal(shipmentFulfilsOrder({ status: "Draft" }, "DAP", false), false);
-  assert.equal(shipmentFulfilsOrder({ status: "Cancelled" }, "DAP", false), false);
-  assert.equal(shipmentFulfilsOrder({ status: "Loaded" }, "DAP", false), true);
-});
+// ── v6.55.0: the v6.34.6 consume-guard tests are RETIRED with the rule.
+// They pinned a carve-out (pre-carriage road-to-port under CIF/CFR/CPT/CIP does
+// not consume the order) that existed only because shipments were counted
+// against a PO at all. A PO is consumed by SALES ORDERS. See receipts.domain
+// below for the rules that replaced this. sellIncotermHasOnwardLeg survives —
+// it states a real fact about incoterms and is used elsewhere.
+const { sellIncotermHasOnwardLeg } = require("./build/tradeFlow.domain.js");
+console.log("── incoterms: which sales carry an onward freight leg ──");
 T("freight-onward set is exactly CIF/CFR/CPT/CIP", () => {
   ["CIF","CFR","CPT","CIP"].forEach(i => assert.ok(sellIncotermHasOnwardLeg(i)));
   ["FOB","FCA","EXW","DAP","DDP",""].forEach(i => assert.ok(!sellIncotermHasOnwardLeg(i)));
 });
-
 // ── v6.34.8: SO multi-shipment parity — same per-line remaining math as PO ──
 console.log("── SO partial-shipment parity ──");
 T("SO line ships across two shipments; second defaults to remaining (parity with PO)", () => {
@@ -2061,9 +2048,12 @@ T("two PO lines produce their own pallets, each carrying its own variety", () =>
     { product: "Apples", variety: "Gala", size: "70-80", qtyKg: 936 * 3 },
     { product: "Apples", variety: "Idared", size: "65-70", qtyKg: 936 * 2 },
   ], PKG.PACKAGING_SEED);
-  assert.equal(rows.length, 5);
-  assert.deepEqual(rows.map(r => r.variety), ["Gala","Gala","Gala","Idared","Idared"]);
-  assert.deepEqual(rows.map(r => r.no), [1,2,3,4,5], "numbered continuously across lines");
+  // v6.57.0: the sheet always prints 21 lines, so measure the FILLED ones.
+  const filled = LP.filledRows(rows);
+  assert.equal(filled.length, 5);
+  assert.equal(rows.length, 21, "the rest print as blank writable lines");
+  assert.deepEqual(filled.map(r => r.variety), ["Gala","Gala","Gala","Idared","Idared"]);
+  assert.deepEqual(filled.map(r => r.no), [1,2,3,4,5], "numbered continuously across lines");
 });
 T("truck capacity: weight bites before floor space for apples", () => {
   const c = LP.checkTruckLoad(26, 26 * 936 * 1.13, "standard");
@@ -2076,15 +2066,25 @@ T("euro pallets allow 33; over that the count binds", () => {
   assert.equal(LP.checkTruckLoad(34, 5000, "euro").limit, "pallets");
   assert.equal(LP.checkTruckLoad(27, 5000, "standard").limit, "pallets");
 });
-T("confirm-as-loaded ticks every row in one action", () => {
+T("confirm-as-loaded ticks the loaded rows, never the blank padding", () => {
   const rows = LP.confirmAsLoaded(LP.deriveRows([{ product: "Apples", qtyKg: 936 * 2 }], PKG.PACKAGING_SEED));
-  assert.ok(rows.every(r => r.boxesOk === true && r.goodsOk === true && r.remarks === "Brak"));
+  const filled = LP.filledRows(rows);
+  assert.equal(filled.length, 2);
+  assert.ok(filled.every(r => r.boxesOk === true && r.goodsOk === true && r.remarks === "Brak"));
+  // v6.57.0: ticking the spare lines would make 19 empty rows read as inspected
+  // sound pallets — the false completeness this sheet exists to prevent.
+  assert.ok(rows.slice(2).every(r => r.boxesOk === null && r.goodsOk === null));
+  assert.equal(LP.protocolGaps({ rows, driverSignedDate: "x", issuerSignedDate: "x", recorderNos: ["1"], chamberTempBeforeC: "2", scanLink: "l",
+    checks: { transportClean: true, chamberClean: true, foreignOdours: false, packagingCompliant: true } })
+    .filter(g => g.includes("condition")).length, 0, "blank lines are not unconfirmed pallets");
 });
 T("adding a pallet renumbers and inherits the previous row", () => {
   const rows = LP.addBlankRow(LP.deriveRows([{ product: "Apples", variety: "Gala", qtyKg: 936 }], PKG.PACKAGING_SEED));
-  assert.equal(rows.length, 2);
-  assert.equal(rows[1].no, 2);
-  assert.equal(rows[1].variety, "Gala", "inherits so the producer types less");
+  assert.equal(rows.length, 22, "a 22nd line beyond the printed 21");
+  assert.equal(rows[21].no, 22, "renumbered to the end of the sheet");
+  // v6.57.0: inherits from the last row carrying GOODS, not from the blank
+  // padding above it — otherwise the added pallet arrives with no variety.
+  assert.equal(rows[21].variety, "Gala", "inherits so the producer types less");
 });
 T("a signature dated after departure is flagged", () => {
   const w = LP.signatureWarnings({ departedOn: "2026-05-02", driverSignedDate: "2026-05-04", issuerSignedDate: "2026-05-02" });
@@ -2134,7 +2134,7 @@ T("a truck carrying only one of two lines gets only that line's pallets", () => 
     { id: 1, product: "Apples", variety: "Gala", qtyKg: 936 },
     { id: 2, product: "Apples", variety: "Idared", qtyKg: 936 },
   ];
-  const rows = LP.deriveRows(LP.unitGoodsLines(goods, { id: "A", load: [{ goodsLineId: 2, qtyKg: 936 }] }), PKG.PACKAGING_SEED);
+  const rows = LP.filledRows(LP.deriveRows(LP.unitGoodsLines(goods, { id: "A", load: [{ goodsLineId: 2, qtyKg: 936 }] }), PKG.PACKAGING_SEED));
   assert.equal(rows.length, 1);
   assert.equal(rows[0].variety, "Idared", "the other truck's variety must not appear");
 });
@@ -2187,12 +2187,276 @@ T("the sheet is built for its truck: plate, driver and pallet type", () => {
   assert.equal(p.driverName, "Nowak");
   assert.equal(p.palletType, "euro", "pallet footprint follows the truck");
   assert.deepEqual(p.recorderNos, ["TR-1"], "a recorder already on the unit is carried onto the sheet");
-  assert.equal(p.rows.length, 1);
+  assert.equal(LP.filledRows(p.rows).length, 1);
+  assert.equal(p.rows.length, 21, "v6.57.0: every sheet prints 21 lines");
 });
 
 T("euro and standard pallet ceilings bind differently on the same load", () => {
   assert.equal(LP.checkTruckLoad(30, 5000, "standard").limit, "pallets");
   assert.equal(LP.checkTruckLoad(30, 5000, "euro").limit, "", "30 euro pallets fit where 30 standard do not");
+});
+
+console.log("");
+console.log("── cancellation.domain: a cancelled record never happened (v6.54.0) ──");
+
+const CX = require("./build/cancellation.domain.js");
+
+T("cancelled is recognised however it was written", () => {
+  assert.ok(CX.isCancelled({ status: "Cancelled" }));
+  assert.ok(CX.isCancelled("Void"), "protocols use Void for the same idea");
+  assert.ok(CX.isCancelled("Canceled"), "the one-l spelling must not slip through");
+  assert.ok(!CX.isCancelled({ status: "Loaded" }));
+  assert.ok(!CX.isCancelled({}), "a record with no status is live, not cancelled");
+});
+
+T("cancelled records count toward no operational figure", () => {
+  const ships = [
+    { number: "S1", status: "Loaded", billingStatus: "Not ready" },
+    { number: "S2", status: "Cancelled", billingStatus: "Not ready" },
+    { number: "S3", status: "Cancelled", billingStatus: "Supplier invoice received" },
+  ];
+  assert.equal(CX.liveOnly(ships).length, 1);
+  assert.equal(ships.filter(CX.countsOperationally).length, 1,
+    "the real defect: 2 of 3 shipments were inflating the KPI tiles");
+});
+
+T("linked documents split into live and cancelled", () => {
+  const { live, cancelled } = CX.splitByCancelled([
+    { number: "SHP-11", status: "Loaded" },
+    { number: "SHP-09", status: "Cancelled" },
+    { number: "SHP-08", status: "Cancelled" },
+  ]);
+  assert.equal(live.length, 1);
+  assert.equal(cancelled.length, 2, "PO-0009's real shape: 3 linked, 1 counting");
+  assert.equal(live[0].number, "SHP-11");
+});
+
+T("cancelled refs are struck through and red", () => {
+  const s = CX.cancelledTextStyle(true);
+  assert.equal(s.textDecoration, "line-through");
+  assert.equal(s.color, "#DC2626");
+  assert.deepEqual(CX.cancelledTextStyle(false), {}, "live refs get no styling");
+});
+
+T("a claim cannot be raised against a cancelled document", () => {
+  const docs = { "SHP-9": { status: "Cancelled" }, "SHP-11": { status: "Loaded" }, "SO-1": { status: "Cancelled" } };
+  const look = (s) => docs[s.ref];
+  assert.ok(CX.claimBlockReason([{ kind: "shipment", ref: "SHP-9" }], look).includes("never happened"));
+  assert.equal(CX.claimBlockReason([{ kind: "shipment", ref: "SHP-11" }], look), "", "a live shipment can be claimed on");
+  const both = CX.claimBlockReason([{ kind: "shipment", ref: "SHP-9" }, { kind: "so", ref: "SO-1" }], look);
+  assert.ok(both.includes("SHP-9") && both.includes("SO-1"), "every dead subject is named");
+  assert.equal(CX.claimBlockReason([{ kind: "shipment", ref: "UNKNOWN" }], look), "",
+    "an unresolvable ref cannot block — it may simply be external");
+});
+
+T("a claim whose subject is cancelled later is flagged, never silently voided", () => {
+  const docs = { "SHP-9": { status: "Cancelled" }, "SHP-11": { status: "Loaded" } };
+  const look = (s) => docs[s.ref];
+  const claims = [
+    { number: "CLM-1", status: "Sent", subjects: [{ kind: "SHIPMENT", ref: "SHP-9" }] },
+    { number: "CLM-2", status: "Draft", subjects: [{ kind: "SHIPMENT", ref: "SHP-11" }] },
+    { number: "CLM-3", status: "Cancelled", subjects: [{ kind: "SHIPMENT", ref: "SHP-9" }] },
+  ];
+  const warns = CX.staleClaimWarnings(claims, look);
+  assert.equal(warns.length, 1, "only the live claim on a dead subject needs resolving");
+  assert.equal(warns[0].claimNumber, "CLM-1");
+  assert.deepEqual(warns[0].deadRefs, ["SHP-9"]);
+});
+
+T("cancellation records what it released, including nothing", () => {
+  const t = CX.releaseSummaryText({ lotPostings: 3, costLots: 2, protocols: 1, kg: 38844 });
+  assert.ok(t.includes("3 lot posting"));
+  assert.ok(t.includes("38 844 kg") || t.includes("38\u00a0844 kg"), "kg are reported for the trail");
+  assert.ok(t.includes("2 lot(s)") && t.includes("1 loading protocol"));
+  assert.ok(CX.releaseSummaryText({ lotPostings: 0, costLots: 0, protocols: 0, kg: 0 }).includes("nothing to release"),
+    "a cancellation that reversed nothing is itself worth recording");
+});
+
+console.log("");
+console.log("── receipts.domain: a PO is consumed by SOs, not by movements (v6.55.0) ──");
+
+const RC = require("./build/receipts.domain.js");
+
+T("only the inbound movement receives against a PO", () => {
+  assert.ok(RC.isReceiptOfPO({ purpose: "INBOUND", poRefs: ["PO-1"] }));
+  assert.ok(!RC.isReceiptOfPO({ purpose: "TRANSFER", poRefs: ["PO-1"] }), "port → warehouse moves goods already received");
+  assert.ok(!RC.isReceiptOfPO({ purpose: "OUTBOUND", poRefs: ["PO-1"] }), "delivery to the client is not a receipt");
+  assert.ok(!RC.isReceiptOfPO({ purpose: "INBOUND", status: "Cancelled" }), "a cancelled movement never happened");
+  assert.ok(RC.isReceiptOfPO({ poRefs: ["PO-1"] }), "legacy shipment with no purpose is treated as the receipt");
+});
+
+T("THE REGRESSION: moving the same cargo twice no longer exhausts the PO", () => {
+  // PO-2026-0009's real shape: received once on SHP-0011, then moved onward.
+  const ships = [
+    { number: "SHP-0011", purpose: "INBOUND", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 38844 }] },
+    { number: "SHP-0014", purpose: "TRANSFER", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 38844 }] },
+    { number: "SHP-0015", purpose: "OUTBOUND", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 38844 }] },
+  ];
+  const got = RC.receivedKgByPoLine(ships, "PO-9");
+  assert.equal(got["L1"], 38844, "three movements of one delivery are still one delivery");
+  assert.equal(RC.overReceiptCheck([{ id: "L1", product: "Apples", qty: 38844 }], got).length, 0,
+    "before v6.55.0 this read as 116 532 kg against a 38 844 kg order and blocked creation");
+});
+
+T("cancelled receipts free the order again", () => {
+  const ships = [
+    { number: "SHP-0009", purpose: "INBOUND", status: "Cancelled", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 38844 }] },
+    { number: "SHP-0011", purpose: "INBOUND", status: "Loaded", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 19422 }] },
+  ];
+  assert.equal(RC.receivedKgByPoLine(ships, "PO-9")["L1"], 19422);
+});
+
+T("over-receipt is reported, never blocked, and tolerates whole-box rounding", () => {
+  const items = [{ id: "L1", product: "Apples", qty: 21000 }];
+  assert.equal(RC.overReceiptCheck(items, { L1: 21008 }).length, 1, "8 kg over is still over");
+  assert.equal(RC.overReceiptCheck(items, { L1: 21000.5 }).length, 0, "sub-kilo rounding is not an exception");
+  const over = RC.overReceiptCheck(items, { L1: 20000 }, { L1: 2000 });
+  assert.equal(over.length, 1, "the shipment being created counts toward the check");
+  assert.equal(over[0].overKg, 1000);
+  assert.ok(RC.receiptWarningText(over).includes("nothing is blocked"));
+  assert.equal(RC.receiptWarningText([]), "");
+});
+
+T("a lot cannot ship kilos it does not hold", () => {
+  const lots = [{ number: "LOT-1", product: "Apples", qtyKg: 5000 }];
+  const short = RC.lotStockCheck([{ lotRef: "LOT-1", qtyKg: 8000 }], lots);
+  assert.equal(short.length, 1);
+  assert.equal(short[0].shortKg, 3000);
+  assert.equal(RC.lotStockCheck([{ lotRef: "LOT-1", qtyKg: 5000 }], lots).length, 0);
+  assert.equal(RC.lotStockCheck([{ lotRef: "LOT-1", qtyKg: 3000 }, { lotRef: "LOT-1", qtyKg: 3000 }], lots).length, 1,
+    "two lines drawing on one lot are summed");
+  assert.equal(RC.lotStockCheck([{ lotRef: "UNKNOWN", qtyKg: 9999 }], lots).length, 0,
+    "an unknown lot cannot be judged — silence beats a false alarm");
+});
+
+console.log("");
+console.log("── loadPlan.domain: one movement, several shipments (v6.56.0) ──");
+
+const LDP = require("./build/loadPlan.domain.js");
+
+// The real apple export: 5 trucks -> 4 containers. Four go in whole; the fifth
+// is split across all four.
+const mkPlan = () => ({
+  id: 1, number: "LDP-2026-0001",
+  shipmentRefs: ["T1", "T2", "T3", "T4", "T5", "SEA"],
+  map: [
+    { containerRef: "C1", shipmentRef: "T1", qtyKg: 19656 }, { containerRef: "C1", shipmentRef: "T5", qtyKg: 4680 },
+    { containerRef: "C2", shipmentRef: "T2", qtyKg: 19656 }, { containerRef: "C2", shipmentRef: "T5", qtyKg: 4680 },
+    { containerRef: "C3", shipmentRef: "T3", qtyKg: 19656 }, { containerRef: "C3", shipmentRef: "T5", qtyKg: 4680 },
+    { containerRef: "C4", shipmentRef: "T4", qtyKg: 19656 }, { containerRef: "C4", shipmentRef: "T5", qtyKg: 4680 },
+  ],
+});
+const mkShips = () => ["T1", "T2", "T3", "T4", "T5"].map((n, i) => ({
+  id: i + 1, number: n, mode: "Road", status: "Loaded", poRefs: ["PO-9"], soRefs: ["SO-9"],
+  goods: [{ qtyKg: n === "T5" ? 18720 : 19656, pallets: 21 }],
+  loadingProtocols: [{ number: `LP-${n}`, status: "Returned" }],
+})).concat([{ id: 9, number: "SEA", mode: "Sea", status: "Loaded", poRefs: ["PO-9"], soRefs: ["SO-9"], goods: [{ qtyKg: 97344, pallets: 105 }] }]);
+
+T("numbering does not collide with the loading protocol's LP series", () => {
+  assert.equal(LDP.nextLoadPlanNumber([], 2026), "LDP-2026-0001");
+  assert.equal(LDP.nextLoadPlanNumber([{ number: "LDP-2026-0003" }], 2026), "LDP-2026-0004");
+});
+
+T("every figure is derived from the member shipments, never stored", () => {
+  const t = LDP.planTotals(mkPlan(), mkShips(), () => 1000);
+  assert.equal(t.live, 6);
+  assert.deepEqual(t.poRefs, ["PO-9"], "several trucks on one order collapse to one reference");
+  assert.equal(t.freightPLN, 6000, "freight is summed across the member shipments");
+  assert.equal(t.protocolsBack, 5);
+  assert.equal(t.protocolsTotal, 5, "the sea leg has no loading protocol and is not counted as missing one");
+});
+
+T("a cancelled member stays listed but counts toward nothing", () => {
+  const ships = mkShips();
+  ships[0].status = "Cancelled";
+  const t = LDP.planTotals(mkPlan(), ships, () => 1000);
+  assert.equal(t.shipments, 6, "nothing is ever deleted");
+  assert.equal(t.live, 5);
+  assert.equal(t.cancelled, 1);
+  assert.equal(t.freightPLN, 5000);
+});
+
+T("the split truck is fully accounted for across four containers", () => {
+  const gaps = LDP.mapGaps(mkPlan(), mkShips());
+  assert.equal(gaps.length, 0, "T5's 18 720 kg = 4 x 4 680 across C1-C4");
+  assert.equal(LDP.planGaps(mkPlan(), mkShips()).length, 0);
+});
+
+T("a truck missing from the map is reported, not passed over", () => {
+  const plan = mkPlan();
+  plan.map = plan.map.filter(e => e.shipmentRef !== "T3");
+  const gaps = LDP.mapGaps(plan, mkShips());
+  assert.equal(gaps.length, 1);
+  assert.equal(gaps[0].shipmentRef, "T3");
+  assert.equal(gaps[0].unmappedKg, 19656);
+  assert.ok(LDP.planGaps(plan, mkShips()).some(g => g.includes("T3")));
+});
+
+T("an empty map is itself the gap — the map is required", () => {
+  const plan = mkPlan(); plan.map = [];
+  assert.ok(LDP.planGaps(plan, mkShips()).some(g => g.includes("transshipment map is empty")));
+});
+
+T("placing more in containers than a truck carries is caught", () => {
+  const plan = mkPlan();
+  plan.map.push({ containerRef: "C4", shipmentRef: "T1", qtyKg: 5000 });
+  const gaps = LDP.mapGaps(plan, mkShips());
+  assert.equal(gaps[0].overKg, 5000);
+});
+
+T("THE CLAIM CHAIN: a damaged container names the trucks that filled it", () => {
+  const plan = mkPlan();
+  const feeders = LDP.tracebackFromContainer(plan, "C3");
+  assert.deepEqual(feeders.sort(), ["T3", "T5"]);
+  const contents = LDP.containerContents(plan);
+  assert.equal(contents.length, 4);
+  assert.equal(contents[0].containerRef, "C1");
+  assert.equal(contents[0].kg, 24336, "one whole truck plus the split truck's share");
+});
+
+console.log("");
+console.log("── loadingProtocol: the sheet is always 21 lines (v6.57.0) ──");
+
+T("a 6-pallet truck still prints a 21-line sheet", () => {
+  const rows = LP.deriveRows([{ product: "Apples", variety: "Gala", size: "70-80", qtyKg: 936 * 6 }], PKG.PACKAGING_SEED);
+  assert.equal(rows.length, 21, "the producer writes on the paper — he needs the lines");
+  assert.equal(LP.filledRows(rows).length, 6);
+  assert.deepEqual(rows.map(r => r.no).slice(0, 3), [1, 2, 3]);
+  assert.equal(rows[20].no, 21, "spare lines are numbered too");
+  assert.ok(LP.isBlankRow(rows[6]) && !LP.isBlankRow(rows[5]));
+});
+
+T("21 is a floor, never a cap", () => {
+  // 45 pallets: a full truck's worth and then some.
+  const rows = LP.deriveRows([{ product: "Apples", qtyKg: 936 * 45 }], PKG.PACKAGING_SEED);
+  assert.equal(rows.length, 45, "a bigger load simply runs longer");
+  assert.equal(LP.filledRows(rows).length, 45);
+});
+
+T("blank padding never reaches the arithmetic", () => {
+  const rows = LP.deriveRows([{ product: "Apples", qtyKg: 936 * 6 }], PKG.PACKAGING_SEED);
+  const t = LP.protocolTotals({ rows }, PKG.PACKAGING_SEED, "Apples");
+  assert.equal(t.pallets, 6, "not 21 — otherwise gross weight, tare and capacity all break together");
+  assert.equal(t.boxes, 72 * 6);
+  // The capacity check reads these totals, so a padded sheet must not read as a full truck.
+  assert.equal(LP.checkTruckLoad(t.pallets, t.grossKg, "standard").limit, "");
+});
+
+T("a padded sheet can still be complete", () => {
+  const rows = LP.confirmAsLoaded(LP.deriveRows([{ product: "Apples", variety: "Gala", size: "70-80", qtyKg: 936 * 2 }], PKG.PACKAGING_SEED));
+  const gaps = LP.protocolGaps({
+    rows, driverSignedDate: "2026-05-02", issuerSignedDate: "2026-05-02", recorderNos: ["TR-1"],
+    chamberTempBeforeC: "2", scanLink: "http://x",
+    checks: { transportClean: true, chamberClean: true, foreignOdours: false, packagingCompliant: true },
+  });
+  assert.deepEqual(gaps, [], "19 blank lines must not hold a finished sheet open forever");
+});
+
+T("padToSheet is idempotent and leaves filled rows alone", () => {
+  const once = LP.padToSheet([{ no: 1, boxes: 72, kgPerBox: 13, variety: "Gala", size: "70-80" }]);
+  assert.equal(once.length, 21);
+  assert.equal(LP.padToSheet(once).length, 21, "padding an already-padded sheet changes nothing");
+  assert.equal(once[0].variety, "Gala");
 });
 
 console.log("");

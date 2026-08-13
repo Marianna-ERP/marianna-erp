@@ -1,11 +1,15 @@
 import React, { useMemo, useState } from "react";
-import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection, shipmentFulfilsOrder } from "./tradeFlow.domain";
+import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
 import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms, syncLegFreightCostLines, legFreightSource, findLotForSOLine } from "./shipments.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { printHtmlNode } from "./documentService";
 import LoadingProtocolModal from "./LoadingProtocolModal";
 import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } from "./loadingProtocol.domain";
+import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
+import { isReceiptOfPO, lotStockCheck } from "./receipts.domain";
+import LoadPlans from "./LoadPlans";
+
 import { inspectLink, summariseDocs } from "./docLinks.domain";
 import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
@@ -84,15 +88,9 @@ const MODE_CONFIG = {
   Multimodal: { bg: "#F5F3FF", color: "#7C3AED", label: "Multimodal", icon: "🔀" },
 };
 
-const PURPOSE_LABELS = {
-  PO_PICKUP:       "PO pickup",
-  PO_IMPORT:       "PO import",
-  PO_EXPORT:       "PO export",
-  SO_DELIVERY:     "SO delivery",
-  TRANSFER:        "Transfer",
-  DIRECT_PO_TO_SO: "Direct PO -> SO",
-  MANUAL:          "Manual",
-};
+// v6.56.0: PURPOSE_LABELS removed — its last consumer was the one-line list
+// row's tooltip, replaced by BP-60's two-line row where route, dates, weight
+// and carrier are visible outright rather than hidden behind a hover.
 
 const BILLING_STATUSES = [
   "Not ready",
@@ -976,16 +974,36 @@ function Kpi({ label, value, sub, onClick }: any) {
   </div>;
 }
 
-function ShipmentListRow({ sh, active, onClick, contacts }: any) {
-  // v6.4.0: single compact line (number · mode · status) so more shipments fit
-  // on screen. A small amber dot flags missing documents.
+function ShipmentListRow({ sh, active, onClick, contacts, planNumber = "" }: any) {
+  // BP-60 part A (v6.56.0): two lines instead of one. The old row showed number,
+  // mode and status — true, but never the thing you scan a list FOR. You had to
+  // open each shipment to find out where it goes and when. Now the second line
+  // carries route, dates, weight and carrier, and a chip names the single next
+  // action so the list tells you what to DO, not just what exists.
   const missingDocs = (sh.documents || []).filter(d => ["Required", "Missing"].includes(d.status)).length;
-  return <div onClick={onClick} title={`${PURPOSE_LABELS[sh.purpose] || sh.purpose} · ${providerName(sh.carrierId || sh.forwarderId, contacts)} · ${sh.loadingDate || "-"} → ${sh.expectedDeliveryDate || "-"}${missingDocs ? ` · ${missingDocs} document(s) missing` : ""}`}
-    style={{ padding: "9px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: sh.status === "Cancelled" ? "#FEF2F2" : active ? "#F9FAFB" : "#fff", borderLeft: sh.status === "Cancelled" ? "4px solid #DC2626" : active ? "4px solid #111" : "4px solid transparent", display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-    <div style={{ fontSize: 12.5, fontWeight: 800, color: sh.status === "Cancelled" ? "#B91C1C" : "#111", whiteSpace: "nowrap" }}>{sh.number}</div>
-    <ModeBadge mode={sh.mode} />
-    <StatusBadge status={sh.status} />
-    {missingDocs > 0 && <span title={`${missingDocs} document(s) missing`} style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0, marginLeft: "auto" }} />}
+  const dead = isCancelled(sh);
+  const na = dead ? null : nextShipmentAction(sh);
+  const kg = (sh.goods || []).reduce((a, g) => a + parseNum(g.qtyKg), 0);
+  const carrier = providerName(sh.carrierId || sh.forwarderId, contacts);
+  const route = [locById(sh.originLocationId)?.name, locById(sh.destinationLocationId)?.name].filter(Boolean).join(" \u2192 ");
+  const dates = [sh.loadingDate, sh.expectedDeliveryDate].filter(Boolean).join(" \u2192 ");
+  return <div onClick={onClick}
+    style={{ padding: "8px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: dead ? "#FEF2F2" : active ? "#F9FAFB" : "#fff", borderLeft: dead ? "4px solid #DC2626" : active ? "4px solid #111" : "4px solid transparent", minWidth: 0 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 800, color: dead ? "#B91C1C" : "#111", whiteSpace: "nowrap", ...(dead ? { textDecoration: "line-through" } : {}) }}>{sh.number}</div>
+      <ModeBadge mode={sh.mode} />
+      <StatusBadge status={sh.status} />
+      {planNumber && <span title={`Part of load plan ${planNumber}`} style={{ fontSize: 9.5, fontWeight: 700, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}>{planNumber}</span>}
+      <div style={{ flex: 1 }} />
+      {missingDocs > 0 && <span title={`${missingDocs} document(s) missing`} style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0 }} />}
+      {na && <span style={{ fontSize: 9.5, fontWeight: 700, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 999, padding: "1px 7px", whiteSpace: "nowrap" }}>{na.label}</span>}
+    </div>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, fontSize: 10.5, color: "#64748B", minWidth: 0 }}>
+      {route && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "45%" }} title={route}>{route}</span>}
+      {dates && <span style={{ whiteSpace: "nowrap" }}>{dates}</span>}
+      {kg > 0 && <span style={{ whiteSpace: "nowrap" }}>{Math.round(kg).toLocaleString("pl-PL")} kg</span>}
+      {carrier && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={carrier}>{carrier}</span>}
+    </div>
   </div>;
 }
 
@@ -1044,10 +1062,13 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const srcGoodsMatch = (g: any) => sourceType === "PO" ? g.poRef === selectedPO?.number : g.soRef === selectedSO?.number;
   const srcLineKey = (g: any) => String((sourceType === "PO" ? (g.poLineId ?? g.lineId) : (g.soLineId ?? g.lineId)) ?? "");
 
+  // v6.55.0: RECEIPTS, not "shipped". Only the inbound movement counts against a
+  // PO line — a transfer to the warehouse or a delivery to a client moves goods
+  // already received, and counting those is what made a PO look shipped twice.
   const lineShippedKgOuter: Record<string, number> = (() => {
     const map: Record<string, number> = {};
     if (!srcDoc) return map;
-    (shipments || []).filter((s: any) => srcRefMatch(s) && shipmentConsumesBudget(s, orders, locById))
+    (shipments || []).filter((s: any) => srcRefMatch(s) && (sourceType === "PO" ? isReceiptOfPO(s) : !isCancelled(s)))
       .forEach((s: any) => (s.goods || []).forEach((g: any) => {
         if (!srcGoodsMatch(g)) return;
         const key = srcLineKey(g);
@@ -1057,7 +1078,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   })();
   const poShipState = (() => {
     if (!srcDoc) return null;
-    const existing = (shipments || []).filter((s: any) => srcRefMatch(s) && shipmentConsumesBudget(s, orders, locById));
+    const existing = (shipments || []).filter((s: any) => srcRefMatch(s) && (sourceType === "PO" ? isReceiptOfPO(s) : !isCancelled(s)));
     const poQty = srcItems.reduce((a: number, it: any) => a + parseNum(it.qty), 0);
     const shippedKg = existing.reduce((sum: number, s2: any) => sum + (s2.goods || []).filter((g: any) => srcGoodsMatch(g)).reduce((a: number, g: any) => a + parseNum(g.qtyKg), 0), 0);
     // v6.34.4: 'this shipment' kg = the per-line entered amounts (default: remaining), not the full line.
@@ -1073,9 +1094,11 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       return a + (on ? enteredFor(it, idx) : 0);
     }, 0);
     const projected = shippedKg + thisKg;
-    const alreadyFull = poQty > 0 && shippedKg >= poQty - 1;
-    const wouldExceed = poQty > 0 && projected > poQty + 1;
-    return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), alreadyFull, wouldExceed, exceedBy: Math.max(0, Math.round(projected - poQty)) };
+    // v6.55.0: these are now WARNINGS, never blocks. A producer loading more than
+    // ordered is routine and the PO already carries a variance field; refusing to
+    // record the truck that is standing at the dock helps nobody.
+    const overReceipt = sourceType === "PO" && poQty > 0 && projected > poQty + 1;
+    return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), overReceipt, exceedBy: Math.max(0, Math.round(projected - poQty)) };
   })();
 
   // v6.34.4: per-LINE shipped kg (across non-cancelled shipments of this PO), so each
@@ -1086,7 +1109,10 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     return Math.max(0, parseNum(it.qty) - (lineShippedKg[id] || 0));
   };
   const needsRef = sourceType !== "Manual" && !ref; // v6.18.14 (#4)
-  const blockCreate = needsRef || (!!poShipState && (poShipState.alreadyFull || poShipState.wouldExceed));
+  // v6.55.0: the ONLY reason creation is blocked is a missing source reference.
+  // The over-shipping guard is gone — a PO is consumed by sales orders, not by
+  // movements, so no count of shipments can tell you a PO is used up.
+  const blockCreate = needsRef;
   // v6.16 (#4): the PO loading date starts the whole shipment and the SO delivery
   // date ends it. Prefill the header Expected loading / delivery dates from those
   // when the reference changes (in-between dates are set per leg later).
@@ -1173,30 +1199,30 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           </div>
         </Card>
 
-        {poShipState && poShipState.poQty > 0 && (poShipState.existing.length > 0 || poShipState.wouldExceed) && (() => {
+        {poShipState && poShipState.poQty > 0 && (poShipState.existing.length > 0 || poShipState.overReceipt) && (() => {
           const pct = Math.min(100, Math.round((poShipState.shippedKg / poShipState.poQty) * 100));
           const thisPct = Math.min(100 - pct, Math.round((poShipState.thisKg / poShipState.poQty) * 100));
-          const blocked = poShipState.alreadyFull || poShipState.wouldExceed;
+          const blocked = false; // v6.55.0: nothing here blocks any more — informational only.
           return (
             <Card style={{ gridColumn: "1 / 3", background: blocked ? "#FEF2F2" : "#FFFBEB", border: `1px solid ${blocked ? "#FECACA" : "#FDE68A"}` }}>
               <div style={{ fontSize: 12.5, color: blocked ? "#991B1B" : "#92400E", lineHeight: 1.5, marginBottom: 10 }}>
-                {blocked ? "⛔" : "⚠"} <strong>{srcDoc?.number}</strong> already has {poShipState.existing.length} shipment(s){poShipState.existing.length ? `: ${poShipState.existing.map((s: any) => s.number).join(", ")}` : ""}.
+                {poShipState.overReceipt ? "⚠" : "ℹ"} <strong>{srcDoc?.number}</strong> {sourceType === "PO" ? "has been received on" : "already has"} {poShipState.existing.length} shipment(s){poShipState.existing.length ? `: ${poShipState.existing.map((s: any) => s.number).join(", ")}` : ""}.
               </div>
               {/* kg bar: shipped (solid) + this shipment (striped) against PO total */}
               <div style={{ display: "flex", height: 22, borderRadius: 6, overflow: "hidden", border: "1px solid #E5E7EB", background: "#fff", marginBottom: 8 }}>
-                <div style={{ width: `${pct}%`, background: "#3B82F6" }} title={`Already shipped: ${fmtNum(poShipState.shippedKg)} kg`} />
-                <div style={{ width: `${thisPct}%`, background: poShipState.wouldExceed ? "#DC2626" : "#22C55E", backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(255,255,255,0.35) 5px, rgba(255,255,255,0.35) 10px)" }} title={`This shipment: ${fmtNum(poShipState.thisKg)} kg`} />
+                <div style={{ width: `${pct}%`, background: "#3B82F6" }} title={`${sourceType === "PO" ? "Already received" : "Already shipped"}: ${fmtNum(poShipState.shippedKg)} kg`} />
+                <div style={{ width: `${thisPct}%`, background: poShipState.overReceipt ? "#D97706" : "#22C55E", backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(255,255,255,0.35) 5px, rgba(255,255,255,0.35) 10px)" }} title={`This shipment: ${fmtNum(poShipState.thisKg)} kg`} />
               </div>
               <div style={{ fontSize: 11.5, color: "#475569", display: "flex", gap: 16, flexWrap: "wrap" }}>
-                <span><span style={{ display: "inline-block", width: 9, height: 9, background: "#3B82F6", borderRadius: 2, marginRight: 4 }} />Already shipped <strong>{fmtNum(poShipState.shippedKg)}</strong></span>
-                <span><span style={{ display: "inline-block", width: 9, height: 9, background: poShipState.wouldExceed ? "#DC2626" : "#22C55E", borderRadius: 2, marginRight: 4 }} />This shipment <strong>{fmtNum(poShipState.thisKg)}</strong></span>
+                <span><span style={{ display: "inline-block", width: 9, height: 9, background: "#3B82F6", borderRadius: 2, marginRight: 4 }} />{sourceType === "PO" ? "Already received" : "Already shipped"} <strong>{fmtNum(poShipState.shippedKg)}</strong></span>
+                <span><span style={{ display: "inline-block", width: 9, height: 9, background: poShipState.overReceipt ? "#D97706" : "#22C55E", borderRadius: 2, marginRight: 4 }} />This shipment <strong>{fmtNum(poShipState.thisKg)}</strong></span>
                 <span>{sourceType} total <strong>{fmtNum(poShipState.poQty)}</strong> kg</span>
               </div>
               {blocked && (
                 <div style={{ fontSize: 12.5, color: "#991B1B", fontWeight: 700, marginTop: 10 }}>
-                  {poShipState.alreadyFull
-                    ? `This ${sourceType} is fully shipped — there's nothing left to ship. Creating another shipment is blocked.`
-                    : `This shipment would exceed the ${sourceType} by ${fmtNum(poShipState.exceedBy)} kg. Reduce the lines selected, or it's blocked.`}
+                  {poShipState.overReceipt
+                    ? `More is arriving than was ordered — over by ${fmtNum(poShipState.exceedBy)} kg. Recorded as variance; nothing is blocked.`
+                    : `${fmtNum(poShipState.remaining)} kg of this ${sourceType} not yet received.`}
                 </div>
               )}
             </Card>
@@ -1276,12 +1302,19 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           </div>
         </Card>
         <Card>
-          <SectionTitle>Dates and temperature</SectionTitle>
+          <SectionTitle>Dates</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div><Lbl>Expected loading date</Lbl><Inp type="date" value={form.loadingDate} onChange={e => sf("loadingDate", e.target.value)} title="Start of the whole shipment — from the PO loading date" /></div>
             <div><Lbl>Expected delivery date</Lbl><Inp type="date" value={form.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} title="End of the whole shipment — from the SO delivery date" /></div>
-            <div><Lbl>Temp min C</Lbl><Inp type="number" value={form.temperatureMinC} onChange={e => sf("temperatureMinC", e.target.value)} /></div>
-            <div><Lbl>Temp max C</Lbl><Inp type="number" value={form.temperatureMaxC} onChange={e => sf("temperatureMaxC", e.target.value)} /></div>
+          </div>
+          {/* BP-60 part C (v6.57.0): creating a shipment is BOOKING a truck.
+              Temperature range moved to the editor's Execution stage — it is
+              carried forward from the product defaults and almost never changed
+              at booking, so asking for it here was two fields of noise on the
+              screen you use most. Plates, drivers and recorder numbers were
+              already there; this finishes the job. */}
+          <div style={{ marginTop: 9, fontSize: 10.5, color: "#94A3B8", lineHeight: 1.5 }}>
+            Temperature range, plates, drivers and recorder numbers are set in the shipment editor once the carrier confirms — booking only needs who, what, where and when.
           </div>
         </Card>
         {sourceType === "Manual" && <Card style={{ gridColumn: "1 / 3" }}>
@@ -1310,7 +1343,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="green" onClick={() => create()} disabled={blockCreate} title={needsRef ? `Select a ${sourceType} first` : blockCreate ? (poShipState?.alreadyFull ? `This ${sourceType} is fully shipped — nothing left to ship` : `This shipment would exceed the ${sourceType} quantity — reduce the lines selected`) : ""}>Create shipment</SmallButton>
+        <SmallButton kind="green" onClick={() => create()} disabled={blockCreate} title={needsRef ? `Select a ${sourceType} first` : ""}>Create shipment</SmallButton>
       </div>
 
       {/* v6.34.0 (BP-61): which SO/client is this truck for? Shown only when the
@@ -1354,16 +1387,11 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
 // untouched.
 // v6.34.6: does this shipment consume the PO/SO shipped budget? Delegates to the
 // pure engine rule (sell incoterm + port destination). destIsPort is resolved from
-// the shipment's destination location; the governing sell incoterm from its SO.
-function shipmentConsumesBudget(sh: any, ordersAll: any[], locResolve: (id: any) => any): boolean {
-  const destLoc = locResolve(sh?.destinationLocationId);
-  const destIsPort = !!destLoc && (destLoc.type === "Port" || String(destLoc.legacyType || "").toUpperCase() === "PORT");
-  // governing sell incoterm: from the shipment's governing SO, else any SO it references
-  const govSo = (ordersAll || []).find((o: any) => o.number === sh?.governingSoRef)
-    || (ordersAll || []).find((o: any) => (sh?.soRefs || []).includes(o.number));
-  const sellIncoterm = govSo?.sellIncoterm || "";
-  return shipmentFulfilsOrder(sh, sellIncoterm, destIsPort);
-}
+
+// v6.55.0: shipmentConsumesBudget() removed. It answered "does this movement
+// use up the order?" — a question with no correct answer, because the same
+// cargo moves several times. Consumption lives on the sales order.
+
 
 function syncCustomsCostLine(sh: any) {
   // v6.34.5: ONE auto-managed customs line, identified by a stable source tag (not a
@@ -1393,7 +1421,40 @@ function syncCustomsCostLine(sh: any) {
   return { ...sh, costs };
 }
 
+/**
+ * BP-60 part D (v6.57.0): the editor grouped by LIFECYCLE STAGE.
+ *
+ * The editor showed every field a shipment will ever have, all at once, from
+ * the moment it was booked. Booking a truck meant scrolling past BL numbers and
+ * closing costs that cannot possibly be known yet. Grouping by when the
+ * information ARRIVES lets you open the stage you are actually in.
+ *
+ * Deliberately NOT a wizard: every stage stays open-able at any time, because
+ * real shipments do not proceed in order — a BL sometimes lands before the
+ * driver's name does.
+ */
+function Stage({ title, subtitle, done, total, open, onToggle, children }: any) {
+  const complete = total > 0 && done >= total;
+  return <Card style={{ padding: 0, overflow: "hidden" }}>
+    <button onClick={onToggle} style={{ width: "100%", border: "none", background: open ? "#FAFAFA" : "#fff", cursor: "pointer", padding: "11px 16px", display: "flex", alignItems: "center", gap: 10, textAlign: "left" }}>
+      <span style={{ width: 9, height: 9, borderRadius: "50%", flexShrink: 0, background: complete ? "#22C55E" : done > 0 ? "#F59E0B" : "#E5E7EB" }}
+        title={total > 0 ? `${done} of ${total} filled in` : ""} />
+      <span style={{ fontSize: 13, fontWeight: 800, color: "#111" }}>{title}</span>
+      {subtitle && <span style={{ fontSize: 11, color: "#94A3B8" }}>{subtitle}</span>}
+      <span style={{ flex: 1 }} />
+      {total > 0 && <span style={{ fontSize: 10.5, color: complete ? "#166534" : "#64748B" }}>{done}/{total}</span>}
+      <span style={{ fontSize: 11, color: "#94A3B8" }}>{open ? "\u25B2" : "\u25BC"}</span>
+    </button>
+    {open && <div style={{ padding: "4px 16px 16px" }}>{children}</div>}
+  </Card>;
+}
+
 function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [], packagingTypes = [], onSave, onCancel }: any) {
+  // v6.57.0 (BP-60 part D): which lifecycle stage is expanded. Booking opens by
+  // default because that is where a new shipment starts; the rest stay closed
+  // until their information exists.
+  const [openStages, setOpenStages] = useState<Record<string, boolean>>({ booking: true, execution: false, closing: false });
+  const toggleStage = (k: string) => setOpenStages(o => ({ ...o, [k]: !o[k] }));
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: editDialogNode } = useConfirm(); // P2-6
   const [draft, setDraft] = useState(() => {
     const d = withStandardDocs(JSON.parse(JSON.stringify(shipment)));
@@ -1589,7 +1650,11 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
         </div>
         <button onClick={onCancel} style={{ border: "none", background: "transparent", fontSize: 22, color: "#888", cursor: "pointer" }}>x</button>
       </div>
-      <div style={{ padding: 22, display: "grid", gap: 16 }}>
+      <div style={{ padding: 22, display: "grid", gap: 12 }}>
+        <Stage title="Booking" subtitle="what you know when the truck is ordered"
+          open={openStages.booking} onToggle={() => toggleStage("booking")}
+          done={[draft.carrierId || draft.forwarderId, draft.loadingDate, draft.originLocationId, draft.destinationLocationId].filter(Boolean).length}
+          total={4}>
         <Card>
           <SectionTitle>Header</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
@@ -1643,6 +1708,15 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             <div><Lbl>Notes</Lbl><Inp value={draft.notes} onChange={e => sf("notes", e.target.value)} /></div>
           </div>
         </Card>
+        </Stage>
+
+        <Stage title="Execution" subtitle="filled in as the shipment actually moves"
+          open={openStages.execution} onToggle={() => toggleStage("execution")}
+          done={[(draft.legs || []).some((l: any) => transportUnitsForLeg(l).some((u: any) => u.truckPlate || u.containerNumber)),
+                 (draft.legs || []).some((l: any) => transportUnitsForLeg(l).some((u: any) => u.driverName)),
+                 (draft.goods || []).length > 0,
+                 (draft.customs || {}).required === false || !!(draft.customs || {}).status].filter(Boolean).length}
+          total={4}>
         <Card>
           <SectionTitle>Customs clearance</SectionTitle>
           <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10, lineHeight: 1.5 }}>
@@ -1872,6 +1946,14 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             })()}
           </div>)}
         </Card>
+        </Stage>
+
+        <Stage title="Closing" subtitle="costs, billing and the document file"
+          open={openStages.closing} onToggle={() => toggleStage("closing")}
+          done={[(draft.costs || []).some((c: any) => parseNum(c.amount) > 0),
+                 !!draft.billingStatus && draft.billingStatus !== "Not ready",
+                 (draft.documents || []).some((d: any) => d.status === "Have it" || d.status === "Sent")].filter(Boolean).length}
+          total={3}>
         <Card>
           <SectionTitle right={<SmallButton kind="green" onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 10, alignItems: "end", marginBottom: 12, paddingBottom: 12, borderBottom: "1px dashed #E5E7EB" }}>
@@ -1992,6 +2074,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             );
           })()}
         </Card>
+        </Stage>
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
@@ -2338,7 +2421,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   </div>;
 }
 
-function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim }: any) {
+function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim }: any) {
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
   const cancelledRefs = cancelledDocSet(pos, orders); // v6.35.1: strike cancelled PO/SO refs
   const missingDocs = (shipment.documents || []).filter(d => ["Required", "Missing"].includes(d.status));
@@ -2410,6 +2493,21 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onP
         </div>; })}
       </Card>
       <Card>
+        {/* BP-60 part B (v6.56.0): the shipment's FACE, above the checklist.
+            The detail used to open on a list of tasks, so answering "where is
+            this going and when" meant opening the editor just to look. Route,
+            dates, weight and carrier now sit where the eye lands first. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+          {[["ROUTE", [locById(shipment.originLocationId)?.name, locById(shipment.destinationLocationId)?.name].filter(Boolean).join(" \u2192 ") || "—"],
+            ["DATES", [shipment.loadingDate, shipment.expectedDeliveryDate].filter(Boolean).join(" \u2192 ") || "—"],
+            ["ON BOARD", (() => { const kg = (shipment.goods || []).reduce((a, g) => a + parseNum(g.qtyKg), 0); const pl = (shipment.goods || []).reduce((a, g) => a + parseNum(g.pallets), 0); return kg ? `${Math.round(kg).toLocaleString("pl-PL")} kg${pl ? ` · ${pl} pal` : ""}` : "—"; })()],
+            ["CARRIER", provider?.name || "—"]].map(([k, v]) => (
+            <div key={k} style={{ background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
+              <div style={{ fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{k}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={String(v)}>{v}</div>
+            </div>
+          ))}
+        </div>
         <SectionTitle>Operational checklist</SectionTitle>
         <ChecklistLine ok={!!provider} label="Carrier / forwarder selected" />
         <ChecklistLine ok={(shipment.goods || []).length > 0} label="Goods lines present" />
@@ -2435,6 +2533,16 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], onEdit, onP
           const over = gaps.filter((g: any) => g.overKg > 0);
           return <ChecklistLine ok={false} label="Goods assigned to trucks"
             warnText={[short.length ? `${short.length} line(s) unassigned` : "", over.length ? `${over.length} over-assigned` : ""].filter(Boolean).join(" · ")} />;
+        })()}
+        {/* v6.55.0: the constraint that replaces the PO guard — physical, not
+            policy. A lot cannot ship kilos it does not hold, whatever the
+            paperwork says. Reported, so a mis-keyed quantity surfaces here
+            rather than as a negative stock balance three screens away. */}
+        {(() => {
+          const short = lotStockCheck(shipment.goods || [], lots || []);
+          if (!short.length) return null;
+          return <ChecklistLine ok={false} label="Lots hold what this shipment moves"
+            warnText={`${short[0].lotRef} short by ${Math.round(short[0].shortKg).toLocaleString("pl-PL")} kg${short.length > 1 ? ` (+${short.length - 1} more)` : ""}`} />;
         })()}
         <ChecklistLine ok={missingDocs.length === 0} label="Required documents received" warnText={missingDocs.length ? `${missingDocs.length} missing` : ""} />
         {/* v6.47.0: a tick is not evidence — flag anything we say we hold but couldn't produce. */}
@@ -2530,6 +2638,8 @@ function ChecklistLine({ ok, label, warnText = "" }: any) {
 
 export default function Shipments({
   shipments: extShipments,
+  loadPlans = [],
+  setLoadPlans = null,
   packagingTypes = [],
   setClaims = null,
   setShipments: extSetShipments,
@@ -2571,6 +2681,15 @@ export default function Shipments({
   const [modeFilter, setModeFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("Open");
   const [showCreate, setShowCreate] = useState(false);
+  // v6.56.0: Load Plan lives as a TAB inside Shipments (user ruling), not a
+  // separate module — it is the same work, one level up.
+  const [tab, setTab] = useState("shipments");
+  // Which load plan a shipment belongs to, so the list can badge it — a truck
+  // that is part of a bigger export should say so where you scan for it.
+  const planNumberFor = React.useCallback((shipmentNumber: string) => {
+    const p = (loadPlans || []).find((x: any) => (x.shipmentRefs || []).includes(shipmentNumber));
+    return p ? p.number : "";
+  }, [loadPlans]);
   const [editShipment, setEditShipment] = useState(null);
   const [printShipment, setPrintShipment] = useState(null);
   const [protocolShipment, setProtocolShipment] = useState<any>(null);
@@ -2592,11 +2711,18 @@ export default function Shipments({
   const selected = shipments.find(s => s.id === selectedId) || filtered[0] || shipments[0] || null;
 
   const kpis = useMemo(() => {
-    const open = shipments.filter(s => !["Closed", "Cancelled"].includes(s.status));
-    const inTransit = shipments.filter(s => ["Loaded", "Arrived"].includes(s.status));
-    const missingDocs = shipments.filter(s => (s.documents || []).some(d => ["Required", "Missing"].includes(d.status))).length;
-    const billingReady = shipments.filter(s => s.billingStatus === "Ready for supplier invoice").length;
-    const unallocated = shipments.filter(s => shipmentCostPLN(s) > 0 && !["Cost allocated", "Closed"].includes(s.billingStatus)).length;
+    // v6.54.0: a cancelled shipment NEVER HAPPENED, so it counts toward nothing.
+    // Before this release only `open` and `inTransit` excluded it, while
+    // missingDocs / billingReady / unallocated silently counted cancelled
+    // shipments — a document never chased, an invoice never coming, a cost that
+    // was already stripped off the lots at cancellation time. Every one of those
+    // was a task on a screen that no one could ever complete.
+    const live = liveOnly<any>(shipments);
+    const open = live.filter(s => s.status !== "Closed");
+    const inTransit = live.filter(s => ["Loaded", "Arrived"].includes(s.status));
+    const missingDocs = live.filter(s => (s.documents || []).some(d => ["Required", "Missing"].includes(d.status))).length;
+    const billingReady = live.filter(s => s.billingStatus === "Ready for supplier invoice").length;
+    const unallocated = live.filter(s => shipmentCostPLN(s) > 0 && !["Cost allocated", "Closed"].includes(s.billingStatus)).length;
     return { open: open.length, inTransit: inTransit.length, missingDocs, billingReady, unallocated };
   }, [shipments]);
 
@@ -2673,14 +2799,27 @@ export default function Shipments({
   // a transport claim is normally cargo lost PLUS the cost of putting it right.
   async function raiseTransportClaim(sh) {
     if (typeof setClaims !== "function") return;
+    // v6.54.0 (user ruling): a cancelled shipment never happened, so there is
+    // nothing to claim against. Blocked at the point of raising rather than
+    // filtered out later — a drafted claim on a void movement would otherwise
+    // travel to a carrier before anyone noticed.
+    if (isCancelled(sh)) {
+      await shConfirm({ tone: "warn", title: "Shipment cancelled",
+        message: `${sh.number} was cancelled — the movement never happened, so there is nothing to claim against. If goods really did travel, un-cancel the shipment first.`,
+        confirmLabel: "OK" });
+      return;
+    }
     const leg = (sh.legs || [])[0] || {};
     const providerId = leg.carrierId || leg.forwarderId || sh.carrierId || sh.forwarderId;
     const provider = (contacts || []).find((c) => String(c.id) === String(providerId));
     const kind = (leg.forwarderId || sh.forwarderId) ? "Forwarder" : "Carrier";
     const lotRefs = uniq((sh.goods || []).map((g) => g.lotRef).filter(Boolean));
     const evidence = [];
-    const lp = sh.loadingProtocol;
-    if (lp) evidence.push({ kind: `Loading protocol ${lp.number}`, ref: lp.number, link: lp.scanLink || "" });
+    // v6.53.0 made sheets per-truck; a claim must cite ALL of them, not the
+    // legacy single one — a groupage truck's damage may sit on any of them.
+    const sheets = protocolsForShipment(sh);
+    sheets.forEach((p) => evidence.push({ kind: `Loading protocol ${p.number}${p.truckPlate ? ` (${p.truckPlate})` : ""}`, ref: p.number, link: p.scanLink || "" }));
+    const lp = sheets[0] || null;
     (sh.documents || []).filter((d) => ["cmr", "bl", "awb"].includes(String(d.type || "").toLowerCase()))
       .forEach((d) => evidence.push({ kind: d.type, ref: d.ref || "", link: d.link || "" }));
     const recorders = (sh.legs || []).flatMap((l) => transportUnitsForLeg(l)).map((u) => u.tempRecorderNo).filter(Boolean);
@@ -2705,7 +2844,9 @@ export default function Shipments({
         date: today,
         status: "Draft",
         evidence,
-        notes: `Raised from ${sh.number}${lp ? ` · loading protocol ${lp.number} ${lp.status === "Returned" ? "signed & returned" : "NOT yet returned"}` : " · no loading protocol on file"}`,
+        notes: `Raised from ${sh.number}${sheets.length
+          ? ` · ${sheets.filter((p) => p.status === "Returned").length}/${sheets.length} loading protocol(s) signed & returned`
+          : " · no loading protocol on file"}`,
       }];
     });
     await shConfirm({
@@ -2747,6 +2888,7 @@ export default function Shipments({
       recordAudit({ module: "Shipments", docType: "Shipment", docNumber: next.number, action: status === "Cancelled" ? "cancelled" : "status", summary: status === "Cancelled" ? "Cancelled — inventory postings & allocated costs reversed" : `Status → ${status}` });
       // v6.35.5: cancellation reverses whatever this shipment posted to inventory.
       if (status === "Cancelled") {
+        const releasedKg = (next.goods || []).reduce((a: number, g: any) => a + (parseNum(g.qtyKg, 0) || 0), 0);
         const n = reverseShipmentPostings(next);
         // v6.37.1 (F-3): also remove this shipment's ALLOCATED COST lines from lots —
         // a cancelled shipment must not leave phantom landed cost (cost-side mirror of
@@ -2759,7 +2901,26 @@ export default function Shipments({
           costTouched++;
           return { ...lot, costs: (lot.costs || []).filter((c: any) => !String(c.source || "").startsWith(prefix)) };
         }));
-        if (n > 0 || costTouched > 0) setToast(`${next.number} cancelled — reversed: ${n} lot posting(s), allocated costs on ${costTouched} lot(s).`);
+        // v6.54.0: the truck never ran, so its signed sheets are no longer
+        // evidence of anything. They stay on record (nothing is deleted) but
+        // read as void, and cannot be issued or marked returned.
+        const sheets = protocolsForShipment(next);
+        const toVoid = sheets.filter((p: any) => p && p.status !== "Void").length;
+        if (toVoid > 0) {
+          const voided = sheets.map((p: any) => p && p.status !== "Void"
+            ? { ...p, status: "Void", voidedAt: todayISO(), voidNote: `${next.number} cancelled` } : p);
+          updateShipment(next.id, (s: any) => ({ ...s, loadingProtocols: voided }));
+          setProtocolShipment((cur: any) => cur && cur.id === next.id ? { ...cur, loadingProtocols: voided } : cur);
+        }
+        // v6.54.0: what a cancellation RELEASED belongs in the trail, not in a
+        // toast that vanishes. Under a keep-everything policy the reversal is
+        // exactly the part someone will need to reconstruct later.
+        const summary = releaseSummaryText({ lotPostings: n, costLots: costTouched, protocols: toVoid, kg: releasedKg });
+        try {
+          recordAudit({ module: "Shipments", docType: "Shipment", docNumber: next.number,
+            action: "cancelled", summary: `Cancelled — ${summary}.` });
+        } catch {}
+        setToast(`${next.number} cancelled — ${summary}.`);
       }
       // v6.35.4 (T-20): post the inventory movement as soon as the goods ARRIVE, not only
       // at Delivered — for an inbound shipment, arrival at the warehouse IS the receipt.
@@ -2848,12 +3009,30 @@ export default function Shipments({
           <Kpi label="BILLING READY" value={kpis.billingReady} sub="waiting for supplier invoice" />
           <Kpi label="UNALLOCATED COSTS" value={kpis.unallocated} sub="costs not yet in lot costing" />
         </div>
+        {/* v6.56.0: Shipments | Load plans. A load plan is the commercial
+            movement several shipments add up to — five trucks and four
+            containers are one export, nine shipments. */}
+        <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
+          {[["shipments", `Shipments (${filtered.length})`], ["plans", `Load plans (${(loadPlans || []).length})`]].map(([k, label]) => (
+            <button key={k} onClick={() => setTab(k)} style={{
+              border: "none", background: "transparent", cursor: "pointer", padding: "6px 2px", marginRight: 14,
+              fontSize: 12.5, fontWeight: tab === k ? 800 : 600, color: tab === k ? "#111" : "#94A3B8",
+              borderBottom: tab === k ? "2px solid #111" : "2px solid transparent",
+            }}>{label}</button>
+          ))}
+        </div>
       </div>
     </div>
 
     {toast && <div style={{ maxWidth: 1460, margin: "12px auto 0", width: "calc(100% - 56px)", background: "#F0FDF4", border: "1px solid #BBF7D0", color: "#166534", borderRadius: 9, padding: "9px 12px", fontSize: 12, display: "flex", justifyContent: "space-between" }}><span>{toast}</span><button onClick={() => setToast("")} style={{ border: "none", background: "transparent", cursor: "pointer", color: "#166534", fontWeight: 800 }}>x</button></div>}
 
-    <div style={{ flex: 1, overflow: "hidden", padding: "16px 28px 24px" }}>
+    {tab === "plans" && setLoadPlans && (
+      <LoadPlans loadPlans={loadPlans} setLoadPlans={setLoadPlans} shipments={shipments} contacts={contacts}
+        costPLN={shipmentCostPLN}
+        onOpenShipment={(numRef: string) => { const hit = shipments.find((x: any) => x.number === numRef); if (hit) { setSelectedId(hit.id); setTab("shipments"); } }} />
+    )}
+
+    <div style={{ flex: 1, overflow: "hidden", padding: "16px 28px 24px", display: tab === "shipments" ? "block" : "none" }}>
       <div style={{ maxWidth: 1460, margin: "0 auto", height: "100%", display: "grid", gridTemplateColumns: "390px 1fr", gap: 16 }}>
         <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "grid", gap: 10 }}>
@@ -2861,11 +3040,11 @@ export default function Shipments({
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
           </div>
           <div style={{ overflow: "auto", flex: 1 }}>
-            {filtered.length ? filtered.map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
+            {filtered.length ? filtered.map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} planNumber={planNumberFor(sh.number)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
+          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
         </div>
       </div>
     </div>
@@ -2880,6 +3059,7 @@ export default function Shipments({
       allShipments={shipments}
       companyName={COMPANY.name}
       company={COMPANY}
+      shipmentCancelled={isCancelled(protocolShipment)}
       gateReason={poGateReason(protocolShipment, pos)}
       onSave={(p: any, unitId: any) => {
         // v6.53.0: sheets live in an ARRAY, one per truck. The write folds the

@@ -5,6 +5,7 @@ import { inspectLink } from "./docLinks.domain";
 import {
   buildLoadingProtocol, deriveRows, protocolTotals, protocolExceptions, protocolGaps,
   unitGoodsLines, protocolForUnit, protocolsForShipment, checkTruckLoad, signatureWarnings,
+  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS,
   PALLET_CAPACITY,
 } from "./loadingProtocol.domain";
 
@@ -85,7 +86,7 @@ function TakNie({ value, yes = "TAK", no = "NIE" }: any) {
 
 export default function LoadingProtocolModal({
   shipment, contacts = [], pos = [], packagingTypes = [], allShipments = [],
-  companyName = "", company = null, gateReason = "", onSave, onClose,
+  companyName = "", company = null, gateReason = "", shipmentCancelled = false, onSave, onClose,
 }: any) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();
 
@@ -110,7 +111,10 @@ export default function LoadingProtocolModal({
 
   const makeSheet = React.useCallback((t: any, alreadyDrafted: any[]) => {
     const stored = protocolForUnit(shipment, t.unit?.id);
-    if (stored) return stored;
+    // v6.57.0: a sheet saved before this release holds only its derived rows.
+    // Pad it on read so it prints the full 21 lines, without rewriting stored
+    // data — the same fold-forward approach used for per-truck protocols.
+    if (stored) return { ...stored, rows: padToSheet(stored.rows || []) };
     const poRef = (shipment?.poRefs || [])[0] || "";
     const po = (pos || []).find((x: any) => x.number === poRef);
     const supplier = po?.supplier || (contacts || []).find((c: any) => String(c.id) === String(po?.supplierId)) || null;
@@ -160,10 +164,12 @@ export default function LoadingProtocolModal({
   const removeRow = (i: number) => setP((x: any) => ({ ...x, rows: renumber((x.rows || []).filter((_: any, ri: number) => ri !== i)) }));
   const regenerate = async () => {
     if (!(await uiConfirm({ tone: "warn", title: "Re-derive the pallet table?", message: "The rows will be rebuilt from what this truck is assigned to carry. Anything typed into the table (calibres, conditions, remarks) will be lost.", confirmLabel: "Re-derive" }))) return;
-    setP((x: any) => ({ ...x, rows: deriveRows(truckGoods, packagingTypes) }));
+    setP((x: any) => ({ ...x, rows: deriveRows(truckGoods, packagingTypes) }));  // deriveRows pads to 21
   };
 
   const totals = protocolTotals(p, packagingTypes, (truckGoods || [])[0]?.product);
+  // v6.57.0: how many of the sheet's 21 lines actually carry goods.
+  const usedRows = filledRows(p.rows || []).length;
   const exceptions = protocolExceptions(p);
   const gaps = protocolGaps(p);
   const sigWarnings = signatureWarnings(p);
@@ -172,6 +178,13 @@ export default function LoadingProtocolModal({
   const load = checkTruckLoad(totals.pallets, totals.grossKg, p.palletType || "standard");
 
   const save = async (status?: string) => {
+    // v6.54.0: the shipment was cancelled — the truck never ran. Its sheets stay
+    // on record but are read-only: nothing may be issued, edited or marked back.
+    if (shipmentCancelled) {
+      await uiAlert({ tone: "warn", title: "Shipment cancelled",
+        message: "This shipment was cancelled, so its loading protocols are void and read-only. A cancelled movement never happened — there is nothing to send or record against it." });
+      return;
+    }
     // v6.53.0: an unconfirmed PO must not put a truck under load. Issuing is
     // blocked; recording a sheet that has already come back never is — the
     // paperwork exists whatever the order status now says.
@@ -251,7 +264,12 @@ export default function LoadingProtocolModal({
             Calibre is left blank on purpose — it is only known when the pallets are built. Temperature recorder numbers are picked from the producer's pack at loading,
             so record them here when the signed sheet comes back.
           </div>
-          {gateReason && (
+          {shipmentCancelled && (
+            <div style={{ padding: "8px 11px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#991B1B", marginBottom: 10 }}>
+              <strong style={{ textDecoration: "line-through" }}>Void</strong> — the shipment was cancelled, so this sheet is no longer evidence of anything. It stays on record and can still be printed for the file, but it cannot be issued or marked returned.
+            </div>
+          )}
+          {gateReason && !shipmentCancelled && (
             <div style={{ padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E", marginBottom: 10 }}>
               <strong>Not ready to issue</strong> — {gateReason}
             </div>
@@ -308,6 +326,9 @@ export default function LoadingProtocolModal({
             <div style={{ flex: 1 }} />
             <SmallButton onClick={addRow}>+ Pallet</SmallButton>
             <SmallButton onClick={regenerate}>↻ Re-derive from goods</SmallButton>
+            <span style={{ fontSize: 10.5, color: "#64748B", marginLeft: 8 }}>
+              {usedRows} pallet{usedRows === 1 ? "" : "s"} loaded · sheet prints {Math.max(SHEET_MIN_ROWS, (p.rows || []).length)} lines
+            </span>
           </div>
           <div style={{ maxHeight: 240, overflow: "auto", marginTop: 8, border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
@@ -317,9 +338,12 @@ export default function LoadingProtocolModal({
                 ))}
               </tr></thead>
               <tbody>
+                {/* v6.57.0: rows beyond the derived load are the sheet's spare
+                    lines. They stay editable — the producer may well load a 22nd
+                    pallet — but are greyed so nobody mistakes them for cargo. */}
                 {(p.rows || []).map((r: any, i: number) => (
-                  <tr key={i} style={{ borderTop: "1px solid #F1F5F9" }}>
-                    <td style={{ padding: "3px 7px", fontWeight: 700 }}>{r.no}</td>
+                  <tr key={i} style={{ borderTop: "1px solid #F1F5F9", background: isBlankRow(r) ? "#FCFCFD" : "#fff", opacity: isBlankRow(r) ? 0.62 : 1 }}>
+                    <td style={{ padding: "3px 7px", fontWeight: 700, color: isBlankRow(r) ? "#9CA3AF" : "#111" }}>{r.no}</td>
                     <td style={{ padding: "3px 4px" }}><input type="number" value={r.boxes} onChange={e => sr(i, "boxes", parseFloat(e.target.value) || 0)} style={{ ...INP, width: 66, padding: "3px 5px" }} /></td>
                     <td style={{ padding: "3px 4px" }}><input type="number" value={r.kgPerBox} onChange={e => sr(i, "kgPerBox", parseFloat(e.target.value) || 0)} style={{ ...INP, width: 62, padding: "3px 5px" }} /></td>
                     <td style={{ padding: "3px 4px" }}><input value={r.size || ""} onChange={e => sr(i, "size", e.target.value)} placeholder="70-80" style={{ ...INP, width: 74, padding: "3px 5px" }} /></td>
@@ -438,18 +462,26 @@ export default function LoadingProtocolModal({
               </tr>
             </thead>
             <tbody>
-              {(p.rows || []).map((r: any, i: number) => (
-                <tr key={i}>
-                  <td style={{ ...TD, textAlign: "center", fontWeight: 700 }}>{r.no}</td>
-                  <td style={{ ...TD, textAlign: "center" }}>{r.boxes}x{r.kgPerBox}</td>
-                  <td style={{ ...TD, textAlign: "center" }}>{r.variety || ""}</td>
-                  <td style={{ ...TD, textAlign: "center", minWidth: 50 }}>{r.size || ""}</td>
-                  <td style={{ ...TD, textAlign: "center" }}>{r.boxesOk === true ? "Tak" : r.boxesOk === false ? "Nie" : ""}</td>
-                  <td style={{ ...TD, textAlign: "center" }}>{r.goodsOk === true ? "Tak" : r.goodsOk === false ? "Nie" : ""}</td>
-                  <td style={TD}>{r.remarks || ""}</td>
-                  <td style={TD}>{r.observations || ""}</td>
-                </tr>
-              ))}
+              {/* v6.57.0: the sheet prints 21 numbered lines whatever the truck
+                  carries, because the producer writes on the paper at the dock.
+                  Blank lines are ruled and numbered but left empty and slightly
+                  taller, so there is room to write by hand. */}
+              {(p.rows || []).map((r: any, i: number) => {
+                const blank = isBlankRow(r);
+                const cell = blank ? { ...TD, height: 17, background: "#fff" } : TD;
+                return (
+                  <tr key={i}>
+                    <td style={{ ...cell, textAlign: "center", fontWeight: 700, color: blank ? "#9CA3AF" : "#111" }}>{r.no}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{blank ? "" : `${r.boxes}x${r.kgPerBox}`}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{r.variety || ""}</td>
+                    <td style={{ ...cell, textAlign: "center", minWidth: 50 }}>{r.size || ""}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{r.boxesOk === true ? "Tak" : r.boxesOk === false ? "Nie" : ""}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{r.goodsOk === true ? "Tak" : r.goodsOk === false ? "Nie" : ""}</td>
+                    <td style={cell}>{r.remarks || ""}</td>
+                    <td style={cell}>{r.observations || ""}</td>
+                  </tr>
+                );
+              })}
               {(p.rows || []).length > 0 && (
                 <tr>
                   <td style={{ ...TD, fontWeight: 800, textAlign: "center" }}>{totals.pallets}</td>
