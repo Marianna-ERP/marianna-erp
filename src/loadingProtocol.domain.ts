@@ -135,13 +135,18 @@ export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPallet
   // part-filled) — which is why a standard load comes out at 21 without anyone
   // choosing that number. The producer confirms or corrects each row at loading.
   const rows: ProtocolPalletRow[] = [];
+  const unresolved: string[] = [];
   let no = 1;
   (lines || []).forEach(g => {
     const net = num(g.qtyKg) || num(g.qty);
     if (net <= 0) return;
     const pk = findPackaging(types, g.packagingId) || findPackaging(types, g.packaging) || defaultPackagingForProduct(types, g.product);
     const capacity = pk && pk.capacityKg > 0 ? num(pk.capacityKg) : 0;
-    if (!capacity) return;
+    // v6.57.1: previously a line whose packaging could not be resolved was
+    // SKIPPED IN SILENCE, so a real PO could produce a sheet of 21 blank lines
+    // with nothing to say why. The line still cannot be split into pallets
+    // without a box weight, so it is reported instead of vanishing.
+    if (!capacity) { unresolved.push(String(g.product || "line")); return; }
     const gross = grossForGoodsLine({ qtyKg: net, product: g.product, packaging: g.packaging, packagingId: g.packagingId, pallets: g.pallets }, types);
     const bpp = pk && num(pk.boxesPerPallet) > 0 ? num(pk.boxesPerPallet) : 0;
     palletManifest(gross.boxes, bpp).forEach(m => {
@@ -153,7 +158,26 @@ export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPallet
       });
     });
   });
+  lastDeriveUnresolved = unresolved;
   return padToSheet(rows);
+}
+
+/** Products whose packaging could not be resolved on the last deriveRows call.
+ *  Read straight after deriving, so the screen can explain an empty table
+ *  instead of leaving the user staring at 21 blank lines. */
+export let lastDeriveUnresolved: string[] = [];
+
+/** Which packaging a goods line will use, and whether it can be resolved at all.
+ *  Exposed so the UI can warn BEFORE the producer prints a useless sheet. */
+export function packagingResolution(lines: any[], types: PackagingType[]): { ok: boolean; unresolved: string[] } {
+  const bad: string[] = [];
+  (lines || []).forEach(g => {
+    const net = num(g.qtyKg) || num(g.qty);
+    if (net <= 0) return;
+    const pk = findPackaging(types, g.packagingId) || findPackaging(types, g.packaging) || defaultPackagingForProduct(types, g.product);
+    if (!pk || num(pk.capacityKg) <= 0) bad.push(String(g.product || "line"));
+  });
+  return { ok: bad.length === 0, unresolved: bad };
 }
 
 /** v6.57.0: THE SHEET IS ALWAYS 21 LINES.

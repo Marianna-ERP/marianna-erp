@@ -2459,6 +2459,26 @@ T("padToSheet is idempotent and leaves filled rows alone", () => {
   assert.equal(once[0].variety, "Gala");
 });
 
+T("THE WORKED EXAMPLE: 19 422 kg of apples becomes 20x72 + 1x54 on 21 lines", () => {
+  const rows = LP.filledRows(LP.deriveRows([{ product: "Apples", variety: "Gala", size: "70-80", qtyKg: 19422 }], PKG.PACKAGING_SEED));
+  assert.equal(rows.reduce((a, r) => a + r.boxes, 0), 1494, "19 422 / 13 kg = 1 494 boxes");
+  assert.equal(rows.length, 21, "1 494 / 72 = 20.75 -> 21 pallets");
+  assert.equal(rows.filter(r => r.boxes === 72).length, 20);
+  assert.equal(rows[20].boxes, 54, "the last pallet is part-filled");
+  assert.ok(rows.every(r => r.variety === "Gala" && r.size === "70-80"), "variety and calibre carried onto every line");
+});
+
+T("an unresolvable packaging is REPORTED, not silently skipped", () => {
+  // Before v6.57.1 this produced a sheet of 21 blank lines with no explanation.
+  const bad = LP.packagingResolution([{ product: "Apples", qtyKg: 19422 }], []);
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.unresolved, ["Apples"]);
+  const good = LP.packagingResolution([{ product: "Apples", qtyKg: 19422 }], PKG.PACKAGING_SEED);
+  assert.equal(good.ok, true);
+  assert.equal(LP.filledRows(LP.deriveRows([{ product: "Apples", qtyKg: 19422 }], [])).length, 0,
+    "still no rows — but the caller can now say why");
+});
+
 console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

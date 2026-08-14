@@ -1,11 +1,12 @@
 import React, { useState } from "react";
+import { PrintLogo } from "./brand";
 import { SmallButton, Lbl, useConfirm } from "./ui";
 import { printHtmlNode } from "./documentService";
 import { inspectLink } from "./docLinks.domain";
 import {
   buildLoadingProtocol, deriveRows, protocolTotals, protocolExceptions, protocolGaps,
   unitGoodsLines, protocolForUnit, protocolsForShipment, checkTruckLoad, signatureWarnings,
-  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS,
+  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS, packagingResolution,
   PALLET_CAPACITY,
 } from "./loadingProtocol.domain";
 
@@ -170,6 +171,9 @@ export default function LoadingProtocolModal({
   const totals = protocolTotals(p, packagingTypes, (truckGoods || [])[0]?.product);
   // v6.57.0: how many of the sheet's 21 lines actually carry goods.
   const usedRows = filledRows(p.rows || []).length;
+  // v6.57.1: if a goods line has no resolvable packaging there is no box weight,
+  // so no pallet split is possible and the table comes out empty. Say so.
+  const pkgCheck = packagingResolution(truckGoods, packagingTypes);
   const exceptions = protocolExceptions(p);
   const gaps = protocolGaps(p);
   const sigWarnings = signatureWarnings(p);
@@ -267,6 +271,11 @@ export default function LoadingProtocolModal({
           {shipmentCancelled && (
             <div style={{ padding: "8px 11px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#991B1B", marginBottom: 10 }}>
               <strong style={{ textDecoration: "line-through" }}>Void</strong> — the shipment was cancelled, so this sheet is no longer evidence of anything. It stays on record and can still be printed for the file, but it cannot be issued or marked returned.
+            </div>
+          )}
+          {!pkgCheck.ok && (
+            <div style={{ padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E", marginBottom: 10 }}>
+              <strong>No pallet table can be built</strong> — packaging is not set for {Array.from(new Set(pkgCheck.unresolved)).join(", ")}. The sheet needs a box weight and boxes-per-pallet to split the load (19 422 kg ÷ 13 kg = 1 494 boxes → 20 × 72 + 1 × 54 = 21 pallets). Set the packaging type on the PO line or in Settings, then re-derive.
             </div>
           )}
           {gateReason && !shipmentCancelled && (
@@ -397,14 +406,14 @@ export default function LoadingProtocolModal({
                     signed by a carrier's driver — it has to identify us fully,
                     not by trading name alone. */}
                 <td style={{ ...TD, width: "26%", textAlign: "center" }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.5 }}>{company?.name || p.receiverName || "MARIANNA"}</div>
+                  {/* v6.57.1: the real logo, exactly as the PO and SO print it. */}
+                  <PrintLogo width={150} />
+                  <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.5, marginTop: 2 }}>{company?.name || p.receiverName || "MARIANNA"}</div>
                   {company?.address1 ? <div style={{ fontSize: 8 }}>{company.address1}</div> : null}
                   {company?.address2 ? <div style={{ fontSize: 8 }}>{company.address2}</div> : null}
                   {company?.nip ? <div style={{ fontSize: 8 }}>NIP: {company.nip}</div> : null}
                 </td>
-                <td style={{ ...TD, width: "24%" }}><BL k="version" /></td>
-                <td style={{ ...TD, width: "16%", fontWeight: 700 }}>{p.formVersion}</td>
-                <td style={{ ...TD, width: "34%", fontSize: 8.5 }} rowSpan={2}>
+                <td style={{ ...TD, width: "40%", fontSize: 8.5 }} rowSpan={2}>
                   <div style={{ fontWeight: 700, fontSize: 9 }}>{TXT.recorders.pl}</div>
                   <div style={{ fontStyle: "italic", color: "#555" }}>{TXT.recorders.en}</div>
                   <div style={{ marginTop: 3, fontFamily: "monospace", fontSize: 10, minHeight: 26 }}>
@@ -414,10 +423,12 @@ export default function LoadingProtocolModal({
               </tr>
               <tr>
                 <td style={{ ...TD, textAlign: "center", fontSize: 8, fontStyle: "italic", color: "#555" }}>AUTHENTIC TASTE OF QUALITY</td>
-                <td style={TD}><BL k="page" /></td>
-                <td style={{ ...TD, fontWeight: 700 }}>1 / 1</td>
               </tr>
-              <tr><td style={{ ...TD, textAlign: "center", fontWeight: 800, fontSize: 12, letterSpacing: 0.5 }} colSpan={4}>{TXT.title.pl} / {TXT.title.en}</td></tr>
+              {/* v6.57.1: the Wersja (form version) box and its value are gone —
+                  they belonged to the printed stationery, not to a document the
+                  producer signs. The page number moved to the footer, where a
+                  reader looks for it. */}
+              <tr><td style={{ ...TD, textAlign: "center", fontWeight: 800, fontSize: 12, letterSpacing: 0.5 }} colSpan={2}>{TXT.title.pl} / {TXT.title.en}</td></tr>
             </tbody>
           </table>
 
@@ -526,6 +537,9 @@ export default function LoadingProtocolModal({
 
           <div style={{ marginTop: 8, fontSize: 8, color: "#666", display: "flex", justifyContent: "space-between" }}>
             <span>{p.number} · {p.shipmentRef}{trucks.length > 1 ? ` · ${current?.label} (${truckIx + 1}/${trucks.length})` : ""}</span>
+            {/* v6.57.1: page number belongs in the footer (moved out of the
+                header grid, where it sat beside the retired Wersja box). */}
+            <span style={{ fontWeight: 700 }}>{TXT.page?.pl || "Strona"} 1 / 1</span>
             <span style={{ fontStyle: "italic" }}>Confidential</span>
           </div>
         </div>
