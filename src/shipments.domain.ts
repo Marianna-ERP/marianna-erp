@@ -394,3 +394,27 @@ export function syncLegFreightCostLines(sh: any): any {
   });
   return { ...sh, costs };
 }
+
+
+// ── v6.58.0: WHAT A SHIPMENT ACTUALLY CARRIES ────────────────────────────────
+// Header poRefs/soRefs/lotRefs are seeded from the SOURCE DOCUMENT at creation,
+// so a shipment carrying one lot of a two-PO source displayed both POs and all
+// the source's lots. Related documents must come from the goods on board.
+export function carriedRefs(sh: any): { poRefs: string[]; soRefs: string[]; lotRefs: string[] } {
+  const pos = new Set<string>(), sos = new Set<string>(), lots = new Set<string>();
+  const goods = (sh?.goods || []).filter((g: any) => {
+    const n = parseFloat(String(g?.qtyKg ?? "").replace(",", "."));
+    return isFinite(n) && n > 0;   // a zero-kg line moves nothing and links nothing
+  });
+  goods.forEach((g: any) => {
+    if (g.poRef) pos.add(String(g.poRef));
+    if (g.soRef) sos.add(String(g.soRef));
+    if (g.lotRef) lots.add(String(g.lotRef));
+  });
+  // A shipment with no goods yet falls back to the seeds — a booking still
+  // needs to say which order it belongs to.
+  if (!goods.length) return {
+    poRefs: (sh?.poRefs || []).map(String), soRefs: (sh?.soRefs || []).map(String), lotRefs: (sh?.lotRefs || []).map(String),
+  };
+  return { poRefs: Array.from(pos), soRefs: Array.from(sos), lotRefs: Array.from(lots) };
+}

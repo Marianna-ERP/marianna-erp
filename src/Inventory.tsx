@@ -1409,7 +1409,9 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                           const st = ST[String(c.status || "pending")] || ST.pending;
                           const broker = (contacts || []).find((x: any) => String(x.id) === String(c.brokerId || s.brokerId));
                           const who = ROLE[c.role] || "";
-                          const sentence = [
+                          // v6.58.0: role "not_required" used to concatenate into
+                          // "Cleared by no clearance required (broker name)" — nonsense.
+                          const sentence = c.role === "not_required" ? "No customs clearance was required for this shipment" : [
                             who ? `Cleared by ${who}` : "",
                             broker?.name ? `(${broker.name})` : "",
                             c.place ? `at ${c.place}` : "",
@@ -2282,7 +2284,9 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {/* Table */}
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 140px 130px 120px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-            {["LOT", "PRODUCT", "KL.", "STATUS", "LOCATION & FLOW", "AVAIL/PHYSICAL", "VALUE PLN", "LINKED"].map((h, i) => (
+            {/* v6.58.0: "LINKED" renamed LINKED DOCUMENTS; the quantity column now
+                 states which figure is which rather than a bare pair. */}
+            {["LOT", "PRODUCT", "KL.", "STATUS", "LOCATION & FLOW", "QUANTITY", "VALUE PLN", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>
@@ -2303,6 +2307,11 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                 </div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
+                  {/* v6.58.0: the supplier belongs here — "whose fruit is this"
+                      is asked far more often than the packaging. */}
+                  {(() => { const po = (extPOs || []).find((x: any) => String(x.number) === String(l.poRef));
+                    const sup = po?.supplier?.name || l.supplierName || "";
+                    return sup ? <div style={{ fontSize: 11.5, color: "#475569", fontWeight: 600 }}>{sup}</div> : null; })()}
                   <div style={{ fontSize: 11, color: "#AAA" }}>{l.size || "—"} · {l.origin || "—"} · {l.packaging}</div>
                   {(() => { const d = lotArrivalDate(l); const age = lotAgeDays(l); return d ? (
                     <div style={{ fontSize: 10.5, marginTop: 2 }}><span style={{ color: "#94A3B8" }}>arrived {d}</span> <span style={{ fontWeight: 700, color: ageColor(age as number) }}>· {age} d</span></div>
@@ -2315,8 +2324,18 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                   <div style={{ marginTop: 3 }}><LotDirectionBadge lot={l} shipments={shipments} orders={liveSOs} compact /></div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} <span style={{ fontSize: 11, color: "#AAA", fontWeight: 400 }}>/ {fmtNum(l.physicalKg || 0)} kg</span></div>
-                  {res.totalReserved > 0 && <div style={{ fontSize: 10.5, color: "#7C3AED", fontWeight: 600 }}>{fmtNum(res.totalReserved)} reserved · {res.reservations.length} SO</div>}
+                  {/* v6.58.0: lead with the LOT'S OWN QUANTITY, whatever its
+                      booked/reserved/sold state. Previously a fully reserved lot
+                      showed "0 / 0" plus "19 422 reserved · 1 SO", which never
+                      answered "how much is in this lot". */}
+                  {(() => {
+                    const onHand = parseNum(l.physicalKg, 0) || parseNum(l.receivedKg, 0) || parseNum(l.expectedKg, 0);
+                    const isExpected = !parseNum(l.physicalKg, 0) && !parseNum(l.receivedKg, 0) && parseNum(l.expectedKg, 0) > 0;
+                    return <>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#111" }}>{fmtNum(onHand)} kg{isExpected ? <span style={{ fontSize: 10, color: "#B45309", fontWeight: 600 }}> expected</span> : null}</div>
+                      <div style={{ fontSize: 10.5, color: "#64748B" }}>{fmtNum(res.liveAvailable)} free · {fmtNum(res.totalReserved)} reserved</div>
+                    </>;
+                  })()}
                   {l.damagedKg > 0 && <div style={{ fontSize: 10.5, color: "#DC2626", fontWeight: 600 }}>{fmtNum(l.damagedKg)} damaged</div>}
                 </div>
                 <div>

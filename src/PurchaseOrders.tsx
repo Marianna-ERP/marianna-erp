@@ -1881,8 +1881,9 @@ ${blockNote}`.trim(),
 
         {/* Table */}
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 130px 120px 160px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-            {["PO NUMBER", "SUPPLIER · PRODUCTS", "STATUS", "VALUE", "LOAD/DELIVERY", "LINKED DOCUMENTS"].map((h, i) => (
+          <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 110px 100px 130px 170px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+            {/* v6.58.0 column order (user ruling): number, supplier+products, order date, delivery date, status, TOTAL (was "value"), linked documents */
+              ["PO NUMBER", "SUPPLIER · PRODUCTS", "ORDER DATE", "DELIVERY DATE", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>
@@ -1893,7 +1894,7 @@ ${blockNote}`.trim(),
             const totalPLN = plnTotal(o);
             const isLoadingOverdue = activeStatuses.has(o.status) && o.loadingDate && new Date(o.loadingDate) < todayStart;
             return (
-              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 130px 120px 160px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: o.status === "Cancelled" ? "#FEF2F2" : "#fff", color: o.status === "Cancelled" ? "#B91C1C" : undefined, cursor: "pointer" }}
+              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 110px 110px 100px 130px 170px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: o.status === "Cancelled" ? "#FEF2F2" : "#fff", color: o.status === "Cancelled" ? "#B91C1C" : undefined, cursor: "pointer" }}
                 onClick={() => { setSelected(o); setView("detail"); }}
                 onMouseEnter={e => e.currentTarget.style.background = "#FAFAFA"}
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
@@ -1904,19 +1905,22 @@ ${blockNote}`.trim(),
                 </div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{o.supplier?.name || "—"}</div>
-                  <div style={{ fontSize: 11, color: "#888" }}>{o.items.map(i => `${i.product}${i.variety ? " — " + i.variety : ""} · ${fmtNum(i.qty)} kg`).join(" / ")}</div>
+                  {/* v6.58.0: one LINE PER ITEM under the supplier — item,
+                      variety, size, kg — instead of a single run-on string that
+                      became unreadable past two products. */}
+                  <div style={{ fontSize: 11, color: "#888", lineHeight: 1.5, marginTop: 2 }}>
+                    {o.items.map((i: any, ix: number) => (
+                      <div key={ix}>{[i.product, i.variety, i.size, `${fmtNum(i.qty)} kg`].filter(Boolean).join(" · ")}</div>
+                    ))}
+                  </div>
                 </div>
+                <div style={{ fontSize: 11.5, color: isLoadingOverdue ? "#DC2626" : "#444", fontWeight: isLoadingOverdue ? 600 : 400 }}>{formatDMY(o.orderDate) || formatDMY(o.loadingDate) || "—"}</div>
+                <div style={{ fontSize: 11.5, color: "#444" }}>{formatDMY(o.expectedDeliveryDate) || "—"}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}
-
-                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}</div>
                   {o.currency !== "PLN" && <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtMoney(totalPLN, "PLN")}</div>}
                   <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtNum(totalKg)} kg</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: isLoadingOverdue ? "#DC2626" : "#666", fontWeight: isLoadingOverdue ? 600 : 400 }}>Load: {formatDMY(o.loadingDate) || "—"}</div>
-                  <div style={{ fontSize: 11, color: "#666" }}>Del: {formatDMY(o.expectedDeliveryDate) || "—"}</div>
                 </div>
                 <div style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace", lineHeight: 1.5 }}>
                   {/* v6.34.1 (item 3): show the linked DOCUMENT NUMBERS, not counts. */}

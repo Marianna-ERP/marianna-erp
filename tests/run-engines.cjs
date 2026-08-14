@@ -2480,5 +2480,50 @@ T("an unresolvable packaging is REPORTED, not silently skipped", () => {
 });
 
 console.log("");
+console.log("── v6.58.0: what a shipment carries, and what it has taken ──");
+
+const SHD = require("./build/shipments.domain.js");
+
+T("related documents come from the goods on board, not the creation seeds", () => {
+  // The real export: SHP-0001 was seeded with both POs and three lots, but
+  // carried one lot. It displayed all of them as if it had moved them.
+  const sh = {
+    poRefs: ["PO-2026-0001", "PO-2026-0002"], soRefs: ["SO-2026-0001"],
+    lotRefs: ["LOT-2026-0001", "LOT-2026-0002", "LOT-2026-0004"],
+    goods: [{ poRef: "PO-2026-0001", soRef: "SO-2026-0001", lotRef: "LOT-2026-0001", qtyKg: 19422 }],
+  };
+  const cr = SHD.carriedRefs(sh);
+  assert.deepEqual(cr.poRefs, ["PO-2026-0001"]);
+  assert.deepEqual(cr.lotRefs, ["LOT-2026-0001"], "the other two lots never moved on this truck");
+});
+
+T("a zero-kg goods line links nothing", () => {
+  const cr = SHD.carriedRefs({ goods: [
+    { poRef: "PO-1", lotRef: "LOT-1", qtyKg: 0 },
+    { poRef: "PO-2", lotRef: "LOT-2", qtyKg: 5000 },
+  ] });
+  assert.deepEqual(cr.poRefs, ["PO-2"], "a line carrying nothing is not a link");
+});
+
+T("a booking with no goods yet still shows its source", () => {
+  const cr = SHD.carriedRefs({ poRefs: ["PO-9"], soRefs: ["SO-9"], lotRefs: [], goods: [] });
+  assert.deepEqual(cr.poRefs, ["PO-9"], "an empty shipment must still say which order it belongs to");
+});
+
+T("THE REGRESSION: an OUTBOUND shipment counts against the PO line too", () => {
+  // v6.55.0 counted only INBOUND receipts, so with an EXW-buy/CIF-sell flow the
+  // second shipment re-proposed goods the first had already moved — and the
+  // phantom line reached the carrier's transport order.
+  const shipped = [
+    { number: "SHP-1", purpose: "OUTBOUND", status: "Loaded", poRefs: ["PO-1"], goods: [{ poRef: "PO-1", poLineId: "L1", qtyKg: 19422 }] },
+    { number: "SHP-2", purpose: "OUTBOUND", status: "Cancelled", poRefs: ["PO-1"], goods: [{ poRef: "PO-1", poLineId: "L1", qtyKg: 5000 }] },
+  ];
+  const live = shipped.filter(s => s.status !== "Cancelled");
+  const taken = live.reduce((a, s) => a + s.goods.reduce((b, g) => b + g.qtyKg, 0), 0);
+  assert.equal(taken, 19422, "the outbound move counts; the cancelled one does not");
+  assert.equal(19422 - taken, 0, "nothing left to pre-fill on a second shipment");
+});
+
+console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -7,7 +7,8 @@ import { printHtmlNode } from "./documentService";
 import LoadingProtocolModal from "./LoadingProtocolModal";
 import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } from "./loadingProtocol.domain";
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
-import { isReceiptOfPO, lotStockCheck } from "./receipts.domain";
+import { lotStockCheck } from "./receipts.domain";
+import { carriedRefs } from "./shipments.domain";
 import LoadPlans from "./LoadPlans";
 
 import { inspectLink, summariseDocs } from "./docLinks.domain";
@@ -984,8 +985,6 @@ function ShipmentListRow({ sh, active, onClick, contacts, planNumber = "" }: any
   const dead = isCancelled(sh);
   const na = dead ? null : nextShipmentAction(sh);
   const kg = (sh.goods || []).reduce((a, g) => a + parseNum(g.qtyKg), 0);
-  const carrier = providerName(sh.carrierId || sh.forwarderId, contacts);
-  const route = [locById(sh.originLocationId)?.name, locById(sh.destinationLocationId)?.name].filter(Boolean).join(" \u2192 ");
   const dates = [sh.loadingDate, sh.expectedDeliveryDate].filter(Boolean).join(" \u2192 ");
   return <div onClick={onClick}
     style={{ padding: "8px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: dead ? "#FEF2F2" : active ? "#F9FAFB" : "#fff", borderLeft: dead ? "4px solid #DC2626" : active ? "4px solid #111" : "4px solid transparent", minWidth: 0 }}>
@@ -998,11 +997,12 @@ function ShipmentListRow({ sh, active, onClick, contacts, planNumber = "" }: any
       {missingDocs > 0 && <span title={`${missingDocs} document(s) missing`} style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0 }} />}
       {na && <span style={{ fontSize: 9.5, fontWeight: 700, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 999, padding: "1px 7px", whiteSpace: "nowrap" }}>{na.label}</span>}
     </div>
+    {/* v6.58.0: route and carrier REMOVED from the summary line (user ruling)
+        — route read shipment-level locations that real data leaves unset, so
+        it named the wrong place with confidence. Dates and quantity stay. */}
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, fontSize: 10.5, color: "#64748B", minWidth: 0 }}>
-      {route && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "45%" }} title={route}>{route}</span>}
       {dates && <span style={{ whiteSpace: "nowrap" }}>{dates}</span>}
       {kg > 0 && <span style={{ whiteSpace: "nowrap" }}>{Math.round(kg).toLocaleString("pl-PL")} kg</span>}
-      {carrier && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={carrier}>{carrier}</span>}
     </div>
   </div>;
 }
@@ -1068,7 +1068,12 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   const lineShippedKgOuter: Record<string, number> = (() => {
     const map: Record<string, number> = {};
     if (!srcDoc) return map;
-    (shipments || []).filter((s: any) => srcRefMatch(s) && (sourceType === "PO" ? isReceiptOfPO(s) : !isCancelled(s)))
+    // v6.58.0 REGRESSION FIX: v6.55.0 counted only INBOUND receipts here, but
+    // the real flow ships OUTBOUND straight from the PO (EXW buy -> CIF sell),
+    // so nothing was deducted and a second shipment re-proposed goods already
+    // moved — and the phantom line bled into the transport order. The pre-fill
+    // deducts kg on ANY live shipment of the line; nothing blocks (v6.55.0).
+    (shipments || []).filter((s: any) => srcRefMatch(s) && !isCancelled(s))
       .forEach((s: any) => (s.goods || []).forEach((g: any) => {
         if (!srcGoodsMatch(g)) return;
         const key = srcLineKey(g);
@@ -1078,7 +1083,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   })();
   const poShipState = (() => {
     if (!srcDoc) return null;
-    const existing = (shipments || []).filter((s: any) => srcRefMatch(s) && (sourceType === "PO" ? isReceiptOfPO(s) : !isCancelled(s)));
+    const existing = (shipments || []).filter((s: any) => srcRefMatch(s) && !isCancelled(s));
     const poQty = srcItems.reduce((a: number, it: any) => a + parseNum(it.qty), 0);
     const shippedKg = existing.reduce((sum: number, s2: any) => sum + (s2.goods || []).filter((g: any) => srcGoodsMatch(g)).reduce((a: number, g: any) => a + parseNum(g.qtyKg), 0), 0);
     // v6.34.4: 'this shipment' kg = the per-line entered amounts (default: remaining), not the full line.
@@ -1097,7 +1102,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     // v6.55.0: these are now WARNINGS, never blocks. A producer loading more than
     // ordered is routine and the PO already carries a variance field; refusing to
     // record the truck that is standing at the dock helps nobody.
-    const overReceipt = sourceType === "PO" && poQty > 0 && projected > poQty + 1;
+    const overReceipt = sourceType === "PO" && String((form as any).flow || (form as any).purpose || "").toUpperCase().includes("PICKUP") && poQty > 0 && projected > poQty + 1;
     return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), overReceipt, exceedBy: Math.max(0, Math.round(projected - poQty)) };
   })();
 
@@ -1532,6 +1537,24 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
     if (d && (d.type || d.ref) && !(await uiConfirm({ tone: "warn", title: "Remove document row", message: `Remove document row "${d.type || d.ref}"?`, confirmLabel: "Remove" }))) return;
     setDraft(prev => ({ ...prev, documents: (prev.documents || []).filter((_, i) => i !== idx) }));
   }
+  // v6.58.0 (user ruling): a two-leg shipment must open with one preliminary
+  // cost line PER LEG — carrier's road leg and forwarder's sea leg — instead of
+  // an empty table typed from scratch. Zero-amount until priced; only fills a
+  // truly empty cost table so nothing already entered is touched.
+  React.useEffect(() => {
+    if ((draft.costs || []).length) return;
+    const legs = (draft.legs || []).filter((l: any) => l.mode);
+    if (legs.length < 2) return;
+    setDraft((prev: any) => (prev.costs || []).length ? prev : ({ ...prev, costs: legs.map((l: any, i: number) => ({
+      id: nextId() + i, type: "freight", legId: l.id,
+      supplierId: l.carrierId || l.forwarderId || prev.carrierId || prev.forwarderId || 1001,
+      amount: 0, currency: l.costCurrency || "PLN", fxRate: resolveFxRate(null, l.costCurrency || "PLN"),
+      amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
+      notes: `Leg ${i + 1} · ${l.mode}`,
+    })) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [(draft.legs || []).length]);
+
   function addCost() {
     // New manual lines default to a non-freight type ("other") so they're freely
     // deletable; freight lines are reserved for the per-leg freight created by the builder.
@@ -1660,10 +1683,11 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)} disabled={draft.status === "Cancelled"} title={draft.status === "Cancelled" ? "This shipment is cancelled — read-only and can't be reactivated." : ""}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => setDraft(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
-            {/* v6.50.0 (test round): courier tracking was buried in the documents
-                section; it is checked far too often to hide. It sits in the header now. */}
-            <div><Lbl>Courier tracking nr — originals to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
-            <div><Lbl>Originals sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} max={localTodayISO()} /></div>
+            {/* v6.58.0: courier tracking + originals-sent moved BACK to the
+                Closing stage beside documents (user ruling, reversing v6.50.0).
+                With the editor now staged by lifecycle, "where the documents
+                are" is the natural home again — the v6.50.0 problem was the
+                unstaged editor, not the fields' location. */}
             <div><Lbl>Trade direction <span style={{ color: "#BBB", fontWeight: 400 }}>· owns the journey</span></Lbl>
               {(() => {
                 const govSO = (orders || []).find((o: any) => o.number === draft.governingSoRef) || null;
@@ -2030,6 +2054,12 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, color: ready === rows.length ? "#16A34A" : "#64748B", background: "#F3F4F6", borderRadius: 10, padding: "2px 9px" }}>{ready}/{rows.length} done ▾</span>
                 </summary>
                 <div style={{ marginTop: 14 }}>
+                  {/* v6.58.0: courier tracking + originals-sent back beside the
+                      documents they track (user ruling, reversing v6.50.0). */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                    <div><Lbl>Courier tracking nr — originals to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
+                    <div><Lbl>Originals sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} max={localTodayISO()} /></div>
+                  </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
                     <SmallButton kind="green" onClick={addDoc}>+ Add document</SmallButton>
                   </div>
@@ -2433,7 +2463,12 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           {/* v6.4.0 header: number · mode · status · billing + document pills only.
               Route, provider and dates live in the cards below — not repeated here. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ fontSize: 22, fontWeight: 850, letterSpacing: "-0.4px" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(shipment.poRefs || []).map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}><DocRef num={r} cancelledSet={cancelledRefs} /></span>)}{soPills.map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}><DocRef num={r} cancelledSet={cancelledRefs} /></span>)}{(shipment.lotRefs || []).map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
+          {/* v6.58.0: related documents come from the goods ON BOARD, not the
+              creation seeds — a shipment carrying one lot must not display its
+              source's other POs and lots as if it moved them. */}
+          {(() => { const cr = carriedRefs(shipment); return (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{cr.poRefs.map(r => <span key={r} style={pillStyle("#DBEAFE", "#2563EB")}><DocRef num={r} cancelledSet={cancelledRefs} /></span>)}{cr.soRefs.map(r => <span key={r} style={pillStyle("#DCFCE7", "#16A34A")}><DocRef num={r} cancelledSet={cancelledRefs} /></span>)}{cr.lotRefs.map(r => <span key={r} style={pillStyle("#F5F3FF", "#7C3AED")}>{r}</span>)}</div>
+          ); })()}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {shipment.status === "Cancelled"
@@ -2464,6 +2499,12 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
             const na = nextShipmentAction(shipment);
             return na ? <SmallButton onClick={() => onQuickStatus(na.to)} kind={na.kind}>{na.label}</SmallButton> : null;
           })()}
+          {/* v6.58.0: billing/costing actions live with the other header
+              buttons (user ruling) — buried at the bottom of costs & billing,
+              "Apply inventory movement" was the button nobody found. */}
+          <SmallButton onClick={onSendBilling} kind="amber">Send to billing queue</SmallButton>
+          <SmallButton onClick={onAllocateCosts} kind="green">Allocate costs to lots</SmallButton>
+          <SmallButton onClick={onApplyInventory} title="Normally automatic on Loaded/Arrived — use only to re-post after editing goods.">Re-post inventory</SmallButton>
           {!["Closed", "Cancelled"].includes(canonicalStatus(shipment.status)) &&
             <SmallButton kind="red" onClick={() => onQuickStatus("Cancelled")} title="Cancel this shipment — it stays on record (read-only) but no longer counts toward the PO/SO.">Cancel shipment</SmallButton>}
         </div>
@@ -2475,7 +2516,13 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
         <SectionTitle>Route / legs</SectionTitle>
         {(shipment.legs || []).map((leg, i) => { const mc = MODE_CONFIG[leg.mode] || MODE_CONFIG.Road; return <div key={leg.id || i} style={{ display: "grid", gridTemplateColumns: "36px 70px 1fr 1fr 1.1fr", gap: 10, alignItems: "start", padding: "10px 0 10px 10px", borderLeft: `3px solid ${mc.color}`, borderBottom: i === (shipment.legs || []).length - 1 ? "none" : "1px solid #F1F5F9" }}>
           <div style={{ width: 26, height: 26, borderRadius: 999, background: mc.color, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>{i + 1}</div>
-          <div><ModeBadge mode={leg.mode} /><div style={{ marginTop: 4 }}><StatusBadge status={legDisplayStatus(leg.status, shipment.status)} /></div></div>
+          <div><ModeBadge mode={leg.mode} /><div style={{ marginTop: 4 }}><StatusBadge status={legDisplayStatus(leg.status, shipment.status)} /></div>
+            {/* v6.58.0 (user ruling): each leg names its OWN carrier or
+                forwarder — a road+sea shipment has two providers and the
+                header can only show one. */}
+            {(() => { const prov = providerName(leg.carrierId || leg.forwarderId || (leg.mode === "Sea" || leg.mode === "Air" ? shipment.forwarderId : shipment.carrierId), contacts);
+              return prov ? <div style={{ fontSize: 10, color: "#475569", marginTop: 4, maxWidth: 66, overflowWrap: "break-word" }} title={leg.forwarderId ? "Forwarder" : "Carrier"}>{prov}</div> : null; })()}
+          </div>
           <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>LOADING</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedPickupDate || "").slice(0, 10) || "-"}</div></div>
           <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>UNLOADING</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedDeliveryDate || "").slice(0, 10) || "-"}</div></div>
           <div style={{ fontSize: 11.5, color: "#555", lineHeight: 1.45 }}>
@@ -2493,21 +2540,11 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
         </div>; })}
       </Card>
       <Card>
-        {/* BP-60 part B (v6.56.0): the shipment's FACE, above the checklist.
-            The detail used to open on a list of tasks, so answering "where is
-            this going and when" meant opening the editor just to look. Route,
-            dates, weight and carrier now sit where the eye lands first. */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
-          {[["ROUTE", [locById(shipment.originLocationId)?.name, locById(shipment.destinationLocationId)?.name].filter(Boolean).join(" \u2192 ") || "—"],
-            ["DATES", [shipment.loadingDate, shipment.expectedDeliveryDate].filter(Boolean).join(" \u2192 ") || "—"],
-            ["ON BOARD", (() => { const kg = (shipment.goods || []).reduce((a, g) => a + parseNum(g.qtyKg), 0); const pl = (shipment.goods || []).reduce((a, g) => a + parseNum(g.pallets), 0); return kg ? `${Math.round(kg).toLocaleString("pl-PL")} kg${pl ? ` · ${pl} pal` : ""}` : "—"; })()],
-            ["CARRIER", provider?.name || "—"]].map(([k, v]) => (
-            <div key={k} style={{ background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
-              <div style={{ fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{k}</div>
-              <div style={{ fontSize: 12.5, fontWeight: 700, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={String(v)}>{v}</div>
-            </div>
-          ))}
-        </div>
+        {/* v6.58.0: the four face boxes (route / dates / on board / carrier)
+            are REMOVED on user ruling — route read shipment-level location
+            fields that real data does not populate (legs carry the truth), so
+            the box confidently showed the wrong place. The checklist returns
+            to the top of the card. */}
         <SectionTitle>Operational checklist</SectionTitle>
         <ChecklistLine ok={!!provider} label="Carrier / forwarder selected" />
         <ChecklistLine ok={(shipment.goods || []).length > 0} label="Goods lines present" />
@@ -2587,7 +2624,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           <div style={{ textAlign: "right" }}><div style={{ fontSize: 12, fontWeight: 800 }}>{fmtMoney(c.amount, c.currency)}</div><div style={{ fontSize: 11, color: "#888" }}>{fmtMoney(c.amountPLN, "PLN")}</div></div>
         </div>)}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}><div style={{ fontSize: 12, color: "#888" }}>Cost / kg: <strong style={{ color: "#111" }}>{shipmentKg(shipment) ? fmtMoney(shipmentCostPLN(shipment) / shipmentKg(shipment), "PLN") : "-"}</strong></div><div style={{ fontSize: 15, fontWeight: 850 }}>{fmtMoney(shipmentCostPLN(shipment), "PLN")}</div></div>
-        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}><SmallButton onClick={onSendBilling} kind="amber">Send to billing queue</SmallButton><SmallButton onClick={onAllocateCosts} kind="green">Allocate costs to lots</SmallButton><SmallButton onClick={onApplyInventory}>Apply inventory movement</SmallButton></div>
+        {/* v6.58.0: the three action buttons moved to the shipment header. */}
       </Card>
       <Card>
         <SectionTitle>Documents</SectionTitle>
@@ -2709,6 +2746,32 @@ export default function Shipments({
     });
   }, [sorted, query, modeFilter, statusFilter, contacts]);
   const selected = shipments.find(s => s.id === selectedId) || filtered[0] || shipments[0] || null;
+
+  // v6.58.0 one-time reconcile: shipments that reached Loaded/Arrived before
+  // auto-posting existed left their lots stuck at "Expected". Apply the missed
+  // movements once, guarded on data being present (the v6.51.1 lesson) and on
+  // postShipmentToLots' own idempotence, so nothing double-posts.
+  const reconciledRef = React.useRef(false);
+  React.useEffect(() => {
+    if (reconciledRef.current) return;
+    if (!(shipments || []).length || !(lots || []).length) return;   // data-present guard
+    reconciledRef.current = true;
+    const eligible = shipments.filter((sh: any) => ["Loaded", "Arrived", "Delivered", "Closed"].includes(sh.status) && !isCancelled(sh));
+    let touched = 0;
+    eligible.forEach((sh: any) => {
+      const refs = engineShipmentLotRefs(sh);
+      const missing = refs.some((r: any) => {
+        const lot = (lots || []).find((l: any) => String(l.number) === String(r));
+        return lot && !(lot.movements || []).some((m: any) => String(m.shipmentRef) === String(sh.number));
+      });
+      if (missing) { applyInventoryMovement(sh); touched += 1; }
+    });
+    if (touched) {
+      try { recordAudit({ module: "Shipments", docType: "Reconcile", docNumber: "v6.58.0", action: "auto-posted",
+        summary: `${touched} shipment(s) had reached Loaded without lot movements — posted now.` }); } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipments, lots]);
 
   const kpis = useMemo(() => {
     // v6.54.0: a cancelled shipment NEVER HAPPENED, so it counts toward nothing.
@@ -2926,7 +2989,12 @@ export default function Shipments({
       // at Delivered — for an inbound shipment, arrival at the warehouse IS the receipt.
       // postShipmentToLots is idempotent (its hasMovement guard prevents double-posting),
       // so running on both Arrived and Delivered is safe.
-      if (status === "Arrived" || status === "Delivered" || status === "Closed") {
+      // v6.58.0 (user ruling: no manual step in the normal flow): LOADED also
+      // posts — for an outbound shipment, leaving the dock IS the movement.
+      // Waiting for Arrived left the lot reading "Expected, 0 kg, journey at
+      // the producer" while a loaded truck was on the road. Idempotent, so
+      // Loaded -> Arrived -> Delivered posts each stage exactly once.
+      if (status === "Loaded" || status === "Arrived" || status === "Delivered" || status === "Closed") {
         applyInventoryMovement(next);
       }
       // v6.37.1 (F-2, ruling A): delivery concludes the transaction — costs allocate

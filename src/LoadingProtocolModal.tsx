@@ -30,6 +30,7 @@ const TXT: any = {
   odours:     { pl: "Obecność obcych zapachów", en: "Presence of foreign odours" },
   packaging:  { pl: "Stan opakowań i palet", en: "Condition of packaging and pallets" },
   palletNo:   { pl: "Nr palety", en: "Pallet no." },
+  item:       { pl: "Towar", en: "Item" },
   variety:    { pl: "Odmiana", en: "Variety" },
   qty:        { pl: "Ilość opakowań szt x KG", en: "Packages pcs x kg" },
   size:       { pl: "Rozmiar", en: "Calibre" },
@@ -421,9 +422,8 @@ export default function LoadingProtocolModal({
                   </div>
                 </td>
               </tr>
-              <tr>
-                <td style={{ ...TD, textAlign: "center", fontSize: 8, fontStyle: "italic", color: "#555" }}>AUTHENTIC TASTE OF QUALITY</td>
-              </tr>
+              {/* v6.58.0: the "AUTHENTIC TASTE OF QUALITY" strapline row is
+                  removed — it is marketing on a document a producer signs. */}
               {/* v6.57.1: the Wersja (form version) box and its value are gone —
                   they belonged to the printed stationery, not to a document the
                   producer signs. The page number moved to the footer, where a
@@ -462,14 +462,20 @@ export default function LoadingProtocolModal({
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th style={{ ...TH, width: "7%" }}><BL k="palletNo" align="center" /></th>
+                {/* v6.58.0 column order (user ruling): pallet no, packages
+                    (BOX COUNT — 72 x 13 kg), item, variety, calibre, boxes in
+                    good condition, goods undamaged, remarks. The Observations
+                    column is removed: it duplicated Remarks and its width was
+                    what pushed the signatures onto a second page. Widths now
+                    total 100% and fit one page with the signatures at the foot. */}
+                <th style={{ ...TH, width: "6%" }}><BL k="palletNo" align="center" /></th>
                 <th style={{ ...TH, width: "13%" }}><BL k="qty" align="center" /></th>
-                <th style={{ ...TH, width: "11%" }}><BL k="variety" align="center" /></th>
-                <th style={{ ...TH, width: "10%" }}><BL k="size" align="center" /></th>
-                <th style={{ ...TH, width: "13%" }}><BL k="boxesOk" align="center" /></th>
-                <th style={{ ...TH, width: "13%" }}><BL k="goodsOk" align="center" /></th>
-                <th style={{ ...TH, width: "21%" }}><BL k="remarks" align="center" /></th>
-                <th style={{ ...TH, width: "21%" }}><BL k="observ" align="center" /></th>
+                <th style={{ ...TH, width: "14%" }}><BL k="item" align="center" /></th>
+                <th style={{ ...TH, width: "13%" }}><BL k="variety" align="center" /></th>
+                <th style={{ ...TH, width: "11%" }}><BL k="size" align="center" /></th>
+                <th style={{ ...TH, width: "12%" }}><BL k="boxesOk" align="center" /></th>
+                <th style={{ ...TH, width: "12%" }}><BL k="goodsOk" align="center" /></th>
+                <th style={{ ...TH, width: "19%" }}><BL k="remarks" align="center" /></th>
               </tr>
             </thead>
             <tbody>
@@ -483,13 +489,13 @@ export default function LoadingProtocolModal({
                 return (
                   <tr key={i}>
                     <td style={{ ...cell, textAlign: "center", fontWeight: 700, color: blank ? "#9CA3AF" : "#111" }}>{r.no}</td>
-                    <td style={{ ...cell, textAlign: "center" }}>{blank ? "" : `${r.boxes}x${r.kgPerBox}`}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{blank ? "" : `${r.boxes} × ${r.kgPerBox} kg`}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{blank ? "" : (r.product || p.product || "")}</td>
                     <td style={{ ...cell, textAlign: "center" }}>{r.variety || ""}</td>
-                    <td style={{ ...cell, textAlign: "center", minWidth: 50 }}>{r.size || ""}</td>
+                    <td style={{ ...cell, textAlign: "center", minWidth: 44 }}>{r.size || ""}</td>
                     <td style={{ ...cell, textAlign: "center" }}>{r.boxesOk === true ? "Tak" : r.boxesOk === false ? "Nie" : ""}</td>
                     <td style={{ ...cell, textAlign: "center" }}>{r.goodsOk === true ? "Tak" : r.goodsOk === false ? "Nie" : ""}</td>
                     <td style={cell}>{r.remarks || ""}</td>
-                    <td style={cell}>{r.observations || ""}</td>
                   </tr>
                 );
               })}
@@ -525,7 +531,10 @@ export default function LoadingProtocolModal({
                         {who === "driver" ? (p.driverSignedDate || "") : (p.issuerSignedDate || "")}
                       </div>
                     </div>
-                    {who === "driver" && p.driverName ? <div style={{ fontSize: 9.5, marginTop: 3 }}>{p.driverName}{p.carrierName ? ` · ${p.carrierName}` : ""}</div> : null}
+                    {/* v6.58.0 (user ruling): the pre-printed driver name and
+                        carrier line under the signature box is removed. The
+                        driver writes his own name when he signs — printing it
+                        for him adds nothing and pre-empts the signature. */}
                     <div style={{ fontWeight: 700, fontSize: 9.5, marginTop: 8 }}>{TXT.stampSign.pl}</div>
                     <div style={{ fontStyle: "italic", color: "#555", fontSize: 8 }}>{TXT.stampSign.en}</div>
                     <div style={{ height: 54, border: "1px dashed #999", borderRadius: 4, marginTop: 3 }} />
