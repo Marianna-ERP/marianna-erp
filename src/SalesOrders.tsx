@@ -3,6 +3,8 @@ import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
+import { PACKAGING_SEED } from "./packaging.domain";
+import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
@@ -91,6 +93,9 @@ let PO_REFS: any[] = [];   // Batch 0 (G1): no stub fallback — live props only
 // keep the raw arrays here for shippedKgByLine.
 let RAW_LOTS: any[] = [];
 let SHIPMENTS_REF: any[] = [];
+// v6.61.0: packaging types, so a line priced per box can convert to kilos using
+// the same box weights the loading protocol already uses. Synced below.
+let PACKAGING_TYPES_REF: any[] = PACKAGING_SEED;
 function reserveCtx() { return RAW_LOTS.length ? { lots: RAW_LOTS, shipments: SHIPMENTS_REF } : undefined; }
 
 // Convert the lots into the Inventory→SalesOrders interface shape.
@@ -201,7 +206,10 @@ function fmtMoney(n, cur) {
 }
 function fmtDate(d) { return d || "—"; }
 function netTotal(items) {
-  return (items || []).reduce((sum, it) => sum + (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0), 0);
+  // v6.61.0: a line priced per BOX totals boxes x price. Lines priced per kg —
+  // every existing line — behave exactly as before, because pricingUnit is
+  // absent on them and defaults to kg.
+  return (items || []).reduce((sum, it) => sum + lineTotalPU(it, PACKAGING_TYPES_REF), 0);
 }
 // Next SO number — scans for current year, increments highest NNNN
 function nextSONumber(orders) {
@@ -534,7 +542,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                 const isEmpty = live.liveAvailable <= 0;
                 return (
                 <div key={lot.number} onClick={() => pickLot(lot)}
-                  style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 110px 120px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
+                  style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 130px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#0369A1"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
                   <div>
@@ -543,7 +551,20 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   </div>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}{(lot as any).variety ? " — " + (lot as any).variety : ""}</div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}{(lot as any).arrivalDate ? ` · arrived ${formatDMY((lot as any).arrivalDate)}` : ""}</div>
+                    {/* v6.59.0: both views now carry the SAME facts under the
+                        item and variety — size, origin, packaging, supplier and
+                        the arrival. The two tabs used to describe a lot and a PO
+                        line differently, so choosing between them meant reading
+                        two different layouts. The 4th column is gone: it held a
+                        warehouse for stock and a permanent dash for a PO line
+                        that has not arrived anywhere yet. */}
+                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}</div>
+                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>
+                      Supplier: {(() => { const po = PO_REFS.find((x: any) => x.number === lot.poRef); return po?.supplierName || po?.supplier?.name || "—"; })()}
+                      {(lot as any).arrivalDate ? ` · arrived ${formatDMY((lot as any).arrivalDate)}` : " · arrival not recorded"}
+                      {lot.poRef ? ` · from ${lot.poRef}` : ""}
+                      {lot.warehouse ? ` · ${lot.warehouse}` : ""}
+                    </div>
                     {live.reservations.length > 0 && (
                       <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}
@@ -551,7 +572,6 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                     )}
                   </div>
                   <div><QualityBadge quality={lot.quality} /></div>
-                  <div style={{ fontSize: 11, color: "#666" }}>{lot.warehouse}{lot.poRef ? <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>from {lot.poRef}</div> : null}</div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#16A34A" }}>{fmtNum(live.liveAvailable)} kg</div>
                     <div style={{ fontSize: 10, color: "#888" }}>live available</div>
@@ -573,7 +593,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                 const isEmpty = live.liveAvailable <= 0;
                 return (
                 <div key={`${line._po.number}-${line.id}`} onClick={() => pickPO(line)}
-                  style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 120px 120px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
+                  style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 130px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#9D174D"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
                   <div>
@@ -588,7 +608,11 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{line.product}{(line as any).variety ? " — " + (line as any).variety : ""}</div>
                     <div style={{ fontSize: 11, color: "#888" }}>{line.size} · {line.origin} · {line.packaging}</div>
-                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>Supplier: {line._po.supplierName} · ETA {line._po.expectedDelivery}</div>
+                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>
+                      Supplier: {line._po.supplierName || line._po.supplier?.name || "—"}
+                      {line._po.expectedDelivery ? ` · arriving ${formatDMY(line._po.expectedDelivery)}` : " · arrival not scheduled"}
+                      {` · from ${line._po.number}`}
+                    </div>
                     {live.reservations.length > 0 && (
                       <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}
@@ -596,7 +620,6 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                     )}
                   </div>
                   <div><QualityBadge quality={line.quality} /></div>
-                  <div style={{ fontSize: 11, color: "#666" }}>—</div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#9D174D" }}>{fmtNum(live.liveAvailable)} kg</div>
                     <div style={{ fontSize: 10, color: "#888" }}>live available</div>
@@ -1079,8 +1102,12 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                       <td style={{ padding: "6px 8px" }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtNum(it.qty)} kg</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtMoney(it.unitPrice, order.currency)}</td>
+                      {/* v6.61.0: a line sold by box prints what was sold —
+                          boxes and the per-box price — with the kilos alongside,
+                          because the kilos are what physically move and what a
+                          customs declaration or a claim will refer to. */}
+                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{quantityLabel(it, PACKAGING_TYPES_REF)}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtMoney(it.unitPrice, order.currency)}{pricingUnitOf(it) === "box" ? "/box" : "/kg"}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{fmtMoney(lt, order.currency)}</td>
                     </tr>
                   );
@@ -1361,6 +1388,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             </div>
           )}
 
+          {/* v6.61.0: a line priced per box with no box weight cannot be
+              converted, and inventing one would put a wrong number on an
+              invoice. Say so before that happens. */}
+          {(() => { const bad = unresolvedBoxLines(order.items, PACKAGING_TYPES_REF);
+            return bad.length ? (
+              <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+                <strong>Priced per box, but no box weight is set</strong> for {Array.from(new Set(bad)).join(", ")}. Set the packaging on the line so boxes can convert to kilos.
+              </div>
+            ) : null; })()}
           {overageCount > 0 && (
             availabilityBlock ? (
               <div style={{ padding: "12px 16px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, marginBottom: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
@@ -1633,7 +1669,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               {productSuggestions.map(p => <option key={p} value={p} />)}
             </datalist>
             {order.items.map((it, i) => {
-              const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
+              const lineTotal = lineTotalPU(it, PACKAGING_TYPES_REF);
               const lineNeedsSource = !it.sourceType || !it.sourceRef;
               const lineIsBlocking = lineNeedsSource && nonDraftStatuses.includes(order.status);
               const avail = availability[i] || {};
@@ -1757,8 +1793,25 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked} /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
-                    <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
-                    <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
+                    {/* v6.61.0: sell by kg or by box. Kilos remain the stored
+                        quantity either way — entering boxes simply derives them
+                        from the packaging this line already names, which is
+                        exact because the boxes are exact by weight. */}
+                    <div><Lbl>Priced per</Lbl><Sel value={pricingUnitOf(it)} disabled={fullyLocked}
+                      onChange={e => setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? convertLineUnit(x, e.target.value, PACKAGING_TYPES_REF) : x) }))}>
+                      <option value="kg">kg</option>
+                      <option value="box">box</option>
+                    </Sel></div>
+                    {pricingUnitOf(it) === "box" ? (
+                      <div><Lbl>Qty (boxes)</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => {
+                        const b = Math.round(parseFloat(e.target.value) || 0);
+                        const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
+                        setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? { ...x, boxes: b, qty: kgPerBox > 0 ? Math.round(b * kgPerBox * 1000) / 1000 : x.qty } : x) }));
+                      }} placeholder="e.g. 400" disabled={fullyLocked} /></div>
+                    ) : (
+                      <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
+                    )}
+                    <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
                     <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
@@ -2121,6 +2174,7 @@ export default function SalesOrders({
   orders: extOrders, setOrders: extSetOrders,
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs, shipments: extShipments = [], setShipments: extSetShipments = null,
   contacts: extContacts,
+  packagingTypes = [],
   operationalCosts: extOperationalCosts = [],
   invoices: extInvoices = null, setInvoices: extSetInvoices = null,
   financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null,
@@ -2185,6 +2239,7 @@ export default function SalesOrders({
   if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots);
   RAW_LOTS = extInvLots || [];
   SHIPMENTS_REF = extShipments || [];
+  PACKAGING_TYPES_REF = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED;
   if (extPOs)    PO_REFS = _adaptPOsFromModule(extPOs);
   // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields.
   // Backfill them from the originating PO line so sourcing "from stock" is as complete as

@@ -172,6 +172,10 @@ export default function LoadingProtocolModal({
   const totals = protocolTotals(p, packagingTypes, (truckGoods || [])[0]?.product);
   // v6.57.0: how many of the sheet's 21 lines actually carry goods.
   const usedRows = filledRows(p.rows || []).length;
+  // v6.58.1: sheets saved before this release have no product on their rows.
+  // Fall back to the truck's goods rather than re-deriving (which would discard
+  // whatever the producer already wrote), so old sheets print an Item too.
+  const legacyProduct = String((truckGoods || [])[0]?.product || "");
   // v6.57.1: if a goods line has no resolvable packaging there is no box weight,
   // so no pallet split is possible and the table comes out empty. Say so.
   const pkgCheck = packagingResolution(truckGoods, packagingTypes);
@@ -490,7 +494,7 @@ export default function LoadingProtocolModal({
                   <tr key={i}>
                     <td style={{ ...cell, textAlign: "center", fontWeight: 700, color: blank ? "#9CA3AF" : "#111" }}>{r.no}</td>
                     <td style={{ ...cell, textAlign: "center" }}>{blank ? "" : `${r.boxes} × ${r.kgPerBox} kg`}</td>
-                    <td style={{ ...cell, textAlign: "center" }}>{blank ? "" : (r.product || p.product || "")}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{blank ? "" : (r.product || legacyProduct)}</td>
                     <td style={{ ...cell, textAlign: "center" }}>{r.variety || ""}</td>
                     <td style={{ ...cell, textAlign: "center", minWidth: 44 }}>{r.size || ""}</td>
                     <td style={{ ...cell, textAlign: "center" }}>{r.boxesOk === true ? "Tak" : r.boxesOk === false ? "Nie" : ""}</td>

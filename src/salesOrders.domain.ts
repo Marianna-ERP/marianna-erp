@@ -249,7 +249,22 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
       if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
       return a;
     }, 0);
-    const gone = Math.max(Math.max(0, l.receivedKg ?? 0), Math.max(0, shipped));
+    // v6.58.1 (ROOT CAUSE B, second half): v6.51.0 excluded the evaluated SO's
+    // own SHIP_OUT movements, but not its own RECEIPT — and a receipt carries no
+    // soRef, so it was counted as "gone" whoever it belonged to. In the
+    // producer -> port -> container flow every lot is a pass-through whose
+    // receipt IS this SO's goods, so all 13 lines of a balanced order reported
+    // "exceeds available supply" against stock they had just brought in.
+    // If the whole lot ships out to the evaluated SO, its receipt is this SO's
+    // own supply and must not count against it either.
+    const shippedToSelf = selfSO ? (l.movements || []).reduce((a: number, m: any) => {
+      if (!m || m.voided || String(m.soRef || "") !== selfSO) return a;
+      if (m.type === "SHIP_OUT") return a + (parseFloat(m.qtyKg) || 0);
+      if (m.type === "REVERSAL") return a - (parseFloat(m.qtyKg) || 0);
+      return a;
+    }, 0) : 0;
+    const receivedForOthers = Math.max(0, (l.receivedKg ?? 0) - shippedToSelf);
+    const gone = Math.max(receivedForOthers, Math.max(0, shipped));
     if (l.poLineId != null) {
       const k2 = `${l.poRef}::${l.poLineId}`;
       goneKgByPOLine[k2] = (goneKgByPOLine[k2] || 0) + gone;

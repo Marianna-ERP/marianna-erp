@@ -2525,5 +2525,217 @@ T("THE REGRESSION: an OUTBOUND shipment counts against the PO line too", () => {
 });
 
 console.log("");
+console.log("── v6.58.1: the Item column, and the pass-through false shortfall ──");
+
+T("every pallet row carries its product", () => {
+  const rows = LP.filledRows(LP.deriveRows([
+    { product: "Apples", variety: "Gala Schniga", size: "70-80", qtyKg: 936 },
+    { product: "Pears", variety: "Conference", size: "60-65", qtyKg: 936 },
+  ], PKG.PACKAGING_SEED));
+  // v6.58.0 added the Item column to the printed sheet but the row had no
+  // product field behind it, so the column printed empty on every sheet.
+  assert.equal(rows[0].product, "Apples");
+  assert.equal(rows[1].product, "Pears", "a mixed load names the product per line, not once per sheet");
+  assert.ok(LP.isBlankRow({ no: 3, boxes: 0, kgPerBox: 0, product: "", variety: "", size: "", boxesOk: null, goodsOk: null, remarks: "", observations: "" }));
+  assert.ok(!LP.isBlankRow({ no: 3, boxes: 0, kgPerBox: 0, product: "Apples", variety: "", size: "", boxesOk: null, goodsOk: null, remarks: "", observations: "" }),
+    "a row naming a product is not blank padding");
+});
+
+T("an added pallet inherits the product as well as the variety", () => {
+  const rows = LP.addBlankRow(LP.deriveRows([{ product: "Apples", variety: "Gala", qtyKg: 936 }], PKG.PACKAGING_SEED));
+  assert.equal(rows[21].product, "Apples");
+  assert.equal(rows[21].variety, "Gala");
+});
+
+T("a pass-through lot does not count against the SO that consumed it", () => {
+  // SO-2026-0015's shape: producer -> port (receipt) -> container (ship-out),
+  // one lot per PO line, received == shipped == the whole line.
+  const lots = [{
+    number: "LOT-71", poRef: "PO-21", poLineId: "L1", receivedKg: 5616, availableKg: 0,
+    product: "Apples", variety: "Golden Delicious",
+    movements: [{ type: "IN", qtyKg: 5616 }, { type: "SHIP_OUT", soRef: "SO-15", qtyKg: 5616 }],
+  }];
+  const pos = [{ number: "PO-21", status: "Confirmed", items: [{ id: "L1", product: "Apples", variety: "Golden Delicious", qty: 5616, available: 5616 }] }];
+  const so = { id: 1, number: "SO-15", status: "Shipped", items: [{ product: "Apples", variety: "Golden Delicious", qty: 5616, sourceType: "PO", sourceRef: "PO-21", sourceLineId: "L1" }] };
+  const av = computeLineAvailability(so.items, [so], so.id, lots, pos, []);
+  assert.equal(av[0].hasOverage, false,
+    "the receipt is this SO's own goods — it must not read as supply someone else took");
+
+  // The guard still works the other way: a receipt consumed by a DIFFERENT SO
+  // genuinely is gone, and must still reduce what is available here.
+  const lots2 = [{ ...lots[0], movements: [{ type: "IN", qtyKg: 5616 }, { type: "SHIP_OUT", soRef: "SO-99", qtyKg: 5616 }] }];
+  const av2 = computeLineAvailability(so.items, [so], so.id, lots2, pos, []);
+  assert.equal(av2[0].hasOverage, true, "another order's dispatch really did take the supply");
+});
+
+console.log("");
+console.log("── v6.59.0: a lot's shipments are the ones that carried it ──");
+
+// The defect: shipmentsForLot() matched any shipment sharing the lot's PO or SO,
+// or listing it in the header lotRefs seeded at creation. One wrong predicate
+// produced three separate visible faults — a customs box naming the wrong
+// shipment, a direction badge reading another shipment's flow, and extra sales
+// orders in the lot's linked documents. Pinned here as pure logic so a future
+// change to the predicate cannot quietly bring them all back.
+function carriesLot(sh, lotNumber) {
+  const inGoods = (sh.goods || []).some(g => String(g.lotRef || "") === String(lotNumber));
+  if (inGoods) return true;
+  if ((sh.goods || []).length) return false;
+  return (sh.lotRefs || []).includes(lotNumber);
+}
+
+T("sharing a PO is not carrying the lot", () => {
+  const other = { number: "SHP-2", poRefs: ["PO-1"], lotRefs: ["LOT-9", "LOT-10"], goods: [{ lotRef: "LOT-9", qtyKg: 100 }] };
+  assert.equal(carriesLot(other, "LOT-1"), false, "SHP-0002 was appearing in LOT-0001's customs box");
+  const real = { number: "SHP-1", poRefs: ["PO-1"], goods: [{ lotRef: "LOT-1", qtyKg: 4680 }] };
+  assert.equal(carriesLot(real, "LOT-1"), true);
+});
+
+T("over-broad header lotRefs do not count once goods exist", () => {
+  // SHP-2026-0001's real shape: seeded with three lots, carried one.
+  const sh = { number: "SHP-1", lotRefs: ["LOT-1", "LOT-2", "LOT-3"], goods: [{ lotRef: "LOT-1", qtyKg: 4680 }] };
+  assert.equal(carriesLot(sh, "LOT-1"), true);
+  assert.equal(carriesLot(sh, "LOT-2"), false, "listed at creation, never loaded");
+  // A booking with no goods yet still honours its header refs.
+  assert.equal(carriesLot({ number: "SHP-9", lotRefs: ["LOT-2"], goods: [] }, "LOT-2"), true);
+});
+
+T("a groupage shipment attributes each SO to its own lot", () => {
+  // Header names two clients; each lot belongs to one of them. Taking every
+  // header soRef gave a lot sold once two sales orders.
+  const sh = { soRefs: ["SO-1", "SO-2"], goods: [
+    { lotRef: "LOT-1", soRef: "SO-1", qtyKg: 5000 },
+    { lotRef: "LOT-2", soRef: "SO-2", qtyKg: 5000 },
+  ] };
+  const soFor = (lotNumber) => {
+    const rows = sh.goods.filter(g => String(g.lotRef) === lotNumber);
+    const fromRows = rows.map(g => g.soRef).filter(Boolean);
+    return fromRows.length ? Array.from(new Set(fromRows)) : (sh.soRefs.length === 1 ? sh.soRefs : []);
+  };
+  assert.deepEqual(soFor("LOT-1"), ["SO-1"]);
+  assert.deepEqual(soFor("LOT-2"), ["SO-2"]);
+  // Rows silent + exactly one header order: safe to attribute.
+  const single = { soRefs: ["SO-7"], goods: [{ lotRef: "LOT-3", qtyKg: 100 }] };
+  const rows = single.goods.filter(g => g.lotRef === "LOT-3").map(g => g.soRef).filter(Boolean);
+  assert.deepEqual(rows.length ? rows : single.soRefs, ["SO-7"]);
+});
+
+console.log("");
+console.log("── customs.domain: where, who, what, status (v6.60.0) ──");
+
+const CU = require("./build/customs.domain.js");
+
+T("a pre-v6.60.0 record reads forward without being rewritten", () => {
+  assert.equal(CU.readCustoms({ applies: true, role: "PL_BROKER" }).place, "PL");
+  assert.equal(CU.readCustoms({ applies: true, role: "PL_BROKER" }).party, "OUR_BROKER");
+  assert.equal(CU.readCustoms({ applies: true, role: "FORWARDER" }).place, "PORT_LOADING",
+    "clearance at the port of loading is the forwarder's, and a different party to chase");
+  assert.equal(CU.readCustoms({ applies: true, role: "T1_LOCAL" }).docType, "T1");
+  assert.equal(CU.readCustoms({ applies: true, country: "Poland" }).place, "PL");
+});
+
+T("the self-contradicting sentence cannot come back", () => {
+  // v6.58.0 fixed "Cleared by no clearance required (AM SPED…)" at the string
+  // level; the cause was that not-required was a ROLE and could coexist with a
+  // named broker. It is now a state of its own.
+  assert.equal(CU.customsApplies({ role: "not_required", brokerId: 7 }), false);
+  assert.equal(CU.customsSummary({ role: "not_required", brokerId: 7 }, "AM SPED"), "No customs clearance required");
+  assert.equal(CU.customsSummary({}), "No customs clearance required");
+});
+
+T("a cleared shipment states its document and reference", () => {
+  const c = { applies: true, place: "PL", party: "OUR_BROKER", status: "Cleared", docType: "EX1", declRef: "26PL445010E0123456", clearedOn: "2026-08-12" };
+  const t = CU.customsSummary(c, "AM SPED");
+  assert.ok(t.includes("26PL445010E0123456"));
+  assert.ok(t.includes("Poland"));
+  assert.ok(t.includes("AM SPED"), "the named broker wins over the generic party label");
+  assert.deepEqual(CU.customsGaps(c), []);
+  assert.equal(CU.customsComplete(c), true);
+});
+
+T("a missing export declaration reference is called out for what it costs", () => {
+  const c = { applies: true, place: "PL", party: "OUR_BROKER", status: "Cleared", docType: "EX1", clearedOn: "2026-08-12" };
+  const gaps = CU.customsGaps(c, { isExport: true });
+  assert.equal(gaps.length, 1);
+  assert.equal(gaps[0].field, "reference");
+  assert.ok(gaps[0].why.includes("zero-rating"), "the reason it matters, not just that a box is empty");
+  assert.equal(CU.customsComplete(c, { isExport: true }), false);
+});
+
+T("nothing to clear is a finished state, not an outstanding one", () => {
+  assert.equal(CU.customsComplete({ applies: false }), true);
+  assert.deepEqual(CU.customsGaps({ applies: false }), []);
+});
+
+T("what is stuck in customs, without opening each shipment", () => {
+  const ships = [
+    { number: "SHP-1", status: "Loaded", customs: { applies: true, status: "Pending", place: "PORT_LOADING", party: "FORWARDER" } },
+    { number: "SHP-2", status: "Loaded", customs: { applies: true, status: "Cleared", place: "PL", party: "OUR_BROKER" } },
+    { number: "SHP-3", status: "Cancelled", customs: { applies: true, status: "Pending" } },
+    { number: "SHP-4", status: "Loaded", customs: { applies: false } },
+  ];
+  const out = CU.outstandingCustoms(ships);
+  assert.equal(out.length, 1, "cleared, cancelled and not-required all drop out");
+  assert.equal(out[0].number, "SHP-1");
+  assert.equal(out[0].party, "Our forwarder", "so you know who to chase");
+});
+
+console.log("");
+console.log("── pricingUnit.domain: sell by box, kg still the invariant (v6.61.0) ──");
+
+const PU = require("./build/pricingUnit.domain.js");
+
+T("every existing line is untouched — no pricingUnit means kg", () => {
+  const line = { product: "Apples", qty: 8000, unitPrice: 2.8, packaging: "13 kg wooden boxes" };
+  assert.equal(PU.pricingUnit(line), "kg");
+  assert.equal(PU.lineTotal(line, PKG.PACKAGING_SEED), 22400, "8 000 x 2.80, exactly as before");
+  assert.equal(PU.lineQuantity(line, PKG.PACKAGING_SEED).qtyKg, 8000);
+  // Node's pl-PL grouping separator differs by ICU build, so assert the shape
+  // rather than the exact space character.
+  assert.ok(/^8.?000 kg$/.test(PU.quantityLabel(line, PKG.PACKAGING_SEED)), PU.quantityLabel(line, PKG.PACKAGING_SEED));
+});
+
+T("a line priced per box derives its kilos exactly", () => {
+  // The user's ruling: boxes are EXACT by weight, so this is arithmetic.
+  const line = { product: "Apples", pricingUnit: "box", boxes: 400, unitPrice: 36.4, packaging: "13 kg wooden boxes" };
+  const q = PU.lineQuantity(line, PKG.PACKAGING_SEED);
+  assert.equal(q.boxes, 400);
+  assert.equal(q.kgPerBox, 13);
+  assert.equal(q.qtyKg, 5200, "400 x 13 — no rounding, no tolerance");
+  assert.equal(PU.lineTotal(line, PKG.PACKAGING_SEED), 14560, "boxes x price-per-box");
+  assert.ok(PU.quantityLabel(line, PKG.PACKAGING_SEED).includes("400"));
+  assert.ok(PU.quantityLabel(line, PKG.PACKAGING_SEED).includes("13 kg"), "kilos are always shown too");
+});
+
+T("switching unit keeps the same goods AND the same money", () => {
+  // Changing how you price something must not change what it is worth.
+  const kgLine = { product: "Apples", qty: 5200, unitPrice: 2.8, packaging: "13 kg wooden boxes" };
+  const before = PU.lineTotal(kgLine, PKG.PACKAGING_SEED);
+  const boxLine = PU.convertLineUnit(kgLine, "box", PKG.PACKAGING_SEED);
+  assert.equal(boxLine.boxes, 400);
+  assert.equal(boxLine.unitPrice, 36.4, "2.80 x 13");
+  assert.equal(PU.lineTotal(boxLine, PKG.PACKAGING_SEED), before, "the line total does not move");
+  const backToKg = PU.convertLineUnit(boxLine, "kg", PKG.PACKAGING_SEED);
+  assert.equal(backToKg.qty, 5200);
+  assert.equal(backToKg.unitPrice, 2.8);
+  assert.equal(PU.lineTotal(backToKg, PKG.PACKAGING_SEED), before, "round trip is lossless");
+});
+
+T("no box weight means no invented number", () => {
+  const line = { product: "Mystery", pricingUnit: "box", boxes: 400, unitPrice: 10 };
+  const q = PU.lineQuantity(line, []);
+  assert.equal(q.unresolved, true, "guessing a box weight would put a wrong figure on an invoice");
+  assert.equal(q.kgPerBox, 0);
+  assert.deepEqual(PU.unresolvedBoxLines([line], []), ["Mystery"]);
+  assert.deepEqual(PU.unresolvedBoxLines([{ product: "Apples", qty: 100, packaging: "13 kg wooden boxes" }], PKG.PACKAGING_SEED), [],
+    "a kg-priced line never needs a box weight");
+});
+
+T("the price label says which unit it is", () => {
+  assert.equal(PU.priceLabel({ pricingUnit: "box", unitPrice: 36.4 }, "EUR"), "36.4 EUR/box");
+  assert.equal(PU.priceLabel({ unitPrice: 2.8 }, "EUR"), "2.8 EUR/kg");
+});
+
+console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

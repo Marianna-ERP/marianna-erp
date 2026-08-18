@@ -9,6 +9,7 @@ import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } f
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { lotStockCheck } from "./receipts.domain";
 import { carriedRefs } from "./shipments.domain";
+import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
 import { inspectLink, summariseDocs } from "./docLinks.domain";
@@ -1756,13 +1757,18 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                 </label>
                 {c.applies && (
                   <>
+                    {/* v6.60.0: WHERE / WHO / WHAT / STATUS, in fields. These
+                        used to be a role, a free-text country and a note whose
+                        placeholder read "Declaration ref, phyto, duties…" — so
+                        the declaration number, the only thing that proves
+                        zero-rating, lived in prose nothing could check. */}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                      <div><Lbl>Cleared by</Lbl><Sel value={c.role || "PL_BROKER"} onChange={e => setC("role", e.target.value)}>
-                        <option value="PL_BROKER">Our PL broker</option>
-                        <option value="FORWARDER">Forwarder (abroad)</option>
-                        <option value="T1_LOCAL">T1 transit + our local broker</option>
+                      <div><Lbl>Cleared where</Lbl><Sel value={readCustoms(c).place || "PL"} onChange={e => setC("place", e.target.value)}>
+                        {Object.keys(CUSTOMS_PLACES).map(k => <option key={k} value={k}>{CUSTOMS_PLACES[k]}</option>)}
                       </Sel></div>
-                      <div><Lbl>Country of clearance</Lbl><Inp value={c.country || ""} onChange={e => setC("country", e.target.value)} placeholder="e.g. Poland" /></div>
+                      <div><Lbl>Cleared by</Lbl><Sel value={readCustoms(c).party || "OUR_BROKER"} onChange={e => setC("party", e.target.value)}>
+                        {Object.keys(CUSTOMS_PARTIES).map(k => <option key={k} value={k}>{CUSTOMS_PARTIES[k]}</option>)}
+                      </Sel></div>
                       <div><Lbl>Status</Lbl><Sel value={c.status || "Pending"} onChange={e => setC("status", e.target.value)}>{["Pending", "In progress", "Cleared"].map(s => <option key={s}>{s}</option>)}</Sel></div>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "120px 120px 110px 1fr", gap: 10, marginTop: 10 }}>
@@ -1771,7 +1777,23 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                       <div><Lbl>FX → PLN</Lbl><Inp type="number" value={c.fxRate ?? (!c.currency || c.currency === "PLN" ? 1 : "")} onChange={e => setC("fxRate", parseNum(e.target.value))} /></div>
                       <div style={{ display: "flex", alignItems: "flex-end" }}><label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}><input type="checkbox" checked={!!c.t1} onChange={e => setC("t1", e.target.checked)} /> Moved under T1 transit</label></div>
                     </div>
-                    <div style={{ marginTop: 10 }}><Lbl>Notes</Lbl><Inp value={c.notes || ""} onChange={e => setC("notes", e.target.value)} placeholder="Declaration ref, phyto, duties…" /></div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 130px", gap: 10, marginTop: 10 }}>
+                      <div><Lbl>Document</Lbl><Sel value={readCustoms(c).docType || ""} onChange={e => setC("docType", e.target.value)}>
+                        <option value="">— not recorded —</option>
+                        {Object.keys(CUSTOMS_DOCS).map(k => <option key={k} value={k}>{CUSTOMS_DOCS[k]}</option>)}
+                      </Sel></div>
+                      <div><Lbl>Declaration reference (MRN)</Lbl><Inp value={c.declRef || ""} onChange={e => setC("declRef", e.target.value)} placeholder="e.g. 26PL445010E0123456" /></div>
+                      <div><Lbl>Cleared on</Lbl><Inp type="date" value={c.clearedOn || ""} onChange={e => setC("clearedOn", e.target.value)} /></div>
+                    </div>
+                    {(() => {
+                      const gaps = customsGaps(c, { isExport: String(draft.tradeDirection || "") === "EXPORT" });
+                      return gaps.length ? (
+                        <div style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+                          {gaps.map(g => <div key={g.field}>· <strong>{g.field}</strong> — {g.why}</div>)}
+                        </div>
+                      ) : null;
+                    })()}
+                    <div style={{ marginTop: 10 }}><Lbl>Notes</Lbl><Inp value={c.notes || ""} onChange={e => setC("notes", e.target.value)} placeholder="Phyto, duties, anything the fields above do not cover" /></div>
                     <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 6 }}>The customs cost is synced into this shipment's cost lines (type "customs") for allocation.</div>
                   </>
                 )}
@@ -2580,6 +2602,15 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           if (!short.length) return null;
           return <ChecklistLine ok={false} label="Lots hold what this shipment moves"
             warnText={`${short[0].lotRef} short by ${Math.round(short[0].shortKg).toLocaleString("pl-PL")} kg${short.length > 1 ? ` (+${short.length - 1} more)` : ""}`} />;
+        })()}
+        {/* v6.60.0: customs on the checklist, with the declaration reference
+            named. "What is stuck in customs" should be answerable here. */}
+        {customsApplies(shipment.customs) && (() => {
+          const isExport = String(shipment.tradeDirection || "") === "EXPORT";
+          const done = customsComplete(shipment.customs, { isExport });
+          const gaps = customsGaps(shipment.customs, { isExport });
+          return <ChecklistLine ok={done} label={customsSummary(shipment.customs)}
+            warnText={gaps.length ? gaps.map(g => g.field).join(", ") + " missing" : ""} />;
         })()}
         <ChecklistLine ok={missingDocs.length === 0} label="Required documents received" warnText={missingDocs.length ? `${missingDocs.length} missing` : ""} />
         {/* v6.47.0: a tick is not evidence — flag anything we say we hold but couldn't produce. */}

@@ -52,6 +52,10 @@ export interface ProtocolPalletRow {
   no: number;              // Nr palety
   boxes: number;           // Ilość opakowań (szt)
   kgPerBox: number;        // x KG
+  /** v6.58.1: the PRODUCT on this pallet. The Item column was added to the
+   *  printed sheet in v6.58.0 but the row had no product field behind it, so
+   *  the column printed empty on every sheet. */
+  product: string;         // Towar
   /** v6.52.0: pre-filled from the PO line so the producer CONFIRMS rather than
    *  transcribes. They correct only where the actual load differs. */
   variety: string;         // Odmiana
@@ -151,7 +155,7 @@ export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPallet
     const bpp = pk && num(pk.boxesPerPallet) > 0 ? num(pk.boxesPerPallet) : 0;
     palletManifest(gross.boxes, bpp).forEach(m => {
       rows.push({
-        no: no++, boxes: m.boxes, kgPerBox: capacity,
+        no: no++, product: String(g.product || ""), boxes: m.boxes, kgPerBox: capacity,
         variety: String(g.variety || "").trim(),
         size: String(g.size || "").trim(),
         boxesOk: null, goodsOk: null, remarks: "", observations: "",
@@ -192,7 +196,7 @@ export function padToSheet(rows: ProtocolPalletRow[], min: number = SHEET_MIN_RO
   const out = [...(rows || [])];
   let no = out.length + 1;
   while (out.length < min) {
-    out.push({ no: no++, boxes: 0, kgPerBox: 0, variety: "", size: "", boxesOk: null, goodsOk: null, remarks: "", observations: "" });
+    out.push({ no: no++, boxes: 0, kgPerBox: 0, product: "", variety: "", size: "", boxesOk: null, goodsOk: null, remarks: "", observations: "" });
   }
   return out;
 }
@@ -201,7 +205,7 @@ export function padToSheet(rows: ProtocolPalletRow[], min: number = SHEET_MIN_RO
  *  Totals, completeness and the capacity check must all ignore these, or a
  *  6-pallet truck would report 21 pallets and 15 missing conditions. */
 export function isBlankRow(r: any): boolean {
-  return !r || (num(r.boxes) <= 0 && !String(r.variety || "").trim() && !String(r.size || "").trim()
+  return !r || (num(r.boxes) <= 0 && !String(r.product || "").trim() && !String(r.variety || "").trim() && !String(r.size || "").trim()
     && !String(r.remarks || "").trim() && !String(r.observations || "").trim()
     && r.boxesOk == null && r.goodsOk == null);
 }
@@ -311,7 +315,7 @@ export function addBlankRow(rows: ProtocolPalletRow[], like?: Partial<ProtocolPa
   const last = real[real.length - 1] || (rows || [])[(rows || []).length - 1];
   const next = [...(rows || []), {
     no: 0, boxes: like?.boxes ?? last?.boxes ?? 72, kgPerBox: like?.kgPerBox ?? last?.kgPerBox ?? 13,
-    variety: like?.variety ?? last?.variety ?? "", size: like?.size ?? last?.size ?? "",
+    product: like?.product ?? last?.product ?? "", variety: like?.variety ?? last?.variety ?? "", size: like?.size ?? last?.size ?? "",
     boxesOk: null, goodsOk: null, remarks: "", observations: "",
   } as ProtocolPalletRow];
   return next.map((r, i) => ({ ...r, no: i + 1 }));

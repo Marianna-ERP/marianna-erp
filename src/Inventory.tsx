@@ -10,6 +10,7 @@ import { lotReservationsForStock, productsMatch as domainProductsMatch, soClient
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
+import { customsSummary } from "./customs.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
@@ -169,11 +170,18 @@ function shipmentsForLot(lot: any, shipments: any[]) {
   if (!Array.isArray(shipments)) return [];
   return shipments.filter((sh: any) => {
     const lotRefs = sh.lotRefs || [];
-    const poRefs = sh.poRefs || [];
-    const soRefs = sh.soRefs || [];
-    return (lot.number && lotRefs.includes(lot.number))
-        || (lot.poRef && poRefs.includes(lot.poRef))
-        || (lot.soRef && soRefs.includes(lot.soRef));
+    // v6.59.0 ROOT CAUSE of three separate lot defects. This used to match a
+    // shipment that merely shared the lot's PO or SO, or that listed the lot in
+    // the header lotRefs seeded at creation. So every shipment of PO-2026-0001
+    // counted as carrying LOT-2026-0001 — which is why the lot's customs box
+    // named SHP-2026-0002, why its direction badge read another shipment's
+    // flow, and why extra sales orders appeared in its linked documents.
+    // A shipment carries a lot when its GOODS say so. Header lotRefs are only
+    // trusted for a shipment that has no goods rows yet (a booking).
+    const carriedInGoods = (sh.goods || []).some((g: any) => String(g.lotRef || "") === String(lot.number));
+    if (carriedInGoods) return true;
+    if ((sh.goods || []).length) return false;
+    return !!(lot.number && lotRefs.includes(lot.number));
   });
 }
 
@@ -410,13 +418,17 @@ function soRefsFor(lot, sourceSOs, shipmentsList = []) {
   // isn't sourced from this lot/PO directly.
   (shipmentsList || []).forEach(sh => {
     if (!sh || sh.status === "Cancelled") return;
-    const carriesLot = (sh.lotRefs || []).includes(lot.number)
-      || (sh.goods || []).some(g => g.lotRef === lot.number);
+    const lotRows = (sh.goods || []).filter(g => String(g.lotRef || "") === String(lot.number));
+    const carriesLot = lotRows.length > 0
+      || (!(sh.goods || []).length && (sh.lotRefs || []).includes(lot.number));
     if (!carriesLot) return;
-    const shipmentSONumbers = uniqStrings([
-      ...(sh.soRefs || []),
-      ...((sh.goods || []).filter(g => g.lotRef === lot.number).map(g => g.soRef)),
-    ]);
+    // v6.59.0: take the SO from THIS LOT'S rows. Pulling every header soRef
+    // attributed a groupage shipment's other clients to this lot — the "2 SOs
+    // on a lot that was sold once" defect. The header is used only when the
+    // rows are silent AND it names exactly one order.
+    const fromRows = lotRows.map(g => g.soRef).filter(Boolean);
+    const shipmentSONumbers = uniqStrings(fromRows.length ? fromRows
+      : ((sh.soRefs || []).length === 1 ? sh.soRefs : []));
     shipmentSONumbers.forEach(soNumber => {
       if (!soNumber) return;
       if (refs.find(r => r.number === soNumber)) return;
@@ -498,11 +510,15 @@ function LotDirectionBadge({ lot, shipments = [], orders = [], compact = false }
   // v6.43.0 (test-round #5b): prefer an explicit direction on the shipment header,
   // then on THIS lot's goods row (where direct-export deals record EXPORT), before
   // any fallback — so a CIF/CFR export is never mislabelled "Import".
+  // v6.59.0: THIS LOT'S OWN GOODS ROW WINS over the shipment header. A header
+  // direction describes the shipment as a whole; on a mixed movement it can
+  // disagree with the row, and the row is the one that knows what this lot did.
+  // (SHP-2026-0002 in the test data: header EXPORT, goods rows IMPORT.)
   for (const sh of shs) {
-    const d = sh?.tradeDirection;
-    if (d && MOVEMENT_LABELS[d]) { dir = d; break; }
     const g = (sh?.goods || []).find((x: any) => String(x.lotRef || "") === String(lot.number) && x.tradeDirection && MOVEMENT_LABELS[x.tradeDirection]);
     if (g) { dir = g.tradeDirection; break; }
+    const d = sh?.tradeDirection;
+    if (d && MOVEMENT_LABELS[d]) { dir = d; break; }
   }
   if (!dir && shs.length) {
     // last resort: derive from the shipment context (may still fall back to Import
@@ -1161,7 +1177,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [], lotClaims = [] }: any) {
+function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [], lotClaims = [] }: any) {
   const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1197,12 +1213,19 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22 }}>
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              {/* v6.59.0 (user ruling): the lot NUMBER comes first. Status,
+                  class and the expected/received variance sat above it, so the
+                  eye met three qualifiers before the thing being qualified. */}
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 6 }}>{lot.number}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
                 <StatusBadge status={lot.status} />
                 <QualityBadge quality={lot.quality} />
                 <VarianceBadge expected={lot.expectedKg} actual={lot.receivedKg} />
               </div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{lot.number}</div>
+              {/* v6.59.0: the supplier — asked far more often than the packaging. */}
+              {(() => { const po = (pos || []).find((x: any) => String(x.number) === String(lot.poRef));
+                const sup = po?.supplier?.name || lot.supplierName || "";
+                return sup ? <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 2 }}>{sup}</div> : null; })()}
               <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
               <div style={{ marginTop: 10 }}><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} /></div>
             </div>
@@ -1411,13 +1434,17 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                           const who = ROLE[c.role] || "";
                           // v6.58.0: role "not_required" used to concatenate into
                           // "Cleared by no clearance required (broker name)" — nonsense.
-                          const sentence = c.role === "not_required" ? "No customs clearance was required for this shipment" : [
+                          // v6.60.0: the shared summary replaces this ad-hoc
+                          // concatenation, so one sentence is produced the same
+                          // way everywhere and cannot contradict itself.
+                          const shared = customsSummary(c, broker?.name);
+                          const sentence = shared || (c.role === "not_required" ? "No customs clearance was required for this shipment" : [
                             who ? `Cleared by ${who}` : "",
                             broker?.name ? `(${broker.name})` : "",
                             c.place ? `at ${c.place}` : "",
                             c.t1Transit ? "· moved under T1 transit" : "",
                             c.entryRef ? `· entry ${c.entryRef}` : "",
-                          ].filter(Boolean).join(" ");
+                          ].filter(Boolean).join(" "));
                           return <div key={i} style={{ padding: "8px 0", borderTop: i ? "1px solid #F1F5F9" : "none", fontSize: 12 }}>
                             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 2 }}>
                               <span style={{ fontWeight: 700 }}>{s.number}</span>
@@ -2197,6 +2224,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             if (close) setSettlementLot(null);
           }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
+          pos={extPOs}
           allLots={lots}
           lotClaims={claimsForLot(extClaims || [], selected?.number).filter((c: any) => c.direction === "RECOVERY")}
           lot={selected}
