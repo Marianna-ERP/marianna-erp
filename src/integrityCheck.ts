@@ -42,6 +42,9 @@ export interface IntegrityInputs {
   creditNotes?: any[];
   invoices?: any[];
   financeNotes?: any[];
+  /** v6.63.0 (D-13/audit gaps): claims and load plans join the audit. */
+  claims?: any[];
+  loadPlans?: any[];
 }
 
 // ── small helpers (kept local so this module has zero imports) ──
@@ -242,6 +245,58 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // ── 9. Invoices & finance notes (v6.18.6, P0-7) ────────────────────────────
   const invoices = arr(inp.invoices);
   const financeNotes = arr(inp.financeNotes);
+
+  // ── v6.63.0: the six blind stores get eyes (audit gap closure) ──────────────
+  const claims = arr(inp.claims);
+  const loadPlans = arr(inp.loadPlans);
+  const docNumberSets = {
+    LOT: new Set(lots.map((x: any) => String(x.number))),
+    SO: new Set(orders.map((x: any) => String(x.number))),
+    PO: new Set(pos.map((x: any) => String(x.number))),
+    SHIPMENT: new Set(shipments.map((x: any) => String(x.number))),
+    INVOICE: new Set(invoices.map((x: any) => String(x.number))),
+  } as Record<string, Set<string>>;
+  const knownContactIds = new Set(contacts.map((c: any) => String(c.id)));
+
+  claims.forEach((c: any) => {
+    const label = c.number || "(unnumbered claim)";
+    (c.subjects || []).forEach((s: any) => {
+      if (s?.kind === "LEG") return; // legs live inside shipments; the shipment ref is the anchor
+      const set = docNumberSets[String(s?.kind)];
+      if (set && s?.ref && !set.has(String(s.ref)))
+        add("warning", "CLAIM_ORPHAN_SUBJECT", "Claims", label, `Subject ${s.kind} ${s.ref} no longer exists — the claim points at a ghost document.`);
+    });
+    const cid = c?.respondent?.contactId;
+    if (cid !== null && cid !== undefined && cid !== "" && !knownContactIds.has(String(cid)))
+      add("warning", "CLAIM_ORPHAN_CONTACT", "Claims", label, `Respondent contact (id ${cid}) no longer exists.`);
+    if (c?.financeNoteId && !financeNotes.some((nt: any) => String(nt.id) === String(c.financeNoteId)))
+      add("warning", "CLAIM_ORPHAN_NOTE", "Claims", label, `The credit/debit note this claim produced (id ${c.financeNoteId}) no longer exists.`);
+    if (c?.parentClaimId && !claims.some((p: any) => String(p.id) === String(c.parentClaimId)))
+      add("warning", "CLAIM_ORPHAN_PARENT", "Claims", label, `The client claim that triggered this recovery (id ${c.parentClaimId}) no longer exists.`);
+  });
+
+  loadPlans.forEach((lp: any) => {
+    const label = lp.number || lp.name || "(unnamed plan)";
+    const refs = new Set([...(lp.shipmentRefs || []), ...((lp.map || []).map((m: any) => m.shipmentRef))].filter(Boolean).map(String));
+    refs.forEach(ref => {
+      if (!docNumberSets.SHIPMENT.has(ref))
+        add("warning", "LOADPLAN_ORPHAN_SHIPMENT", "Load plans", label, `Plan references shipment ${ref}, which no longer exists — its totals silently exclude that cargo.`);
+    });
+  });
+
+  // Goods ROWS were never audited (only header refs) — yet posting reads the rows.
+  shipments.forEach((sh: any) => {
+    if (sh.status === "Cancelled") return;
+    const label = sh.number || "(unnumbered shipment)";
+    (sh.goods || []).forEach((g: any) => {
+      if (g?.lotRef && !docNumberSets.LOT.has(String(g.lotRef)))
+        add("warning", "SHIP_ROW_ORPHAN", "Shipments", label, `A goods row points at lot ${g.lotRef}, which doesn't exist — delivery would post nothing for it.`);
+      if (g?.soRef && !docNumberSets.SO.has(String(g.soRef)))
+        add("warning", "SHIP_ROW_ORPHAN", "Shipments", label, `A goods row points at sales order ${g.soRef}, which doesn't exist.`);
+      if (g?.poRef && !docNumberSets.PO.has(String(g.poRef)))
+        add("warning", "SHIP_ROW_ORPHAN", "Shipments", label, `A goods row points at purchase order ${g.poRef}, which doesn't exist.`);
+    });
+  });
   const shipByNumber = new Set(shipments.map((s: any) => String(s.number)));
   const invoiceById = new Map(invoices.map((i: any) => [String(i.id), i]));
 

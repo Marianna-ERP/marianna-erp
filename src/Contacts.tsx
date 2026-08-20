@@ -1,3 +1,4 @@
+import { referencesToContact } from "./referenceGuards";
 import React, { useState, useMemo, useRef } from "react";
 import { Lbl, useConfirm } from "./ui";
 import { nextId } from "./ids";
@@ -646,7 +647,7 @@ function parseTaxId(raw) {
   // Strip common prefixes like "VAT ID:", "NIP:"
   s = s.replace(/^(VAT\s*ID:?|NIP:?|VAT:?|Tax\s*ID:?)\s*/i, "").trim();
   // Strip all whitespace, hyphens, dots for the "compact" form
-  const compact = s.replace(/[\s\-\.]/g, "").toUpperCase();
+  const compact = s.replace(/[\s.-]/g, "").toUpperCase();
   // Detect 2-letter EU prefix
   if (compact.length >= 4) {
     const prefix = compact.substring(0, 2);
@@ -1343,7 +1344,8 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
   );
 }
 
-export default function Contacts({ contacts: extContacts, setContacts: extSetContacts, logisticsPoints: extLogisticsPoints, setLogisticsPoints: extSetLogisticsPoints }: any = {}) {
+export default function Contacts({ contacts: extContacts, setContacts: extSetContacts, logisticsPoints: extLogisticsPoints, setLogisticsPoints: extSetLogisticsPoints, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [] }: any = {}) {
+  const { alert: guardAlert, dialogNode: guardNode } = useConfirm(); // v6.63.0 (D-01): delete-guard dialog
   // Integration mode: if parent passes state in, use it (shell owns state).
   // Standalone mode: use local state with the baked-in seed.
   const [localContacts, setLocalContacts] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
@@ -1472,7 +1474,22 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
     }
     setDupePairs(pairs);
   }
-  function deleteCounterparty(id) {
+  async function deleteCounterparty(id) {
+    // v6.63.0 (D-01/D-02, M1/M8 root cause): a referenced counterparty must not be
+    // hard-deletable. Deleting a supplier orphaned every PO snapshot; deleting a
+    // broker silently blanked the shipment's customs agent. Same dependent-check
+    // pattern as the lot delete: list the blockers, block the delete, suggest the
+    // path (unlink or keep the record). Cancelled documents still block — under the
+    // keep-everything ruling their snapshots must stay resolvable for the record.
+    const refs = referencesToContact(id, { pos, orders, shipments, invoices, claims, warehouseInvoices });
+    if (refs.total > 0) {
+      await guardAlert({
+        tone: "warn",
+        title: "This counterparty can't be deleted",
+        message: `It is still referenced by:\n\n${refs.blockers.map(b => "• " + b).join("\n")}\n\nDeleting it would orphan those documents (broken supplier/client data, blank carrier or broker fields). Remove the references first, or simply keep the record — unreferenced records can always be deleted later.`,
+      });
+      return;
+    }
     setCounterparties(prev => prev.filter(c => c.id !== id));
     if (selectedId === id) setSelectedId(null);
   }
@@ -1554,6 +1571,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
   // ── render ─────────────────────────────────────────────────────────────
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>
+      {guardNode}
       {modal && (
         <CounterpartyModal
           counterparty={modal === "new" ? null : modal}

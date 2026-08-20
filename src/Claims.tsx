@@ -5,6 +5,7 @@ import { inspectLink } from "./docLinks.domain";
 import {
   CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS, CLAIM_BASES,
   isClaimOpen, claimsSummary, incidentNet, nextClaimNumber, blankClaim,
+  buildClaimFinanceNote, claimNoteMode,
   requestedFromBasis, buildClaimPostings, applyPostingsToLots, applyPostingsToOrders,
   reverseClaimPostings,
 } from "./claims.domain";
@@ -43,7 +44,7 @@ function Pill({ bg, fg, children, title }: any) {
   return <span title={title} style={{ background: bg, color: fg, borderRadius: 999, padding: "2px 9px", fontSize: 10.5, fontWeight: 800, whiteSpace: "nowrap" }}>{children}</span>;
 }
 
-export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [] }: any) {
+export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], claimSeed = null, onClaimSeedConsumed = null }: any) {
   // v6.54.0: "a cancelled document never happened, so there are no claims on it".
   const cancelledRefs = cancelledDocSet(shipments, orders, pos);
   // Resolve a claim subject ref to the actual document, whichever module owns it.
@@ -80,6 +81,55 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
 
   const patch = (id: any, changes: any) =>
     setClaims((prev: any[]) => (prev || []).map(c => String(c.id) === String(id) ? { ...c, ...changes } : c));
+
+  // v6.63.0 (D-13): arriving from another module with context — SO+SINV for a
+  // client claim, shipment+transport invoice for a carrier claim, lot+PO+PINV
+  // for a producer claim. One claim per seed; the seed is consumed immediately.
+  React.useEffect(() => {
+    if (!claimSeed) return;
+    const c = blankClaim({
+      id: nextId(),
+      number: nextClaimNumber(claims, new Date(today).getFullYear() || 2026),
+      date: today,
+      status: "Draft",
+      direction: claimSeed.direction || (String(claimSeed.respondentKind) === "Client" ? "CONCESSION" : "RECOVERY"),
+      respondent: { kind: claimSeed.respondentKind || "Supplier", contactId: claimSeed.contactId ?? null, name: claimSeed.respondentName || "" },
+      cause: claimSeed.cause || "Quality defect",
+      subjects: claimSeed.subjects || [],
+      notes: claimSeed.notes || "",
+    });
+    setClaims((prev: any[]) => [...(prev || []), c]);
+    setSelectedId(c.id);
+    if (typeof onClaimSeedConsumed === "function") onClaimSeedConsumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claimSeed]);
+
+  // v6.63.0 (D-13): finalisation produces the MONEY DOCUMENT, per the owner's
+  // rulings — client → credit note we issue; supplier/carrier → their credit
+  // note if received, otherwise a DEBIT note we issue (what we need to get).
+  const finaliseNote = async (c: any) => {
+    if (typeof setFinanceNotes !== "function") return;
+    if (c.financeNoteId || (financeNotes || []).some((nt: any) => String(nt.source) === `claim:${c.number}`)) {
+      await uiConfirm({ tone: "warn", title: "Already documented", message: `${c.number} already has its credit/debit note. Corrections go through a new note in Invoices.`, confirmLabel: "OK", cancelLabel: "Close" });
+      return;
+    }
+    if (!(Number(c.acceptedEUR) > 0) || !(Number(c.plnPerEur) > 0)) {
+      await uiConfirm({ tone: "warn", title: "No agreed amount", message: "Enter the accepted EUR amount and the PLN/EUR rate first — the note documents the money that was actually agreed.", confirmLabel: "OK", cancelLabel: "Close" });
+      return;
+    }
+    let mode;
+    if (String(c.respondent?.kind) === "Client") {
+      const ok = await uiConfirm({ tone: "warn", title: `Issue credit note to ${c.respondent?.name || "the client"}?`, message: `CREDIT note (we give back) for €${c.acceptedEUR} ≈ ${(Number(c.acceptedEUR) * Number(c.plnPerEur)).toLocaleString("pl-PL")} PLN, linked to ${c.number}.`, confirmLabel: "Issue credit note" });
+      if (!ok) return;
+      mode = claimNoteMode(c, false);
+    } else {
+      const theyIssued = await uiConfirm({ tone: "warn", title: `${c.respondent?.name || "The respondent"} — did they issue a credit note?`, message: `If YES: their CREDIT note is recorded (reduces what we owe them).\nIf NO: WE issue a DEBIT note to them for €${c.acceptedEUR} — what we need to get (owner ruling).`, confirmLabel: "Yes — record their credit note", cancelLabel: "No — we issue a debit note" });
+      mode = claimNoteMode(c, !!theyIssued);
+    }
+    const note = buildClaimFinanceNote(c, mode, { nextId, todayISO: () => today, invoices });
+    setFinanceNotes((prev: any[]) => [note, ...(prev || [])]);
+    patch(c.id, { financeNoteId: note.id, resolvedAt: c.resolvedAt || today, status: ["Settled", "Closed"].includes(String(c.status)) ? c.status : "Settled" });
+  };
 
   const addClaim = () => {
     const c = blankClaim({
@@ -362,6 +412,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                       ))}
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <SmallButton kind="dark" onClick={() => postClaim(selected)}>{posted ? "Re-post agreed amount" : "Post agreed amount to P/L"}</SmallButton>
+                        <SmallButton kind="green" onClick={() => finaliseNote(selected)} title="Client → credit note we issue. Supplier/carrier → their credit note, or a debit note we issue if they don't send one.">{selected.financeNoteId ? "Money document ✓" : "Create credit/debit note"}</SmallButton>
                         {posted && <SmallButton kind="red" onClick={() => unpostClaim(selected)}>Reverse posting</SmallButton>}
                         {posted && <span style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>✓ posted</span>}
                       </div>

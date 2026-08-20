@@ -146,7 +146,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
       if (!inv) return;
       const isPaidNow = inv.paymentStatus === "Paid";
       if (!isPaidNow) {
-        setInvoices((prev: any[]) => prev.map((x: any) => String(x.id) === id ? markInvoicePaidViaLedger(x, today, () => Date.now() + Math.floor(Math.random() * 1000)) : x));
+        setInvoices((prev: any[]) => prev.map((x: any) => String(x.id) === id ? markInvoicePaidViaLedger(x, today, nextId) : x));
       } else {
         const un = unmarkLedgerPaid(inv);
         if (un === null) { await lvAlert({ tone: "warn", title: "Paid by recorded payments", message: "This invoice is paid by recorded payments — edit them in the Invoices module." }); return; }

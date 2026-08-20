@@ -80,15 +80,36 @@ export function removePaymentEvent(inv: any, evtId: any): any {
 // direction "outgoing" = a note WE issued to a client (receivable side);
 // direction "incoming" = a note from a supplier to us (payable side).
 // CREDIT reduces the open amount on its side; DEBIT increases it.
+// ── v6.63.0 (owner axiom): "a credit note is what we give back; a debit note is
+// what we get." Generalised: THE ISSUER OF A CREDIT NOTE PAYS; THE ISSUER OF A
+// DEBIT NOTE COLLECTS. Every note carries issuedBy ("US" | "COUNTERPARTY");
+// legacy notes without it derive it from direction (outgoing → US, incoming →
+// COUNTERPARTY), which reproduces the old behaviour EXACTLY. The new capability
+// this unlocks: a DEBIT note WE issue to a supplier/carrier (claim recovery)
+// now correctly REDUCES the payable instead of increasing it.
+export function noteIssuedBy(nt: any): "US" | "COUNTERPARTY" {
+  const v = String(nt?.issuedBy || "").toUpperCase();
+  if (v === "US" || v === "COUNTERPARTY") return v as any;
+  return nt?.direction === "incoming" ? "COUNTERPARTY" : "US";
+}
+
+/** Signed PLN effect of one note on its side's OPEN total.
+ *  sign = issuer(US:+1/THEM:−1) × type(DEBIT:+1/CREDIT:−1) × side(receivable:+1/payable:−1) */
+export function noteLedgerEffect(nt: any): { side: "receivable" | "payable"; deltaPLN: number } {
+  const pln = n(nt?.amountPLN) || n(nt?.amount) * (n(nt?.fxRate) || 1);
+  const side: "receivable" | "payable" = nt?.direction === "incoming" ? "payable" : "receivable";
+  if (!nt || nt.status === "Cancelled" || pln <= 0) return { side, deltaPLN: 0 };
+  const issuer = noteIssuedBy(nt) === "US" ? 1 : -1;
+  const type = (nt.noteType === "DEBIT" || nt.noteKind === "DEBIT") ? 1 : -1;
+  const sideSign = side === "receivable" ? 1 : -1;
+  return { side, deltaPLN: r2(issuer * type * sideSign * pln) };
+}
+
 export function notesTotalsAdjustment(financeNotes: any[]): { receivableAdjPLN: number; payableAdjPLN: number } {
   let recv = 0, pay = 0;
   (financeNotes || []).forEach((nt: any) => {
-    if (!nt || nt.status === "Cancelled") return;
-    const pln = n(nt.amountPLN) || n(nt.amount) * (n(nt.fxRate) || 1);
-    if (pln <= 0) return;
-    const sign = (nt.noteType === "DEBIT" || nt.noteKind === "DEBIT") ? +1 : -1; // CREDIT reduces
-    if (nt.direction === "incoming") pay += sign * pln;
-    else recv += sign * pln;
+    const eff = noteLedgerEffect(nt);
+    if (eff.side === "payable") pay += eff.deltaPLN; else recv += eff.deltaPLN;
   });
   return { receivableAdjPLN: r2(recv), payableAdjPLN: r2(pay) };
 }

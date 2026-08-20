@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { computedPOLinks } from "./documents.domain";
 import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, MOVEMENT_LABELS, poDirectFromSOs } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { LOGO_DATA_URL } from "./brand";
@@ -1103,7 +1104,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 }
 
 // ─── ORDER DETAIL ───────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [] }: any) {
+function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -1214,8 +1215,11 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
                 <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
-                <LinkRow label="Inventory lots" items={order.linkedLots} color="#92400E" bg="#FEF3C7" />
-                <LinkRow label="Invoices" items={order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
+                <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" />
+                {/* v6.63.0 (BUG #2 fix): invoices are DERIVED from the register via its links[]
+                    — the stored legacy array was never updated by the Invoices module, so a
+                    cost invoice linked to this PO was invisible here. */}
+                <LinkRow label="Invoices" items={computedInvoices ?? order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
                 <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
                   Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
                 </div>
@@ -1483,7 +1487,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], productCatalog = [], setProductCatalog }: any = {}) {
+export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog }: any = {}) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: poDialogNode } = useConfirm(); // P2-6
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
   const cancelledRefs = cancelledDocSet(extShipments, extSOs, extPOs);
@@ -1552,6 +1556,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
       }
       return true;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, search, filterStatus, filterSupplier]);
 
   function reflectCancelledPOInInventory(po: any) {
@@ -1802,6 +1807,8 @@ ${blockNote}`.trim(),
           order={selected}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
           computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
+          computedLots={(extLots || []).filter((l: any) => String(l.poRef) === String(selected.number)).map((l: any) => l.number)}
+          computedInvoices={computedPOLinks(selected, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }).linkedInvoices}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}
           onDelete={deleteOrder}
@@ -1927,15 +1934,17 @@ ${blockNote}`.trim(),
                   {/* v6.45.0: SOs are DERIVED (any order sourcing from this PO) — they
                       were missing entirely from this column. */}
                   {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)).map((so: any) => so.number))); return sos.length ? <div style={{ color: "#7C3AED" }} title="Sales orders">🧾 {sos.join(", ")}</div> : null; })()}
-                  <LinkedDocNumbers nums={o.linkedShipments} cancelledSet={cancelledRefs} color="#0284C7" icon="📦" title="Shipments" />
+                  {(() => { const cl = computedPOLinks(o, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }); return (<>
+                  <LinkedDocNumbers nums={cl.linkedShipments} cancelledSet={cancelledRefs} color="#0284C7" icon="📦" title="Shipments" />
                   {/* v6.62.0 (user ruling): lots and invoices rendered as raw
                       joined strings while shipments went through LinkedDocNumbers,
                       so one column mixed two styles and only shipments showed a
                       cancelled ref struck through or an n/m live badge. All kinds
                       now render the same way, as in the SO. */}
-                  <LinkedDocNumbers nums={o.linkedLots} cancelledSet={cancelledRefs} color="#92400E" icon="🏷" title="Lots" />
-                  <LinkedDocNumbers nums={o.linkedInvoices} cancelledSet={cancelledRefs} color="#16A34A" icon="📄" title="Invoices" />
-                  {!o.linkedShipments?.length && !o.linkedLots?.length && !o.linkedInvoices?.length && !(extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)) && <span style={{ color: "#CCC" }}>—</span>}
+                  <LinkedDocNumbers nums={cl.linkedLots} cancelledSet={cancelledRefs} color="#92400E" icon="🏷" title="Lots" />
+                  <LinkedDocNumbers nums={cl.linkedInvoices} cancelledSet={cancelledRefs} color="#16A34A" icon="📄" title="Invoices" />
+                  {!cl.linkedShipments?.length && !cl.linkedLots?.length && !cl.linkedInvoices?.length && !(extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)) && <span style={{ color: "#CCC" }}>—</span>}
+                  </>); })()}
                 </div>
               </div>
             );

@@ -362,5 +362,12 @@ export interface FinanceNote {
 // Net adjustment a note applies to an invoice's effective amount (PLN).
 export function noteSignedPLN(note: FinanceNote): number {
   const mag = r2(n(note.amountPLN) || n(note.amount) * resolveFxRate(note.fxRate, note.currency));
-  return note.noteType === "DEBIT" ? mag : -mag;
+  const base = note.noteType === "DEBIT" ? mag : -mag;
+  // v6.63.0 (owner axiom): relative to the linked invoice's open amount, a note
+  // issued by the OTHER side of the usual issuer flips its sign — e.g. a DEBIT
+  // note WE issue against a supplier's cost invoice (claim recovery) REDUCES
+  // what remains payable on it. Legacy notes (no issuedBy) keep the old sign.
+  const issuedBy = String((note as any).issuedBy || "").toUpperCase();
+  const legacyDefault = note.direction === "incoming" ? "COUNTERPARTY" : "US";
+  return (issuedBy === "US" || issuedBy === "COUNTERPARTY") && issuedBy !== legacyDefault ? -base : base;
 }

@@ -37,7 +37,14 @@ function lotsForPO(poNumber: string, lots: any[]): string[] {
 function invoicesForCounterpartyDoc(docNumber: string, kind: "PO" | "SO", invoices: any[]): string[] {
   const out = new Set<string>();
   (invoices || []).forEach(inv => {
-    const links = [...refsOf(inv.poRef), ...refsOf(inv.soRef), ...refsOf(inv.links),
+    // v6.63.0 (BUG #1 fix): canonical invoices carry links as {type, number}
+    // OBJECTS — mapping them with String() produced "[object Object]" and no
+    // register invoice ever matched. Extract .number for objects; keep the
+    // legacy string fields working exactly as before.
+    const linkNumbers = (Array.isArray(inv.links) ? inv.links : [])
+      .map((l: any) => (l && typeof l === "object") ? String(l.number ?? "") : String(l ?? ""))
+      .filter(Boolean);
+    const links = [...refsOf(inv.poRef), ...refsOf(inv.soRef), ...linkNumbers,
       ...refsOf(inv.sourceRef), ...(inv.positions || []).flatMap((p: any) => [...refsOf(p.poRef), ...refsOf(p.soRef)])];
     if (links.includes(docNumber)) out.add(inv.number);
   });

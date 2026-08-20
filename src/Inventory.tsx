@@ -949,10 +949,15 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
   const calc = computeLotSettlement(lot, orders, parseFloat(pct) || 0, extra);
   const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
   const status = st.status || "None";
+  // v6.63.0 (owner ruling D2): once Closed — its cost components written and the
+  // commission invoice issued — a settlement can NEVER be reopened. Corrections,
+  // like invoices, happen only via credit/debit note.
+  const closedFinal = status === "Closed";
   const prodInvNum = parseFloat(prodInvPLN);
   const invVariance = isFinite(prodInvNum) && prodInvNum > 0 ? Math.round((prodInvNum - calc.netPLN) * 100) / 100 : null;
 
   function save(nextStatus: string) {
+    if (closedFinal) return; // ruling D2: Closed is immutable — no path may rewrite it
     const settlement = {
       ...st,
       status: nextStatus,
@@ -1084,6 +1089,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
         <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
           {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save</button>}
           {(status === "None" || status === "Draft") && <button onClick={() => save("Sent")} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Mark statement sent</button>}
+          {closedFinal && <div style={{ fontSize: 12, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "8px 12px", fontWeight: 600 }}>🔒 Closed &amp; final (ruling D2) — this settlement cannot be reopened or edited. Corrections go through a credit or debit note.</div>}
           {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={async () => { if (await stConfirm({ tone: "warn", title: `Close settlement for ${lot.number}?`, message: `Producer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`, confirmLabel: "Close settlement" })) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
         </div>
       </div>
@@ -1843,7 +1849,7 @@ function ClaimModal({ lot, po, existing = null, onCancel, onSave }: any) {
   );
 }
 
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], setClaims: extSetClaims = null }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], setClaims: extSetClaims = null , onStartClaim = null }: any = {}) {
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
@@ -1903,6 +1909,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     if (sortBy === "default") return base;
     const key = (l: any) => lotArrivalDate(l) || "9999-12-31"; // no arrival sorts last on oldest-first
     return [...base].sort((a, b) => sortBy === "oldest" ? key(a).localeCompare(key(b)) : key(b).localeCompare(key(a)));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality, sortBy]);
 
   // v6.18.21 (audit P1): the product filter is derived from the lots actually in
@@ -2245,7 +2252,26 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           contacts={extContacts}
           onRecordSorting={(l) => setSortingLot(l)}
           onOpenSettlement={(l) => setSettlementLot(l)}
-          onOpenClaim={(l) => setClaimLot(l)}
+          onOpenClaim={(l) => {
+            // v6.63.0 (D-13): one claims UI — pre-filled with the lot, its PO,
+            // the producer and the purchase invoice.
+            if (typeof onStartClaim === "function") {
+              const po = (extPOs || []).find((p: any) => p.number === l.poRef) || null;
+              const producer = po ? (extContacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(po.supplier?.name || "").trim().toLowerCase()) : null;
+              const pinv = (extInvoices || []).find((i: any) => i.kind === "COST" && i.category === "PURCHASE" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => lk.type === "PO" && String(lk.number) === String(l.poRef)));
+              onStartClaim({
+                respondentKind: "Supplier", direction: "RECOVERY",
+                respondentName: po?.supplier?.name || "", contactId: producer ? producer.id : null,
+                subjects: [
+                  { kind: "LOT", ref: l.number },
+                  ...(l.poRef ? [{ kind: "PO", ref: l.poRef }] : []),
+                  ...(pinv ? [{ kind: "INVOICE", ref: pinv.number }] : []),
+                ],
+                notes: `Producer claim on ${l.number}`,
+              });
+              return;
+            }
+            setClaimLot(l); }}
           tracePOs={extPOs}
           traceInvoices={extInvoices}
         />

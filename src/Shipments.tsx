@@ -1701,7 +1701,11 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
         <Card>
           <SectionTitle>Header</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-            <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)} disabled={draft.status === "Cancelled"} title={draft.status === "Cancelled" ? "This shipment is cancelled — read-only and can't be reactivated." : ""}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
+            <div><Lbl>Status</Lbl>{/* v6.63.0 (D-11, ruling D3): the edit form no longer changes status —
+                the dropdown bypassed the next-action flow (Delivered→anything with no
+                posting reversal, M7). Statuses move only via the action buttons on the
+                shipment card; Cancel is the only backward path. */}
+              <Sel value={draft.status} onChange={() => {}} disabled title="Status changes only through the action buttons (Confirm booking / Mark loaded / Mark delivered / Cancel) — they post and reverse inventory correctly.">{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => setDraft(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             {/* v6.58.0: courier tracking + originals-sent moved BACK to the
                 Closing stage beside documents (user ruling, reversing v6.50.0).
@@ -2463,7 +2467,8 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   // v6.16 (#6): for multimodal there are several providers — when the user switches
   // the provider, rebuild the body so it addresses the chosen carrier/forwarder
   // (and its own leg + freight), instead of keeping the first provider's text.
-  React.useEffect(() => { setBody(makeBody()); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [providerId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => { setBody(makeBody()); }, [providerId]);
   const recipient = provider.email || "";
   function openMailClient() {
     const mailto = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -2740,6 +2745,8 @@ export default function Shipments({
   orders: extOrders,
   setOrders: extSetOrders,
   onNavigate = () => {},
+  onStartClaim = null,
+  invoices: extInvoices = [],
 }: any = {}) {
   const { confirm: shConfirm, dialogNode: shDialogNode } = useConfirm(); // P2-6
   // v6.45.0 (A): synchronous mirror of the shipments array for chain-safe updates.
@@ -2756,12 +2763,14 @@ export default function Shipments({
   // not silently swap in the STANDALONE_* demo data. Stubs remain for true standalone
   // use only (props undefined).
   const pos = extPOs ?? localPOs;
+  // v6.63.0 (D-15): legacy link writes retired — setPOs kept for API symmetry.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const setPOs = extSetPOs || setLocalPOs;
   const lots = extLots ?? localLots;
   const setLots = extSetLots || setLocalLots;
   const orders = extOrders ?? localOrders;
   const setOrders = extSetOrders || setLocalOrders;
-  const contacts = extContacts || [];
+  const contacts = React.useMemo(() => extContacts || [], [extContacts]);
 
   const [selectedId, setSelectedId] = useState((shipments[0] || {}).id || null);
   const [query, setQuery] = useState("");
@@ -2884,13 +2893,11 @@ export default function Shipments({
     return updated;
   }
 
-  function linkShipmentToDocs(sh) {
-    if (typeof setPOs === "function" && (sh.poRefs || []).length) {
-      setPOs(prev => prev.map(p => (sh.poRefs || []).includes(p.number) ? { ...p, linkedShipments: uniq([...(p.linkedShipments || []), sh.number]) } : p));
-    }
-    if (typeof setOrders === "function" && (sh.soRefs || []).length) {
-      setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, linkedShipments: uniq([...(o.linkedShipments || []), sh.number]) } : o));
-    }
+  function linkShipmentToDocs(_sh) {
+    // v6.63.0 (D-15): retired. BP-49 made linked documents COMPUTED — the PO/SO
+    // screens now derive them from live data (documents.domain), so writing the
+    // legacy stored arrays only created half-alive state that went stale on
+    // cancel. The legacy arrays are read-only compat until stripped at migration.
   }
 
   function markConfirmationSent(sh) {
@@ -2911,6 +2918,27 @@ export default function Shipments({
   // the signed loading protocol and the CMR scan. The basis defaults to MIXED —
   // a transport claim is normally cargo lost PLUS the cost of putting it right.
   async function raiseTransportClaim(sh) {
+    // v6.63.0 (D-13): one claims UI — navigate to Claims pre-filled with the
+    // shipment, the responsible carrier/forwarder and its transport invoice.
+    if (typeof onStartClaim === "function") {
+      const findContact = (id: any) => id == null ? null : (contacts || []).find((c: any) => String(c.id) === String(id)) || null;
+      const carrier = findContact(sh.carrierId) || findContact(sh.forwarderId) || null;
+      const kind = sh.forwarderId && !sh.carrierId ? "Forwarder" : "Carrier";
+      const tInv = (extInvoices || []).find((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => lk.type === "Shipment" && String(lk.number) === String(sh.number)));
+      onStartClaim({
+        respondentKind: kind, direction: "RECOVERY",
+        respondentName: carrier?.name || "", contactId: carrier?.id ?? null,
+        cause: "Transport damage",
+        subjects: [
+          { kind: "SHIPMENT", ref: sh.number },
+          ...((sh.lotRefs || []).slice(0, 3).map((r: any) => ({ kind: "LOT", ref: r }))),
+          ...(tInv ? [{ kind: "INVOICE", ref: tInv.number }] : []),
+        ],
+        notes: `Transport claim on ${sh.number}`,
+      });
+      return;
+    }
+
     if (typeof setClaims !== "function") return;
     // v6.54.0 (user ruling): a cancelled shipment never happened, so there is
     // nothing to claim against. Blocked at the point of raising rather than
@@ -3053,7 +3081,7 @@ export default function Shipments({
         allocateCosts(next);
       }
       if (status === "Delivered" || status === "Closed") {
-        setOrders(prev => prev.map(o => (next.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Shipped" : o.status, linkedShipments: uniq([...(o.linkedShipments || []), next.number]) } : o));
+        setOrders(prev => prev.map(o => (next.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Shipped" : o.status } : o));
       }
     }
     setToast(`${sh.number} moved to ${status}.`);
@@ -3127,7 +3155,7 @@ export default function Shipments({
     const purpose = derivePurpose(sh);
     setLots(prev => postShipmentToLots(sh, prev, { todayISO, nextId }).lots);
     if (purpose === "OUTBOUND") {
-      setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" || o.status === "Confirmed" || o.status === "Reserved" || o.status === "Loading" ? "Shipped" : o.status, linkedShipments: uniq([...(o.linkedShipments || []), sh.number]) } : o));
+      setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" || o.status === "Confirmed" || o.status === "Reserved" || o.status === "Loading" ? "Shipped" : o.status } : o));
     }
     linkShipmentToDocs(sh);
     setToast(`${sh.number} inventory movement applied where matching lot refs exist.`);

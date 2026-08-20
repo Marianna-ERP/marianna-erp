@@ -60,6 +60,12 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     const destId = lastLeg.toLocationId || sh.destinationLocationId || lot.locationId;
     const fromId = firstLeg.fromLocationId || lot.locationId;
     const currentPhysical = num(lot.physicalKg);
+    // v6.63.0 (D-03): anchor the lot's ORIGINAL location before this posting moves
+    // it. Cancellation voids the movements and recomputeLotFromMovements falls back
+    // to baseLocationId — without the anchor it fell back to lot.locationId, which
+    // this very posting had already overwritten with the DESTINATION, so a cancelled
+    // transfer left the lot showing at a place the goods never (officially) reached.
+    const baseAnchor = lot.baseLocationId ?? lot.locationId ?? fromId ?? null;
     const goodsSoRef = relatedGoods.map((g: any) => g.soRef).find(Boolean);
     // v6.51.0: stamp the movement with the date the goods actually MOVED, not the
     // day the record was created. Storage days and every date-based report depend
@@ -103,12 +109,12 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
 
     if (purpose === "TRANSFER") {
       const movement = { id: deps.nextId(), date, type: "TRANSFER", qtyKg: qty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `TRANSFER via ${sh.number}` };
-      return { ...lot, locationId: destId, movements: [...(lot.movements || []), movement] };
+      return { ...lot, baseLocationId: baseAnchor, locationId: destId, movements: [...(lot.movements || []), movement] };
     }
 
     if (purpose === "RETURN") {
       const movement = { id: deps.nextId(), date, type: "REVERSAL", qtyKg: qty, fromId, toId: destId, soRef: goodsSoRef || null, shipmentRef: sh.number, note: `RETURN via ${sh.number} — restored to stock pending inspection` };
-      return { ...lot, physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000, locationId: destId, movements: [...(lot.movements || []), movement] };
+      return { ...lot, baseLocationId: baseAnchor, physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000, locationId: destId, movements: [...(lot.movements || []), movement] };
     }
 
     // INBOUND
@@ -129,6 +135,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, fromId: destId, toId: destId, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — direct pass-through to client` };
       return {
         ...lot,
+        baseLocationId: baseAnchor,
         receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000,
         physicalKg: currentPhysical, // net zero — never in our stock
         locationId: destId,
@@ -141,6 +148,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       const movement = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number}` };
       return {
         ...lot,
+        baseLocationId: baseAnchor,
         locationId: destId,
         receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000,
         physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000,
@@ -166,6 +174,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       const takeQty = Math.min(qty, stillOutstanding);
       const movement = { id: deps.nextId(), date, type: "IN", qtyKg: takeQty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — further delivery against ${lot.poRef || "the order"}` };
       return {
+        baseLocationId: baseAnchor,
         ...lot,
         locationId: destId,
         receivedKg: Math.round((receivedSoFar + takeQty) * 1000) / 1000,

@@ -61,7 +61,9 @@ export function isClaimOpen(c: any): boolean { return !TERMINAL.has(String(c?.st
 
 /** What a claim is about — many-to-many, so one reefer failure can name several lots. */
 export interface ClaimSubject {
-  kind: "LOT" | "SO" | "PO" | "SHIPMENT" | "LEG";
+  /** v6.63.0 (D-13): INVOICE added — a claim must trace to the money document it
+   *  adjusts (SO+SINV / PO+PINV / SHP+transport invoice). */
+  kind: "LOT" | "SO" | "PO" | "SHIPMENT" | "LEG" | "INVOICE";
   ref: string;
   affectedKg?: number;
 }
@@ -445,4 +447,49 @@ export function reverseClaimPostings(claim: any, lots: any[], orders: any[]): { 
     orders: (orders || []).map((o: any) => (o.claimAdjustments || []).some((a: any) => str(a?.source) === source)
       ? { ...o, claimAdjustments: (o.claimAdjustments || []).filter((a: any) => str(a?.source) !== source) } : o),
   };
+}
+
+
+// ── v6.63.0 (D-13): the money document a finalised claim produces ─────────────
+// Owner rulings: a client claim that ends in money → a CREDIT note WE issue.
+// A recovery against supplier/carrier/forwarder → we expect THEIR credit note;
+// if they don't issue one, WE issue a DEBIT note to them ("what we need to get").
+export type ClaimNoteMode = "THEIR_CREDIT" | "OUR_DEBIT" | "OUR_CREDIT_TO_CLIENT";
+
+export function claimNoteMode(claim: any, theyIssued: boolean): ClaimNoteMode {
+  if (String(claim?.respondent?.kind) === "Client") return "OUR_CREDIT_TO_CLIENT";
+  return theyIssued ? "THEIR_CREDIT" : "OUR_DEBIT";
+}
+
+export function buildClaimFinanceNote(
+  claim: any,
+  mode: ClaimNoteMode,
+  deps: { nextId: () => any; todayISO: () => string; invoices?: any[] }
+): any {
+  const acceptedEUR = Number(claim?.acceptedEUR) || 0;
+  const fx = Number(claim?.plnPerEur) || 0;
+  const amountPLN = Math.round(acceptedEUR * (fx || 0) * 100) / 100;
+  const invSubj = (claim?.subjects || []).find((s: any) => s.kind === "INVOICE");
+  const invoice = invSubj ? (deps.invoices || []).find((i: any) => String(i.number) === String(invSubj.ref)) : null;
+  const firstDoc = (claim?.subjects || []).find((s: any) => s.kind !== "INVOICE");
+  const base = {
+    id: deps.nextId(),
+    invoiceId: invoice ? invoice.id : null,
+    relatedRef: firstDoc ? String(firstDoc.ref) : String(claim?.number || ""),
+    partyName: String(claim?.respondent?.name || ""),
+    category: "Claim settlement",
+    amount: acceptedEUR,
+    currency: "EUR",
+    fxRate: fx || 1,
+    amountPLN,
+    status: "Issued",
+    reason: `Claim ${claim?.number || ""} — ${claim?.cause || ""}`.trim(),
+    date: deps.todayISO(),
+    source: `claim:${claim?.number}`,   // idempotency key — one money document per claim
+  };
+  if (mode === "OUR_CREDIT_TO_CLIENT")
+    return { ...base, noteType: "CREDIT", direction: "outgoing", issuedBy: "US" };
+  if (mode === "THEIR_CREDIT")
+    return { ...base, noteType: "CREDIT", direction: "incoming", issuedBy: "COUNTERPARTY" };
+  return { ...base, noteType: "DEBIT", direction: "incoming", issuedBy: "US" };
 }

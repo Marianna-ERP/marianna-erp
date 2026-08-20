@@ -1144,7 +1144,7 @@ function soTermsMissing(o: any): string | null {
 }
 
 function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
-  const { confirm: ofConfirm, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning)
+  const { confirm: ofConfirm, alert: ofAlert, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning) + v6.63.0 (D-10 forward-only alert)
   // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
   // this session shows in the destination picker without a browser refresh.
   const liveLocations = (() => {
@@ -1203,6 +1203,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
       if (clash) result[field] = clash.number;
     });
     return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order.importPermitNo, order.acidNo, order.id, allOrders]);
 
   // Source picker state
@@ -1460,6 +1461,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   const nv = e.target.value;
                   const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status));
                   const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
+                  // v6.63.0 (D-10, ruling D4): a locked SO moves FORWARD only.
+                  // The old dropdown let Shipped→Draft happen silently, with the
+                  // shipped kg and postings left orphaned behind the label (M2).
+                  const curOrd = (SO_STATUSES[order.status || "Draft"] || {}).order ?? 0;
+                  const nvOrd = (SO_STATUSES[nv] || {}).order ?? 0;
+                  if (wasLocked && nv !== "Cancelled" && nvOrd < curOrd) {
+                    await ofAlert({ tone: "warn", title: "Forward only", message: `This sales order is ${order.status} — goods have physically moved, so its status can only advance (or be Cancelled, which reverses the postings). Moving it back to ${nv} would leave shipped kilograms behind a label that denies them.` });
+                    return;
+                  }
                   if (willLock && !wasLocked) {
                     const ok = await ofConfirm({ tone: "warn", title: `Move to ${nv}?`, message: `Once this sales order is ${nv}, it becomes LOCKED — line items, quantities, sourcing and the shipping address can no longer be changed. To correct something afterwards you'd issue a credit/debit note or a new order.\n\nProceed?`, confirmLabel: `Yes, move to ${nv}`, cancelLabel: "Not yet" });
                     if (!ok) return;
@@ -1471,7 +1481,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   {Object.keys(SO_STATUSES).map(s => {
                     // Draft and Cancelled are always available; everything else requires all lines to be
                     // (a) sourced AND (b) have enough combined available qty to cover the demanded qty.
-                    if (s === "Draft" || s === "Cancelled") return <option key={s} value={s}>{s}</option>;
+                    const curOrd2 = (SO_STATUSES[order.status || "Draft"] || {}).order ?? 0;
+                    const isBackward = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status)) && s !== "Cancelled" && ((SO_STATUSES[s] || {}).order ?? 0) < curOrd2;
+                    if (s === "Draft" || s === "Cancelled") return <option key={s} value={s} disabled={s === "Draft" && isBackward}>{s}{s === "Draft" && isBackward ? "  — forward only" : ""}</option>;
+                    if (isBackward) return <option key={s} value={s} disabled>{s}  — forward only</option>;
                     const needsSource = !sourcing.allSourced;
                     const needsSupply = overageCount > 0;
                     const needsPOReady = poReadinessIssues.length > 0;
@@ -1852,7 +1865,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
-  const computedLinks = computedSOLinks(order, { shipments, invoices: [], lots });
+  const computedLinks = computedSOLinks(order, { shipments, invoices: (soInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), lots });
   // P/L visibility rule:
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
@@ -2182,6 +2195,7 @@ export default function SalesOrders({
   userName = "",
   productCatalog = [],
   setProductCatalog,
+  onStartClaim = null,
 }: any = {}) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: soDialogNode } = useConfirm(); // P2-6
   // v6.35.1: cancelled document numbers (POs, SOs, shipments) for struck-through refs.
@@ -2544,7 +2558,7 @@ export default function SalesOrders({
       });
     }
     if (extSetFinanceNotes) {
-      const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
+      const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
       const cur = cc.cur || inv?.currency || soDoc.currency || "PLN";
       const fx = defaultFxRate(cur);
       extSetFinanceNotes((prev: any[]) => [...(prev || []), {
@@ -2677,7 +2691,25 @@ export default function SalesOrders({
           onIssueInvoice={() => setInvoiceOrder(selected)}
           onDelete={deleteOrder}
           onRecordCollection={() => setCollectionFor(selected)}
-          onRecordClientClaim={() => { setClientClaimFor(selected); setCc({ lotId: "", qty: "", value: "", cur: selected.currency || "PLN", note: "" }); }}
+          onRecordClientClaim={() => {
+            // v6.63.0 (D-13): one claims UI — this button now opens the Claims module
+            // pre-filled with the SO, its client and its sales invoice. The old local
+            // modal remains only as a fallback for standalone use.
+            if (typeof onStartClaim === "function") {
+              const sinv = (extInvoices || []).find((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => lk.type === "SO" && String(lk.number) === String(selected.number)));
+              const clientContact = (extContacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(selected.client?.name || "").trim().toLowerCase());
+              onStartClaim({
+                respondentKind: "Client", direction: "CONCESSION",
+                respondentName: selected.client?.name || "", contactId: clientContact ? clientContact.id : null,
+                subjects: [
+                  { kind: "SO", ref: selected.number },
+                  ...(sinv ? [{ kind: "INVOICE", ref: sinv.number }] : []),
+                ],
+                notes: `Client claim on ${selected.number}`,
+              });
+              return;
+            }
+            setClientClaimFor(selected); setCc({ lotId: "", qty: "", value: "", cur: selected.currency || "PLN", note: "" }); }}
         />
       </>
     );
