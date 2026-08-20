@@ -8,8 +8,18 @@ import Shipments from "./Shipments";
 import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
+import { PACKAGING_SEED } from "./packaging.domain";
+import { healRound645, healRound651 } from "./heal.v645";
+import { migrateClaims } from "./claims.domain";
+import Claims from "./Claims";
+import { costTypeLabel, costInventoryType } from "./Shipments";
+import { localTodayISO } from "./dates";
+import { nextId as globalNextId } from "./ids";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
+import { setAuditSink, recordAudit } from "./audit";
+import { appendAudit } from "./auditTrail.domain";
+import AuditTrail from "./AuditTrail";
 import { convertSettledRefsToEvents } from "./payments.domain";
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
@@ -108,6 +118,8 @@ const NAV_GROUPS: { items: { key: string; icon: string; label: string; short: st
   { items: [
     { key: "invoices", icon: "₣", label: "Invoices", short: "Invoices" },
     { key: "finance", icon: "Σ", label: "Finance", short: "Finance" },
+    { key: "claims", icon: "⚖", label: "Claims", short: "Claims" },
+    { key: "audit", icon: "≡", label: "Audit trail", short: "Audit" },
   ] },
   { items: [
     { key: "contacts", icon: "◻", label: "Counterparties", short: "Parties" },
@@ -175,11 +187,101 @@ export default function App() {
   const [creditNotes, setCreditNotes] = useLocalStoredState("creditNotes", []);
   const [invoices, setInvoices] = useLocalStoredState("invoices", []);
   const [productCatalog, setProductCatalog] = useLocalStoredState("productCatalog", PRODUCT_CATALOG_SEED);
+  const [packagingTypes, setPackagingTypes] = useLocalStoredState("packagingTypes", PACKAGING_SEED);
+  const [claims, setClaims] = useLocalStoredState("claims", []);
+  // v6.56.0: load plans group the shipments of one commercial movement.
+  const [loadPlans, setLoadPlans] = useLocalStoredState("loadPlans", []);
+
+  // ─── v6.45.0 one-time DATA HEAL (test-round root causes B + C) ──────────────
+  // Repairs: (C) shipments closed before the v6.44.0 close-posting fix (their
+  // lots never got movements → COGS/direct costs/weights/integrity wrong), and
+  // (B) goods rows the old matcher pointed at the wrong lot (re-tagged, wrong
+  // movements voided, goods re-posted, costs re-allocated). Runs once per
+  // browser (marker), is idempotent anyway, and records itself in the audit
+  // trail. See src/heal.v645.ts for the full reasoning.
+  React.useEffect(() => {
+    try {
+      const MARK = "marianna:heal:v6.45.0";
+      if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      const res = healRound645({ shipments, lots, orders }, {
+        todayISO: localTodayISO,
+        nextId: globalNextId,
+        costMapper: { inventoryType: costInventoryType, label: costTypeLabel },
+      });
+      window.localStorage.setItem(MARK, new Date().toISOString());
+      if (res.changed) {
+        setShipments(res.shipments);
+        setLots(res.lots);
+        try { recordAudit({ module: "System", docType: "Heal", docNumber: "HEAL-6.45.0", action: "healed", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
+      }
+    } catch (e) { console.error("heal v6.45.0 failed (left data untouched):", e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // v6.51.1: the same repair, runnable on demand from Settings.
+  function repairInventory() {
+    const res = healRound651({ shipments, lots });
+    if (res.changed) {
+      setLots(res.lots);
+      try { recordAudit({ module: "System", docType: "Repair", docNumber: "REPAIR-6.51.1", action: "healed", summary: res.notes.slice(0, 6).join(" | ") }); } catch {}
+    }
+    return res;
+  }
+
+  // ─── v6.51.0 heal: mis-posted transfers + outbound costs in landed cost ────
+  React.useEffect(() => {
+    try {
+      const MARK = "marianna:heal:v6.51.0";
+      if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      // v6.51.1: DO NOT claim to have healed before there is anything to heal.
+      // The previous version ran once on mount and wrote the marker unconditionally
+      // — so if the stores had not finished loading in that instant, the heal found
+      // nothing, marked itself done and never ran again. It now waits for real data
+      // and only writes the marker once it has actually processed some.
+      if (!(lots || []).length || !(shipments || []).length) return;
+      const res = healRound651({ shipments, lots });
+      window.localStorage.setItem(MARK, new Date().toISOString());
+      if (res.changed) {
+        setLots(res.lots);
+        try { recordAudit({ module: "System", docType: "Heal", docNumber: "HEAL-6.51.0", action: "healed", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
+      }
+    } catch (e) { console.error("heal v6.51.0 failed (left data untouched):", e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lots.length, shipments.length]);
+
+  // ─── v6.48.0 CLAIMS re-home (Phase 1) ──────────────────────────────────────
+  // Lifts every existing claim into its own store: the producer claims nested in
+  // lot.claims[] and the client claims that only ever existed as CLAIM movements
+  // (unnumbered, statusless). The originals are left untouched — nothing writes
+  // to them any more, so keeping them means a migration bug can't destroy the
+  // only copy. Idempotent by provenance, and marker-guarded on top.
+  React.useEffect(() => {
+    try {
+      const MARK = "marianna:claims:migrated:v6.48.0";
+      if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      const res = migrateClaims({ lots, pos, orders, existing: claims },
+        { todayISO: localTodayISO, nextId: globalNextId });
+      window.localStorage.setItem(MARK, new Date().toISOString());
+      if (res.changed) {
+        setClaims(res.claims);
+        try { recordAudit({ module: "Claims", docType: "Migration", docNumber: "CLAIMS-6.48.0", action: "migrated", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
+      }
+    } catch (e) { console.error("claims migration failed (left data untouched):", e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
   const [logisticsPoints, setLogisticsPoints] = useLocalStoredState("logisticsPoints", []);
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
   const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
   const [userName, setUserName] = useLocalStoredState("userName", "");
+  // v6.40.0: the audit logbook — passive, capped, exported with everything else.
+  const [auditLog, setAuditLog] = useLocalStoredState("auditLog", []);
+  setAuditSink((e: any) => setAuditLog((prev: any[]) => appendAudit(prev || [], {
+    id: Date.now() * 10 + Math.floor(Math.random() * 10),
+    ts: new Date().toISOString(),
+    user: userName || "user",
+    ...e,
+  })));
 
   function setContactsCascade(update: any) {
     _setContacts(update);
@@ -250,22 +352,26 @@ export default function App() {
     switch (activeModule) {
       case "dashboard":
         return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
+      case "claims":
+        return <Claims claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments} />;
+      case "audit":
+        return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} />;
       case "pos":
         return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "lots":
-        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} />;
+        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims} setClaims={setClaims} />;
       case "orders":
-        return <SalesOrders orders={orders} setOrders={setOrders} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
+        return <SalesOrders orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims} />;
       case "shipments":
-        return <Shipments shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} />;
+        return <Shipments shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} packagingTypes={packagingTypes} setClaims={setClaims} />;
       case "invoices":
-        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} lots={lots} />;
+        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
+        return <Settings reloadFromStorage={reloadFromStorage} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory} />;
       default:
         return null;
     }

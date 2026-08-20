@@ -48,8 +48,10 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
   const nextLots = (lots || []).map(lot => {
     const relatedGoods = (sh.goods || []).filter((g: any) => g.lotRef === lot.number);
     if (!relatedGoods.length) return lot;
+    // v6.45.0 (heal): VOIDED movements don't count — a voided posting was undone
+    // (cancellation or heal), so a fresh post must be allowed.
     const hasMovement = (lot.movements || []).some((m: any) =>
-      (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(sh.number)));
+      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(sh.number)));
     if (hasMovement) return lot;
 
     const qty = relatedGoods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
@@ -59,13 +61,28 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     const fromId = firstLeg.fromLocationId || lot.locationId;
     const currentPhysical = num(lot.physicalKg);
     const goodsSoRef = relatedGoods.map((g: any) => g.soRef).find(Boolean);
-    const date = sh.actualDeliveryDate || deps.todayISO();
+    // v6.51.0: stamp the movement with the date the goods actually MOVED, not the
+    // day the record was created. Storage days and every date-based report depend
+    // on this. Preference: actual delivery > planned delivery on the last leg >
+    // loading date > pickup on the first leg > today (last resort).
+    const date = sh.actualDeliveryDate
+      || lastLeg.plannedDeliveryDate || sh.expectedDeliveryDate
+      || sh.loadingDate || firstLeg.plannedPickupDate
+      || deps.todayISO();
     changed.push(lot.number);
 
     if (purpose === "OUTBOUND") {
       // Decision 2 extension: an EXW/direct collection of a lot that never entered
       // our stock posts the PASS-THROUGH PAIR here too (ownership at handover).
-      const isDirectLot = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected";
+      // v6.45.0 (parity with the v6.44.0 INBOUND fix): a PO-backed lot that was
+      // NEVER received and leaves on a sold shipment is a pass-through by
+      // definition — the goods went producer → client without touching our
+      // stock. The old gate demanded the directFlow flag, which older/mis-built
+      // lots don't carry, so genuine direct exports fell into the plain
+      // SHIP_OUT branch: receivedKg stayed 0 (no weight anywhere) and the
+      // over-issue clamp fired on legitimate goods.
+      const isDirectLot = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected"
+        || (!!lot.poRef && (goodsSoRef || (sh.soRefs || []).length > 0));
       const notYetIn = !(num(lot.receivedKg) > 0) && currentPhysical <= 0;
       if (isDirectLot && notYetIn) {
         const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;
@@ -95,7 +112,14 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     }
 
     // INBOUND
-    const isDirect = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected";
+    // v6.44.0 (test-round core): recognise a DIRECT EXPORT pass-through even when the
+    // lot's directFlow flag was never set — if this shipment's goods for the lot carry
+    // an SO reference (the goods are sold, going straight to the client), it's a
+    // pass-through, not a receipt into our stock. This is what produces the SHIP_OUT
+    // that gives the SO its COGS.
+    const goodsAreSold = relatedGoods.some((g: any) => !!g.soRef) || (sh.soRefs || []).length > 0;
+    const goodsAreExport = relatedGoods.some((g: any) => String(g.tradeDirection || "").toUpperCase() === "EXPORT");
+    const isDirect = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected" || (goodsAreSold && goodsAreExport);
     const notYetReceived = !(num(lot.receivedKg) > 0) && currentPhysical <= 0;
     if (isDirect) {
       // Decision 2 (pass-through pair): goods enter our ownership at the handover
@@ -122,6 +146,32 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000,
         status: "In Stock",
         arrivalDate: sh.actualDeliveryDate || lot.arrivalDate || date,
+        movements: [...(lot.movements || []), movement],
+      };
+    }
+    // v6.51.0 (ROOT CAUSE A): a lot that has already been received is NOT
+    // automatically a transfer target. A PO delivered in several trucks posts a
+    // RECEIPT each time — the reported "Shortfall 21 000 kg (-50 %)" was a
+    // 42 000 kg PO delivered in two loads where only the first counted, because
+    // the second was booked as a warehouse move (which adds no stock).
+    // It is a genuine TRANSFER only when the goods are being relocated: the lot
+    // is already sitting somewhere and this shipment moves it elsewhere WITHOUT
+    // bringing new quantity — i.e. the whole lot travels, or the PO line has no
+    // outstanding quantity left to deliver.
+    const orderedForLine = num(lot.expectedKg) || 0;
+    const receivedSoFar = num(lot.receivedKg);
+    const stillOutstanding = orderedForLine > 0 ? Math.max(0, orderedForLine - receivedSoFar) : 0;
+    const isFurtherDelivery = stillOutstanding > 0 && qty > 0;
+    if (isFurtherDelivery) {
+      const takeQty = Math.min(qty, stillOutstanding);
+      const movement = { id: deps.nextId(), date, type: "IN", qtyKg: takeQty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — further delivery against ${lot.poRef || "the order"}` };
+      return {
+        ...lot,
+        locationId: destId,
+        receivedKg: Math.round((receivedSoFar + takeQty) * 1000) / 1000,
+        physicalKg: Math.round((currentPhysical + takeQty) * 1000) / 1000,
+        status: "In Stock",
+        arrivalDate: lot.arrivalDate || date,
         movements: [...(lot.movements || []), movement],
       };
     }
@@ -273,4 +323,98 @@ export function normalizeCustoms(raw: any): any {
     cost: null, currency: "PLN", fxRate: 1,
     _migratedFrom: typeof raw === "string" ? raw : undefined,
   };
+}
+
+// ── v6.37.1 (Finance direct costs, F-1): the freight MIRROR SYNC ─────────────
+// Legs are the operational entry point for freight (truck rate, sea rate); the
+// financial pipeline (KPIs, billing, allocation, SO margin) reads costs[]. Until
+// now costs[] was a one-time snapshot at creation — edit a leg's cost later and
+// finance never saw it (the reported truck/container loss). This sync runs on
+// every save, exactly like the customs sync (v6.34.5): one managed line per leg
+// with a STABLE identity (source "leg-freight:{n}"), amounts from the leg,
+// preserving the line's id / invoiceStatus / invoiceRef across re-syncs, removed
+// when the leg's cost is cleared. It ADOPTS a legacy unsourced snapshot line of
+// the same freight type (builder-era data) instead of duplicating it. Manually
+// added lines (other types, or extra unsourced lines) are never touched.
+const FREIGHT_TYPE_BY_MODE: Record<string, string> = { Air: "air_freight", Rail: "rail_freight", Road: "road_freight", Sea: "sea_freight" };
+export function legFreightSource(legNo: number): string { return `leg-freight:${legNo}`; }
+export function syncLegFreightCostLines(sh: any): any {
+  const legs = sh?.legs || [];
+  const numv = (v: any) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+  let costs = [...(sh?.costs || [])];
+  legs.forEach((leg: any, i: number) => {
+    const n = i + 1;
+    const src = legFreightSource(n);
+    const type = FREIGHT_TYPE_BY_MODE[leg?.mode] || "sea_freight";
+    const amt = numv(leg?.costAmount);
+    const fx = numv(leg?.costFxRate) || 1;
+    const pln = numv(leg?.costPLN) || Math.round(amt * fx * 100) / 100;
+    let idx = costs.findIndex((c: any) => c && String(c.source || "") === src);
+    if (idx === -1 && amt > 0) {
+      idx = costs.findIndex((c: any) => c && !c.source && !c._customsAuto && c.type === type);
+    }
+    if (amt > 0) {
+      const prev = idx >= 0 ? costs[idx] : null;
+      const line = {
+        id: prev?.id ?? (numv(sh?.id) || 0) * 1000 + 900 + n,
+        source: src, type,
+        supplierId: leg?.carrierId || leg?.forwarderId || prev?.supplierId || null,
+        amount: amt, currency: leg?.costCurrency || "PLN", fxRate: fx, amountPLN: pln,
+        invoiceStatus: prev?.invoiceStatus || "Expected",
+        invoiceRef: prev?.invoiceRef || "",
+        allocationMethod: prev?.allocationMethod || "by_kg",
+        notes: `${leg?.mode || "?"} leg ${n}`,
+      };
+      if (idx >= 0) costs[idx] = line; else costs.push(line);
+    } else if (idx >= 0 && String(costs[idx].source || "") === src) {
+      // v6.50.0 (test round): DO NOT silently delete a freight line that carries
+      // real money just because the leg's own cost field is empty. Most freight is
+      // typed straight into the cost line and never onto the leg, so a line that
+      // had once been adopted by a leg vanished on the next save — the reported
+      // "road and sea freight disappear after saving customs" data loss.
+      // The leg simply stops MANAGING the line: we release it (drop the source) so
+      // it survives as an ordinary manual cost line. Only a genuinely empty
+      // managed line is removed.
+      const existing = costs[idx];
+      const carriesMoney = numv(existing?.amount) > 0 || numv(existing?.amountPLN) > 0;
+      if (carriesMoney) {
+        const released = { ...existing };
+        delete released.source;
+        released.notes = String(existing?.notes || "").replace(/^(Road|Sea|Air|Rail|\?) leg \d+$/, "").trim() || existing?.notes || "";
+        costs[idx] = released;
+      } else {
+        costs.splice(idx, 1);
+      }
+    }
+  });
+  // drop managed lines for legs that no longer exist
+  costs = costs.filter((c: any) => {
+    const m = /^leg-freight:(\d+)$/.exec(String(c?.source || ""));
+    return !m || Number(m[1]) <= legs.length;
+  });
+  return { ...sh, costs };
+}
+
+
+// ── v6.58.0: WHAT A SHIPMENT ACTUALLY CARRIES ────────────────────────────────
+// Header poRefs/soRefs/lotRefs are seeded from the SOURCE DOCUMENT at creation,
+// so a shipment carrying one lot of a two-PO source displayed both POs and all
+// the source's lots. Related documents must come from the goods on board.
+export function carriedRefs(sh: any): { poRefs: string[]; soRefs: string[]; lotRefs: string[] } {
+  const pos = new Set<string>(), sos = new Set<string>(), lots = new Set<string>();
+  const goods = (sh?.goods || []).filter((g: any) => {
+    const n = parseFloat(String(g?.qtyKg ?? "").replace(",", "."));
+    return isFinite(n) && n > 0;   // a zero-kg line moves nothing and links nothing
+  });
+  goods.forEach((g: any) => {
+    if (g.poRef) pos.add(String(g.poRef));
+    if (g.soRef) sos.add(String(g.soRef));
+    if (g.lotRef) lots.add(String(g.lotRef));
+  });
+  // A shipment with no goods yet falls back to the seeds — a booking still
+  // needs to say which order it belongs to.
+  if (!goods.length) return {
+    poRefs: (sh?.poRefs || []).map(String), soRefs: (sh?.soRefs || []).map(String), lotRefs: (sh?.lotRefs || []).map(String),
+  };
+  return { poRefs: Array.from(pos), soRefs: Array.from(sos), lotRefs: Array.from(lots) };
 }

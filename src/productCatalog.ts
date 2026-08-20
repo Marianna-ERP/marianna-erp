@@ -73,21 +73,36 @@ export function renameCatalogItem(catalog: CatalogItem[], oldItem: string, newIt
 }
 
 /** Merge Item/Variety rows (e.g. from a CSV import) into the catalog without duplicating. */
-export function mergeCatalogRows(catalog: CatalogItem[], rows: { item: string; variety?: string }[]): CatalogItem[] {
+export function mergeCatalogRows(catalog: CatalogItem[], rows: { item: string; variety?: string; cnCode?: string }[]): CatalogItem[] {
   let out = catalog || [];
   (rows || []).forEach(r => {
     const item = norm(r.item); if (!item) return;
     out = r.variety ? addCatalogVariety(out, item, r.variety) : addCatalogItem(out, item);
+    if (r.cnCode) out = setCatalogCnCode(out, item, r.cnCode);
   });
   return out;
 }
 
+/** BP-8 (v6.34.1): set the per-item default CN/HS code. */
+export function setCatalogCnCode(catalog: CatalogItem[], item: string, cnCode: string): CatalogItem[] {
+  const key = norm(item);
+  return (catalog || []).map(c => norm(c.item) === key ? { ...c, defaultCnCode: cnCode.trim() } : c);
+}
+
+/** The default CN/HS for an item (empty string when unset). */
+export function cnCodeForItem(catalog: CatalogItem[], item: string): string {
+  const key = norm(item);
+  const hit = (catalog || []).find(c => norm(c.item) === key);
+  return (hit && (hit as any).defaultCnCode) || "";
+}
+
 /** Catalog → flat Item/Variety rows for CSV export (one row per variety; items with none get a single row). */
-export function catalogToRows(catalog: CatalogItem[]): { item: string; variety: string }[] {
-  const rows: { item: string; variety: string }[] = [];
+export function catalogToRows(catalog: CatalogItem[]): { item: string; variety: string; cnCode: string }[] {
+  const rows: { item: string; variety: string; cnCode: string }[] = [];
   (catalog || []).forEach(c => {
-    if (!c.varieties.length) rows.push({ item: c.item, variety: "" });
-    else c.varieties.forEach(v => rows.push({ item: c.item, variety: v }));
+    const cn = (c as any).defaultCnCode || "";
+    if (!c.varieties.length) rows.push({ item: c.item, variety: "", cnCode: cn });
+    else c.varieties.forEach(v => rows.push({ item: c.item, variety: v, cnCode: cn }));
   });
   return rows;
 }

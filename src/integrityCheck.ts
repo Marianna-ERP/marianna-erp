@@ -294,7 +294,15 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // wasn't received/shipped (the "apply inventory" step was missed).
   shipments.forEach((sh: any) => {
     if (sh?.status !== "Delivered") return;
-    const lotRefs = new Set([...arr(sh.lotRefs), ...arr(sh.goods).map((g: any) => g.lotRef)].filter(Boolean).map(String));
+    // v6.62.0: judge only the lots this shipment ACTUALLY CARRIES. Header
+    // lotRefs are seeded from the source document at creation, so a shipment
+    // carrying one lot could list three — and the two it never touched, still
+    // Expected with no movements, raised this warning against a shipment that
+    // had done nothing wrong. Same root cause already fixed for the shipment
+    // header display (carriedRefs, v6.58.0) and for Inventory (shipmentsForLot,
+    // v6.59.0); this check was missed then.
+    const carried = arr(sh.goods).map((g: any) => g.lotRef).filter(Boolean).map(String);
+    const lotRefs = new Set(carried.length ? carried : arr(sh.lotRefs).filter(Boolean).map(String));
     if (!lotRefs.size) return;
     const anyMissing = [...lotRefs].some((lr) => {
       const lot = lotByNumber.get(lr);
@@ -474,6 +482,11 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   shipments.forEach((sh: any) => {
     if (!sh || sh.billingStatus !== "Cost allocated") return;
     if (!arr(sh.costs).length) return;
+    // v6.62.0: an OUTBOUND delivery never builds landed cost (v6.51.0), so
+    // "no lot carries the allocation" is the correct outcome, not a stale flag.
+    // Such shipments now carry "Direct cost of sale" instead — but any left on
+    // the old flag must not be reported as broken.
+    if (String(sh.purpose || "").toUpperCase() === "OUTBOUND") return;
     const tagged = lots.some((l: any) => arr(l.costs).some((c: any) => String(c?.source || "").startsWith(`${sh.number}/`)));
     if (!tagged) add("warning", "STALE_BILLING_FLAG", "Shipments", sh.number || "(shipment)",
       `billingStatus is "Cost allocated" but no lot carries this shipment's cost allocation — the flag is stale (allocation never ran, was reverted, or the shipment was cancelled). Re-run the allocation or reset the status.`);

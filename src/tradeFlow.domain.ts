@@ -15,67 +15,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Legacy flow key → structured fields (for existing POs/lots).
-const FLOW_TO_STRUCT: Record<string, any> = {
-  EXP_EXWS:   { tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "supplier",    cargoPlan: "CLIENT_PICKUP" },
-  EXP_FOB:    { tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "origin_port", cargoPlan: "TO_PORT" },
-  EXP_CIF:    { tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "dest_port",   cargoPlan: "TO_PORT" },
-  EXP_DDP_EU: { tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "client",      cargoPlan: "DIRECT_TO_CLIENT" },
-  EXP_DDP_XEU:{ tradeMovement: "EXPORT", purchaseIncoterm: "EXW", handoverPoint: "client",      cargoPlan: "DIRECT_TO_CLIENT" },
-  IMP_EXWS_WH:{ tradeMovement: "IMPORT", purchaseIncoterm: "EXW", handoverPoint: "supplier",    cargoPlan: "OUR_WAREHOUSE" },
-  IMP_EXWS_DIR:{tradeMovement: "IMPORT", purchaseIncoterm: "EXW", handoverPoint: "supplier",    cargoPlan: "DIRECT_TO_CLIENT" },
-  IMP_CIF_WH: { tradeMovement: "IMPORT", purchaseIncoterm: "CIF", handoverPoint: "dest_port",   cargoPlan: "OUR_WAREHOUSE" },
-  IMP_CIF_DIR:{ tradeMovement: "IMPORT", purchaseIncoterm: "CIF", handoverPoint: "dest_port",   cargoPlan: "DIRECT_TO_CLIENT" },
-  IMP_DDP_WH: { tradeMovement: "IMPORT", purchaseIncoterm: "DDP", handoverPoint: "our_wh",      cargoPlan: "OUR_WAREHOUSE" },
-  IMP_DDP_DIR:{ tradeMovement: "IMPORT", purchaseIncoterm: "DDP", handoverPoint: "client",      cargoPlan: "DIRECT_TO_CLIENT" },
-};
+// v6.37.0: the legacy flow-key shim (FLOW_TO_STRUCT / structToFlow / reconcilePOFlow)
+// was retired — stored data was migrated by flowCleanup.migration (schema 2).
 
-export function flowToStruct(flow: string): any {
-  return FLOW_TO_STRUCT[flow] || null;
-}
-
-/**
- * Structured fields → the legacy flow key (BP-12 shim). Deterministic inverse of
- * the table above; picks the closest legacy flow so downstream FLOW_TYPES lookups,
- * journey templates and isExport keep working unchanged.
- */
-export function structToFlow(s: any): string {
-  if (!s || !s.tradeMovement) return "";
-  const inc = String(s.purchaseIncoterm || "EXW").toUpperCase();
-  const direct = s.cargoPlan === "DIRECT_TO_CLIENT";
-  const pickup = s.cargoPlan === "CLIENT_PICKUP";
-  const toPort = s.cargoPlan === "TO_PORT";
-
-  if (s.tradeMovement === "EXPORT") {
-    if (pickup) return "EXP_EXWS";
-    if (toPort) return s.handoverPoint === "dest_port" || s.requiresSea ? "EXP_CIF" : "EXP_FOB";
-    if (direct) return s.crossBorder ? "EXP_DDP_XEU" : "EXP_DDP_EU";
-    return "EXP_CIF";
-  }
-  // IMPORT
-  if (inc === "DDP" || inc === "DAP") return direct ? "IMP_DDP_DIR" : "IMP_DDP_WH";
-  if (inc === "CIF" || inc === "CFR") return direct ? "IMP_CIF_DIR" : "IMP_CIF_WH";
-  // EXW/FCA/FOB purchase
-  return direct ? "IMP_EXWS_DIR" : "IMP_EXWS_WH";
-}
-
-/** Round-trip stability check used by tests: struct→flow→struct preserves the essentials. */
-export function isDirectCargoPlan(s: any): boolean {
-  return s?.cargoPlan === "DIRECT_TO_CLIENT";
-}
-
-
-/** Ensure a PO has both representations in sync (called on load / save). */
-export function reconcilePOFlow(po: any): any {
-  // If structured fields are present, they win and the legacy flow is derived.
-  if (po.tradeMovement) {
-    const flow = structToFlow(po) || po.flow || "";
-    return { ...po, flow, directFlow: isDirectCargoPlan(po) };
-  }
-  // Otherwise derive structured fields from the legacy flow (existing data).
-  const s = flowToStruct(po.flow);
-  if (s) return { ...po, ...s, directFlow: s.cargoPlan === "DIRECT_TO_CLIENT" };
-  return po;
-}
 
 // BP-56 / FB-4: incoterm-specific handover wording (derived, shown read-only).
 export function handoverTextForIncoterm(incoterm: string, tradeMovement: string): string {
@@ -184,27 +126,128 @@ export function poDirectFromSOs(po: any, orders: any[]): boolean {
   });
 }
 
-/** Recompose the PO's internal flow from its terms + the sales reality (Phase B). */
-export function composePOFlow(po: any, orders: any[]): { flow: string; directFlow: boolean } {
-  const direct = poDirectFromSOs(po, orders);
-  const movement = po.tradeMovement || "IMPORT";
-  const st = {
-    tradeMovement: movement === "EXPORT" ? "EXPORT" : "IMPORT", // legacy keys are binary; INTRA_EU/CROSS_TRADE ride the import branch
-    purchaseIncoterm: po.buyIncoterm || po.purchaseIncoterm || "EXW",
-    cargoPlan: (direct || movement === "CROSS_TRADE") ? "DIRECT_TO_CLIENT" : "OUR_WAREHOUSE",
-    handoverPoint: po.handoverPoint,
-  };
-  return { flow: structToFlow(st) || po.flow || "", directFlow: st.cargoPlan === "DIRECT_TO_CLIENT" };
+
+
+// ── v6.34.0: the SHIPMENT resolves direction from its REAL ends ──────────────
+// A shipment's direction is a fact about ITS journey — producer country (from
+// the PO) × final destination country (from the governing SO's destination).
+// One CIF-Koper PO can father an EU-import truck AND a T1 cross-trade truck;
+// each shipment resolves independently once its governing SO is known.
+//
+// Resolution order (first hit wins):
+//   1. explicit manual override on the shipment (the human's final word — the
+//      T1-at-an-EU-port subtlety the matrix can't infer)
+//   2. DERIVED from ends: producer country × SO destination country, via the
+//      four-class matrix — the automatic, correct answer for the common case
+//   3. the PO's provisional movement (no governing SO — unsold-to-warehouse)
+//   4. legacy flow key, then Import
+export const TRADE_DIRECTIONS = ["IMPORT", "EXPORT", "INTRA_EU", "CROSS_TRADE"];
+
+/** A country string for the shipment's ORIGIN — the producer, from the PO. */
+export function poOriginCountry(po: any, resolveCountry?: (id: any) => string): string {
+  if (!po) return "";
+  return String(po.supplier?.country || (po.items || [])[0]?.origin || "").trim();
 }
 
-// ── v6.29.0: the SHIPMENT owns the trade direction (double-entry removed) ────
-// The PO carries no direction input — only a provisional read-only chip. The
-// journey's truth lives on the shipment: explicit field first, then the PO's
-// provisional value, then the legacy flow key, then Import.
-export const TRADE_DIRECTIONS = ["IMPORT", "EXPORT", "INTRA_EU", "CROSS_TRADE"];
-export function shipmentTradeDirection(shipment: any, po: any): string {
+/** A country string for the FINAL DESTINATION — from the governing SO. Prefers
+ *  the SO's named destination (per its sell incoterm) over the client's home
+ *  country: a CIF-to-a-port sale goes where the goods physically go (ruling #2).
+ *  resolveCountry maps a destinationLocationId → its country. */
+export function soDestinationCountry(so: any, resolveCountry?: (id: any) => string): string {
+  if (!so) return "";
+  if (so.destinationLocationId != null && resolveCountry) {
+    const c = resolveCountry(so.destinationLocationId);
+    if (c) return String(c).trim();
+  }
+  if (so.destinationText) {
+    // free-typed place — best effort: a trailing country-ish token, else the client's country
+    const txt = String(so.destinationText).trim();
+    if (txt) return txt;
+  }
+  return String(so.client?.country || "").trim();
+}
+
+/** The derived direction from two country strings, or "" when either is unknown. */
+export function directionFromCountries(originCountry: string, destCountry: string): string {
+  if (!originCountry || !destCountry) return "";
+  return movementFromEnds(isEUCountry(originCountry), isEUCountry(destCountry));
+}
+
+export function shipmentTradeDirection(shipment: any, po: any, so: any = null, resolveCountry?: (id: any) => string): string {
+  // 1. explicit manual override — always wins
   if (shipment?.tradeDirection && MOVEMENT_LABELS[shipment.tradeDirection]) return shipment.tradeDirection;
+  // 2. derived from the real ends when a governing SO is known
+  if (so) {
+    const derived = directionFromCountries(poOriginCountry(po, resolveCountry), soDestinationCountry(so, resolveCountry));
+    if (derived) return derived;
+  }
+  // 3. PO provisional (no SO — unsold portion to warehouse)
   if (po?.tradeMovement && MOVEMENT_LABELS[po.tradeMovement]) return po.tradeMovement;
+  // 4. legacy flow key, then Import
   if (String(po?.flow || "").startsWith("EXP")) return "EXPORT";
   return "IMPORT";
+}
+
+// ── v6.34.6: does a shipment FULFIL its PO/SO (consume the shipped budget)? ──────
+// The fulfilling movement is decided by the SELL INCOTERM + the destination:
+//   • FOB/FCA/EXW sales: our obligation ends at the port/handover — the leg to the
+//     port IS fulfilment → it consumes.
+//   • CIF/CFR/CPT/CIP sales: main carriage is on us, so an ONWARD (sea) leg follows;
+//     the PRE-CARRIAGE road leg to a PORT does NOT consume (the onward leg will) —
+//     otherwise the same goods count twice (5 trucks + 4 containers).
+//   • Anything else (DAP/DDP/road-direct, no port hop): the movement is fulfilment → consumes.
+// A shipment only counts once it is BOOKED or beyond (Draft is still being built).
+const FREIGHT_ONWARD_SELL = new Set(["CIF", "CFR", "CPT", "CIP"]);
+export function sellIncotermHasOnwardLeg(sellIncoterm: any): boolean {
+  return FREIGHT_ONWARD_SELL.has(String(sellIncoterm || "").toUpperCase());
+}
+// v6.55.0: shipmentFulfilsOrder() REMOVED, together with the carve-out it held.
+// It existed to stop a pre-carriage road leg to a port under CIF/CFR/CPT/CIP
+// from consuming a purchase order twice. That was a patch on a wrong premise —
+// shipments do not consume purchase orders at all — and it only ever covered
+// that one shape: it still double-counted a truck to a customs point where the
+// client transships, and cargo loaded straight into a container at the
+// producer. Consumption is a sales-order question (salesOrders.domain).
+// sellIncotermHasOnwardLeg() is kept: it describes a real fact about incoterms
+// and is used elsewhere.
+
+// ── v6.35.1 (Phase C step 3): ownership boundaries from the REAL incoterms, not the flow key.
+// buyOwnershipStart = the point at which WE take ownership from the supplier (buy incoterm).
+// sellOwnershipEnd  = the point at which we hand ownership to the client (sell incoterm).
+// Points, earliest→latest along a trade: supplier → origin_port → dest_port → our_wh → client.
+export const OWNERSHIP_POINTS = ["supplier", "origin_port", "dest_port", "our_wh", "client"] as const;
+export function buyOwnershipStartFromIncoterm(buyIncoterm: any): string {
+  const ic = String(buyIncoterm || "").toUpperCase();
+  // where WE become owner when buying:
+  if (ic === "EXW" || ic === "FCA") return "supplier";      // we take over at the supplier
+  if (ic === "FOB" || ic === "FAS") return "origin_port";    // we take over at the port of loading
+  if (ic === "CIF" || ic === "CFR" || ic === "CIP" || ic === "CPT") return "dest_port"; // supplier's risk to destination port
+  if (ic === "DAP" || ic === "DPU") return "our_wh";         // supplier delivers to us
+  if (ic === "DDP") return "our_wh";                          // supplier delivers duty-paid to us
+  return "supplier";
+}
+export function sellOwnershipEndFromIncoterm(sellIncoterm: any): string {
+  const ic = String(sellIncoterm || "").toUpperCase();
+  // where WE stop being owner when selling:
+  if (ic === "EXW" || ic === "FCA") return "supplier";       // client collects at origin
+  if (ic === "FOB" || ic === "FAS") return "origin_port";    // handed over at port of loading
+  if (ic === "CIF" || ic === "CFR" || ic === "CIP" || ic === "CPT") return "dest_port"; // our risk to destination port
+  if (ic === "DAP" || ic === "DPU" || ic === "DDP") return "client"; // we deliver to client
+  return "client";
+}
+/**
+ * Ownership state of the goods at a given transfer point, from the real incoterms.
+ * Returns "not_owned" | "owned" | "handed_over".
+ */
+export function ownershipAtPoint(point: string, buyIncoterm: any, sellIncoterm: any): string {
+  const order = OWNERSHIP_POINTS as readonly string[];
+  const start = buyOwnershipStartFromIncoterm(buyIncoterm);
+  const end = sellOwnershipEndFromIncoterm(sellIncoterm);
+  const pI = order.indexOf(point);
+  const sI = order.indexOf(start);
+  const eI = order.indexOf(end);
+  if (pI === -1 || sI === -1 || eI === -1) return "owned";
+  if (pI < sI) return "not_owned";
+  if (pI > eI) return "handed_over";
+  return "owned";
 }

@@ -1,8 +1,10 @@
+import { useConfirm, SmallButton } from "./ui";
 import React, { useRef, useState } from "react";
 import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
-import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows } from "./productCatalog";
+import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
+import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -12,8 +14,13 @@ import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVari
 // place to add user-facing administration features as we grow (Phase 2:
 // language, currency display preferences, notification settings, etc.)
 
+const INP: any = { width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
 function Card({ children, style }: any) {
   return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "20px 22px", ...style }}>{children}</div>;
+}
+
+function Lbl({ children }: any) {
+  return <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 3, textTransform: "uppercase" }}>{children}</div>;
 }
 
 function SectionTitle({ children }: any) {
@@ -41,7 +48,219 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
   );
 }
 
+
+// ── v6.36.0: PORTS & LOCATIONS manager ──────────────────────────────────────
+// The panel removed in v6.15, rebuilt on the surviving engine. Built-in reference
+// locations can have their real details OVERRIDDEN (name/country/address); custom
+// locations are fully editable; logistics points and counterparty warehouses are
+// listed read-only with a pointer to Parties. Changes reload the app so every
+// module that snapshots LOCATIONS at import picks them up (the documented pattern).
+function LocationsPanel() {
+  const { confirm: lpConfirm, alert: lpAlert, dialogNode: lpNode } = useConfirm(); // P2-6
+  const [q, setQ] = React.useState("");
+  const [typeFilter, setTypeFilter] = React.useState("All");
+  const [editingId, setEditingId] = React.useState<any>(null);
+  const [edit, setEdit] = React.useState<any>({});
+  const [add, setAdd] = React.useState<any>({ name: "", type: "Port", country: "", address: "" });
+  const overrides = readLocationOverrides();
+  // v6.38.0: this list manages ONLY built-in and custom locations. Party-derived
+  // addresses (suppliers/clients/warehouses) and logistics points remain in every
+  // picker but are managed in Parties — they don't belong in this list and were
+  // the "can't delete / wrong data" confusion.
+  const sourceOf = (l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE ? "Custom" : "Built-in";
+  // v6.43.0 (test-round #12): this manager is for PORTS only. Built-in party
+  // facilities (rented warehouse / supplier / client / customs) belong to the
+  // Parties module — they were wrongly mixed into the built-in seed here and
+  // couldn't be deleted. We now show only genuine Port-type built-ins; custom
+  // entries the user added stay visible and manageable. Party facilities are
+  // unaffected in storage and still feed the pickers via counterpartyLocations.
+  const PORT_TYPES = new Set(["Port", "PortWarehouse"]);
+  const locs = allLocations().filter((l: any) =>
+    Number(l.id) < LOGISTICS_POINT_BASE &&
+    (sourceOf(l) === "Custom" || PORT_TYPES.has(String(l.type))));
+  const types = ["All", ...Array.from(new Set(locs.map((l: any) => l.type)))];
+  const shown = locs.filter((l: any) => (typeFilter === "All" || l.type === typeFilter) &&
+    (!q.trim() || `${l.name} ${l.country} ${l.address || ""}`.toLowerCase().includes(q.trim().toLowerCase())));
+  const reloadNote = async () => { await lpAlert({ tone: "info", title: "Saved", message: "The app will reload so all location pickers see the change." }); window.location.reload(); };
+  const startEdit = (l: any) => { setEditingId(l.id); setEdit({ name: l.name, country: l.country || "", address: l.address || "" }); };
+  const saveEdit = (l: any) => {
+    const src = sourceOf(l);
+    if (src === "Custom") updateCustomLocation(Number(l.id), { name: edit.name, country: edit.country, address: edit.address });
+    else if (src === "Built-in") writeLocationOverride(Number(l.id), { name: edit.name, country: edit.country, address: edit.address });
+    reloadNote();
+  };
+  const inp = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: "100%" } as any;
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      {lpNode}
+      <SectionTitle>PORTS &amp; LOCATIONS <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· feeds port pickers, the over-ship guard and transport-order addresses</span></SectionTitle>
+      <div style={{ fontSize: 11.5, color: "#64748B", margin: "6px 0 12px" }}>
+        Add your own ports, port/transshipment warehouses or facilities here — they appear in every location picker.
+        Built-in reference locations can be edited too (e.g. put the real transshipment-warehouse address on a port) — shown with an <span style={{ color: "#B45309", fontWeight: 700 }}>edited</span> mark.
+        Supplier / client / warehouse addresses and forwarders' relay points are <strong>not listed here</strong> — they live in <strong>Parties</strong> (and still appear in every location picker automatically).
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.1fr 0.9fr 1.6fr auto", gap: 8, alignItems: "end", marginBottom: 12, background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 8, padding: 10 }}>
+        <div><Lbl>Name</Lbl><input style={inp} value={add.name} onChange={e => setAdd((a: any) => ({ ...a, name: e.target.value }))} placeholder="e.g. Luka Koper CFS warehouse" /></div>
+        <div><Lbl>Type</Lbl><select style={inp} value={add.type} onChange={e => setAdd((a: any) => ({ ...a, type: e.target.value }))}>{CUSTOM_LOCATION_TYPE_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}</select></div>
+        <div><Lbl>Country</Lbl><input style={inp} value={add.country} onChange={e => setAdd((a: any) => ({ ...a, country: e.target.value }))} placeholder="Slovenia" /></div>
+        <div><Lbl>Address</Lbl><input style={inp} value={add.address} onChange={e => setAdd((a: any) => ({ ...a, address: e.target.value }))} placeholder="street, city — printed on transport orders" /></div>
+        <button disabled={!add.name.trim()} onClick={() => { addCustomLocation({ name: add.name, country: add.country, type: add.type, address: add.address }); reloadNote(); }}
+          style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: add.name.trim() ? "#111" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: add.name.trim() ? "pointer" : "not-allowed" }}>+ Add</button>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        <input style={{ ...inp, maxWidth: 260 }} value={q} onChange={e => setQ(e.target.value)} placeholder="Search name / country / address…" />
+        <select style={{ ...inp, maxWidth: 180 }} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>{types.map(t => <option key={String(t)}>{String(t)}</option>)}</select>
+        <div style={{ fontSize: 11, color: "#94A3B8", alignSelf: "center" }}>{shown.length} of {locs.length}</div>
+      </div>
+      <div style={{ maxHeight: 340, overflowY: "auto", border: "1px solid #F1F5F9", borderRadius: 8 }}>
+        {shown.map((l: any) => {
+          const src = sourceOf(l);
+          const overridden = src === "Built-in" && !!overrides[String(l.id)];
+          const editable = src === "Custom" || src === "Built-in";
+          const isEd = editingId === l.id;
+          return (
+            <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 0.8fr 1.7fr 0.9fr auto", gap: 8, padding: "7px 10px", borderBottom: "1px solid #F8FAFC", fontSize: 12, alignItems: "center" }}>
+              {isEd ? <input style={inp} value={edit.name} onChange={e => setEdit((x: any) => ({ ...x, name: e.target.value }))} />
+                    : <div style={{ fontWeight: 600 }}>{l.name}{overridden && <span style={{ marginLeft: 6, fontSize: 9.5, color: "#B45309", fontWeight: 700 }}>edited</span>}</div>}
+              <div style={{ color: "#64748B" }}>{l.type}</div>
+              {isEd ? <input style={inp} value={edit.country} onChange={e => setEdit((x: any) => ({ ...x, country: e.target.value }))} /> : <div style={{ color: "#64748B" }}>{l.country}</div>}
+              {isEd ? <input style={inp} value={edit.address} onChange={e => setEdit((x: any) => ({ ...x, address: e.target.value }))} placeholder="address" /> : <div style={{ color: "#94A3B8", fontSize: 11 }}>{l.address || "—"}</div>}
+              <div style={{ fontSize: 10, color: src === "Built-in" ? "#64748B" : src === "Custom" ? "#0369A1" : "#7C3AED" }}>{src}</div>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                {isEd ? (<>
+                  <button onClick={() => saveEdit(l)} style={{ border: "none", background: "#111", color: "#fff", borderRadius: 6, fontSize: 11, padding: "4px 10px", cursor: "pointer", fontWeight: 700 }}>Save</button>
+                  <button onClick={() => setEditingId(null)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>Cancel</button>
+                </>) : (<>
+                  {editable && <button onClick={() => startEdit(l)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Edit</button>}
+                  {overridden && <button title="Restore the built-in details" onClick={() => { clearLocationOverride(Number(l.id)); reloadNote(); }} style={{ border: "1px solid #FDE68A", background: "#fff", color: "#B45309", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Reset</button>}
+                  {src === "Custom" && <button onClick={async () => { if (await lpConfirm({ tone: "danger", title: `Remove ${l.name}?`, message: "Documents that referenced it keep only the plain text.", confirmLabel: "Remove" })) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Remove</button>}
+                </>)}
+              </div>
+            </div>
+          );
+        })}
+        {shown.length === 0 && <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12.5 }}>No locations match.</div>}
+      </div>
+    </Card>
+  );
+}
+
+
+// ── v6.38.0 (R1-C): full-screen editor window for the reference-data managers ──
+function FullScreenModal({ title, onClose, children }: any) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 70, display: "flex", alignItems: "stretch", justifyContent: "center", padding: "3vh 3vw" }} onClick={onClose}>
+      <div style={{ background: "#F8FAFC", borderRadius: 14, width: "100%", maxWidth: 1100, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,0.35)" }} onClick={(e: any) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "#fff", borderBottom: "1px solid #E5E7EB" }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#111" }}>{title}</div>
+          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Close</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: 18 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// Compact summary card shown in Settings; the real editing happens in the window.
+function ManageCard({ title, summary, buttonLabel, onManage }: any) {
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#94A3B8", letterSpacing: "0.06em", textTransform: "uppercase" }}>{title}</div>
+          <div style={{ fontSize: 12.5, color: "#64748B", marginTop: 4 }}>{summary}</div>
+        </div>
+        <button onClick={onManage} style={{ flexShrink: 0, border: "none", background: "#111", color: "#fff", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{buttonLabel}</button>
+      </div>
+    </Card>
+  );
+}
+
+// ─── v6.44.0 (test-round #7): packaging types → gross weight ────────────────
+// Gross weight is driven by packaging, not a flat percentage: a wooden box holds
+// 13 kg of apples and weighs 1.4 kg empty, so gross = net + boxes x tare. This
+// panel maintains that table; shipments derive gross from it.
+function PackagingPanel({ types, setTypes }: any) {
+  const { confirm: pkConfirm, alert: pkAlert, dialogNode: pkNode } = useConfirm(); // P2-6
+  const blank = { id: "", label: "", capacityKg: "", tareKg: "", boxesPerPallet: "", palletTareKg: "", appliesTo: "" };
+  const [form, setForm] = React.useState<any>(blank);
+  const list = types || [];
+  const sf = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  const save = async () => {
+    const label = String(form.label || "").trim();
+    const cap = parseFloat(form.capacityKg), tare = parseFloat(form.tareKg);
+    if (!label) { await pkAlert({ tone: "warn", title: "Name required", message: "Give the packaging a name, e.g. \u201cWooden box (13 kg)\u201d." }); return; }
+    if (!(cap > 0)) { await pkAlert({ tone: "warn", title: "Capacity required", message: "How many kg of product does one unit hold?" }); return; }
+    if (!(tare >= 0)) { await pkAlert({ tone: "warn", title: "Tare required", message: "How much does the empty unit weigh?" }); return; }
+    const id = String(form.id || "").trim() || label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const appliesTo = String(form.appliesTo || "").split(",").map((x: string) => x.trim()).filter(Boolean);
+    const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, boxesPerPallet: parseFloat(form.boxesPerPallet) || 0, palletTareKg: parseFloat(form.palletTareKg) || 0, appliesTo }];
+    setTypes(next); setForm(blank);
+  };
+  const edit = (t: any) => setForm({ id: t.id, label: t.label, capacityKg: t.capacityKg, tareKg: t.tareKg, boxesPerPallet: t.boxesPerPallet ?? "", palletTareKg: t.palletTareKg ?? "", appliesTo: (t.appliesTo || []).join(", ") });
+  const del = async (t: any) => {
+    if (!(await pkConfirm({ tone: "danger", title: `Remove "${t.label}"?`, message: "Shipment lines already using it keep their saved gross weight.", confirmLabel: "Remove" }))) return;
+    setTypes(list.filter((x: any) => x.id !== t.id));
+  };
+
+  return (
+    <div>
+      {pkNode}
+      <div style={{ fontSize: 12.5, color: "#555", lineHeight: 1.6, marginBottom: 14 }}>
+        Gross weight on transport orders is calculated as <strong>net + (number of units x empty-unit weight)</strong>.
+        Gross also includes the pallets themselves. Apples travel in wooden boxes holding 13&nbsp;kg (1.4&nbsp;kg empty, 72 to a pallet), so 19&nbsp;422&nbsp;kg net = 1&nbsp;494 boxes on 21 pallets = 22&nbsp;038.6&nbsp;kg gross.
+        Set <em>applies to</em> so a product picks its packaging automatically.
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 18 }}>
+        <thead><tr style={{ background: "#F9FAFB", textAlign: "left" }}>
+          <th style={{ padding: "7px 9px" }}>Packaging</th>
+          <th style={{ padding: "7px 9px", textAlign: "right" }}>Holds (kg)</th>
+          <th style={{ padding: "7px 9px", textAlign: "right" }}>Empty (kg)</th>
+          <th style={{ padding: "7px 9px", textAlign: "right" }}>Boxes / pallet</th>
+          <th style={{ padding: "7px 9px", textAlign: "right" }}>Pallet (kg)</th>
+          <th style={{ padding: "7px 9px" }}>Applies to</th>
+          <th style={{ padding: "7px 9px" }}></th>
+        </tr></thead>
+        <tbody>
+          {list.map((t: any) => (
+            <tr key={t.id} style={{ borderTop: "1px solid #F1F5F9" }}>
+              <td style={{ padding: "7px 9px", fontWeight: 600 }}>{t.label}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.capacityKg}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.tareKg}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.boxesPerPallet || "—"}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.palletTareKg || "—"}</td>
+              <td style={{ padding: "7px 9px", color: "#64748B" }}>{(t.appliesTo || []).join(", ") || "—"}</td>
+              <td style={{ padding: "7px 9px", textAlign: "right", whiteSpace: "nowrap" }}>
+                <SmallButton onClick={() => edit(t)}>Edit</SmallButton>{" "}
+                <SmallButton kind="red" onClick={() => del(t)}>Remove</SmallButton>
+              </td>
+            </tr>
+          ))}
+          {!list.length && <tr><td colSpan={7} style={{ padding: "10px 9px", color: "#9CA3AF" }}>No packaging types yet.</td></tr>}
+        </tbody>
+      </table>
+      <Card>
+        <SectionTitle>{form.id ? "EDIT PACKAGING" : "ADD PACKAGING"}</SectionTitle>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 2fr auto", gap: 10, alignItems: "end", marginTop: 10 }}>
+          <div><Lbl>Name</Lbl><input value={form.label} onChange={e => sf("label", e.target.value)} placeholder="Wooden box (13 kg)" style={INP} /></div>
+          <div><Lbl>Holds (kg)</Lbl><input type="number" value={form.capacityKg} onChange={e => sf("capacityKg", e.target.value)} placeholder="13" style={INP} /></div>
+          <div><Lbl>Empty (kg)</Lbl><input type="number" value={form.tareKg} onChange={e => sf("tareKg", e.target.value)} placeholder="1.4" style={INP} /></div>
+          <div><Lbl>Boxes / pallet</Lbl><input type="number" value={form.boxesPerPallet} onChange={e => sf("boxesPerPallet", e.target.value)} placeholder="72" style={INP} /></div>
+          <div><Lbl>Pallet (kg)</Lbl><input type="number" value={form.palletTareKg} onChange={e => sf("palletTareKg", e.target.value)} placeholder="25" style={INP} /></div>
+          <div><Lbl>Applies to (comma separated)</Lbl><input value={form.appliesTo} onChange={e => sf("appliesTo", e.target.value)} placeholder="Apples, Pears" style={INP} /></div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <SmallButton kind="dark" onClick={save}>{form.id ? "Save" : "Add"}</SmallButton>
+            {form.id ? <SmallButton onClick={() => setForm(blank)}>Cancel</SmallButton> : null}
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function ProductCatalogPanel({ catalog, setCatalog }: any) {
+  const { confirm: pcConfirm, alert: pcAlert, dialogNode: pcNode } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
   const [vDraft, setVDraft] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
@@ -52,7 +271,7 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
   const addItem = () => { const n = newItem.trim(); if (!n) return; setCatalog((c: any) => addCatalogItem(c || [], n)); setNewItem(""); };
   const addVar = (item: string) => { const v = (vDraft[item] || "").trim(); if (!v) return; setCatalog((c: any) => addCatalogVariety(c || [], item, v)); setVDraft(d => ({ ...d, [item]: "" })); };
   const rmVar = (item: string, v: string) => setCatalog((c: any) => removeCatalogVariety(c || [], item, v));
-  const rmItem = (item: string) => { if (window.confirm(`Remove "${item}" and its varieties from the catalog?`)) setCatalog((c: any) => removeCatalogItem(c || [], item)); };
+  const rmItem = async (item: string) => { if (await pcConfirm({ tone: "danger", title: `Remove "${item}"?`, message: "This removes the item and its varieties from the catalog.", confirmLabel: "Remove" })) setCatalog((c: any) => removeCatalogItem(c || [], item)); };
 
   function parseLine(line: string): string[] {
     const out: string[] = []; let f = "", inQ = false;
@@ -65,27 +284,29 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
       try {
         const text = String(e.target?.result || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
         const lines = text.split("\n").filter(l => l.trim());
-        if (!lines.length) { alert("Empty file."); return; }
+        if (!lines.length) { pcAlert({ tone: "warn", title: "Empty file", message: "The file contains no rows." }); return; }
         const hdr = parseLine(lines[0]).map(h => h.trim().toLowerCase());
+        const ci = hdr.findIndex(h => h === "cn" || h === "hs" || h === "cncode" || h === "cn/hs" || h === "cn code" || h.includes("cn"));
         const ii = hdr.indexOf("item"), vi = hdr.indexOf("variety");
         const start = ii >= 0 ? 1 : 0;
-        const rows = lines.slice(start).map(l => { const cols = parseLine(l); return { item: (ii >= 0 ? cols[ii] : cols[0] || "").trim(), variety: (vi >= 0 ? cols[vi] : cols[1] || "").trim() }; }).filter(r => r.item);
-        if (!rows.length) { alert("No Item rows found. Use columns: Item, Variety."); return; }
+        const rows = lines.slice(start).map(l => { const cols = parseLine(l); return { item: (ii >= 0 ? cols[ii] : cols[0] || "").trim(), variety: (vi >= 0 ? cols[vi] : cols[1] || "").trim(), cnCode: (ci >= 0 ? cols[ci] || "" : "").trim() }; }).filter(r => r.item);
+        if (!rows.length) { pcAlert({ tone: "warn", title: "No rows found", message: "No Item rows found. Use columns: Item, Variety." }); return; }
         setCatalog((c: any) => mergeCatalogRows(c || [], rows));
-        alert(`Imported ${rows.length} row(s) into the catalog.`);
-      } catch (err) { alert("Could not read CSV: " + (err instanceof Error ? err.message : String(err))); }
+        pcAlert({ tone: "info", title: "Imported", message: `Imported ${rows.length} row(s) into the catalog.` });
+      } catch (err) { pcAlert({ tone: "warn", title: "Import failed", message: "Could not read CSV: " + (err instanceof Error ? err.message : String(err)) }); }
     };
     reader.readAsText(file);
   };
   const exportCsv = () => {
     const rows = catalogToRows(items);
-    const csv = "Item,Variety\n" + rows.map(r => `"${r.item.replace(/"/g, '""')}","${r.variety.replace(/"/g, '""')}"`).join("\n");
+    const csv = "Item,Variety,CN/HS\n" + rows.map(r => `"${r.item.replace(/"/g, '""')}","${r.variety.replace(/"/g, '""')}","${(r.cnCode || "").replace(/"/g, '""')}"`).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" }); const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = "product-catalog.csv"; a.click(); URL.revokeObjectURL(url);
   };
 
   return (
     <Card style={{ marginBottom: 16 }}>
+      {pcNode}
       <SectionTitle>PRODUCT CATALOG <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· Item / Variety used on PO &amp; SO lines</span></SectionTitle>
       <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
         The single list everyone picks products from, so the same item is named the same way everywhere. New products added from a PO/SO line land here too. Sizes are not part of this — size stays its own field on the line.
@@ -104,6 +325,7 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
           <div key={c.item} style={{ padding: "12px 14px", borderBottom: "1px solid #F5F5F5" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{c.item} <span style={{ fontSize: 11, fontWeight: 400, color: "#AAA" }}>· {c.varieties.length} {c.varieties.length === 1 ? "variety" : "varieties"}</span></div>
+              <input value={c.defaultCnCode || ""} onChange={e => setCatalog((cat: any) => setCatalogCnCode(cat || [], c.item, e.target.value))} placeholder="CN/HS" title="Default CN/HS customs code for this item — auto-fills new PO lines" style={{ ...inp, padding: "3px 8px", fontSize: 12, width: 90, marginRight: 8 }} />
               <button onClick={() => rmItem(c.item)} title="Remove item" style={{ border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600 }}>Remove</button>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -123,21 +345,29 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
 
 export default function Settings({
   reloadFromStorage,
+  repairInventory = () => null,
   userRole,
   setUserRole,
   userName,
   setUserName,
   productCatalog = [],
   setProductCatalog,
+  packagingTypes = [],
+  setPackagingTypes,
 }: {
   reloadFromStorage: () => void;
+  repairInventory?: () => any;
   userRole?: string;
   setUserRole?: (r: string) => void;
   userName?: string;
   setUserName?: (n: string) => void;
   productCatalog?: any[];
   setProductCatalog?: (v: any) => void;
+  packagingTypes?: any[];
+  setPackagingTypes?: (v: any) => void;
 }) {
+  const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
+  const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
 
@@ -209,7 +439,7 @@ export default function Settings({
     if (!file) return;
     e.target.value = ""; // reset early so the same file can be re-picked later
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const result = reader.result;
       if (typeof result !== "string") {
         setMessage({ kind: "error", text: "Could not read file as text." });
@@ -228,13 +458,12 @@ export default function Settings({
           versionWarn = `\n\n⚠ This file has no app-version stamp (older export). Import only if you know it matches v${APP_VERSION}.`;
         }
       } catch { /* importAllData will report invalid JSON */ }
-      const proceed = window.confirm(
-        "Import will REPLACE all data currently in this browser with the contents of this file.\n\n" +
-        "There is no merge — anything here that isn't in the file will be gone.\n\n" +
-        "A backup of your current data will be saved automatically first, so you can undo it from Settings → Local backups." +
-        versionWarn +
-        "\n\nContinue?"
-      );
+      const proceed = await stConfirm({
+        tone: "danger",
+        title: "Replace all data?",
+        message: "Import will REPLACE all data currently in this browser with the contents of this file.\n\nThere is no merge — anything here that isn't in the file will be gone.\n\nA backup of your current data will be saved automatically first, so you can undo it from Settings → Local backups." + versionWarn,
+        confirmLabel: "Replace & import", cancelLabel: "Cancel",
+      });
       if (!proceed) { setMessage({ kind: "info", text: "Import cancelled — nothing was changed." }); return; }
       const outcome = importAllData(result);
       if (!outcome.ok) {
@@ -257,27 +486,41 @@ export default function Settings({
     setMessage(meta ? { kind: "success", text: "Backup saved locally." } : { kind: "error", text: "Could not save a backup (storage may be full)." });
   }
 
-  function handleRestore(b: BackupMeta) {
-    if (!window.confirm(`Restore the backup from ${new Date(b.createdAt).toLocaleString()}?\n\nThis REPLACES current data. Your current data will itself be backed up first, so this is reversible.`)) return;
+  async function handleRestore(b: BackupMeta) {
+    if (!(await stConfirm({ tone: "danger", title: "Restore this backup?", message: `From ${new Date(b.createdAt).toLocaleString()}.\n\nThis REPLACES current data. Your current data will itself be backed up first, so this is reversible.`, confirmLabel: "Restore" }))) return;
     const outcome = restoreBackup(b.id);
     if (!outcome.ok) { setMessage({ kind: "error", text: outcome.error || "Restore failed." }); return; }
     setMessage({ kind: "success", text: "Backup restored. Reloading…" });
     setTimeout(() => window.location.reload(), 1200);
   }
 
-  function handleDeleteBackup(b: BackupMeta) {
-    if (!window.confirm("Delete this backup permanently?")) return;
+  async function handleDeleteBackup(b: BackupMeta) {
+    if (!(await stConfirm({ tone: "danger", title: "Delete backup?", message: "Delete this backup permanently?", confirmLabel: "Delete" }))) return;
     deleteBackup(b.id);
     refreshBackups();
   }
 
-  function handleReset() {
-    const confirmed = window.confirm(
-      "Start fresh — clear ALL your data?\n\n" +
-      "This wipes contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points, " +
-      "returning the system to a completely empty state.\n\n" +
-      "A backup will be saved automatically first, so you can undo this from Settings → Local backups."
-    );
+  async function runRepair() {
+    try {
+      const res = repairInventory();
+      if (!res || !res.changed) {
+        await stConfirm({ tone: "info", title: "Nothing to repair", message: "Every lot already matches the shipments that served it.", confirmLabel: "OK", cancelLabel: "Close" });
+        return;
+      }
+      await stConfirm({ tone: "info", title: `Repaired ${res.notes.length} record(s)`, message: res.notes.slice(0, 10).join("\n") + (res.notes.length > 10 ? `\n… and ${res.notes.length - 10} more` : ""), confirmLabel: "OK", cancelLabel: "Close" });
+      reloadFromStorage();
+    } catch (e) {
+      await stConfirm({ tone: "warn", title: "Repair failed", message: String(e), confirmLabel: "OK", cancelLabel: "Close" });
+    }
+  }
+
+  async function handleReset() {
+    const confirmed = await stConfirm({
+      tone: "danger",
+      title: "Start fresh — clear ALL data?",
+      message: "This wipes contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points, returning the system to a completely empty state.\n\nA backup will be saved automatically first, so you can undo this from Settings → Local backups.",
+      confirmLabel: "Clear all data", cancelLabel: "Keep my data",
+    });
     if (!confirmed) return;
     const backup = clearAllData();
     refreshBackups();
@@ -287,6 +530,7 @@ export default function Settings({
 
   return (
     <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
+      {stNode}
       <div style={{ maxWidth: 800, margin: "0 auto" }}>
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: "#111", letterSpacing: "-0.3px" }}>Settings</div>
@@ -356,7 +600,40 @@ export default function Settings({
           </div>
         </Card>
 
-        <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog} />
+        {/* v6.38.0 (R1-C): reference data opens in dedicated editor windows */}
+        <ManageCard
+          title="PRODUCT CATALOG"
+          summary={`${(productCatalog || []).length} item${(productCatalog || []).length === 1 ? "" : "s"} · ${(productCatalog || []).reduce((n: number, it: any) => n + ((it.varieties || []).length), 0)} varieties · controls the Item/Variety pickers and CN codes`}
+          buttonLabel="Manage products…"
+          onManage={() => setManage("products")}
+        />
+        <ManageCard
+          title="PORTS & LOCATIONS"
+          summary={(() => { const PORT = new Set(["Port", "PortWarehouse"]); const all = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE); const c = all.filter((l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE).length; const b = all.filter((l: any) => Number(l.id) < CUSTOM_LOCATION_ID_BASE && PORT.has(String(l.type))).length; return `${b} port built-ins · ${c} custom · party facilities are managed in Parties`; })()}
+          buttonLabel="Manage ports & locations…"
+          onManage={() => setManage("locations")}
+        />
+        <ManageCard
+          title="PACKAGING & GROSS WEIGHT"
+          summary={`${(packagingTypes || []).length} type${(packagingTypes || []).length === 1 ? "" : "s"} · box capacity + empty weight drive the gross weight printed on transport orders`}
+          buttonLabel="Manage packaging…"
+          onManage={() => setManage("packaging")}
+        />
+        {manage === "packaging" && (
+          <FullScreenModal title="Packaging & gross weight" onClose={() => setManage(null)}>
+            <PackagingPanel types={packagingTypes} setTypes={setPackagingTypes} />
+          </FullScreenModal>
+        )}
+        {manage === "products" && (
+          <FullScreenModal title="Product catalog" onClose={() => setManage(null)}>
+            <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog} />
+          </FullScreenModal>
+        )}
+        {manage === "locations" && (
+          <FullScreenModal title="Ports & locations" onClose={() => setManage(null)}>
+            <LocationsPanel />
+          </FullScreenModal>
+        )}
 
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· invoice sync</span></SectionTitle>
@@ -445,6 +722,21 @@ export default function Settings({
               ))}
             </div>
           )}
+        </Card>
+
+        {/* v6.51.1: a manual repair, so a data fix is never at the mercy of an
+            automatic trigger firing at the right moment. Safe to press at any time —
+            the repair only changes records that are genuinely wrong, and pressing it
+            twice changes nothing the second time. */}
+        <Card style={{ marginBottom: 16, borderLeft: "3px solid #2563EB" }}>
+          <SectionTitle>REPAIR INVENTORY RECORDS</SectionTitle>
+          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+            Re-checks every lot against the shipments that served it and corrects two things older records can get wrong:
+            a second delivery against the same order that was filed as a warehouse move instead of a receipt (which makes a lot
+            look short), and delivery costs that were folded into a lot's landed cost instead of staying with the sale.
+            Nothing else is touched, and running it again changes nothing.
+          </div>
+          <Button onClick={runRepair}>Check and repair inventory records</Button>
         </Card>
 
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>

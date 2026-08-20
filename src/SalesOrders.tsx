@@ -1,19 +1,23 @@
 import React, { useState, useMemo } from "react";
-import { handoverSentence } from "./tradeFlow.domain";
 import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
-import { Card, Lbl, SectionTitle } from "./ui";
+import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
+import { PACKAGING_SEED } from "./packaging.domain";
+import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
 import { nextId } from "./ids";
+import { nextClaimNumber, blankClaim } from "./claims.domain";
+import { defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
+import { recordAudit } from "./audit";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -84,6 +88,15 @@ function clientsFromContacts(contacts) {
 // 4 different functions. The render-time assignment pattern is safe given React's synchronous render model.
 let LOTS: any[] = [];      // Batch 0 (G1): no stub fallback — live props only
 let PO_REFS: any[] = [];   // Batch 0 (G1): no stub fallback — live props only
+// v6.41.0 (A5): raw lots (with .movements) + shipments, for the unshipped-
+// remainder reservation rule. The adapted LOTS above lose .movements, so we
+// keep the raw arrays here for shippedKgByLine.
+let RAW_LOTS: any[] = [];
+let SHIPMENTS_REF: any[] = [];
+// v6.61.0: packaging types, so a line priced per box can convert to kilos using
+// the same box weights the loading protocol already uses. Synced below.
+let PACKAGING_TYPES_REF: any[] = PACKAGING_SEED;
+function reserveCtx() { return RAW_LOTS.length ? { lots: RAW_LOTS, shipments: SHIPMENTS_REF } : undefined; }
 
 // Convert the lots into the Inventory→SalesOrders interface shape.
 // Inventory stores: { number, product, quality, size, origin, warehouse, physicalKg, ... }
@@ -107,6 +120,12 @@ function _adaptLotsFromInventory(invLots) {
     physicalKg: l.physicalKg ?? 0,
     receivedKg: l.receivedKg ?? 0,
     packaging: l.packaging,
+    // v6.45.0 (D): preserved for the engine — poLineId ties a lot to its PO line,
+    // movements let the engine derive shipped kg (remainder rule + shipped-aware
+    // PO supply). The old adapter dropped both, silently degrading the v6.41.0
+    // remainder context inside computeLineAvailability.
+    poLineId: l.poLineId ?? null,
+    movements: l.movements || [],
   }));
 }
 
@@ -121,7 +140,6 @@ function _adaptPOsFromModule(pos) {
     supplierName: po.supplier?.name || po.supplierName || "—",
     country: po.supplier?.country || po.country || "—",
     expectedDelivery: po.expectedDeliveryDate || po.expectedDelivery || "—",
-    requiresSea: !!po.requiresSea,
     items: (po.items || []).map(it => ({
       ...it,
       available: it.available ?? (parseFloat(it.qty) || 0),
@@ -188,7 +206,10 @@ function fmtMoney(n, cur) {
 }
 function fmtDate(d) { return d || "—"; }
 function netTotal(items) {
-  return (items || []).reduce((sum, it) => sum + (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0), 0);
+  // v6.61.0: a line priced per BOX totals boxes x price. Lines priced per kg —
+  // every existing line — behave exactly as before, because pricingUnit is
+  // absent on them and defaults to kg.
+  return (items || []).reduce((sum, it) => sum + lineTotalPU(it, PACKAGING_TYPES_REF), 0);
 }
 // Next SO number — scans for current year, increments highest NNNN
 function nextSONumber(orders) {
@@ -324,12 +345,12 @@ function validatePOReadinessForSO(items: any[]) {
 // Returns: { liveAvailable, reservations: [{ soNumber, soId, status, qty }] }
 // for a given lot, considering reservations from all SOs except `excludeOrderId`.
 function lotReservations(lot, allOrders, excludeOrderId) {
-  return lotReservationsForPicker(lot, allOrders, excludeOrderId); // engine: salesOrders.domain (Batch 1)
+  return lotReservationsForPicker(lot, allOrders, excludeOrderId, reserveCtx()); // engine: salesOrders.domain (Batch 1)
 }
 
 // Same idea for a PO line — reservations from non-Draft, non-Cancelled SOs.
 function poLineReservations(po, poLine, allOrders, excludeOrderId) {
-  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId); // engine (Batch 1)
+  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId, reserveCtx()); // engine (Batch 1)
 }
 
 // Availability check — for each line, compute how much of its demanded qty is
@@ -365,7 +386,7 @@ function sameSoDuplicateSources(soItems) {
 
 function computeLineAvailability(soItems, allOrders, currentOrderId) {
   // Engine extracted to salesOrders.domain (Batch 1) — LOTS/PO_REFS passed explicitly.
-  return domainComputeLineAvailability(soItems, allOrders, currentOrderId, LOTS, PO_REFS);
+  return domainComputeLineAvailability(soItems, allOrders, currentOrderId, LOTS, PO_REFS, SHIPMENTS_REF);
 }
 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
@@ -521,7 +542,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                 const isEmpty = live.liveAvailable <= 0;
                 return (
                 <div key={lot.number} onClick={() => pickLot(lot)}
-                  style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 110px 120px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
+                  style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 130px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#0369A1"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
                   <div>
@@ -530,7 +551,20 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   </div>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}{(lot as any).variety ? " — " + (lot as any).variety : ""}</div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}{(lot as any).arrivalDate ? ` · arrived ${formatDMY((lot as any).arrivalDate)}` : ""}</div>
+                    {/* v6.59.0: both views now carry the SAME facts under the
+                        item and variety — size, origin, packaging, supplier and
+                        the arrival. The two tabs used to describe a lot and a PO
+                        line differently, so choosing between them meant reading
+                        two different layouts. The 4th column is gone: it held a
+                        warehouse for stock and a permanent dash for a PO line
+                        that has not arrived anywhere yet. */}
+                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}</div>
+                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>
+                      Supplier: {(() => { const po = PO_REFS.find((x: any) => x.number === lot.poRef); return po?.supplierName || po?.supplier?.name || "—"; })()}
+                      {(lot as any).arrivalDate ? ` · arrived ${formatDMY((lot as any).arrivalDate)}` : " · arrival not recorded"}
+                      {lot.poRef ? ` · from ${lot.poRef}` : ""}
+                      {lot.warehouse ? ` · ${lot.warehouse}` : ""}
+                    </div>
                     {live.reservations.length > 0 && (
                       <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}
@@ -538,7 +572,6 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                     )}
                   </div>
                   <div><QualityBadge quality={lot.quality} /></div>
-                  <div style={{ fontSize: 11, color: "#666" }}>{lot.warehouse}{lot.poRef ? <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>from {lot.poRef}</div> : null}</div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#16A34A" }}>{fmtNum(live.liveAvailable)} kg</div>
                     <div style={{ fontSize: 10, color: "#888" }}>live available</div>
@@ -560,7 +593,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                 const isEmpty = live.liveAvailable <= 0;
                 return (
                 <div key={`${line._po.number}-${line.id}`} onClick={() => pickPO(line)}
-                  style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 120px 120px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
+                  style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 130px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#9D174D"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
                   <div>
@@ -575,7 +608,11 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{line.product}{(line as any).variety ? " — " + (line as any).variety : ""}</div>
                     <div style={{ fontSize: 11, color: "#888" }}>{line.size} · {line.origin} · {line.packaging}</div>
-                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>Supplier: {line._po.supplierName} · ETA {line._po.expectedDelivery}{line._po.requiresSea ? " ⚓" : ""}</div>
+                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>
+                      Supplier: {line._po.supplierName || line._po.supplier?.name || "—"}
+                      {line._po.expectedDelivery ? ` · arriving ${formatDMY(line._po.expectedDelivery)}` : " · arrival not scheduled"}
+                      {` · from ${line._po.number}`}
+                    </div>
                     {live.reservations.length > 0 && (
                       <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}
@@ -583,7 +620,6 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                     )}
                   </div>
                   <div><QualityBadge quality={line.quality} /></div>
-                  <div style={{ fontSize: 11, color: "#666" }}>—</div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#9D174D" }}>{fmtNum(live.liveAvailable)} kg</div>
                     <div style={{ fontSize: 10, color: "#888" }}>live available</div>
@@ -802,9 +838,10 @@ function SODoc({ order }: any) {
 
 // ─── PRINT MODAL ──────────────────────────────────────────────────────────
 function PrintModal({ order, onClose }: any) {
+  const { alert: pmAlert, dialogNode: pmNode } = useConfirm(); // P2-6 completion
   function printDoc() {
     const node = document.getElementById("so-print-doc");
-    if (!node) { alert("Print preview not ready"); return; }
+    if (!node) { pmAlert({ tone: "warn", title: "Not ready", message: "Print preview not ready — please try again in a moment." }); return; }
     const existing = document.getElementById("so-print-frame");
     if (existing) existing.remove();
     const iframe = document.createElement("iframe");
@@ -825,10 +862,11 @@ function PrintModal({ order, onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
-      const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the SO
+      const prevTitle = document.title; // v6.34.2: restore on afterprint, not 1s
       document.title = order.number || prevTitle;
-      try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
+      const restore = () => { document.title = prevTitle; iframe.remove(); };
+      try { iframe.contentWindow?.focus(); const w = iframe.contentWindow as any; if (w) w.onafterprint = restore; iframe.contentWindow?.print(); } catch {}
+      setTimeout(() => { if (document.title === (order.number || prevTitle)) restore(); }, 60000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -841,6 +879,7 @@ function PrintModal({ order, onClose }: any) {
   }
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+      {pmNode}
       <div style={{ background: "#fff", borderRadius: 14, width: "min(940px, 96vw)", maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -854,12 +893,6 @@ function PrintModal({ order, onClose }: any) {
         </div>
         <div style={{ padding: 24, overflowY: "auto", background: "#ECECEC" }}>
           <div id="so-print-doc" style={{ background: "#fff", padding: "8mm", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", width: "186mm", margin: "0 auto", boxSizing: "content-box" }}>
-          {order.sellIncoterm && (
-            <div style={{ border: "1.5px solid #111", padding: "6px 10px", margin: "6px 0 10px", fontSize: 12.5 }}>
-              <b>Terms / Warunki: {order.sellIncoterm} {order.destinationText || ((order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client")) === "client" ? (order.client?.address || "") : "")} (Incoterms 2020)</b>
-              <div style={{ fontSize: 11, marginTop: 2 }}>{handoverSentence(order.sellIncoterm, order.destinationText || ((order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client")) === "client" ? (order.client?.name || "client") : ""))}</div>
-            </div>
-          )}
             <SODoc order={order} />
           </div>
         </div>
@@ -876,6 +909,7 @@ function bestContactEmail(cp: any) {
   return (withEmail && withEmail.email) || (cp && cp.email) || "";
 }
 function EmailModal({ order, contacts = [], onClose }: any) {
+  const { alert: emAlert, dialogNode: emNode } = useConfirm(); // P2-6 completion
   // v6.18.14 (#1): resolve the client email LIVE from Contacts at send time.
   const sid = order && order.client && order.client.id;
   const liveClient = (sid != null) ? (contacts || []).find((c: any) => String(c.id) === String(sid)) : null;
@@ -884,8 +918,8 @@ function EmailModal({ order, contacts = [], onClose }: any) {
   const [body, setBody] = useState(`Dear ${order.client?.name || "Sir/Madam"},\n\nPlease find attached our Sales Order confirmation ${order.number} for ${order.items.map(i => `${fmtNum(i.qty)} kg ${i.product}${i.variety ? " " + i.variety : ""}`).join(", ")}.\n\nDelivery date: ${formatDMY(order.deliveryDate) || "TBA"}\nIncoterm: ${order.sellIncoterm}\nPayment: ${order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}${order.importPermitNo ? `\nImport permit no.: ${order.importPermitNo}` : ""}${order.acidNo ? `\nACID no.: ${order.acidNo}` : ""}\n\nPlease confirm receipt.\n\nBest regards,\n${COMPANY.name}`);
 
   function openPrintForPdf() {
-    const node = document.getElementById("so-print-doc-email");
-    if (!node) { alert("Print preview not ready — please try again in a moment."); return; }
+    const node = document.getElementById("so-print-doc");
+    if (!node) { emAlert({ tone: "warn", title: "Not ready", message: "Print preview not ready — please try again in a moment." }); return; }
     const existing = document.getElementById("so-email-print-frame");
     if (existing) existing.remove();
     const iframe = document.createElement("iframe");
@@ -897,7 +931,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
   @page { size: A4; margin: 12mm; }
   html, body { margin: 0; padding: 0; background: #fff; }
   body { font-family: Calibri, Arial, sans-serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  #so-print-doc-email { width: 186mm; margin: 0 auto; }
+  #so-print-doc { width: 186mm; margin: 0 auto; }
   table { page-break-inside: avoid; border-collapse: collapse; }
   tr { page-break-inside: avoid; }
   img { max-width: 100%; }
@@ -906,10 +940,11 @@ function EmailModal({ order, contacts = [], onClose }: any) {
     if (!doc) { iframe.remove(); return; }
     doc.open(); doc.write(html); doc.close();
     const fire = () => {
-      const prevTitle = document.title; // v6.18.8 (#1): name the saved PDF after the SO
+      const prevTitle = document.title; // v6.34.2: restore on afterprint, not 1s
       document.title = order.number || prevTitle;
-      try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); } catch {}
-      setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
+      const restore = () => { document.title = prevTitle; iframe.remove(); };
+      try { iframe.contentWindow?.focus(); const w = iframe.contentWindow as any; if (w) w.onafterprint = restore; iframe.contentWindow?.print(); } catch {}
+      setTimeout(() => { if (document.title === (order.number || prevTitle)) restore(); }, 60000);
     };
     const img = doc.querySelector("img");
     if (img && !img.complete) {
@@ -928,6 +963,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+      {emNode}
       <div style={{ background: "#fff", borderRadius: 14, width: 620, maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -945,7 +981,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
           <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
           <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
           <div style={{ position: "absolute", left: -99999, top: 0 }}>
-            <div id="so-print-doc-email" style={{ width: "186mm" }}>
+            <div id="so-print-doc" style={{ width: "186mm" }}>
               <SODoc order={order} />
             </div>
           </div>
@@ -1066,8 +1102,12 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                       <td style={{ padding: "6px 8px" }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtNum(it.qty)} kg</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtMoney(it.unitPrice, order.currency)}</td>
+                      {/* v6.61.0: a line sold by box prints what was sold —
+                          boxes and the per-box price — with the kilos alongside,
+                          because the kilos are what physically move and what a
+                          customs declaration or a claim will refer to. */}
+                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{quantityLabel(it, PACKAGING_TYPES_REF)}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtMoney(it.unitPrice, order.currency)}{pricingUnitOf(it) === "box" ? "/box" : "/kg"}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{fmtMoney(lt, order.currency)}</td>
                     </tr>
                   );
@@ -1104,6 +1144,7 @@ function soTermsMissing(o: any): string | null {
 }
 
 function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
+  const { confirm: ofConfirm, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning)
   // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
   // this session shows in the destination picker without a browser refresh.
   const liveLocations = (() => {
@@ -1113,9 +1154,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
     return [...byId.values()];
   })();
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
-  const si = (i, k, v) => setOrder(o => ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
-  const removeItem = (i) => setOrder(o => ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
+  const soFullyLocked = (st: any) => ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(st));
+  const si = (i, k, v) => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
+  const addItem = () => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
+  const removeItem = (i) => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
     setOrder(o => {
@@ -1134,8 +1176,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   // "other" = a different place (dropdown or free text).
   const destMode = order.destinationMode || ((order.destinationLocationId || order.destinationText) ? "other" : "client");
   const setDestMode = (mode) => {
+    // v6.34.2 (module review): "client" fills the registered address; anything else
+    // CLEARS the free-text and any picked place, so a stale client address can't
+    // linger under a CIF/port choice (item: CIF + client address inconsistency).
     if (mode === "client") setOrder(o => ({ ...o, destinationMode: "client", destinationLocationId: null, destinationText: o.client?.address || "" }));
-    else setOrder(o => ({ ...o, destinationMode: "other" }));
+    else setOrder(o => ({ ...o, destinationMode: "other", destinationLocationId: null, destinationText: "" }));
   };
   // v6.11 (#7): destination guidance must match the chosen Incoterm.
   const incotermDestinationHint = (() => {
@@ -1189,6 +1234,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   // Status lock: once Confirmed+, currency/fx and pricing fields lock to prevent accidental edits
   const lockedStatuses = new Set(["Confirmed", "Reserved", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"]);
   const isLocked = lockedStatuses.has(order.status);
+  // v6.44.0 (test-round #6, ruling): from SHIPPED onward the SO is FULLY locked —
+  // line items, quantities, sourcing and shipping addresses can no longer change
+  // (the goods are on their way; the commercial deal is fixed). A warning is shown
+  // before this lock takes effect (see the banner below).
+  const FULLY_LOCKED_STATUSES = new Set(["Shipped", "Delivered", "Invoiced", "Closed"]);
+  const fullyLocked = FULLY_LOCKED_STATUSES.has(order.status);
 
   // Sourcing rule: every line must be sourced (stock lot OR PO in any status) before
   // the SO can move past Draft. This is a hard business rule — we can't promise goods
@@ -1239,6 +1290,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {ofNode}
       {sourceFor !== null && (
         <SourcePickerModal
           lineItem={order.items[sourceFor]}
@@ -1336,6 +1388,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             </div>
           )}
 
+          {/* v6.61.0: a line priced per box with no box weight cannot be
+              converted, and inventing one would put a wrong number on an
+              invoice. Say so before that happens. */}
+          {(() => { const bad = unresolvedBoxLines(order.items, PACKAGING_TYPES_REF);
+            return bad.length ? (
+              <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+                <strong>Priced per box, but no box weight is set</strong> for {Array.from(new Set(bad)).join(", ")}. Set the packaging on the line so boxes can convert to kilos.
+              </div>
+            ) : null; })()}
           {overageCount > 0 && (
             availabilityBlock ? (
               <div style={{ padding: "12px 16px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, marginBottom: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
@@ -1395,7 +1456,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
               <div style={{ order: -1 }}><Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => sf("status", e.target.value)} disabled={order.status === "Cancelled"}
+                <Sel value={order.status || "Draft"} onChange={async e => {
+                  const nv = e.target.value;
+                  const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status));
+                  const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
+                  if (willLock && !wasLocked) {
+                    const ok = await ofConfirm({ tone: "warn", title: `Move to ${nv}?`, message: `Once this sales order is ${nv}, it becomes LOCKED — line items, quantities, sourcing and the shipping address can no longer be changed. To correct something afterwards you'd issue a credit/debit note or a new order.\n\nProceed?`, confirmLabel: `Yes, move to ${nv}`, cancelLabel: "Not yet" });
+                    if (!ok) return;
+                  }
+                  sf("status", nv);
+                }} disabled={order.status === "Cancelled"}
                   title={order.status === "Cancelled" ? "This SO is cancelled — read-only and can't be reactivated." : ""}
                   style={{ borderLeft: `4px solid ${(SO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (SO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
                   {Object.keys(SO_STATUSES).map(s => {
@@ -1523,7 +1593,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                         : ic === "EXW" ? [whGroup, clientGroup, portGroup]
                         : [clientGroup, portGroup, whGroup];
                       return (
-                        <Sel value={order.destinationLocationId || ""} onChange={e => sf("destinationLocationId", parseInt(e.target.value) || null)} style={{ marginTop: 8 }}>
+                        <Sel disabled={fullyLocked} value={order.destinationLocationId || ""} onChange={e => { const id = parseInt(e.target.value) || null; setOrder(o => ({ ...o, destinationLocationId: id, destinationText: (id && (o.destinationText || "") === (o.client?.address || "")) ? "" : o.destinationText })); }} style={{ marginTop: 8 }}>
                           <option value="">— select a known place —</option>
                           {order2}
                         </Sel>
@@ -1531,6 +1601,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     })()}
                     <Inp
                       value={order.destinationText || ""}
+                      disabled={fullyLocked}
                       onChange={e => sf("destinationText", e.target.value)}
                       placeholder="…or type the exact delivery address (free text)"
                       style={{ marginTop: 6 }}
@@ -1583,17 +1654,22 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             </div>
           )}
 
+          {fullyLocked && (
+            <div style={{ margin: "0 0 12px", padding: "10px 14px", borderRadius: 8, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 12, color: "#991B1B", lineHeight: 1.5 }}>
+              🔒 <strong>This sales order is locked.</strong> Once an SO reaches <strong>{order.status}</strong>, its line items, quantities, sourcing and shipping address can no longer be changed — the goods are on their way and the commercial deal is fixed. To correct something, issue a credit/debit note or a new order.
+            </div>
+          )}
           {/* Line items */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle right={<div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => { const idx = order.items.length; addItem(); setTimeout(() => setSourceFor(idx), 0); }} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#0369A1", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }} title="Add a line sourced from a PO or stock — product, variety, packaging, origin, size and quality are copied automatically; you set only price, quantity and pallets.">+ Add from PO / stock</button>
               <button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }} title="Add an empty line to fill in manually">+ Blank line</button>
-            </div>}>LINE ITEMS ({order.items.length})</SectionTitle>
+            </div>}>LINE ITEMS ({order.items.length}){fullyLocked && <span style={{ marginLeft: 8, fontSize: 10, color: "#DC2626", fontWeight: 700 }}>🔒 locked ({order.status})</span>}</SectionTitle>
             <datalist id="so-product-suggestions">
               {productSuggestions.map(p => <option key={p} value={p} />)}
             </datalist>
             {order.items.map((it, i) => {
-              const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
+              const lineTotal = lineTotalPU(it, PACKAGING_TYPES_REF);
               const lineNeedsSource = !it.sourceType || !it.sourceRef;
               const lineIsBlocking = lineNeedsSource && nonDraftStatuses.includes(order.status);
               const avail = availability[i] || {};
@@ -1713,23 +1789,40 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                         ? <div style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F9FAFB", color: "#374151", minHeight: 18 }} title="Inherited from the linked source — clear the source link to change the product">{it.product || "—"}{it.variety ? ` — ${it.variety}` : ""}</div>
                         : <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />}
                     </div>
-                    <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
-                    <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
+                    <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" disabled={fullyLocked} /></div>
+                    <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked} /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
-                    <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" /></div>
-                    <div><Lbl>Sell price</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" disabled={isLocked} /></div>
+                    {/* v6.61.0: sell by kg or by box. Kilos remain the stored
+                        quantity either way — entering boxes simply derives them
+                        from the packaging this line already names, which is
+                        exact because the boxes are exact by weight. */}
+                    <div><Lbl>Priced per</Lbl><Sel value={pricingUnitOf(it)} disabled={fullyLocked}
+                      onChange={e => setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? convertLineUnit(x, e.target.value, PACKAGING_TYPES_REF) : x) }))}>
+                      <option value="kg">kg</option>
+                      <option value="box">box</option>
+                    </Sel></div>
+                    {pricingUnitOf(it) === "box" ? (
+                      <div><Lbl>Qty (boxes)</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => {
+                        const b = Math.round(parseFloat(e.target.value) || 0);
+                        const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
+                        setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? { ...x, boxes: b, qty: kgPerBox > 0 ? Math.round(b * kgPerBox * 1000) / 1000 : x.qty } : x) }));
+                      }} placeholder="e.g. 400" disabled={fullyLocked} /></div>
+                    ) : (
+                      <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
+                    )}
+                    <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
                     <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
                   <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
                     <div>
                       <Lbl>Packaging</Lbl>
-                      <Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" />
+                      <Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" disabled={fullyLocked} />
                     </div>
                     <div>
                       <Lbl>Pallets (for this sale)</Lbl>
-                      <Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 12" />
+                      <Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 12" disabled={fullyLocked} />
                     </div>
                   </div>
                 </div>
@@ -1756,7 +1849,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
   const computedLinks = computedSOLinks(order, { shipments, invoices: [], lots });
@@ -1824,10 +1917,14 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
             <button onClick={onRecordCollection} title="EXW: the client collects — records the pickup and creates a minimal collection shipment (no transport order, no freight on our side)."
               style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0369A1", background: "#F0F9FF", color: "#0369A1", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🚚 Record client collection</button>
           )}
+          {["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status) && onRecordClientClaim && (
+            <button onClick={onRecordClientClaim} title="The client reports a quality problem on delivered goods. Records the claim against the delivery and drafts a credit note — warehouse stock is not touched (those kg already left)."
+              style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #B45309", background: "#FFFBEB", color: "#B45309", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record client claim</button>
+          )}
           {order.status === "Cancelled"
             ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
             : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
-          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
+          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
 
@@ -1936,6 +2033,35 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                 </table>
               </Card>
 
+              {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
+              {(computedLinks.linkedInvoices?.length > 0 || computedLinks.linkedShipments?.length > 0) && (
+                <Card style={{ marginBottom: 16 }}>
+                  <SectionTitle>LINKED DOCUMENTS</SectionTitle>
+                  {computedLinks.linkedInvoices?.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SALES INVOICES</div>
+                      {computedLinks.linkedInvoices.map(inv => (
+                        <div key={inv} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div>
+                      ))}
+                    </div>
+                  )}
+                  {computedLinks.linkedShipments?.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SHIPMENTS</div>
+                      {/* v6.54.0: these chips were plain text and so escaped the
+                          cancelled-ref styling every other module applies — a
+                          cancelled shipment read here exactly like a live one. */}
+                      {computedLinks.linkedShipments.map(s => {
+                        const dead = cancelledDocSet(shipments).has(String(s));
+                        return (
+                          <div key={s} title={dead ? "Cancelled — kept on record, no longer active" : undefined}
+                            style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: dead ? "#FEF2F2" : "#F3E8FF", border: `1px solid ${dead ? "#FECACA" : "#DDD6FE"}`, borderRadius: 5, fontSize: 11, fontWeight: 600, color: dead ? "#B91C1C" : "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace", ...(dead ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px" } : {}) }}>{s}</div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card>
+              )}
               {order.notes && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>NOTES</SectionTitle>
@@ -2004,27 +2130,7 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                 </Card>
               )}
 
-              {(computedLinks.linkedInvoices?.length > 0 || computedLinks.linkedShipments?.length > 0) && (
-                <Card style={{ marginBottom: 16 }}>
-                  <SectionTitle>LINKED RECORDS</SectionTitle>
-                  {computedLinks.linkedInvoices?.length > 0 && (
-                    <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SALES INVOICES</div>
-                      {computedLinks.linkedInvoices.map(inv => (
-                        <div key={inv} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div>
-                      ))}
-                    </div>
-                  )}
-                  {computedLinks.linkedShipments?.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SHIPMENTS</div>
-                      {computedLinks.linkedShipments.map(s => (
-                        <div key={s} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#F3E8FF", border: "1px solid #DDD6FE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace" }}>{s}</div>
-                      ))}
-                    </div>
-                  )}
-                </Card>
-              )}
+
             </div>
           </div>
         </div>
@@ -2063,16 +2169,23 @@ function CollectionModal({ so, onClose, onSave }: any) {
 }
 
 export default function SalesOrders({
+  claims: extClaims = [],
+  setClaims: extSetClaims = null,
   orders: extOrders, setOrders: extSetOrders,
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs, shipments: extShipments = [], setShipments: extSetShipments = null,
   contacts: extContacts,
+  packagingTypes = [],
   operationalCosts: extOperationalCosts = [],
   invoices: extInvoices = null, setInvoices: extSetInvoices = null,
+  financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null,
   userRole = "General Manager",
   userName = "",
   productCatalog = [],
   setProductCatalog,
 }: any = {}) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode: soDialogNode } = useConfirm(); // P2-6
+  // v6.35.1: cancelled document numbers (POs, SOs, shipments) for struck-through refs.
+  const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments);
   // Integration mode: shell owns SO state. Standalone: local state with seed.
   const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   // v6.33.0 (A3-6): the Invoices register is the sole owner of invoices — this
@@ -2124,6 +2237,9 @@ export default function SalesOrders({
   // downstream of this assignment within the same render pass.
   // In standalone mode (no extInvLots / extPOs), LOTS and PO_REFS retain their seed values.
   if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots);
+  RAW_LOTS = extInvLots || [];
+  SHIPMENTS_REF = extShipments || [];
+  PACKAGING_TYPES_REF = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED;
   if (extPOs)    PO_REFS = _adaptPOsFromModule(extPOs);
   // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields.
   // Backfill them from the originating PO line so sourcing "from stock" is as complete as
@@ -2275,17 +2391,17 @@ export default function SalesOrders({
     }));
   }
 
-  function saveOrder(o) {
+  async function saveOrder(o) {
     // Batch 6b: hard confirm-gate — no SO past Draft without its sell terms.
     const termsMissing = soTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
-      alert(`This SO cannot move to ${o.status} without ${termsMissing}. "CIF" without "CIF Jeddah" is only half the contract.`);
+      await uiAlert({ tone: "warn", title: "Terms incomplete", message: `This SO cannot move to ${o.status} without ${termsMissing}. "CIF" without "CIF Jeddah" is only half the contract.` });
       return;
     }
 
     // Duplicate number guard
     const dup = orders.find(p => p.number === o.number && p.id !== o.id);
-    if (dup) { alert(`SO number ${o.number} already exists.`); return; }
+    if (dup) { await uiAlert({ tone: "warn", title: "Duplicate SO number", message: `SO number ${o.number} already exists.` }); return; }
     // v6.3.0: import-document duplicate guard. Import permits and ACID numbers are
     // single-use — re-using one across orders/shipments risks customs rejection.
     // Block by default; allow an explicit, recorded override.
@@ -2308,11 +2424,12 @@ export default function SalesOrders({
         const lines = conflicts.map(c =>
           `• ${label(c.field)} "${c.value}" already used on ${c.soNumber}${c.shipments.length ? ` (shipment${c.shipments.length > 1 ? "s" : ""} ${c.shipments.join(", ")})` : ""}`
         ).join("\n");
-        const ok = window.confirm(
-          `⚠ DUPLICATE IMPORT DOCUMENT NUMBER\n\n${lines}\n\n` +
-          `Import permits and ACID numbers are normally single-use. Saving this SO with a number that was already used may cause customs rejection at destination.\n\n` +
-          `Press OK to OVERRIDE and save anyway (the override is recorded in the SO notes), or Cancel to go back and change the number.`
-        );
+        const ok = await uiConfirm({
+          tone: "danger",
+          title: "Duplicate import document number",
+          message: `${lines}\n\nImport permits and ACID numbers are normally single-use. Saving this SO with a number that was already used may cause customs rejection at destination.\n\nOverride and save anyway? (the override is recorded in the SO notes)`,
+          confirmLabel: "Override & save", cancelLabel: "Go back",
+        });
         if (!ok) return;
         const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
         const overrideNote = `[${stamp}] OVERRIDE: saved despite duplicate ${conflicts.map(c => `${label(c.field)} "${c.value}" (also on ${c.soNumber})`).join("; ")}.`;
@@ -2323,13 +2440,13 @@ export default function SalesOrders({
     const src = validateSourcing(o.items);
     const needsSource = !src.allSourced && o.status !== "Draft" && o.status !== "Cancelled";
     if (needsSource) {
-      alert(`Cannot save SO as ${o.status} — ${src.unsourcedIndexes.length} line(s) unsourced. Pick a stock lot or a PO for every line first, or save as Draft.`);
+      await uiAlert({ tone: "warn", title: "Lines unsourced", message: `Cannot save SO as ${o.status} — ${src.unsourcedIndexes.length} line(s) unsourced. Pick a stock lot or a PO for every line first, or save as Draft.` });
       return;
     }
     const poIssues = validatePOReadinessForSO(o.items);
     if (poIssues.length && o.status !== "Draft" && o.status !== "Cancelled") {
       const poDetails = poIssues.map((x: any) => `• Line ${x.idx + 1}: ${x.poRef} (${x.status})`).join("\n");
-      alert(`Cannot save SO as ${o.status} because it refers to a PO that is Draft, Cancelled or missing:\n\n${poDetails}\n\nConfirm the PO first, choose another source, or keep the SO as Draft.`);
+      await uiAlert({ tone: "warn", title: "Source PO not usable", message: `Cannot save SO as ${o.status} because it refers to a PO that is Draft, Cancelled or missing:\n\n${poDetails}\n\nConfirm the PO first, choose another source, or keep the SO as Draft.` });
       return;
     }
     // Availability guard — same hard rule, parallel to sourcing.
@@ -2342,7 +2459,7 @@ export default function SalesOrders({
         .map((a: any, i: number) => a.hasOverage ? `  • Line ${i + 1}: short by ${a.overage.toLocaleString("pl-PL")} kg (demand ${a.lineQty.toLocaleString("pl-PL")} kg, primary source available ${a.primaryAvailable.toLocaleString("pl-PL")} kg)` : null)
         .filter((value: string | null): value is string => typeof value === "string")
         .join("\n");
-      alert(`Cannot save SO as ${o.status} — ${overCount} line(s) exceed available supply:\n\n${details}\n\nReduce qty, switch source, or arrange more procurement.`);
+      await uiAlert({ tone: "warn", title: "Over available supply", message: `Cannot save SO as ${o.status} — ${overCount} line(s) exceed available supply:\n\n${details}\n\nReduce qty, switch source, or arrange more procurement.` });
       return;
     }
     // Detect Shipped transition — compare incoming status with previously-saved one.
@@ -2355,6 +2472,7 @@ export default function SalesOrders({
       || invoicesForSO(o.number).length > 0; // v6.33.0 (A3-6)
 
     const savedOrder = { ...o, id: o.id ?? nextId() };
+    recordAudit({ module: "Sales orders", docType: "SO", docNumber: savedOrder.number, action: o.id == null ? "created" : "saved", summary: `SO ${o.id == null ? "created" : "saved"} (${savedOrder.status || "Draft"}${savedOrder.sellIncoterm ? " · " + savedOrder.sellIncoterm : ""})` });
     setOrders(prev => {
       const exists = prev.find(p => p.id === savedOrder.id);
       if (exists) return prev.map(p => p.id === savedOrder.id ? savedOrder : p);
@@ -2384,17 +2502,74 @@ export default function SalesOrders({
   // Batch 3b (decision 2): EXW client collection — one click creates the minimal
   // collection shipment (purpose OUTBOUND, responsibility Client, no legs/TO/freight).
   const [collectionFor, setCollectionFor] = useState<any>(null);
-  function recordCollection(info) {
-    if (!extSetShipments) { window.alert("Shipments store not available."); return; }
+  const [clientClaimFor, setClientClaimFor] = useState<any>(null); // v6.36.2 (P3)
+  const [cc, setCc] = useState<any>({ lotId: "", qty: "", value: "", cur: "PLN", note: "" });
+
+  // v6.36.2 (P3): client claim recorded FROM THE SO — appends a CLAIM movement to the
+  // sourced lot (stock untouched; those kg already left) and drafts an outgoing credit
+  // note, exactly like the Inventory quality-flow path.
+  function saveClientClaim() {
+    const soDoc = clientClaimFor; if (!soDoc) return;
+    const lotsAll = extInvLots || [];
+    const lot = lotsAll.find((l: any) => String(l.id) === String(cc.lotId));
+    const amt = parseFloat(cc.value) || 0;
+    if (!lot || amt <= 0) return;
+    const qty = parseFloat(cc.qty) || 0;
+    const today = domainToday();
+    const mv = { id: nextId(), date: today, type: "CLAIM", qtyKg: qty, soRef: soDoc.number, claimValue: amt, claimCurrency: cc.cur || "PLN", note: cc.note || `Client claim on ${soDoc.number}`, source: `claim:so:${soDoc.id}:${Date.now()}` };
+    if (extSetLots) extSetLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? { ...l, movements: [...(l.movements || []), mv], claimedKg: (parseFloat(l.claimedKg) || 0) + qty } : l));
+    // v6.48.0 (Phase 1): a client claim is now a numbered DOCUMENT, not just a
+    // movement. Previously it had no number, no status and nothing to cite in
+    // correspondence — half the claim population was invisible as documents.
+    if (typeof extSetClaims === "function") {
+      extSetClaims((prev: any[]) => {
+        const list = prev || [];
+        const number = nextClaimNumber(list, new Date(today).getFullYear() || 2026);
+        return [...list, {
+          ...blankClaim(),
+          id: nextId(), number,
+          direction: "CONCESSION",
+          respondent: { kind: "Client", contactId: null, name: soDoc.client?.name || "" },
+          cause: "Quality defect",
+          subjects: [
+            { kind: "LOT", ref: lot.number, affectedKg: qty || undefined },
+            { kind: "SO", ref: soDoc.number },
+          ],
+          date: today,
+          requestedEUR: 0,
+          status: "Submitted",
+          movementRef: mv.id,
+          notes: [cc.note || "", `Credit ${amt} ${cc.cur || "PLN"} requested`].filter(Boolean).join(" · "),
+        }];
+      });
+    }
+    if (extSetFinanceNotes) {
+      const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
+      const cur = cc.cur || inv?.currency || soDoc.currency || "PLN";
+      const fx = defaultFxRate(cur);
+      extSetFinanceNotes((prev: any[]) => [...(prev || []), {
+        id: nextId(), noteType: "CREDIT", direction: "outgoing",
+        invoiceId: inv?.id ?? null, relatedRef: soDoc.number, partyName: inv?.counterparty?.name || soDoc.client?.name || "Client",
+        category: "Quality", amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
+        status: "Draft", reason: `Client quality claim — ${qty ? qty + " kg " : ""}on ${lot.number} (${soDoc.number})`,
+        date: today, source: mv.source,
+      }]);
+    }
+    recordAudit({ module: "Sales orders", docType: "SO", docNumber: soDoc.number, action: "claim", summary: `Client claim recorded on ${lot.number} — ${amt.toLocaleString("pl-PL")} ${cc.cur || "PLN"}; credit note drafted` });
+    setClientClaimFor(null);
+  }
+
+  async function recordCollection(info) {
+    if (!extSetShipments) { await uiAlert({ tone: "warn", title: "Unavailable", message: "Shipments store not available." }); return; }
     const built = buildCollectionShipment(collectionFor, extInvLots || [], extShipments, info, { todayISO: domainToday, nextId });
-    if (!built.goods.length) { window.alert("No sourced lines found — source the SO lines from stock or a PO first, then record the collection."); return; }
+    if (!built.goods.length) { await uiAlert({ tone: "warn", title: "Nothing to collect", message: "No sourced lines found — source the SO lines from stock or a PO first, then record the collection." }); return; }
     extSetShipments(prev => [built, ...(prev || [])]);
     setOrders(prev => prev.map(o => o.id === collectionFor.id ? { ...o, linkedShipments: Array.from(new Set([...(o.linkedShipments || []), built.number])) } : o));
     setCollectionFor(null);
   }
 
-  function deleteOrder() {
-    if (!window.confirm(`Cancel SO ${selected.number}? Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.`)) return;
+  async function deleteOrder() {
+    if (!(await uiConfirm({ tone: "danger", title: `Cancel SO ${selected.number}?`, message: "Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.", confirmLabel: "Cancel SO", cancelLabel: "Keep" }))) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     reverseCancelledSOInInventory(cancelled);
     setOrders(prev => prev.map(p => p.id === selected.id ? cancelled : p));
@@ -2426,6 +2601,7 @@ export default function SalesOrders({
   if (view === "form" && form) {
     return (
       <>
+        {soDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
@@ -2439,20 +2615,20 @@ export default function SalesOrders({
           setProductCatalog={setProductCatalog}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
-          onPrint={() => {
+          onPrint={async () => {
             if (form.status === "Draft") {
-              alert("Cannot print or share a draft SO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft SO", message: "Cannot print or share a draft SO. Confirm the order first." });
               return;
             }
-            { const _m = soTermsMissing(form); if (_m) { alert(`Cannot print this SO without ${_m} — the client must see the delivery terms.`); return; } }
+            { const _m = soTermsMissing(form); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot print this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setPrintOrder(form);
           }}
-          onEmail={() => {
+          onEmail={async () => {
             if (form.status === "Draft") {
-              alert("Cannot email a draft SO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft SO", message: "Cannot email a draft SO. Confirm the order first." });
               return;
             }
-            { const _m = soTermsMissing(form); if (_m) { alert(`Cannot email this SO without ${_m} — the client must see the delivery terms.`); return; } }
+            { const _m = soTermsMissing(form); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot email this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setEmailOrder(form);
           }}
         />
@@ -2462,6 +2638,7 @@ export default function SalesOrders({
   if (view === "detail" && selected) {
     return (
       <>
+        {soDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
@@ -2481,25 +2658,26 @@ export default function SalesOrders({
           userName={userName}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => editOrder(selected)}
-          onPrint={() => {
+          onPrint={async () => {
             if (selected.status === "Draft") {
-              alert("Cannot print or share a draft SO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft SO", message: "Cannot print or share a draft SO. Confirm the order first." });
               return;
             }
-            { const _m = soTermsMissing(selected); if (_m) { alert(`Cannot print this SO without ${_m} — the client must see the delivery terms.`); return; } }
+            { const _m = soTermsMissing(selected); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot print this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setPrintOrder(selected);
           }}
-          onEmail={() => {
+          onEmail={async () => {
             if (selected.status === "Draft") {
-              alert("Cannot email a draft SO. Confirm the order first.");
+              await uiAlert({ tone: "warn", title: "Draft SO", message: "Cannot email a draft SO. Confirm the order first." });
               return;
             }
-            { const _m = soTermsMissing(selected); if (_m) { alert(`Cannot email this SO without ${_m} — the client must see the delivery terms.`); return; } }
+            { const _m = soTermsMissing(selected); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot email this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setEmailOrder(selected);
           }}
           onIssueInvoice={() => setInvoiceOrder(selected)}
           onDelete={deleteOrder}
           onRecordCollection={() => setCollectionFor(selected)}
+          onRecordClientClaim={() => { setClientClaimFor(selected); setCc({ lotId: "", qty: "", value: "", cur: selected.currency || "PLN", note: "" }); }}
         />
       </>
     );
@@ -2527,12 +2705,12 @@ export default function SalesOrders({
             <div style={{ fontSize: 17, fontWeight: 700, color: "#16A34A", marginTop: 2 }}>{fmtMoney(activeValuePLN, "PLN")}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
-            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERED <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· to invoice</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 2 }}>{deliveredNotInvoicedCount}</div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>AWAITING INVOICE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· delivered</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 2 }} title="Sales orders marked Delivered that have not yet been invoiced — your invoicing backlog.">{deliveredNotInvoicedCount}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
-            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DELIVERIES <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· ≤7 days</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 2 }}>{upcomingDeliveryCount}</div>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DUE SOON <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· next 7 days</span></div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 2 }} title="Active orders whose delivery date falls within the next 7 days — deliveries to prepare for.">{upcomingDeliveryCount}</div>
           </Card>
         </div>
 
@@ -2551,7 +2729,7 @@ export default function SalesOrders({
         {/* Table */}
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-            {["NUMBER", "CLIENT", "ORDER", "DELIVERY", "STATUS", "TOTAL", "SOURCES"].map((h, i) => (
+            {["SO NUMBER", "CLIENT", "ORDER DATE", "DELIVERY DATE", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>
@@ -2588,12 +2766,25 @@ export default function SalesOrders({
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(netTotal(o.items), o.currency)}</div>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                  {uniqueSources.length === 0 && <span style={{ fontSize: 10.5, color: "#CCC", fontStyle: "italic" }}>unsourced</span>}
-                  {uniqueSources.slice(0, 2).map((s, i) => (
-                    <span key={i} style={{ fontSize: 10, fontFamily: "ui-monospace, Menlo, monospace", color: "#666" }}>{s}</span>
-                  ))}
-                  {uniqueSources.length > 2 && <span style={{ fontSize: 10, color: "#AAA" }}>+{uniqueSources.length - 2}</span>}
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                  {/* v6.34.2 (module review): list the linked source documents, don't truncate to 2. */}
+                  {uniqueSources.length === 0 && <span style={{ fontSize: 10.5, color: "#CCC", fontStyle: "italic", fontFamily: "inherit" }}>unsourced</span>}
+                  {uniqueSources.map((s, i) => {
+                    // strip any leading icon to test the bare number against the cancelled set
+                    const bare = String(s).replace(/^[^A-Za-z0-9]+/, "");
+                    const icon = String(s).slice(0, String(s).length - bare.length);
+                    return <span key={i} style={{ fontSize: 10.5, color: "#475569" }}>{icon}<DocRef num={bare} cancelledSet={cancelledRefs} /></span>;
+                  })}
+                  {/* v6.45.0: shipments + invoices were missing from this column —
+                      the SO showed only its SOURCE documents even after shipping. */}
+                  {(() => {
+                    const shps = Array.from(new Set([
+                      ...((o.linkedShipments || [])),
+                      ...((extShipments || []).filter((sh: any) => sh.status !== "Cancelled" && ((sh.soRefs || []).includes(o.number) || (sh.goods || []).some((g: any) => g.soRef === o.number))).map((sh: any) => sh.number)),
+                    ]));
+                    return shps.map((n: any, i: number) => <span key={"sh" + i} style={{ fontSize: 10.5, color: "#0284C7" }}>📦<DocRef num={n} cancelledSet={cancelledRefs} /></span>);
+                  })()}
+                  {(o.linkedInvoices || []).map((n: any, i: number) => <span key={"inv" + i} style={{ fontSize: 10.5, color: "#16A34A" }}>📄<DocRef num={n} cancelledSet={cancelledRefs} /></span>)}
                 </div>
               </div>
             );
@@ -2604,6 +2795,41 @@ export default function SalesOrders({
           {filtered.length} of {orders.length} sales orders · Click any row to open
         </div>
       </div>
+      {clientClaimFor && (() => {
+        const soDoc = clientClaimFor;
+        const lotsAll = extInvLots || [];
+        const linked = lotsAll.filter((l: any) =>
+          (l.movements || []).some((m: any) => m && !m.voided && m.type === "SHIP_OUT" && String(m.soRef) === String(soDoc.number)) ||
+          (soDoc.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(l.number)) ||
+          (soDoc.items || []).some((it: any) => it.sourceType === "PO" && l.poRef && String(it.sourceRef) === String(l.poRef)));
+        const pool = linked.length ? linked : lotsAll;
+        const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13 } as any;
+        const canSave = cc.lotId && parseFloat(cc.value) > 0;
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setClientClaimFor(null)}>
+            <div style={{ background: "#fff", borderRadius: 14, padding: 22, width: 480, maxWidth: "92vw" }} onClick={(e: any) => e.stopPropagation()}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>Record client claim — {soDoc.number}</div>
+              <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>Logs the claim against the delivered lot and drafts an outgoing <strong>credit note</strong> (finalise it in Invoices). Warehouse stock is not touched — those kg already left.</div>
+              <Lbl>Lot the claim concerns</Lbl>
+              <select style={inp} value={cc.lotId} onChange={(e: any) => setCc((x: any) => ({ ...x, lotId: e.target.value }))}>
+                <option value="">— select lot —</option>
+                {pool.map((l: any) => <option key={l.id} value={l.id}>{l.number} · {l.product}{l.variety ? " — " + l.variety : ""}</option>)}
+              </select>
+              {!linked.length && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 4 }}>No lot is linked to this SO automatically — pick the delivered lot yourself.</div>}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr", gap: 10, marginTop: 12 }}>
+                <div><Lbl>Affected kg (optional)</Lbl><input style={inp} inputMode="decimal" value={cc.qty} onChange={(e: any) => setCc((x: any) => ({ ...x, qty: e.target.value }))} placeholder="0" /></div>
+                <div><Lbl>Claim value</Lbl><input style={inp} inputMode="decimal" value={cc.value} onChange={(e: any) => setCc((x: any) => ({ ...x, value: e.target.value }))} placeholder="0.00" /></div>
+                <div><Lbl>Currency</Lbl><select style={inp} value={cc.cur} onChange={(e: any) => setCc((x: any) => ({ ...x, cur: e.target.value }))}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
+              </div>
+              <div style={{ marginTop: 12 }}><Lbl>Note</Lbl><input style={inp} value={cc.note} onChange={(e: any) => setCc((x: any) => ({ ...x, note: e.target.value }))} placeholder="What the client reported…" /></div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+                <button onClick={() => setClientClaimFor(null)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+                <button disabled={!canSave} onClick={saveClientClaim} style={{ padding: "7px 16px", borderRadius: 7, border: "none", background: canSave ? "#B45309" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: canSave ? "pointer" : "not-allowed" }}>Record claim + draft credit note</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {collectionFor && (
         <CollectionModal so={collectionFor} onClose={() => setCollectionFor(null)} onSave={recordCollection} />
       )}

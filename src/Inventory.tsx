@@ -1,17 +1,21 @@
 import React, { useState, useMemo } from "react";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
-import { computeClaim, nextClaimNumber, buildClaimNote } from "./claim.domain";
+import { computeClaim, buildClaimNote } from "./claim.domain";
+import { nextClaimNumber, blankClaim, claimsForLot } from "./claims.domain";
 import { buildTraceTree } from "./trace.domain";
 import { fmtNum } from "./format";
-import { Card, Lbl, useConfirm } from "./ui";
+import { Card, Lbl, useConfirm, DocRef, cancelledDocSet } from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
+import { customsSummary } from "./customs.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
+import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
 import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
+import { recordAudit } from "./audit";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 
@@ -60,57 +64,26 @@ const LOT_STATUSES: Record<string, any> = {
 };
 
 // Flow types — 11 flows in two groups (EXP / IMP). Aligned with PurchaseOrders + Shipments.
-const FLOW_TYPES: Record<string, any> = {
-  // EXPORT
-  EXP_EXWS:     { group: "EXP", short: "EXP · EXWs — client pickup",       emoji: "🤝", desc: "Client sends their truck to producer warehouse.", buyOwnershipStart: "never", sellOwnershipEnd: "never", stageTemplate: [{ kind: "supplier", label: "At producer (ready)" }, { kind: "client", label: "Collected by client" }] },
-  EXP_FOB:      { group: "EXP", short: "EXP · FOB — we truck to port",     emoji: "⚓", desc: "We truck to port, client takes over (no sea on our side).", buyOwnershipStart: "supplier", sellOwnershipEnd: "origin_port", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading (handed to client)" }] },
-  EXP_CIF:      { group: "EXP", short: "EXP · CIF — own full logistics",   emoji: "🚢", desc: "Producer → our truck → port → vessel (CIF).", buyOwnershipStart: "supplier", sellOwnershipEnd: "dest_port", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "customs_export", label: "Export customs" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port (handed to client)" }] },
-  EXP_DDP_EU:   { group: "EXP", short: "EXP · DDP intra-EU",               emoji: "🚛", desc: "Producer → our truck → EU client (DDP).", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to client (intra-EU)" }, { kind: "client", label: "Delivered to client" }] },
-  EXP_DDP_XEU:  { group: "EXP", short: "EXP · DDP extra-EU",               emoji: "🛃", desc: "Producer → our truck → export customs → client (DDP).", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At producer" }, { kind: "transit_road", label: "Road to border" }, { kind: "customs_export", label: "Export customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
-  // IMPORT
-  IMP_EXWS_WH:  { group: "IMP", short: "IMP · EXWs → our WH",              emoji: "🔄", desc: "Our truck picks up at supplier → sea (if needed) → customs → our WH.", buyOwnershipStart: "supplier", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to our warehouse" }, { kind: "our_wh", label: "In our warehouse" }] },
-  IMP_EXWS_DIR: { group: "IMP", short: "IMP · EXWs → direct to client",    emoji: "↗️", desc: "Our truck picks up at supplier → sea (if needed) → customs → client.", buyOwnershipStart: "supplier", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At supplier" }, { kind: "transit_road", label: "Road to port of loading" }, { kind: "origin_port", label: "Port of loading" }, { kind: "transit_sea", label: "Sea freight" }, { kind: "dest_port", label: "Destination port" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
-  IMP_CIF_WH:   { group: "IMP", short: "IMP · CIF → our WH",               emoji: "📦", desc: "Supplier ships CIF → we customs + inland → our WH.", buyOwnershipStart: "dest_port", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier ships)" }, { kind: "transit_sea", label: "Sea freight (supplier's risk)" }, { kind: "dest_port", label: "Destination port (we take over)" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to our warehouse" }, { kind: "our_wh", label: "In our warehouse" }] },
-  IMP_CIF_DIR:  { group: "IMP", short: "IMP · CIF → direct to client",     emoji: "➡️", desc: "Supplier ships CIF → we customs + inland → client.", buyOwnershipStart: "dest_port", sellOwnershipEnd: "client", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier ships)" }, { kind: "transit_sea", label: "Sea freight (supplier's risk)" }, { kind: "dest_port", label: "Destination port (we take over)" }, { kind: "customs_import", label: "Import customs" }, { kind: "transit_road", label: "Road to client" }, { kind: "client", label: "Delivered to client" }] },
-  IMP_DDP_WH:   { group: "IMP", short: "IMP · DDP → our WH",               emoji: "🏭", desc: "Supplier delivers DDP to our warehouse.", buyOwnershipStart: "our_wh", sellOwnershipEnd: "our_wh", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier delivers)" }, { kind: "transit_road", label: "Supplier's delivery (their risk)" }, { kind: "our_wh", label: "Received in our warehouse" }] },
-  IMP_DDP_DIR:  { group: "IMP", short: "IMP · DDP → direct to client",     emoji: "🎯", desc: "Supplier delivers DDP straight to client.", buyOwnershipStart: "never", sellOwnershipEnd: "never", stageTemplate: [{ kind: "supplier", label: "At supplier (supplier delivers)" }, { kind: "client", label: "Delivered to client (pass-through)" }] },
-};
+// v6.37.0: FLOW_TYPES retired — direction, journey, ownership and customs all derive
+// from shipments/incoterms; legacy stored data was migrated (flowCleanup.migration, schema 2).
 
-const OWNERSHIP_POINT_ORDER = ["supplier", "origin_port", "vessel", "dest_port", "our_wh", "client"];
 
 // v6.1.5: Standard Incoterm-aligned stage wording, derived from the stage kind and the
 // flow's buy/sell Incoterm family. One source of truth → consistent across the app.
-function incotermFamily(flow: string, side: "buy" | "sell") {
-  // Infer the Incoterm family from the flow code.
-  const f = flow || "";
-  if (side === "buy") {
-    if (f.includes("CIF")) return "CIF";
-    if (f.includes("DDP")) return "DDP";
-    if (f.includes("FOB")) return "FOB";
-    return "EXW"; // EXWS / default pickup
-  } else {
-    if (f.startsWith("EXP_EXWS")) return "EXW";
-    if (f.startsWith("EXP_FOB")) return "FOB";
-    if (f.startsWith("EXP_CIF")) return "CIF";
-    if (f.startsWith("EXP_DDP")) return "DDP";
-    if (f.endsWith("_DIR")) return "DDP"; // sold delivered to client
-    return ""; // import to our WH — no onward sale Incoterm at this point
-  }
-}
-function standardStageLabel(kind: string, flow: string) {
-  const buy = incotermFamily(flow, "buy");
+
+// v6.37.0: generic stage labels — a fallback only; stored/baked and shipment-derived
+// journey stages carry their own real labels, which the render prefers.
+function standardStageLabel(kind: string) {
   switch (kind) {
-    case "supplier":
-      return buy === "EXW" ? "EXW — at supplier"
-           : "At supplier";
+    case "supplier": return "At supplier";
     case "transit_road": return "Road carriage";
-    case "transit_sea":  return buy === "CIF" ? "Sea freight (CIF — supplier's risk)" : "Sea freight";
-    case "origin_port":  return buy === "FOB" ? "FOB — loaded on vessel (port of loading)" : "Port of loading";
+    case "transit_sea": return "Sea freight";
+    case "origin_port": return "Port of loading";
     case "customs_export": return "Export customs cleared";
-    case "dest_port":    return buy === "CIF" ? "CIF — arrived at destination port" : "Destination port";
+    case "dest_port": return "Destination port";
     case "customs_import": return "Import customs cleared";
-    case "our_wh":       return "Received into our warehouse";
-    case "client":       return "Delivered to client";
+    case "our_wh": return "Received into our warehouse";
+    case "client": return "Delivered to client";
     default: return kind;
   }
 }
@@ -120,12 +93,9 @@ const STAGE_KIND_TO_POINT: Record<string, string> = {
   customs_export: "origin_port", transit_sea: "vessel", dest_port: "dest_port",
   customs_import: "dest_port", our_wh: "our_wh", client: "client",
 };
-function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?: number) {
-  const f = FLOW_TYPES[flow];
-  if (!f) return "owned";
-  if (f.buyOwnershipStart === "never" || f.sellOwnershipEnd === "never") return "not_owned";
-  // A transit leg (road/sea) sits BETWEEN two points; its ownership follows the
-  // point it departs FROM — i.e. the nearest preceding non-transit stage's point.
+function ownershipForStage(stageKind: string, stages?: any[], idx?: number, buyIncoterm?: string, sellIncoterm?: string) {
+  // v6.37.0: ownership derives purely from the REAL incoterms (Phase C complete).
+  // A transit leg follows the point it departs FROM (nearest preceding non-transit stage).
   let point = STAGE_KIND_TO_POINT[stageKind] || "supplier";
   const isTransit = stageKind === "transit_road" || stageKind === "transit_sea";
   if (isTransit && Array.isArray(stages) && typeof idx === "number") {
@@ -134,34 +104,60 @@ function ownershipForStage(flow: string, stageKind: string, stages?: any[], idx?
       if (pk !== "transit_road" && pk !== "transit_sea") { point = STAGE_KIND_TO_POINT[pk] || point; break; }
     }
   }
-  const sI = OWNERSHIP_POINT_ORDER.indexOf(f.buyOwnershipStart);
-  const eI = OWNERSHIP_POINT_ORDER.indexOf(f.sellOwnershipEnd);
-  const pI = OWNERSHIP_POINT_ORDER.indexOf(point);
-  if (sI === -1 || eI === -1 || pI === -1) return "owned";
-  if (pI < sI) return "not_owned";
-  if (pI > eI) return "handed_over";
-  return "owned";
+  return ownershipAtPoint(point, buyIncoterm, sellIncoterm);
 }
-// On-the-fly journey for a lot that has a flow but no stored journey (seed/old lots).
+// v6.34.9 (Phase C): build a lot's journey from its REAL shipment legs, not the
+// obsolete flow template. Each leg becomes a transit stage between its endpoints;
+// the sequence reflects what was actually booked. Falls back to a minimal
+// supplier→warehouse shell only when the lot has no shipments at all.
+function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) => any, buyIncoterm?: string, sellIncoterm?: string): any[] {
+  const legs = legsForLot(lot, shipments);
+  if (!legs.length) return [];
+  const nameOf = (id: any, custom: any) => {
+    const l = locResolve(id);
+    return (l && l.name) || custom || "";
+  };
+  const stages: any[] = [];
+  legs.forEach((lg: any, i: number) => {
+    const fromName = nameOf(lg.fromLocationId, lg.fromCustom);
+    const toName = nameOf(lg.toLocationId, lg.toCustom);
+    const mode = lg.mode || "Road";
+    const kind = mode === "Sea" ? "transit_sea" : mode === "Air" ? "transit_air" : "transit_road";
+    // the origin stage (once, from the first leg)
+    if (i === 0 && fromName) {
+      stages.push({ seq: stages.length + 1, kind: "origin", label: fromName, ownership: "ours", plannedDate: lg.plannedPickupDate || null, actualDate: legActualLoad(lg), status: "pending" });
+    }
+    stages.push({
+      seq: stages.length + 1, kind, mode,
+      label: `${mode} → ${toName || "next stop"}`,
+      ownership: "ours",
+      plannedDate: lg.plannedDeliveryDate || null,
+      actualDate: legActualDeliver(lg),
+      status: "pending",
+    });
+  });
+  // v6.37.0: real ownership per stage from the incoterms (was a placeholder "ours").
+  return stages.map((st: any, i: number) => ({ ...st, ownership: ownershipForStage(st.kind, stages, i, buyIncoterm, sellIncoterm) }));
+}
+
+// On-the-fly journey for a lot with no stored journey — derived from real shipments
+// (Phase C), falling back to the flow template only for legacy lots with no shipments.
 function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = []) {
+  // v6.35.1 (Phase C): resolve the REAL incoterms for ownership — buy from the lot (or its
+  // stored value), sell from the governing SO that draws on this lot/PO.
+  const lotBuyIncoterm = lot.buyIncoterm || lot.purchaseIncoterm || "";
+  const govSo = (orders || []).find((o: any) => o.status !== "Cancelled" && (o.items || []).some((it: any) =>
+    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) ||
+    (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
+  const lotSellIncoterm = govSo?.sellIncoterm || "";
+  // Phase C: prefer a stored journey, then one DERIVED FROM REAL SHIPMENTS, and only
+  // then fall back to the legacy flow template (for old lots with neither).
+  const fromShips = (Array.isArray(lot.journey) && lot.journey.length > 0) ? [] : journeyFromShipments(lot, shipments, locById, lotBuyIncoterm, lotSellIncoterm);
   const base = (Array.isArray(lot.journey) && lot.journey.length > 0)
     ? lot.journey
-    : (() => {
-        const f = FLOW_TYPES[lot.flow];
-        if (!f || !Array.isArray(f.stageTemplate)) return [];
-        const load = lot.loadingDate || null;
-        const arrive = lot.arrivalDate || null;
-        const n = f.stageTemplate.length;
-        return f.stageTemplate.map((st: any, i: number) => {
-          let plannedDate: string | null = null;
-          if (load && arrive && n > 1) {
-            const t0 = new Date(load).getTime(), t1 = new Date(arrive).getTime();
-            plannedDate = new Date(t0 + (t1 - t0) * (i / (n - 1))).toISOString().split("T")[0];
-          } else if (i === 0) plannedDate = load;
-          else if (i === n - 1) plannedDate = arrive;
-          return { seq: i + 1, kind: st.kind, label: st.label, ownership: ownershipForStage(lot.flow, st.kind, f.stageTemplate, i), plannedDate, actualDate: null, status: "pending" };
-        });
-      })();
+    : fromShips.length > 0
+    ? fromShips
+    : []; // v6.37.0: no template fallback — a lot with no stored journey and no shipments shows none
   // Drive each stage's status + actual date from real shipment legs, customs,
   // movements and SO status (mapping legs to stages by mode/sequence).
   return applyProgressToJourney(base, lot, shipments, orders);
@@ -174,11 +170,18 @@ function shipmentsForLot(lot: any, shipments: any[]) {
   if (!Array.isArray(shipments)) return [];
   return shipments.filter((sh: any) => {
     const lotRefs = sh.lotRefs || [];
-    const poRefs = sh.poRefs || [];
-    const soRefs = sh.soRefs || [];
-    return (lot.number && lotRefs.includes(lot.number))
-        || (lot.poRef && poRefs.includes(lot.poRef))
-        || (lot.soRef && soRefs.includes(lot.soRef));
+    // v6.59.0 ROOT CAUSE of three separate lot defects. This used to match a
+    // shipment that merely shared the lot's PO or SO, or that listed the lot in
+    // the header lotRefs seeded at creation. So every shipment of PO-2026-0001
+    // counted as carrying LOT-2026-0001 — which is why the lot's customs box
+    // named SHP-2026-0002, why its direction badge read another shipment's
+    // flow, and why extra sales orders appeared in its linked documents.
+    // A shipment carries a lot when its GOODS say so. Header lotRefs are only
+    // trusted for a shipment that has no goods rows yet (a booking).
+    const carriedInGoods = (sh.goods || []).some((g: any) => String(g.lotRef || "") === String(lot.number));
+    if (carriedInGoods) return true;
+    if ((sh.goods || []).length) return false;
+    return !!(lot.number && lotRefs.includes(lot.number));
   });
 }
 
@@ -307,14 +310,22 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
 }
 
 // The customs clearances relevant to a lot's flow (export and/or import).
-function customsStagesForFlow(flow: string) {
-  const f = FLOW_TYPES[flow];
-  if (!f || !Array.isArray(f.stageTemplate)) return [];
-  const kinds = f.stageTemplate.map((s: any) => s.kind);
-  const out: string[] = [];
-  if (kinds.includes("customs_export")) out.push("export");
-  if (kinds.includes("customs_import")) out.push("import");
-  return out;
+// v6.35.2 (Phase C step 4): whether a lot has customs stages is now derived from its
+// real shipments — a shipment with customs applied, or one that crosses the EU boundary
+// (import/export direction) — not from the obsolete flow template.
+function customsStagesForLot(lot: any, shipments: any[]): string[] {
+  const shs = shipmentsForLot(lot, shipments || []);
+  const out = new Set<string>();
+  shs.forEach((sh: any) => {
+    if (sh.customs && sh.customs.applies) {
+      const dir = String(sh.tradeDirection || "").toUpperCase();
+      // classify by trade direction; default to import for an inbound movement.
+      if (dir === "EXPORT" || dir === "CROSS_TRADE") out.add("export");
+      if (dir === "IMPORT" || dir === "CROSS_TRADE") out.add("import");
+      if (out.size === 0) out.add("import");
+    }
+  });
+  return Array.from(out);
 }
 
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"]; // Polish convention (Klasa I/IB/II/Industrial)
@@ -378,9 +389,10 @@ const _soClientName = soClientName; // Batch 1
 // Normalize an SO from either the standalone stub shape ({clientName}) or the real SO module
 // shape ({client: {name, ...}}). Returns flat clientName for display.
 
-function lotReservations(lot, sourceSOs) {
+function lotReservations(lot, sourceSOs, ctx) {
   // Engine: salesOrders.domain (Batch 1). G1: no SOS stub fallback — live SOs only.
-  return lotReservationsForStock(lot, sourceSOs ?? []);
+  // v6.41.0 (A5): ctx {lots, shipments} enables the unshipped-remainder rule.
+  return lotReservationsForStock(lot, sourceSOs ?? [], ctx);
 }
 
 // Returns array of SO references this lot has ever been linked to
@@ -406,13 +418,17 @@ function soRefsFor(lot, sourceSOs, shipmentsList = []) {
   // isn't sourced from this lot/PO directly.
   (shipmentsList || []).forEach(sh => {
     if (!sh || sh.status === "Cancelled") return;
-    const carriesLot = (sh.lotRefs || []).includes(lot.number)
-      || (sh.goods || []).some(g => g.lotRef === lot.number);
+    const lotRows = (sh.goods || []).filter(g => String(g.lotRef || "") === String(lot.number));
+    const carriesLot = lotRows.length > 0
+      || (!(sh.goods || []).length && (sh.lotRefs || []).includes(lot.number));
     if (!carriesLot) return;
-    const shipmentSONumbers = uniqStrings([
-      ...(sh.soRefs || []),
-      ...((sh.goods || []).filter(g => g.lotRef === lot.number).map(g => g.soRef)),
-    ]);
+    // v6.59.0: take the SO from THIS LOT'S rows. Pulling every header soRef
+    // attributed a groupage shipment's other clients to this lot — the "2 SOs
+    // on a lot that was sold once" defect. The header is used only when the
+    // rows are silent AND it names exactly one order.
+    const fromRows = lotRows.map(g => g.soRef).filter(Boolean);
+    const shipmentSONumbers = uniqStrings(fromRows.length ? fromRows
+      : ((sh.soRefs || []).length === 1 ? sh.soRefs : []));
     shipmentSONumbers.forEach(soNumber => {
       if (!soNumber) return;
       if (refs.find(r => r.number === soNumber)) return;
@@ -462,8 +478,19 @@ function QualityBadge({ quality }: any) {
   const p = palette[quality] || palette["I"];
   return <span style={{ background: p.bg, color: p.color, padding: "1px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
-function LocationPill({ locationId }: any) {
+function LocationPill({ locationId, lot = null }: any) {
   const loc = locById(locationId);
+  // v6.45.0 (test-round): a DIRECT lot never sits in one of our locations — the
+  // goods go producer → client. Say so instead of showing an empty dash.
+  if (!loc && lot) {
+    const direct = !!lot.directFlow || lot.custodyType === "Direct" || /direct/i.test(String(lot.status || ""));
+    if (direct) return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#7C3AED" }}>
+        <span style={{ fontSize: 11 }}>↗</span>
+        <span style={{ fontWeight: 500 }}>Direct · producer → client</span>
+      </span>
+    );
+  }
   if (!loc) return <span style={{ color: "#CCC" }}>—</span>;
   const t = locType(loc.type);
   return (
@@ -473,22 +500,48 @@ function LocationPill({ locationId }: any) {
     </span>
   );
 }
-function FlowBadge({ flow, compact = false }: any) {
-  const f = FLOW_TYPES[flow];
-  if (!f) return null;
+// v6.34.7 (Step 1 of flow retirement): the lot's movement is DERIVED from its actual
+// shipment (which now owns the trade direction), not from the obsolete PO flow key.
+// An EXW-purchase + CIF-sale lot no longer mislabels itself "IMP · EXWs → our WH".
+function LotDirectionBadge({ lot, shipments = [], orders = [], compact = false }: any) {
+  const shs = shipmentsForLot(lot, shipments);
+  // Prefer an explicit shipment direction; else derive from the lot's PO + governing SO.
+  let dir = "";
+  // v6.43.0 (test-round #5b): prefer an explicit direction on the shipment header,
+  // then on THIS lot's goods row (where direct-export deals record EXPORT), before
+  // any fallback — so a CIF/CFR export is never mislabelled "Import".
+  // v6.59.0: THIS LOT'S OWN GOODS ROW WINS over the shipment header. A header
+  // direction describes the shipment as a whole; on a mixed movement it can
+  // disagree with the row, and the row is the one that knows what this lot did.
+  // (SHP-2026-0002 in the test data: header EXPORT, goods rows IMPORT.)
+  // v6.62.0: a lot that has never moved has no location and no flow to show —
+  // it is Expected, not broken. A bare dash read as a failure.
+  if (!shs.length && !(lot.movements || []).length) return null;
+  for (const sh of shs) {
+    const g = (sh?.goods || []).find((x: any) => String(x.lotRef || "") === String(lot.number) && x.tradeDirection && MOVEMENT_LABELS[x.tradeDirection]);
+    if (g) { dir = g.tradeDirection; break; }
+    const d = sh?.tradeDirection;
+    if (d && MOVEMENT_LABELS[d]) { dir = d; break; }
+  }
+  if (!dir && shs.length) {
+    // last resort: derive from the shipment context (may still fall back to Import
+    // for genuinely inbound flows with no other signal).
+    dir = shipmentTradeDirection(shs[0], null);
+  }
+  if (!dir) return null;
+  const lbl = MOVEMENT_LABELS[dir];
+  if (!lbl) return null;
   if (compact) {
-    return <span title={f.desc} style={{ background: "#F9FAFB", border: "1px solid #EBEBEB", padding: "1px 7px", borderRadius: 4, fontSize: 10.5, color: "#555", whiteSpace: "nowrap" }}>{f.emoji} {f.short}</span>;
+    return <span title={lbl.hint} style={{ background: "#fff", border: `1px solid ${lbl.color}33`, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, color: lbl.color, whiteSpace: "nowrap" }}>{lbl.label}</span>;
   }
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 12px", background: "#F9FAFB", border: "1px solid #EBEBEB", borderRadius: 8 }}>
-      <span style={{ fontSize: 14 }}>{f.emoji}</span>
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#111" }}>{f.short}</div>
-        <div style={{ fontSize: 10.5, color: "#888" }}>{f.desc}</div>
-      </div>
-    </div>
+    <span title={lbl.hint} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", background: "#fff", border: `1px solid ${lbl.color}33`, borderRadius: 8, fontSize: 11.5, fontWeight: 700, color: lbl.color }}>
+      {lbl.label}
+      <span style={{ fontWeight: 400, color: "#94A3B8", fontSize: 10.5 }}>· from shipment</span>
+    </span>
   );
 }
+
 function VarianceBadge({ expected, actual }: any) {
   if (!expected || !actual) return null;
   const delta = actual - expected;
@@ -511,6 +564,19 @@ function fmtMoney(n, cur = "PLN") {
   if (n === undefined || n === null || isNaN(n)) return "—";
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
 }
+// v6.36.1 (P2): stock age — the first real receipt (non-voided IN) is the arrival.
+function lotArrivalDate(lot: any): string | null {
+  const ins = (lot.movements || []).filter((m: any) => m && !m.voided && m.type === "IN" && m.date).map((m: any) => String(m.date)).sort();
+  return ins[0] || null;
+}
+function lotAgeDays(lot: any): number | null {
+  const d = lotArrivalDate(lot);
+  if (!d) return null;
+  const days = Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
+  return days < 0 ? 0 : days;
+}
+function ageColor(days: number): string { return days <= 7 ? "#16A34A" : days <= 14 ? "#D97706" : "#DC2626"; }
+
 function totalCost(lot) {
   return (lot.costs || []).reduce((s, c) => s + (c.pln || 0), 0);
 }
@@ -536,20 +602,24 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
 }
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
-function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", contacts = [], onCancel, onConfirm }: any) {
+function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", contacts = [], allLots = [], shipments = [], onCancel, onConfirm }: any) {
   const moveLocs = mergedLocations(contacts);
   // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
   // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
   // was 0 kg, making every quantity error out). In edit mode, prefill.
-  const isExpectedLike = lot.status === "Expected" || lot.status === "Direct Expected";
   // v6.11 (#11) / v6.13 (#14): two modes — "movement" (IN / Transfer / Ship Out)
   // and "quality" (Damage / Reclassify). The mode is fixed by which button opened
   // the modal (Record movement vs the red Record quality issue), so there is no
   // in-modal tab toggle anymore.
   const QUALITY_TYPES = ["DAMAGE", "RECLASS", "CLAIM"];
-  const MOVEMENT_MODE_TYPES = ["IN", "TRANSFER", "SHIP_OUT"];
+  // v6.35.4: manual movement is TRANSFER ONLY (relocation between our locations).
+  // Receipts (IN) and dispatches (SHIP_OUT) are driven by Shipments — arrival posts the
+  // receipt automatically, and an EXW client-collection posts the ship-out via its
+  // collection shipment. This removes the manual receipt/dispatch that let a lot's state
+  // drift from its shipment (T-20). Quality corrections stay in the separate quality mode.
+  const MOVEMENT_MODE_TYPES = ["TRANSFER"];
   const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
-  const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : (isExpectedLike ? "IN" : "TRANSFER")));
+  const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : "TRANSFER"));
   // v6.13 (#15): where the quality problem was detected along the journey.
   const QUALITY_DETECTED_AT = ["At port of discharge", "At the client (export delivery)", "At our warehouse (on arrival)", "At the client's warehouse (direct delivery)", "At supplier / origin", "Other"];
   const [detectedAt, setDetectedAt] = useState(editing?.detectedAt || QUALITY_DETECTED_AT[0]);
@@ -570,7 +640,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   const [claimValue, setClaimValue] = useState(editing?.claimValue != null ? String(editing.claimValue) : "");
   const [claimCurrency, setClaimCurrency] = useState(editing?.claimCurrency || "PLN");
   const effectiveType = clientSide && type === "DAMAGE" ? "CLAIM" : type;
-  const reservationState = lotReservations(lot, liveSOs);
+  const reservationState = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
   // so quantity-reducing movements validate against the expected/direct quantity —
   // consistent with how lotReservations computes availability for direct lots.
@@ -608,7 +678,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
         <div style={{ padding: 24 }}>
           {mode === "movement" ? (
             <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
-              <strong>Movement or Shipment?</strong> Record a movement here when the goods move but <strong>we don't arrange the transport</strong> — e.g. an <strong>EXW sale where the client collects with their own truck</strong> (use "Ship Out"), or for receipts, transfers between locations, and stock corrections. If <strong>we book / pay for / document the transport</strong> (carrier, freight cost, transport order), create it from <strong>Shipments</strong> instead, so the cost and paperwork stay linked to the lot.
+              <strong>Manual movement relocates stock between your own locations</strong> (e.g. port → warehouse, warehouse → warehouse). Everything else is automatic: a shipment posts the <strong>receipt</strong> when it arrives and the <strong>ship-out</strong> when it delivers — with transport, cost and paperwork linked to the lot. To receive or dispatch goods, use <strong>Shipments</strong>, not a manual movement. (Quality issues and write-offs are recorded via <em>Record quality issue</em>.)
             </div>
           ) : clientSide ? (
             <div style={{ padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5, marginBottom: 16 }}>
@@ -831,9 +901,9 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
 
 // ─── v6.6: print helper for the settlement statement (same pattern as Shipments) ─
-function printHtmlNodeInv(nodeId, title) {
+function printHtmlNodeInv(nodeId, title, notify = null) {
   const node = document.getElementById(nodeId);
-  if (!node) { alert("Print preview not ready"); return; }
+  if (!node) { if (notify) notify({ tone: "warn", title: "Not ready", message: "Print preview not ready — please try again in a moment." }); else console.warn("print preview node missing:", nodeId); return; }
   const existing = document.getElementById(`${nodeId}-frame`);
   if (existing) existing.remove();
   const iframe = document.createElement("iframe");
@@ -866,6 +936,7 @@ function printHtmlNodeInv(nodeId, title) {
 // → our invoice; payout = net − commission. Closing writes the two cost
 // components onto the lot so SO P/L lands at exactly the commission.
 function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, onSave }: any) {
+  const { confirm: stConfirm, dialogNode: stDialogNode } = useConfirm(); // P2-6
   const po = (pos || []).find((p: any) => p.number === lot.poRef);
   const producer = po ? (contacts || []).find((c: any) => normName(c.name) === normName(po.supplier?.name)) : null;
   const seasonPct = producer ? currentCommissionPct(producer, localTodayISO()) : null;
@@ -906,6 +977,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120, padding: 20 }}>
+      {stDialogNode}
       <div style={{ width: 860, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -1012,7 +1084,7 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
         <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
           {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save</button>}
           {(status === "None" || status === "Draft") && <button onClick={() => save("Sent")} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Mark statement sent</button>}
-          {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={() => { if (window.confirm(`Close settlement for ${lot.number}?\n\nProducer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`)) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
+          {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={async () => { if (await stConfirm({ tone: "warn", title: `Close settlement for ${lot.number}?`, message: `Producer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`, confirmLabel: "Close settlement" })) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
         </div>
       </div>
     </div>
@@ -1108,8 +1180,8 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [] }: any) {
-  const res = lotReservations(lot, liveSOs);
+function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [], lotClaims = [] }: any) {
+  const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
   const value = valueInStock(lot);
@@ -1135,7 +1207,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
           {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
             <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
           )}
-          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete</button>
+          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
 
@@ -1144,14 +1216,21 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22 }}>
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              {/* v6.59.0 (user ruling): the lot NUMBER comes first. Status,
+                  class and the expected/received variance sat above it, so the
+                  eye met three qualifiers before the thing being qualified. */}
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 6 }}>{lot.number}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
                 <StatusBadge status={lot.status} />
                 <QualityBadge quality={lot.quality} />
                 <VarianceBadge expected={lot.expectedKg} actual={lot.receivedKg} />
               </div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{lot.number}</div>
+              {/* v6.59.0: the supplier — asked far more often than the packaging. */}
+              {(() => { const po = (pos || []).find((x: any) => String(x.number) === String(lot.poRef));
+                const sup = po?.supplier?.name || lot.supplierName || "";
+                return sup ? <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 2 }}>{sup}</div> : null; })()}
               <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
-              <div style={{ marginTop: 10 }}><FlowBadge flow={lot.flow} /></div>
+              <div style={{ marginTop: 10 }}><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} /></div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Value of physical stock</div>
@@ -1204,7 +1283,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 </button>
                 {onOpenClaim && (
                   <button onClick={() => onOpenClaim(lot)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#B45309", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="Quantify damage on this consignment and request a credit note from the producer">
-                    {(lot.claims || []).length ? `Producer claim (${lot.claims.length})` : "Producer claim"}
+                    {(lotClaims || []).length ? `Producer claim (${(lotClaims || []).length})` : "Producer claim"}
                   </button>
                 )}
                 <button onClick={() => printHtmlNodeInv("lot-trace-doc", `Trace-${lot.number}`)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #0F766E", background: "#fff", color: "#0F766E", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="One-click recall report: where this lot came from and everywhere it went — supplier, shipments, clients, invoices.">
@@ -1290,7 +1369,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                       // Black/gray emphasis: stages where goods are OURS render in black;
                       // the supplier's / client's portions render gray.
                       const textColor = owned ? "#111827" : "#9CA3AF";
-                      const labelText = standardStageLabel(s.kind, lot.flow);
+                      const labelText = s.label || standardStageLabel(s.kind); // v6.34.9: prefer the real (shipment-derived) stage label
                       const last = i === journey.length - 1;
                       return (
                         <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", paddingBottom: last ? 0 : 16, position: "relative" }}>
@@ -1318,14 +1397,72 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
 
               {/* Customs overlay (v6.1d) — independent clearance events, editable */}
               {(() => {
-                const kinds = customsStagesForFlow(lot.flow);
+                const kinds = customsStagesForLot(lot, shipments);
                 if (kinds.length === 0) return null;
                 return (
                   <Card style={{ marginBottom: 16 }}>
-                    <SectionTitle>CUSTOMS</SectionTitle>
-                    <div style={{ fontSize: 12, color: "#64748B", lineHeight: 1.6 }}>
-                      Customs clearance is now managed on the <strong>shipment</strong> that carries this lot (Shipments → open the shipment → <em>Customs clearance</em>) — where it reflects the EU boundary, who clears it (your PL broker, the forwarder, or T1 + local broker) and the customs cost. The journey step above completes automatically when the goods arrive.
-                    </div>
+                    <SectionTitle>CUSTOMS CLEARANCE</SectionTitle>
+                    {/* v6.51.0 (user ruling): was a signpost saying "managed in shipments".
+                        Now it SUMMARISES the clearance facts already held on the shipments
+                        that carried this lot, so the lot answers "was this cleared, by whom,
+                        under what reference, at what cost" without opening each shipment. */}
+                    {(() => {
+                      const carrying = (shipments || []).filter((s: any) => s && s.status !== "Cancelled"
+                        && ((s.goods || []).some((g: any) => String(g.lotRef) === String(lot.number)) || (s.lotRefs || []).includes(lot.number)));
+                      const withCustoms = carrying.filter((s: any) => (s.customs || {}).applies);
+                      const customsCostPLN = (lot.costs || [])
+                        .filter((c: any) => String(c.type || "").toLowerCase().includes("customs"))
+                        .reduce((a: number, c: any) => a + (parseFloat(c.pln) || 0), 0);
+                      if (!withCustoms.length && !customsCostPLN) {
+                        return <div style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6 }}>
+                          No customs clearance recorded on the shipments carrying this lot. Clearance is captured on the shipment (Shipments → <em>Customs clearance</em>) and summarised here.
+                        </div>;
+                      }
+                      const ROLE: any = { our_broker: "our Polish broker", forwarder_abroad: "the forwarder abroad", t1_local_broker: "a local broker under T1", not_required: "no clearance required" };
+                      const ST: any = { cleared: { t: "Cleared", c: "#059669", bg: "#DCFCE7" }, in_progress: { t: "Being cleared", c: "#B45309", bg: "#FEF3C7" }, pending: { t: "Not yet cleared", c: "#B91C1C", bg: "#FEE2E2" } };
+                      const allCleared = withCustoms.every((s: any) => String((s.customs || {}).status) === "cleared");
+                      return <div>
+                        {/* one plain sentence first — the answer most people want */}
+                        <div style={{ fontSize: 12.5, color: "#334155", lineHeight: 1.6, marginBottom: 10 }}>
+                          {withCustoms.length === 0
+                            ? "No customs clearance was needed for the shipments carrying this lot."
+                            : allCleared
+                              ? <>These goods have been <strong style={{ color: "#059669" }}>cleared through customs</strong>{withCustoms.length > 1 ? ` on all ${withCustoms.length} shipments that carried them` : ""}.</>
+                              : <>Customs is <strong style={{ color: "#B45309" }}>not yet complete</strong> for these goods — see the shipment(s) below.</>}
+                        </div>
+                        {withCustoms.map((s: any, i: number) => {
+                          const c = s.customs || {};
+                          const st = ST[String(c.status || "pending")] || ST.pending;
+                          const broker = (contacts || []).find((x: any) => String(x.id) === String(c.brokerId || s.brokerId));
+                          const who = ROLE[c.role] || "";
+                          // v6.58.0: role "not_required" used to concatenate into
+                          // "Cleared by no clearance required (broker name)" — nonsense.
+                          // v6.60.0: the shared summary replaces this ad-hoc
+                          // concatenation, so one sentence is produced the same
+                          // way everywhere and cannot contradict itself.
+                          const shared = customsSummary(c, broker?.name);
+                          const sentence = shared || (c.role === "not_required" ? "No customs clearance was required for this shipment" : [
+                            who ? `Cleared by ${who}` : "",
+                            broker?.name ? `(${broker.name})` : "",
+                            c.place ? `at ${c.place}` : "",
+                            c.t1Transit ? "· moved under T1 transit" : "",
+                            c.entryRef ? `· entry ${c.entryRef}` : "",
+                          ].filter(Boolean).join(" "));
+                          return <div key={i} style={{ padding: "8px 0", borderTop: i ? "1px solid #F1F5F9" : "none", fontSize: 12 }}>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 2 }}>
+                              <span style={{ fontWeight: 700 }}>{s.number}</span>
+                              <span style={{ background: st.bg, color: st.c, borderRadius: 999, padding: "1px 9px", fontSize: 10.5, fontWeight: 800 }}>{st.t}</span>
+                            </div>
+                            <div style={{ color: "#64748B", lineHeight: 1.5 }}>{sentence || "No clearance details recorded on this shipment."}</div>
+                          </div>;
+                        })}
+                        <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid #E5E7EB", fontSize: 12, color: "#334155", lineHeight: 1.55 }}>
+                          {customsCostPLN > 0
+                            ? <>Customs and duty cost included in this lot's landed cost: <strong>{customsCostPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN</strong>. It is already part of the cost of goods used in every sale from this lot.</>
+                            : <span style={{ color: "#94A3B8" }}>No customs cost has been allocated to this lot.</span>}
+                        </div>
+                      </div>;
+                    })()}
                   </Card>
                 );
               })()}
@@ -1381,7 +1518,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                 {(() => {
                   // Batch 6c (BP-33): one place for the lot's quality story —
                   // claims, claimed/damaged totals, quality movements.
-                  const claims = lot.claims || [];
+                  const claims = lotClaims || [];   // v6.48.0: from the claims store
                   const qmoves = (lot.movements || []).filter((m: any) => ["DAMAGE", "RECLASS", "CLAIM"].includes(m.type));
                   if (!claims.length && !qmoves.length && !(lot.claimedKg > 0) && !(lot.damagedKg > 0)) return null;
                   const chip = (s: string) => ({ Draft: "#94A3B8", Issued: "#B45309", Accepted: "#15803D", Rejected: "#DC2626", Settled: "#4338CA" } as any)[s] || "#94A3B8";
@@ -1481,7 +1618,7 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                   </div>
                   <div>
                     <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>CURRENT LOCATION</div>
-                    <LocationPill locationId={lot.locationId} />
+                    <LocationPill locationId={lot.locationId} lot={lot} />
                     {lot.directFlow && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4 }}>{lot.destinationText || "Direct destination"}</div>}
                   </div>
                   <div>
@@ -1495,7 +1632,11 @@ function LotDetail({ lot, onBack, onMove, onQualityIssue, onEditMovement, onDele
                         </>
                       ) : (
                         <>
-                          Production: <span style={{ fontWeight: 500 }}>{lot.productionDate || "—"}</span><br />
+                          {/* v6.51.0 (user ruling): the production date is the producer's
+                              harvest/packing date — nothing in the current workflow captures
+                              it, so it was blank on every lot. Hidden from the UI; the field
+                              stays in the data model for when producer documents feed it. */}
+                          {lot.productionDate ? <>Production: <span style={{ fontWeight: 500 }}>{lot.productionDate}</span><br /></> : null}
                           Arrival: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span>
                         </>
                       )}
@@ -1702,7 +1843,8 @@ function ClaimModal({ lot, po, existing = null, onCancel, onSave }: any) {
   );
 }
 
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], setClaims: extSetClaims = null }: any = {}) {
+  const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
@@ -1724,6 +1866,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [showReturn, setShowReturn] = useState(false); // v6.18.12 (#4): return-to-warehouse modal
   const [showInspection, setShowInspection] = useState(false);
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState("default"); // v6.36.1: default | oldest | newest (by arrival)
   const [filterStatus, setFilterStatus] = useState("all"); // all | inPossession | <specific>
   const [filterLocationType, setFilterLocationType] = useState("All");
   const [filterProduct, setFilterProduct] = useState("All");
@@ -1743,7 +1886,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
     const q = search.trim().toLowerCase();
     // "In our possession" = anything that hasn't physically left us yet
     const inPossessionStatuses = new Set(["Expected", "In Transit", "Customs", "In Stock"]);
-    return lots.filter(l => {
+    const base = lots.filter(l => {
       const loc = locById(l.locationId);
       if (filterStatus === "inPossession" && !inPossessionStatuses.has(l.status)) return false;
       if (filterStatus !== "all" && filterStatus !== "inPossession" && l.status !== filterStatus) return false;
@@ -1757,7 +1900,10 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       }
       return true;
     });
-  }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality]);
+    if (sortBy === "default") return base;
+    const key = (l: any) => lotArrivalDate(l) || "9999-12-31"; // no arrival sorts last on oldest-first
+    return [...base].sort((a, b) => sortBy === "oldest" ? key(a).localeCompare(key(b)) : key(b).localeCompare(key(a)));
+  }, [lots, liveSOs, search, filterStatus, filterLocationType, filterProduct, filterQuality, sortBy]);
 
   // v6.18.21 (audit P1): the product filter is derived from the lots actually in
   // inventory (catalog-picked on the PO) instead of a hardcoded list that drifted.
@@ -1770,6 +1916,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
 
   // ── mutations ───────────────────────────────────────────────────────
   function recordMovement({ id, type, qtyKg, fromId, toId, note, date, soRef, detectedAt, claimValue, claimCurrency, partyName }: any) {
+    recordAudit({ module: "Inventory", docType: "Lot", docNumber: selected?.number || "?", action: type === "CLAIM" ? "claim" : "movement", summary: `${type}${qtyKg ? " " + Number(qtyKg).toLocaleString("pl-PL") + " kg" : ""}${note ? " - " + note : ""}` });
     setLots(prev => prev.map(l => {
       if (l.id !== selected.id) return l;
       // Capture a stable base location for replay (origin before any movement).
@@ -1932,7 +2079,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   if (view === "detail" && selected) {
     return (
       <>
-        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
+        {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} allLots={lots} shipments={shipments} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
 
         {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
           setLots(prev => prev.map(l => l.id === sortingLot.id ? { ...l, serviceEvents: [...(l.serviceEvents || []), { id: nextId(), type: "SORTING", kg, date, note }] } : l));
@@ -1944,16 +2091,30 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {claimLot && <ClaimModal
           lot={lots.find(l => l.id === claimLot.id) || claimLot}
           po={(extPOs || []).find((p: any) => p.number === (lots.find(l => l.id === claimLot.id) || claimLot).poRef) || null}
-          existing={((lots.find(l => l.id === claimLot.id) || claimLot).claims || [])[0] || null}
+          {...{} /* v6.48.0: the claim document comes from the claims store now */}
+          existing={(() => {
+            const lotNo = (lots.find(l => l.id === claimLot.id) || claimLot).number;
+            const mine = claimsForLot(extClaims || [], lotNo).filter((c: any) => c.direction === "RECOVERY");
+            const c = mine[0];
+            if (!c) return null;
+            // adapt the stored record back to the shape ClaimModal edits
+            return { id: c.id, number: c.number, date: c.date, lines: c.costLines || [],
+              defectType: c.defectType, defectPct: c.defectPct, soldInMarket: c.soldInMarket,
+              recoveredEGP: c.recoveredEGP, egpPerEur: c.egpPerEur, eurPlnRate: c.plnPerEur,
+              affectedKg: (c.subjects || []).find((x: any) => x.kind === "LOT" && String(x.ref) === String(lotNo))?.affectedKg ?? "",
+              status: c.status === "Draft" ? "Draft" : "Issued", notes: c.notes,
+              requestedCreditEUR: c.requestedEUR };
+          })()}
           onCancel={() => setClaimLot(null)}
           onSave={(claim, comp, issue) => {
             // Batch 6a (BP-55b): issuing assigns the CLM number and drafts the
             // incoming credit note against the producer (idempotent by number).
             if (issue && !claim.number) {
-              claim = { ...claim, number: nextClaimNumber(lots, new Date().getFullYear()) };
+              claim = { ...claim, number: nextClaimNumber(extClaims || [], new Date().getFullYear()) };
             }
             if (issue) claim = { ...claim, status: "Issued", requestedCreditEUR: comp.creditNoteEUR, totalCostEUR: comp.totalCostEUR, defectValueEUR: comp.defectValueEUR, recoveredEUR: comp.recoveredEUR };
             const lotNow = lots.find(l => l.id === claimLot.id) || claimLot;
+            const poForClaim = (extPOs || []).find((p: any) => p.number === lotNow.poRef) || null;
             if (issue && extSetFinanceNotes) {
               const clmNo = claim.number;
               const claimForNote = claim;
@@ -1966,11 +2127,50 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                 return [note, ...(prev || [])];
               });
             }
+            // v6.48.0 (Phase 1): the claim DOCUMENT lives in the claims store now.
+            // The old code wrote it into lot.claims[] with a filter that dropped
+            // every existing claim whenever a new one was saved (defect D1), and a
+            // lot can genuinely carry more than one claim. The lot keeps only what
+            // is inventory truth: the CLAIM movement and claimedKg.
+            const withId = claim.id ? claim : { ...claim, id: nextId() };
+            if (typeof extSetClaims === "function") {
+              const lotNoForClaim = lotNow.number;
+              extSetClaims((prev: any[]) => {
+                const list = prev || [];
+                const idx = list.findIndex((c: any) => String(c.id) === String(withId.id) || (withId.number && String(c.number) === String(withId.number)));
+                const record = {
+                  ...blankClaim(),
+                  ...(idx >= 0 ? list[idx] : {}),
+                  id: idx >= 0 ? list[idx].id : withId.id,
+                  number: withId.number || (idx >= 0 ? list[idx].number : ""),
+                  direction: "RECOVERY",
+                  respondent: { kind: "Supplier", contactId: poForClaim?.supplierId ?? null, name: poForClaim?.supplier?.name || "" },
+                  cause: "Quality defect",
+                  subjects: [
+                    { kind: "LOT", ref: lotNoForClaim, affectedKg: parseFloat(String(withId.affectedKg || "")) || undefined },
+                    ...(lotNow.poRef ? [{ kind: "PO", ref: lotNow.poRef }] : []),
+                  ],
+                  date: withId.date || localTodayISO(),
+                  costLines: withId.lines || [],
+                  defectType: withId.defectType || "",
+                  defectPct: withId.defectPct ?? "",
+                  soldInMarket: withId.soldInMarket ?? null,
+                  recoveredEGP: withId.recoveredEGP ?? "",
+                  egpPerEur: withId.egpPerEur ?? "",
+                  plnPerEur: withId.eurPlnRate ?? "",
+                  totalCostEUR: comp?.totalCostEUR ?? 0,
+                  defectValueEUR: comp?.defectValueEUR ?? 0,
+                  recoveredEUR: comp?.recoveredEUR ?? 0,
+                  requestedEUR: comp?.creditNoteEUR ?? withId.requestedCreditEUR ?? 0,
+                  status: issue ? "Submitted" : "Draft",
+                  notes: withId.notes || "",
+                };
+                return idx >= 0 ? list.map((c: any, i: number) => i === idx ? record : c) : [...list, record];
+              });
+            }
             setLots(prev => prev.map(l => {
               if (l.id !== claimLot.id) return l;
-              const others = (l.claims || []).filter((c: any) => c.id && claim.id ? c.id !== claim.id : false);
-              const withId = claim.id ? claim : { ...claim, id: nextId() };
-              let next = { ...l, claims: [withId, ...others] };
+              let next = { ...l };
               // Batch 6c (BP-33): issuing a claim with an affected quantity logs a
               // CLAIM movement — client-side, NO warehouse stock effect (reducer
               // semantics v6.18.10 #5) — so the lot's claimedKg reflects reality.
@@ -2027,6 +2227,9 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             if (close) setSettlementLot(null);
           }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
+          pos={extPOs}
+          allLots={lots}
+          lotClaims={claimsForLot(extClaims || [], selected?.number).filter((c: any) => c.direction === "RECOVERY")}
           lot={selected}
           onBack={() => { setView("list"); setSelectedId(null); }}
           onMove={() => { setEditingMovement(null); setMovementMode("movement"); setShowMovement(true); }}
@@ -2088,6 +2291,11 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {/* Filters — compact single row of dropdowns */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot, product, PO/SO, location…" style={{ flex: "1 1 220px", minWidth: 190, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)} title="Sort by stock age (arrival date of the first receipt)" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff" }}>
+            <option value="default">Sort: default</option>
+            <option value="oldest">Oldest stock first</option>
+            <option value="newest">Newest stock first</option>
+          </select>
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             <option value="inPossession">In our possession</option>
             <option value="all">All statuses</option>
@@ -2107,14 +2315,16 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {/* Table */}
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 140px 130px 120px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-            {["LOT", "PRODUCT", "KL.", "STATUS", "LOCATION & FLOW", "AVAIL/PHYSICAL", "VALUE PLN", "LINKED"].map((h, i) => (
+            {/* v6.58.0: "LINKED" renamed LINKED DOCUMENTS; the quantity column now
+                 states which figure is which rather than a bare pair. */}
+            {["LOT", "PRODUCT", "KL.", "STATUS", "LOCATION & FLOW", "QUANTITY", "VALUE PLN", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No lots match the current filters.</div>}
           {filtered.map((l, idx) => {
             const cpk = costPerKg(l);
-            const res = lotReservations(l, liveSOs);
+            const res = lotReservations(l, liveSOs, { lots, shipments });
             const soList = soRefsFor(l, liveSOs, shipments);
             return (
               <div key={l.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 140px 130px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
@@ -2128,17 +2338,35 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                 </div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
+                  {/* v6.58.0: the supplier belongs here — "whose fruit is this"
+                      is asked far more often than the packaging. */}
+                  {(() => { const po = (extPOs || []).find((x: any) => String(x.number) === String(l.poRef));
+                    const sup = po?.supplier?.name || l.supplierName || "";
+                    return sup ? <div style={{ fontSize: 11.5, color: "#475569", fontWeight: 600 }}>{sup}</div> : null; })()}
                   <div style={{ fontSize: 11, color: "#AAA" }}>{l.size || "—"} · {l.origin || "—"} · {l.packaging}</div>
+                  {(() => { const d = lotArrivalDate(l); const age = lotAgeDays(l); return d ? (
+                    <div style={{ fontSize: 10.5, marginTop: 2 }}><span style={{ color: "#94A3B8" }}>arrived {d}</span> <span style={{ fontWeight: 700, color: ageColor(age as number) }}>· {age} d</span></div>
+                  ) : null; })()}
                 </div>
                 <div><QualityBadge quality={l.quality} /></div>
                 <div><StatusBadge status={l.status} /></div>
                 <div>
-                  <LocationPill locationId={l.locationId} />
-                  <div style={{ marginTop: 3 }}><FlowBadge flow={l.flow} compact /></div>
+                  <LocationPill locationId={l.locationId} lot={l} />
+                  <div style={{ marginTop: 3 }}><LotDirectionBadge lot={l} shipments={shipments} orders={liveSOs} compact /></div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} <span style={{ fontSize: 11, color: "#AAA", fontWeight: 400 }}>/ {fmtNum(l.physicalKg || 0)} kg</span></div>
-                  {res.totalReserved > 0 && <div style={{ fontSize: 10.5, color: "#7C3AED", fontWeight: 600 }}>{fmtNum(res.totalReserved)} reserved · {res.reservations.length} SO</div>}
+                  {/* v6.58.0: lead with the LOT'S OWN QUANTITY, whatever its
+                      booked/reserved/sold state. Previously a fully reserved lot
+                      showed "0 / 0" plus "19 422 reserved · 1 SO", which never
+                      answered "how much is in this lot". */}
+                  {(() => {
+                    const onHand = parseNum(l.physicalKg, 0) || parseNum(l.receivedKg, 0) || parseNum(l.expectedKg, 0);
+                    const isExpected = !parseNum(l.physicalKg, 0) && !parseNum(l.receivedKg, 0) && parseNum(l.expectedKg, 0) > 0;
+                    return <>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#111" }}>{fmtNum(onHand)} kg{isExpected ? <span style={{ fontSize: 10, color: "#B45309", fontWeight: 600 }}> expected</span> : null}</div>
+                      <div style={{ fontSize: 10.5, color: "#64748B" }}>{fmtNum(res.liveAvailable)} free · {fmtNum(res.totalReserved)} reserved</div>
+                    </>;
+                  })()}
                   {l.damagedKg > 0 && <div style={{ fontSize: 10.5, color: "#DC2626", fontWeight: 600 }}>{fmtNum(l.damagedKg)} damaged</div>}
                 </div>
                 <div>
@@ -2146,7 +2374,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                   <div style={{ fontSize: 10, color: "#AAA" }}>{fmtMoney(cpk)}/kg</div>
                 </div>
                 <div>
-                  {l.poRef && <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}>{l.poRef}</div>}
+                  {l.poRef && <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={l.poRef} cancelledSet={cancelledRefs} /></div>}
                   {soList.slice(0, 2).map(s => (
                     <div key={s.number} style={{ fontSize: 11, color: "#15803D", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}>{s.number}</div>
                   ))}

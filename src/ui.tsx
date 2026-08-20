@@ -42,9 +42,31 @@ export function SmallButton({ children, onClick, kind = "default", disabled = fa
   return <button disabled={disabled} title={title} onClick={onClick} style={{ padding: "7px 11px", borderRadius: 7, border, background: bg, color, fontSize: 12, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{children}</button>;
 }
 
+
+// ── v6.35.1: system-wide struck-through rendering for cancelled/voided documents ──
+// Documents are soft-cancelled (kept on record), never hard-deleted. Anywhere a doc
+// number is shown as a reference, wrap it in <DocRef> so a cancelled one is visibly
+// voided (red strike-through) rather than looking live.
+export function cancelledDocSet(...lists: any[][]): Set<string> {
+  const s = new Set<string>();
+  lists.forEach(list => (list || []).forEach((d: any) => {
+    if (d && d.status === "Cancelled" && d.number != null) s.add(String(d.number));
+  }));
+  return s;
+}
+
+export function DocRef({ num, cancelledSet, style = {}, prefix = "" }: any) {
+  if (num == null || num === "") return null;
+  const cancelled = cancelledSet && cancelledSet.has(String(num));
+  const struck = cancelled
+    ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px", color: "#B91C1C", opacity: 0.8 }
+    : {};
+  return <span title={cancelled ? "Cancelled — kept on record, no longer active" : undefined} style={{ ...style, ...struck }}>{prefix}{num}</span>;
+}
+
 // ── In-app dialogs (P2-6) ────────────────────────────────────────────────────
 
-function DialogShell({ tone, title, message, buttons }: any) {
+function DialogShell({ tone, title, message, buttons, input = null }: any) {
   const accent = tone === "danger" ? "#DC2626" : tone === "warn" ? "#D97706" : "#2563EB";
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 9000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -54,6 +76,7 @@ function DialogShell({ tone, title, message, buttons }: any) {
           <div style={{ fontSize: 14, fontWeight: 800, color: "#111" }}>{title}</div>
         </div>
         <div style={{ padding: "8px 20px 16px", fontSize: 12.5, color: "#444", lineHeight: 1.55, whiteSpace: "pre-line" }}>{message}</div>
+        {input && <div style={{ padding: "0 20px 16px" }}>{input}</div>}
         <div style={{ padding: "12px 20px", background: "#F8FAFC", display: "flex", justifyContent: "flex-end", gap: 8 }}>{buttons}</div>
       </div>
     </div>
@@ -68,11 +91,18 @@ function DialogShell({ tone, title, message, buttons }: any) {
  */
 export function useConfirm() {
   const [dlg, setDlg] = useState<any>(null);
+  const [inputVal, setInputVal] = useState("");
   const resolver = useRef<any>(null);
 
   const close = useCallback((result: boolean) => {
     setDlg(null);
     if (resolver.current) { resolver.current(result); resolver.current = null; }
+  }, []);
+
+  // v6.42.0 (P2-6): promise-based prompt — resolves to the entered string, or null on cancel.
+  const closePrompt = useCallback((val: string | null) => {
+    setDlg(null);
+    if (resolver.current) { resolver.current(val); resolver.current = null; }
   }, []);
 
   const confirm = useCallback((opts: any) => new Promise<boolean>(res => {
@@ -85,16 +115,32 @@ export function useConfirm() {
     setDlg({ kind: "alert", tone: opts.tone || "info", title: opts.title || "Notice", message: opts.message || "", confirmLabel: opts.okLabel || "OK" });
   }), []);
 
+  const prompt = useCallback((opts: any) => new Promise<string | null>(res => {
+    resolver.current = res;
+    setInputVal(opts.defaultValue || "");
+    setDlg({ kind: "prompt", tone: opts.tone || "info", title: opts.title || "Enter a value", message: opts.message || "", confirmLabel: opts.confirmLabel || "OK", cancelLabel: opts.cancelLabel || "Cancel", placeholder: opts.placeholder || "" });
+  }), []);
+
   const dialogNode = dlg ? (
-    <DialogShell tone={dlg.tone} title={dlg.title} message={dlg.message} buttons={
-      dlg.kind === "confirm" ? (<>
-        <SmallButton onClick={() => close(false)}>{dlg.cancelLabel}</SmallButton>
-        <SmallButton kind={dlg.tone === "danger" ? "red" : "dark"} onClick={() => close(true)}>{dlg.confirmLabel}</SmallButton>
-      </>) : (
-        <SmallButton kind="dark" onClick={() => close(true)}>{dlg.confirmLabel}</SmallButton>
-      )
-    } />
+    <DialogShell tone={dlg.tone} title={dlg.title} message={dlg.message}
+      input={dlg.kind === "prompt" ? (
+        <input autoFocus value={inputVal} placeholder={dlg.placeholder}
+          onChange={(e: any) => setInputVal(e.target.value)}
+          onKeyDown={(e: any) => { if (e.key === "Enter") closePrompt(inputVal); if (e.key === "Escape") closePrompt(null); }}
+          style={{ width: "100%", boxSizing: "border-box", border: "1px solid #D1D5DB", borderRadius: 8, padding: "8px 11px", fontSize: 13 }} />
+      ) : null}
+      buttons={
+        dlg.kind === "confirm" ? (<>
+          <SmallButton onClick={() => close(false)}>{dlg.cancelLabel}</SmallButton>
+          <SmallButton kind={dlg.tone === "danger" ? "red" : "dark"} onClick={() => close(true)}>{dlg.confirmLabel}</SmallButton>
+        </>) : dlg.kind === "prompt" ? (<>
+          <SmallButton onClick={() => closePrompt(null)}>{dlg.cancelLabel}</SmallButton>
+          <SmallButton kind="dark" onClick={() => closePrompt(inputVal)}>{dlg.confirmLabel}</SmallButton>
+        </>) : (
+          <SmallButton kind="dark" onClick={() => close(true)}>{dlg.confirmLabel}</SmallButton>
+        )
+      } />
   ) : null;
 
-  return { confirm, alert, dialogNode };
+  return { confirm, alert, prompt, dialogNode };
 }

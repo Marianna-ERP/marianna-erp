@@ -1,3 +1,4 @@
+import { migrateFlowCleanup } from "./flowCleanup.migration";
 // ─── Local-storage-backed React state hook ──────────────────────────────────
 //
 // Drop-in replacement for useState. Reads initial value from localStorage if
@@ -18,12 +19,16 @@
 import { useState, useEffect } from "react";
 import { APP_VERSION } from "./version";
 
-export const STORAGE_VERSION = 1;
+export const STORAGE_VERSION = 2; // v6.37.0: flow-model retirement (migration 2)
 const NAMESPACE = "marianna-erp";
 
 function storageKey(name: string): string {
   return `${NAMESPACE}:v${STORAGE_VERSION}:${name}`;
 }
+// v6.38.0: exported so side-stores (locations.ts) always address the CURRENT
+// version's keys instead of hardcoding "v1" — the bug that made post-migration
+// Settings edits land in the stale safety copy.
+export function dataKey(name: string): string { return storageKey(name); }
 
 function readFromStorage<T>(name: string, fallback: T): T {
   if (typeof window === "undefined" || !window.localStorage) return fallback;
@@ -99,7 +104,9 @@ export function storageUsage(): { perKey: Array<{ key: string; kb: number }>; to
 // current-version keys are absent but an older version's exist, we migrate
 // forward and keep the old keys untouched as a safety copy.
 export const MIGRATIONS: Record<number, (all: Record<string, any>) => Record<string, any>> = {
-  // 2: (all) => ({ ...all, invoices: (all.invoices || []).map(addPaymentEvents) }),
+  // v6.37.0: retire the legacy flow model from stored data (backfill incoterms,
+  // bake template journeys for never-shipped legacy lots, drop the flow key).
+  2: migrateFlowCleanup,
 };
 
 export function runMigrationsIfNeeded(): { migrated: boolean; from?: number } {
@@ -156,7 +163,13 @@ export const DATA_KEYS = [
   "invoices", "financeNotes",
   // v6.18.16: the controlled Item/Variety product catalog.
   "productCatalog",
-];
+  // v6.44.0 (test-round #7): packaging types (box capacity + tare) for gross weight.
+  "packagingTypes",
+  // v6.48.0: claims are their own document now (were nested in lot.claims[]).
+  "claims",
+  // v6.56.0: load plans — real data, must travel with export/import and backup.
+  "loadPlans",
+ "auditLog"];
 
 export function exportAllData(): string {
   const data: any = {
