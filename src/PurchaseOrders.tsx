@@ -1472,10 +1472,12 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   const dead = (nums || []).filter((n: string) => cancelledSet && cancelledSet.has(String(n))).length;
   return (
     <div style={{ color }} title={title}>
-      {icon} {nums.map((n: string, i: number) => (
-        <span key={String(n)}>
-          <DocRef num={n} cancelledSet={cancelledSet} />{i < nums.length - 1 ? ", " : ""}
-        </span>
+      {/* v6.65.0 (owner request): one document per row, like the SO list. */}
+      {nums.map((n: string, i: number) => (
+        <div key={String(n)} style={{ whiteSpace: "nowrap", lineHeight: 1.5 }}>
+          {i === 0 ? icon + " " : <span style={{ visibility: "hidden" }}>{icon} </span>}
+          <DocRef num={n} cancelledSet={cancelledSet} />
+        </div>
       ))}
       {dead > 0 && (
         <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 4, padding: "1px 5px" }}

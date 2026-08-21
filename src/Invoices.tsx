@@ -504,7 +504,9 @@ export default function Invoices(props: any) {
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>Invoices</div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button onClick={() => newInvoice("SALES")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Sales invoice</button>
+          {/* v6.65.0 (owner question): "+ Sales invoice" removed — every SINV is issued
+              from its Sales Order (Issue invoice on the SO), so the register can never
+              hold a sales invoice with no order behind it. Cost invoices remain manual. */}
           <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Cost invoice</button>
           <button onClick={() => setShowImport(true)} title="Fetch received cost invoices from Fakturownia, tag them (goods / freight / customs / warehouse / overhead) and post them where they belong." style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Import from Fakturownia</button>
           {showImport && <ImportFakturowniaModal invoices={invoices} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
@@ -618,7 +620,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
             );
           })()}
           {inv.kind === "SALES" && inv.paymentStatus === "Issued" && <button onClick={onSend} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#0284C7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>→ Send to Fakturownia</button>}
-          {inv.kind === "SALES" && inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark Issued</button>}
+          {/* v6.65.0: duplicate "Mark Issued" removed — the status buttons above are the single path. */}
           <button onClick={onNote} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>↩ Credit/Debit note</button>
         </div>
       </div>

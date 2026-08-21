@@ -115,9 +115,18 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
     // previously only the product name and quantity were copied, so the invoice
     // showed amounts with no idea what had been sold.
     positions: arr(order.items).map((it: any) => {
-      const qty = n(it.qty), price = n(it.unitPrice);
+      // v6.65.0 (D-18): a box-priced line invoices in ITS unit — quantity is the
+      // box count, unitPrice per box; the kilos ride along in the description.
+      // (Previously quantity copied it.qty, which is empty until derived, so a
+      // box line produced a 0-quantity position and Fakturownia rejected it.)
+      const isBox = String(it.pricingUnit || "") === "box";
+      const boxes = Math.round(n(it.boxes));
+      const kgQty = n(it.qty) || (isBox && n(it.kgPerBox) > 0 ? r2(boxes * n(it.kgPerBox)) : 0);
+      const qty = isBox && boxes > 0 ? boxes : kgQty;
+      const price = n(it.unitPrice);
       const lineNet = r2(qty * price);
-      const descr = [it.product, it.variety, it.size ? `cal. ${it.size}` : "", it.quality ? `kl. ${it.quality}` : ""]
+      const descr = [it.product, it.variety, it.size ? `cal. ${it.size}` : "", it.quality ? `kl. ${it.quality}` : "",
+        isBox && kgQty ? `${boxes} × ${it.packaging || "box"} = ${kgQty.toLocaleString("pl-PL")} kg` : ""]
         .filter(Boolean).join(" · ");
       return {
         name: descr || it.product || "",
@@ -125,7 +134,7 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
         size: it.size || "", quality: it.quality || "",
         origin: it.origin || "", cnCode: it.cnCode || "",
         packaging: it.packaging || "", pallets: n(it.pallets) || undefined,
-        quantity: qty, unit: it.unit || "kg",
+        quantity: qty, unit: isBox ? "box" : (it.unit || "kg"),
         unitPrice: price || undefined,
         netTotal: lineNet || undefined,
         vatRate,
@@ -318,14 +327,27 @@ export function migrateLegacyInvoices(opts: {
 // Builds the POST /invoices.json body for a SALES invoice. Auto-numbering (number:null).
 // gov_save_and_send defaults OFF — KSeF stays Fakturownia-managed for now.
 export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean }) {
-  const positions = arr<InvoicePosition>(inv.positions).map(p => ({
-    name: p.name || "—",
-    quantity: n(p.quantity) || 1,
-    quantity_unit: p.unit || "kg",
-    tax: n(p.vatRate),
-    total_price_gross: p.grossTotal != null ? r2(n(p.grossTotal)) : undefined,
-    total_price_net: p.grossTotal == null && p.netPrice != null ? r2(n(p.netPrice) * (n(p.quantity) || 1)) : undefined,
-  }));
+  // v6.65.0 (D-07b): Fakturownia requires total_price_gross per position and her
+  // first live push proved a position can arrive without stored totals. The
+  // payload now derives them in order of preference — stored gross → stored net
+  // ×(1+VAT) → quantity×unitPrice×(1+VAT) → the invoice's own gross when it is
+  // a single-position document — and never sends a blank.
+  const positions = arr<InvoicePosition>(inv.positions).map((p, _i, all) => {
+    const qty = n(p.quantity) || 1;
+    const vat = n(p.vatRate ?? inv.vatRate);
+    let gross = p.grossTotal != null ? r2(n(p.grossTotal)) : 0;
+    if (!gross && (p as any).netTotal != null) gross = r2(n((p as any).netTotal) * (1 + vat / 100));
+    if (!gross && (p as any).unitPrice != null) gross = r2(qty * n((p as any).unitPrice) * (1 + vat / 100));
+    if (!gross && (p as any).netPrice != null) gross = r2(qty * n((p as any).netPrice) * (1 + vat / 100));
+    if (!gross && all.length === 1) gross = r2(n(inv.grossAmount));
+    return {
+      name: p.name || "—",
+      quantity: qty,
+      quantity_unit: p.unit || "kg",
+      tax: vat,
+      total_price_gross: gross || r2(n(inv.grossAmount) / (all.length || 1)),
+    };
+  }).filter(p => n(p.total_price_gross) > 0);
   // If no per-line positions exist (migrated invoices), fall back to one summary line.
   const safePositions = positions.length ? positions : [{
     name: inv.notes?.slice(0, 80) || "Sales invoice", quantity: 1, quantity_unit: "szt.",

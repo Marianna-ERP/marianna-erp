@@ -40,7 +40,13 @@ export function kgPerBoxForLine(line: any, types: PackagingType[]): number {
   const pk = findPackaging(types, line?.packagingId)
     || findPackaging(types, line?.packaging)
     || defaultPackagingForProduct(types, line?.product);
-  return pk && num(pk.capacityKg) > 0 ? num(pk.capacityKg) : 0;
+  if (pk && num(pk.capacityKg) > 0) return num(pk.capacityKg);
+  // v6.65.0 (D-18): a weight WRITTEN IN the packaging text ("5 kg carton box")
+  // is a stated fact, not a guess — lines whose packaging isn't in the catalog
+  // (free-typed) were resolving to 0 kg/box and zeroing the whole document chain.
+  const m = String(line?.packaging || "").match(/(\d+(?:[.,]\d+)?)\s*kg\b/i);
+  if (m) { const v = num(m[1]); if (v > 0) return v; }
+  return 0;
 }
 
 /** How this line is priced. Absent = kg, which is every existing line. */

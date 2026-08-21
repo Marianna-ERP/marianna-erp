@@ -137,7 +137,12 @@ function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipment
 
   (order.items || []).forEach((it: any, idx: number) => {
     const qty = safe(it.qty);
-    const price = safe(it.unitPrice);
+    // v6.65.0 (D-19): on a box-priced line unitPrice is PER BOX; the engine works
+    // in kg, so the effective per-kg price is unitPrice / kgPerBox (materialised
+    // on the line at save). kg-priced lines are untouched.
+    const perKg = String(it.pricingUnit || "") === "box" && safe(it.kgPerBox) > 0
+      ? safe(it.unitPrice) / safe(it.kgPerBox) : safe(it.unitPrice);
+    const price = Math.round(perKg * 10000) / 10000;
     const lineTotal = qty * price;
     let label = `${it.product || "—"} · ${qty.toLocaleString("pl-PL")} kg @ ${price} ${order.currency || "PLN"}/kg`;
     let amountSO = lineTotal;

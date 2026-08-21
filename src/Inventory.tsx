@@ -1186,7 +1186,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, tracePOs = [], traceInvoices = [], lotClaims = [] }: any) {
+function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [] }: any) {
   const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1213,6 +1213,9 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
           {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
             <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
           )}
+          {typeof onDirectReceive === "function" && lot.status === "Expected" && !(lot.movements || []).some((m: any) => !m.voided) && (
+            <button onClick={onDirectReceive} title="For DDP / direct arrivals with no shipment of ours: posts the receipt movement so the stock becomes available." style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📥 Receive into stock (direct/DDP)</button>
+          )}
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
         </div>
       </div>
@@ -1234,7 +1237,9 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
               {/* v6.59.0: the supplier — asked far more often than the packaging. */}
               {(() => { const po = (pos || []).find((x: any) => String(x.number) === String(lot.poRef));
                 const sup = po?.supplier?.name || lot.supplierName || "";
-                return sup ? <div style={{ fontSize: 13, fontWeight: 700, color: "#334155", marginBottom: 2 }}>{sup}</div> : null; })()}
+                // v6.65.0 (owner request): the supplier must read as a different kind of
+                // information than the product — amber, smaller caps, not near-black.
+                return sup ? <div style={{ fontSize: 11.5, fontWeight: 700, color: "#B45309", letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 2 }}>{sup}</div> : null; })()}
               <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
               <div style={{ marginTop: 10 }}><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} /></div>
             </div>
@@ -2246,6 +2251,26 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
           onVoidMovement={voidMovement}
           onInspect={() => setShowInspection(true)}
           onReturn={() => setShowReturn(true)}
+          onDirectReceive={async () => {
+            // v6.65.0 (D-20, DDP): a PO bought DDP has no shipment of ours — the
+            // supplier delivers. The PO says Arrived while the lot stays Expected
+            // forever, because only shipment postings created receipts. This posts
+            // the receipt directly: one IN movement for the expected kilos at the
+            // lot's destination, then the standard recompute. Fully visible and
+            // voidable in the movement history like any other receipt.
+            const kg = parseFloat(String(selected?.expectedKg)) || 0;
+            if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No expected quantity", message: "This lot has no expected kilos to receive — set the PO line quantity first." }); return; }
+            const ok = await uiConfirm({ tone: "warn", title: `Receive ${kg.toLocaleString("pl-PL")} kg into stock?`,
+              message: `Direct receipt (no shipment) for ${selected.number} — use this for DDP / delivered-by-supplier arrivals. The stock becomes available at the lot's location and the movement appears in the history (voidable).`, confirmLabel: "Receive into stock" });
+            if (!ok) return;
+            setLots((prev: any[]) => prev.map((l: any) => {
+              if (l.id !== selected.id) return l;
+              const mv = { id: nextId(), date: today, type: "IN", qtyKg: kg, toId: l.locationId ?? null, soRef: null, shipmentRef: null, note: `Direct receipt (DDP) — ${l.poRef || "no PO"}` };
+              const next = recomputeLotFromMovements({ ...l }, [...(l.movements || []), mv]);
+              setSelectedId(next.id);
+              return next;
+            }));
+          }}
           onDelete={deleteLot}
           liveSOs={liveSOs}
           shipments={extShipments}

@@ -2406,6 +2406,17 @@ export default function SalesOrders({
   }
 
   async function saveOrder(o) {
+    // v6.65.0 (D-18): kilos are the single stored quantity (v6.61 ruling), so a
+    // box-priced line must land in storage with its derived kg in `qty` and its
+    // box weight in `kgPerBox` — every engine (reservations, margin, settlement,
+    // allocation) reads those raw fields and must never learn about boxes.
+    o = { ...o, items: (o.items || []).map((it: any) => {
+      if (pricingUnitOf(it) !== "box") return it;
+      const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
+      if (kgPerBox <= 0) return it; // unresolved — the form already warns loudly
+      const boxes = Math.round(parseFloat(String(it.boxes || 0)) || 0);
+      return { ...it, kgPerBox, qty: Math.round(boxes * kgPerBox * 1000) / 1000 };
+    }) };
     // Batch 6b: hard confirm-gate — no SO past Draft without its sell terms.
     const termsMissing = soTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {

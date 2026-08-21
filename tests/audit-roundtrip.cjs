@@ -592,3 +592,51 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("D-17 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.65.0 REGRESSIONS — box pricing closed end-to-end (D-18/D-19) + payload (D-07b) ══
+(function v665(){
+  const margin = B("marginCalculations.js");
+  console.log("\n══ 20. v6.65.0: box-priced line survives the whole document chain ══");
+  const pu = B("pricingUnit.domain.js");
+  const HER_LINE = { product: "Capsicum", packaging: "5 kg carton box", pricingUnit: "box", boxes: 1600, unitPrice: 59, qty: "", unit: "Kg" };
+  t("D-18: a weight written in the packaging text resolves the box weight (no catalog entry needed)", () => {
+    eq(pu.kgPerBoxForLine(HER_LINE, []), 5, "'5 kg carton box' states 5 kg");
+    eq(pu.kgPerBoxForLine({ packaging: "torebka 2,5kg" }, []), 2.5, "comma decimals too");
+    eq(pu.kgPerBoxForLine({ packaging: "carton box" }, []), 0, "no stated weight → still refuses to guess");
+  });
+  t("D-18: lineQuantity derives 8000 kg from her actual line", () => {
+    const q = pu.lineQuantity(HER_LINE, []);
+    eq(q.unresolved, false); eq(q.qtyKg, 8000); eq(q.boxes, 1600); eq(q.kgPerBox, 5);
+  });
+  t("D-19: margin prices the box line per kg — revenue 94 400, not 472 000", () => {
+    const materialised = { ...HER_LINE, qty: 8000, kgPerBox: 5, sourceType: "STOCK", sourceRef: "LOT-1" };
+    const order = { number: "SO-17", status: "Confirmed", currency: "PLN", fxRate: 1, items: [materialised] };
+    const m = margin.computeSOMargin(order, [], [], [], "forecast");
+    approx(m.revenuePLN, 94400, "1600 boxes × 59 = 8000 kg × 11.80");
+  });
+  t("D-19: settlement prices the box line per kg the same way", () => {
+    const materialised = { ...HER_LINE, qty: 8000, kgPerBox: 5, sourceType: "STOCK", sourceRef: "LOT-1" };
+    const lot = { number: "LOT-1", expectedKg: 8000, costs: [] };
+    const s = cons.computeLotSettlement(lot, [{ number: "SO-17", status: "Confirmed", currency: "PLN", fxRate: 1, items: [materialised] }], 8, []);
+    approx(s.grossPLN, 94400);
+  });
+  t("D-18: the SINV position speaks boxes — quantity 1600 @ 59, kilos in the description", () => {
+    const order = { number: "SO-17", status: "Delivered", currency: "PLN", fxRate: 1, client: { name: "X" },
+      items: [{ ...HER_LINE, qty: 8000, kgPerBox: 5 }] };
+    const draft = invc.salesInvoiceFromSODraft(order, { number: "FV/X", vatRate: 5 });
+    const p = draft.positions[0];
+    eq(p.quantity, 1600); eq(p.unit, "box");
+    approx(p.netTotal, 94400); approx(p.grossTotal, 99120);
+    ok(String(p.name).includes("8") && String(p.name).toLowerCase().includes("kg"), "kilos stated in the description");
+  });
+  t("D-07b: the payload NEVER sends a blank total_price_gross — even for a legacy 0-quantity position", () => {
+    const legacyBroken = { number: "FV2026/08/11", kind: "SALES", vatRate: 5, grossAmount: 99120, netAmount: 94400,
+      positions: [{ name: "Capsicum", quantity: 0, unit: "Kg", unitPrice: 59, vatRate: 5 }] };
+    const body = invc.buildFakturowniaPayload(legacyBroken, { apiToken: "t" });
+    const ps = body.invoice.positions;
+    ok(ps.length >= 1);
+    ps.forEach(p => ok(p.total_price_gross > 0, "no blank totals: " + JSON.stringify(p)));
+  });
+  console.log("v6.65.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
