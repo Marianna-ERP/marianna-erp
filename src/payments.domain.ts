@@ -60,10 +60,14 @@ function statusFor(inv: any, paid: number): string {
 }
 
 /** Append a payment event; recomputes the derived paidAmount + paymentStatus. */
-export function applyPaymentEvent(inv: any, evt: { date: string; amount: any; method?: string; note?: string }, nextId: () => any): any {
+export function applyPaymentEvent(inv: any, evt: { date: string; amount: any; method?: string; note?: string; source?: string }, nextId: () => any): any {
   const events = [...normalizeInvoicePayments(inv), {
     id: nextId(), date: String(evt.date || "").slice(0, 10), amount: r2(n(evt.amount)),
     method: evt.method || "Bank transfer", note: evt.note || "",
+    // v6.67.0 (D-33): bank-sourced events carry bank:{account}:{lineId} so a
+    // re-imported statement can never double-post — same idempotency discipline
+    // as claim: and WHINV- sources.
+    ...(evt.source ? { source: String(evt.source) } : {}),
   }];
   const paid = r2(events.reduce((s, p) => s + n(p.amount), 0));
   return { ...inv, payments: events, paidAmount: paid, paymentStatus: statusFor(inv, paid) };

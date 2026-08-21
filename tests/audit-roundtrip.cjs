@@ -683,3 +683,64 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.66.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.67.0 (D-33) — BANK RECONCILIATION, built against the owner's real statements ══
+(function v667(){
+  console.log("\n══ 22. v6.67.0: bank CSV parsers + receivables matcher ══");
+  const bank = B("bankReconciliation.domain.js");
+  const PKO = `"Operation date","Value date","Operation data","Operation type","Amount","Currency"
+"2026-08-18","2026-08-18","Title: EXTERNAL TRANSFER FEE|Account: 96 1020 1026 0000 1502 0511 6969|Transaction identifier: 67300503700122685","Fee","-1.50","PLN"
+"2026-08-14","2026-08-14","Counterparty account: 76 8003 0003 2002 0000 9634 0001|Counterparty name and address: GRUPA PRODUCENTOW OWOCOW|Title: FAKTURA NR FV2026/ 08/12 DZIEKUJEMY|Account: 96 1020 1026 0000 1502 0511 6969|Transaction identifier: 67260501100238396","Transfer","79380.00","PLN"
+"2026-08-18","2026-08-18","Counterparty account: 59 1090 2851|Counterparty name and address: MARIANNA HAZEM OSMAN, UL. DLUGA 29|Title: INTRA COMPANY TRANSFER|Account: 10 1020 1026 0000 1102 0511 7355|Transaction identifier: 67303601000001345","SEPA","-10000.00","EUR"`;
+  const SAN = `2026-08-21;01-08-2026;'07 1090 2851 0000 0001 4723 8128;MARIANNA HAZEM OSMAN UL. DLUGA 29;PLN;1519,28;257,78;5;
+07-08-2026;07-08-2026;ZAPLATA ZA TOWAR;BIEDRONKA SP Z OO;33 1090 1753 0000 0001 3737 6913;2560,03;2282,78;2;
+10-08-2026;10-08-2026;Oplata za prowadzenie rachunku;;;-25,00;257,78;1;`;
+
+  t("PKO parser: quoted commas, pipe-packed data, per-row currency, txid as identity", () => {
+    const p = bank.parseBankCSV(PKO);
+    eq(p.format, "PKO"); eq(p.lines.length, 3);
+    const credit = p.lines.find(l => l.amount > 0);
+    approx(credit.amount, 79380); eq(credit.currency, "PLN");
+    ok(credit.id.includes("67260501100238396"), "transaction identifier is the idempotency key");
+    ok(credit.title.includes("FV2026/ 08/12"), "wrapped title preserved raw");
+  });
+  t("Santander parser: header card row, dd-mm-yyyy, comma decimals, account currency", () => {
+    const p = bank.parseBankCSV(SAN);
+    eq(p.format, "SANTANDER"); eq(p.currency, "PLN"); eq(p.account.slice(0, 6), "071090");
+    const credit = p.lines.find(l => l.amount > 0);
+    approx(credit.amount, 2560.03); eq(credit.date, "2026-08-07");
+  });
+  const invs = [
+    { id: 12, kind: "SALES", number: "FV2026/08/12", paymentStatus: "Sent", currency: "PLN", grossAmount: 79380, paidAmount: 0, counterparty: { name: "Grupa Producentow Owocow" }, payments: [] },
+    { id: 13, kind: "SALES", number: "FV2026/08/13", paymentStatus: "Sent", currency: "PLN", grossAmount: 2688, paidAmount: 128, counterparty: { name: "Biedronka" }, payments: [] },
+  ];
+  t("rank ①: a WRAPPED invoice number in the title still matches (whitespace-proof)", () => {
+    const p = bank.parseBankCSV(PKO);
+    const m = bank.matchBankLines(p.lines, invs);
+    const hit = m.find(s => s.rank === "NUMBER");
+    ok(hit, "number match found despite 'FV2026/ 08/12' being broken by the bank's line wrap");
+    eq(hit.invoiceNumber, "FV2026/08/12");
+  });
+  t("rank ②: amount within ±0.05 + payer overlap (owner tolerance ruling)", () => {
+    const p = bank.parseBankCSV(SAN); // 2560,03 vs outstanding 2560,00 → within 0.05
+    const m = bank.matchBankLines(p.lines, invs);
+    const hit = m.find(s => s.rank === "AMOUNT+PARTY");
+    ok(hit, "±0.05 tolerance honoured regardless of currency"); eq(hit.invoiceNumber, "FV2026/08/13");
+  });
+  t("debit, fee and own-company lines are set aside (receivables first)", () => {
+    const p = bank.parseBankCSV(PKO);
+    const m = bank.matchBankLines(p.lines, invs);
+    eq(m.filter(s => s.rank === "IGNORED").length, 2, "fee + intra-company EUR transfer");
+  });
+  t("idempotency: a confirmed line is ALREADY on re-import; partials accumulate to Paid", () => {
+    const p = bank.parseBankCSV(SAN);
+    const credit = p.lines.find(l => l.amount > 0);
+    let inv = { ...invs[1] };
+    inv = pay.applyPaymentEvent(inv, bank.bankPaymentEvent(credit), deps.nextId);
+    approx(pay.outstandingAmount(inv), 0, "128 prior + 2560.03 covers 2688 (within tolerance handling upstream)");
+    const m2 = bank.matchBankLines(p.lines, [invs[0], inv]);
+    eq(m2.find(s => s.line.id === credit.id).rank, "ALREADY", "same statement re-imported cannot double-post");
+  });
+  console.log("v6.67.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

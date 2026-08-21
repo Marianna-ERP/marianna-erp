@@ -13,7 +13,8 @@
     "../src/loadPlan.domain.ts","../src/loadingProtocol.domain.ts","../src/marginCalculations.ts",
     "../src/numbers.ts","../src/packaging.domain.ts","../src/pricingUnit.domain.ts","../src/payments.domain.ts",
     "../src/productCatalog.ts","../src/receipts.domain.ts",
-    "../src/referenceGuards.ts","../src/salesOrders.domain.ts",
+    "../src/referenceGuards.ts",
+    "../src/bankReconciliation.domain.ts","../src/salesOrders.domain.ts",
     "../src/settlement.domain.ts","../src/shipments.domain.ts","../src/trace.domain.ts",
     "../src/tradeFlow.domain.ts","../src/types.ts","../src/warehouseCharges.ts"
   ]

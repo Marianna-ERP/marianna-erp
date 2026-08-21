@@ -1,4 +1,6 @@
 import { useConfirm } from "./ui";
+import { parseBankCSV, matchBankLines, bankPaymentEvent } from "./bankReconciliation.domain";
+import { applyPaymentEvent as bankApplyPaymentEvent } from "./payments.domain";
 import React, { useMemo, useState } from "react";
 import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { computeSOMargin } from "./marginCalculations";
@@ -129,6 +131,91 @@ function newCostTemplate(): OperationalCost {
 
 
 // ─── v6.9: RECEIVABLES & PAYABLES VIEW ──────────────────────────────────────
+
+// ── v6.67.0 (D-33): BANK STATEMENT IMPORT — receivables-first, one-click confirm ──
+// Owner rulings: CSV (PKO + Santander formats auto-detected), matches are NEVER
+// auto-posted (the Confirm click is the act), tolerance ±0.05 in any currency.
+// A confirmed line becomes a standard payment event with source bank:{lineId} —
+// re-importing the same statement can never double-post.
+function BankImportPanel({ invoices = [], setInvoices = null, nextId }: any) {
+  const [parsed, setParsed] = React.useState<any>(null);
+  const [done, setDone] = React.useState<Record<string, string>>({});
+  const [pick, setPick] = React.useState<Record<string, any>>({});
+  const fileRef = React.useRef<any>(null);
+  const suggestions = React.useMemo(() => parsed ? matchBankLines(parsed.lines, invoices) : [], [parsed, invoices]);
+
+  function onFile(f: any) {
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { setParsed(parseBankCSV(String(reader.result || ""))); setDone({}); setPick({}); };
+    reader.readAsText(f, "UTF-8");
+  }
+  function confirmLine(s: any, invoiceId: any) {
+    if (typeof setInvoices !== "function" || invoiceId == null) return;
+    const evt = bankPaymentEvent(s.line);
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => String(i.id) === String(invoiceId) ? bankApplyPaymentEvent(i, evt, nextId) : i));
+    setDone(d => ({ ...d, [s.line.id]: String(invoiceId) }));
+  }
+
+  const credits = suggestions.filter((s: any) => s.rank !== "IGNORED");
+  const ignored = suggestions.length - credits.length;
+  const fmtA = (n: number, c: string) => `${n.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${c}`;
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>🏦 Bank import — receivables</div>
+        <div style={{ fontSize: 11, color: "#888" }}>PKO & Santander CSV exports · every match takes your click — nothing posts itself</div>
+        <div style={{ marginLeft: "auto" }}>
+          <button onClick={() => fileRef.current?.click()} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Upload statement CSV</button>
+          <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(e: any) => onFile(e.target.files?.[0])} />
+        </div>
+      </div>
+      {parsed && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 11.5, color: "#555", marginBottom: 8 }}>
+            {parsed.format} · account …{String(parsed.account).slice(-6)} · {parsed.lines.length} lines ({ignored} debit/fee/own-transfer lines set aside — payables phase comes later){parsed.skipped ? ` · ${parsed.skipped} unparseable` : ""}
+          </div>
+          {credits.length === 0 && <div style={{ fontSize: 12, color: "#94A3B8", padding: 8 }}>No credit lines to match in this file.</div>}
+          {credits.map((s: any) => {
+            const doneInv = done[s.line.id];
+            const chosen = pick[s.line.id] ?? s.invoiceId;
+            const badge = s.rank === "NUMBER" ? ["invoice № in title", "#065F46", "#ECFDF5"]
+              : s.rank === "AMOUNT+PARTY" ? ["amount + payer", "#1D4ED8", "#EFF6FF"]
+              : s.rank === "AMOUNT" ? ["amount only — verify payer", "#B45309", "#FFFBEB"]
+              : s.rank === "ALREADY" ? ["already recorded", "#6B7280", "#F3F4F6"]
+              : ["no match — pick manually", "#B91C1C", "#FEF2F2"];
+            return (
+              <div key={s.line.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 4px", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
+                <div style={{ minWidth: 82, fontSize: 11.5, color: "#555" }}>{s.line.date}</div>
+                <div style={{ flex: "1 1 220px", minWidth: 200 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>{String(s.line.counterparty).slice(0, 46) || "—"}</div>
+                  <div style={{ fontSize: 10.5, color: "#94A3B8" }} title={s.line.title}>{String(s.line.title).slice(0, 70)}</div>
+                </div>
+                <div style={{ minWidth: 110, textAlign: "right", fontSize: 13, fontWeight: 800, color: "#16A34A", fontVariantNumeric: "tabular-nums" }}>{fmtA(s.line.amount, s.line.currency)}</div>
+                <span style={{ fontSize: 10, fontWeight: 800, color: badge[1], background: badge[2], borderRadius: 5, padding: "2px 8px" }} title={s.reason}>{badge[0]}</span>
+                {doneInv ? (
+                  <span style={{ fontSize: 11.5, fontWeight: 800, color: "#065F46" }}>✓ recorded on {(invoices.find((i: any) => String(i.id) === String(doneInv)) || {}).number}</span>
+                ) : s.rank === "ALREADY" ? null : (
+                  <>
+                    <select value={chosen ?? ""} onChange={(e: any) => setPick(p => ({ ...p, [s.line.id]: e.target.value }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, maxWidth: 260 }}>
+                      <option value="">— pick invoice —</option>
+                      {(s.invoiceId != null && !s.candidates.length ? [{ id: s.invoiceId, number: s.invoiceNumber, outstanding: null, counterparty: "" }] : s.candidates).map((c: any) => (
+                        <option key={String(c.id)} value={c.id}>{c.number}{c.outstanding != null ? ` · open ${c.outstanding.toLocaleString("pl-PL")}` : ""}{c.counterparty ? ` · ${c.counterparty}` : ""}</option>
+                      ))}
+                    </select>
+                    <button disabled={chosen == null || chosen === ""} onClick={() => confirmLine(s, chosen)} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: chosen != null && chosen !== "" ? "#16A34A" : "#CBD5E1", color: "#fff", fontSize: 12, fontWeight: 800, cursor: chosen != null && chosen !== "" ? "pointer" : "not-allowed" }}>Confirm receipt</button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
   const { alert: lvAlert, dialogNode: lvNode } = useConfirm(); // P2-6
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
@@ -174,6 +261,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
   return (
     <>
       {lvNode}
+      <BankImportPanel invoices={invoices} setInvoices={setInvoices} nextId={nextId} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#DC2626" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
