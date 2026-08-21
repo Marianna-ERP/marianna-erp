@@ -17,7 +17,9 @@
     "build:vercel": "CI=false react-scripts build",
     "typecheck": "tsc --noEmit",
     "verify": "tsc --noEmit && CI=true react-scripts build",
-    "test:engines": "tsc -p tests/tsconfig.json && node tests/run-engines.cjs"
+    "test:engines": "tsc -p tests/tsconfig.json && node tests/run-engines.cjs",
+    "test:matrix": "tsc -p tests/tsconfig.json && node tests/phase3-matrix.cjs",
+    "test:all": "tsc -p tests/tsconfig.json && node tests/run-engines.cjs && node tests/audit-roundtrip.cjs && node tests/phase3-matrix.cjs"
   },
   "browserslist": {
     "production": [
