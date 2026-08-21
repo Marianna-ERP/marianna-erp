@@ -350,3 +350,13 @@ export function findInvoiceNoCol(headers: string[], rows?: any[][]): number {
   }
   return -1;
 }
+
+
+/** v6.66.0 (D-30): what an import row duplicates — for the staging badge. */
+export function duplicateCostInvoiceInfo(number: string, invoices: any[]): { number: string; status: string; grossAmount: number; source: string } | null {
+  const nrm = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
+  const n = nrm(number);
+  if (!n) return null;
+  const hit = (invoices || []).find((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && nrm(i.number) === n);
+  return hit ? { number: hit.number, status: hit.paymentStatus, grossAmount: Number(hit.grossAmount) || 0, source: String(hit.source || "") } : null;
+}

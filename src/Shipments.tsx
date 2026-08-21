@@ -8,7 +8,7 @@ import LoadingProtocolModal from "./LoadingProtocolModal";
 import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } from "./loadingProtocol.domain";
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { lotStockCheck } from "./receipts.domain";
-import { carriedRefs } from "./shipments.domain";
+import { carriedRefs, overShipReport } from "./shipments.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -134,7 +134,8 @@ function isFreightCostType(type) {
 function freightTypeForMode(mode) {
   return mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight";
 }
-function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier) {
+function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier, contactsList = []) {
+  const nameOf = (id) => { const c = (contactsList || []).find((x) => String(x.id) === String(id)); return c ? c.name : ""; };
   return (legs || []).map((leg, idx) => {
     const amt = parseNum(leg.costAmount, 0);
     const cur = leg.costCurrency || fallbackCurrency || "PLN";
@@ -146,7 +147,8 @@ function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier) {
       supplierId: leg.carrierId || leg.forwarderId || fallbackSupplier || null,
       amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
       invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
-      notes: `${leg.mode} leg`,
+      // v6.66.0 (D-24): the line says WHO gets paid — the leg's own carrier/forwarder.
+      notes: `${leg.mode} leg ${idx + 1}${nameOf(leg.carrierId || leg.forwarderId) ? " — " + nameOf(leg.carrierId || leg.forwarderId) : ""}`,
     };
   });
 }
@@ -625,11 +627,11 @@ function norm(v) {
 
 
 // v6.3.0: every newly built shipment starts with the standard document checklist.
-function buildShipmentFromPO(po, opts, shipments, lots, governingSO = null) { return withStandardDocs(buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO)); }
-function buildShipmentFromSO(so, opts, shipments, lots) { return withStandardDocs(buildShipmentFromSO__raw(so, opts, shipments, lots)); }
+function buildShipmentFromPO(po, opts, shipments, lots, governingSO = null, contactsList = []) { return withStandardDocs(buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO, contactsList)); }
+function buildShipmentFromSO(so, opts, shipments, lots, contactsList = []) { return withStandardDocs(buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList)); }
 function buildManualShipment(opts, shipments) { return withStandardDocs(buildManualShipment__raw(opts, shipments)); }
 
-function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null) {
+function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null, contactsList = []) {
   const id = nextId();
   const number = nextShipmentNumber(shipments);
   // v6.29.0: the shipment owns the trade direction — seeded from the PO's
@@ -732,7 +734,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
     }];
   }
 
-  const costsFromLegs = freightCostsFromLegs(legs, currency, carrierId || forwarderId);
+  const costsFromLegs = freightCostsFromLegs(legs, currency, carrierId || forwarderId, contactsList);
 
   return {
     id,
@@ -776,7 +778,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
   };
 }
 
-function buildShipmentFromSO__raw(so, opts, shipments, lots) {
+function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) {
   // v6.45.0 (B): the shipment owns the trade direction — derived from its
   // governing SO (the from-PO builder already did this; this one never did,
   // which is why direct-export lots showed "Import").
@@ -877,7 +879,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
     notes: `Created from ${so.number}. Delivery to ${so.client?.name || "client"}.`,
     legs: soLegs,
     goods,
-    costs: freightCostsFromLegs(soLegs, currency, carrierId || forwarderId),
+    costs: freightCostsFromLegs(soLegs, currency, carrierId || forwarderId, contactsList),
     documents: [
       { id: 1, type: "Transport order", ref: "", status: "Required", date: "", notes: "Generate and send to carrier" },
       { id: 2, type: "CMR", ref: "", status: "Required", date: "", notes: "Original CMR required for billing" },
@@ -1169,9 +1171,9 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         ? linkedSOList.find(o => o.number === governingSoRef)
         : (governingSoRef === "__none__" ? null : (linkedSOList[0] || null));
       const soRefs = governing ? [governing.number] : [];
-      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing);
+      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing, contacts);
     }
-    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys }, shipments, lots);
+    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys }, shipments, lots, contacts);
     else sh = buildManualShipment(form, shipments);
     // v6.10 (#11/#14): for a DDP purchase we don't order the carrier and carry no
     // freight cost on the supplier→warehouse leg. Seed the first road leg's unit
@@ -1650,7 +1652,14 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           forwarderId: prev.forwarderId || null,
           plannedPickupDate: prev.loadingDate || todayISO(),
           plannedDeliveryDate: prev.expectedDeliveryDate || todayISO(),
-          vehicles: [],
+          // v6.66.0 (D-23): multimodal redundancy — what the truck carried IS what
+          // the container carries. Each unit of the new leg starts with the previous
+          // leg's weight, pallets and temp-recorder number (all editable, for the
+          // collapsed-pallet repack case).
+          vehicles: transportUnitsForLeg(last || {}).map((u: any) => ({
+            ...blankTransportUnit(prev.mode === "Sea" ? "Sea" : "Road"),
+            qtyKg: u.qtyKg || 0, pallets: u.pallets || 0, tempRecorderNo: u.tempRecorderNo || "",
+          })),
           notes: ""
         }]
       };
@@ -2848,7 +2857,14 @@ export default function Shipments({
     return { open: open.length, inTransit: inTransit.length, missingDocs, billingReady, unallocated };
   }, [shipments]);
 
-  function saveShipment(next) {
+  async function saveShipment(next) {
+    // v6.66.0 (owner ruling): over-shipping an SO is confirm-gated, not silent.
+    const over = overShipReport(next, shipments, extOrders || []);
+    if (over.length) {
+      const lines = over.map(o => `• ${o.soRef} · ${o.product}: ordered ${o.orderedKg.toLocaleString("pl-PL")} kg, already shipped ${o.alreadyKg.toLocaleString("pl-PL")}, this shipment adds ${o.thisKg.toLocaleString("pl-PL")} → OVER by ${o.exceedKg.toLocaleString("pl-PL")} kg`).join("\n");
+      const ok = await shConfirm({ tone: "danger", title: "This would ship MORE than was ordered", message: `${lines}\n\nThe same goods may already be on another live shipment. Ship anyway?`, confirmLabel: "Ship anyway", cancelLabel: "Go back" });
+      if (!ok) return;
+    }
     const { __isNew, ...clean } = next || {};
     if (__isNew) {
       setShipments(prev => [clean, ...prev]);
@@ -3021,6 +3037,12 @@ export default function Shipments({
       }
       if (status === "Closed") {
         patch.billingStatus = s.billingStatus === "Not ready" ? "Ready for supplier invoice" : s.billingStatus;
+      }
+      if (status === "Cancelled") {
+        // v6.66.0 (D-31): allocations are stripped on cancel, so the billing flag
+        // falls with them — "Cost allocated" on a cancelled shipment tripped
+        // STALE_BILLING_FLAG forever.
+        patch.billingStatus = "Not ready";
       }
       return patch;
     });

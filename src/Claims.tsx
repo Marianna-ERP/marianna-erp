@@ -315,7 +315,15 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div>
                     <Lbl>Direction</Lbl>
-                    <select value={selected.direction} onChange={e => patch(selected.id, { direction: e.target.value })} style={INP}>
+                    <select value={selected.direction} onChange={e => {
+                      // v6.66.0 (D-25): direction DETERMINES who can be on the other
+                      // side. A concession faces a Client; a recovery faces a
+                      // supplier/carrier/forwarder — never the other way round.
+                      const dirV = e.target.value;
+                      const k = selected.respondent?.kind || "Supplier";
+                      const fixedKind = dirV === "CONCESSION" ? "Client" : (k === "Client" ? "Supplier" : k);
+                      patch(selected.id, { direction: dirV, respondent: { ...(selected.respondent || {}), kind: fixedKind } });
+                    }} style={INP}>
                       {CLAIM_DIRECTIONS.map(d => <option key={d} value={d}>{DIR_STYLE[d].label} — {DIR_STYLE[d].hint}</option>)}
                     </select>
                   </div>
@@ -328,7 +336,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   <div>
                     <Lbl>Respondent — who is on the other side</Lbl>
                     <select value={selected.respondent?.kind || "Supplier"} onChange={e => patch(selected.id, { respondent: { ...(selected.respondent || {}), kind: e.target.value } })} style={INP}>
-                      {RESPONDENT_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
+                      {RESPONDENT_KINDS.filter((k: string) => selected.direction === "CONCESSION" ? k === "Client" : k !== "Client").map(k => <option key={k} value={k}>{k}</option>)}
                     </select>
                   </div>
                   <div>
@@ -434,6 +442,41 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
 
               <Card>
                 <SectionTitle>WHAT IT COVERS</SectionTitle>
+                {/* v6.66.0 (D-26): the root document drives the claim — picking it
+                    fills the respondent and shows what is being claimed and its value. */}
+                <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <select value="" onChange={e => {
+                    const [kind, ref] = String(e.target.value).split("::"); if (!ref) return;
+                    const add = (subs: any[]) => patch(selected.id, Object.assign({ subjects: [...(selected.subjects || []).filter((s: any) => s.ref !== ref), ...subs] },
+                      (() => {
+                        if (kind === "SO") { const o = (orders || []).find((x: any) => x.number === ref); const val = (o?.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (Number(it.boxes) || 0) : (Number(it.qty) || 0)) * (Number(it.unitPrice) || 0)), 0);
+                          return { direction: "CONCESSION", respondent: { kind: "Client", contactId: (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(o?.client?.name || "").trim().toLowerCase())?.id ?? null, name: o?.client?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (o?.items || []).map((it: any) => `${it.product} ${it.qty || it.boxes} ${it.pricingUnit === "box" ? "boxes" : "kg"} @ ${it.unitPrice}`).join(", ") + ` · document value ${val.toLocaleString("pl-PL")} ${o?.currency || "PLN"}` }; }
+                        if (kind === "PO") { const p = (pos || []).find((x: any) => x.number === ref); const val = (p?.items || []).reduce((a: number, it: any) => a + (Number(it.qty) || 0) * (Number(it.unitPrice) || 0), 0);
+                          return { direction: "RECOVERY", respondent: { kind: "Supplier", contactId: (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(p?.supplier?.name || "").trim().toLowerCase())?.id ?? null, name: p?.supplier?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (p?.items || []).map((it: any) => `${it.product} ${it.qty} kg @ ${it.unitPrice}`).join(", ") + ` · document value ${val.toLocaleString("pl-PL")} ${p?.currency || "PLN"}` }; }
+                        const sh = (shipments || []).find((x: any) => x.number === ref); const carrier = (contacts || []).find((c: any) => String(c.id) === String(sh?.carrierId || sh?.forwarderId));
+                        return { direction: "RECOVERY", respondent: { kind: sh?.forwarderId && !sh?.carrierId ? "Forwarder" : "Carrier", contactId: carrier?.id ?? null, name: carrier?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (sh?.goods || []).map((g: any) => `${g.product || g.lotRef} ${g.qtyKg} kg`).join(", ") };
+                      })()));
+                    add([{ kind, ref }]);
+                  }} style={{ ...INP, maxWidth: 420 }}>
+                    <option value="">+ Link root document (fills respondent & value)…</option>
+                    <optgroup label="Sales Orders">{(orders || []).filter((o: any) => o.status !== "Cancelled").map((o: any) => <option key={"SO" + o.number} value={"SO::" + o.number}>SO {o.number} · {o.client?.name}</option>)}</optgroup>
+                    <optgroup label="Purchase Orders">{(pos || []).filter((p: any) => p.status !== "Cancelled").map((p: any) => <option key={"PO" + p.number} value={"PO::" + p.number}>PO {p.number} · {p.supplier?.name}</option>)}</optgroup>
+                    <optgroup label="Shipments">{(shipments || []).filter((s: any) => s.status !== "Cancelled").map((s: any) => <option key={"SH" + s.number} value={"SHIPMENT::" + s.number}>SHP {s.number}</option>)}</optgroup>
+                  </select>
+                  {selected.direction === "RECOVERY" && (
+                    <select value={selected.parentClaimId || ""} onChange={e => patch(selected.id, { parentClaimId: e.target.value || null })} style={{ ...INP, maxWidth: 320 }} title="v6.66.0 (D-27): the concession claim that raised this recovery — optional; most recoveries stand alone.">
+                      <option value="">— triggered by client claim (optional) —</option>
+                      {(claims || []).filter((c: any) => c.direction === "CONCESSION" && c.id !== selected.id).map((c: any) => <option key={c.id} value={c.id}>{c.number} · {c.respondent?.name}</option>)}
+                    </select>
+                  )}
+                </div>
+                {selected.parentClaimId && (() => { const par = (claims || []).find((c: any) => String(c.id) === String(selected.parentClaimId));
+                  return par ? <div style={{ fontSize: 11.5, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>↳ Raised by client claim {par.number} ({par.status}) — {par.respondent?.name}</div> : null; })()}
+                {(claims || []).some((c: any) => String(c.parentClaimId) === String(selected.id)) && (
+                  <div style={{ fontSize: 11.5, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>
+                    ↱ Recoveries raised from this claim: {(claims || []).filter((c: any) => String(c.parentClaimId) === String(selected.id)).map((c: any) => `${c.number} (${c.status})`).join(", ")}
+                  </div>
+                )}
                 {!(selected.subjects || []).length && <div style={{ fontSize: 12, color: "#94A3B8" }}>Nothing linked yet.</div>}
                 {(selected.subjects || []).map((s: any, i: number) => {
                   // v6.54.0: a subject cancelled AFTER the claim was raised. The

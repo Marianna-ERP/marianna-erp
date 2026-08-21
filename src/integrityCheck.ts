@@ -371,6 +371,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // A delivered/arrived shipment carrying logistics costs that were never allocated
   // to inventory lot costing — those costs are missing from COGS.
   shipments.forEach((sh: any) => {
+    if (sh?.status === "Cancelled") return; // v6.66.0 (D-28)
     if (!["Delivered", "Arrived"].includes(sh?.status)) return;
     const hasCost = arr(sh.costs).some((c: any) => num(c.amountPLN) > 0);
     if (hasCost && sh.billingStatus !== "Cost allocated") {
@@ -386,6 +387,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   {
     const seen = new Map<string, string>();
     invoices.forEach((v: any) => {
+      if (v?.paymentStatus === "Cancelled") return; // v6.66.0 (D-28): a cancelled invoice frees its number
       const num = String(v.number || "").trim();
       if (!num) return; // drafts without official numbers are fine
       const key = `${String(v.counterparty?.name || "").trim().toLowerCase()}::${num.toLowerCase()}`;
@@ -535,7 +537,8 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // carries this shipment's allocation tags (Batch-1b replace-by-source) — the
   // allocation never ran or was reverted; the flag misleads the tester.
   shipments.forEach((sh: any) => {
-    if (!sh || sh.billingStatus !== "Cost allocated") return;
+    if (!sh || sh.status === "Cancelled") return; // v6.66.0 (D-28): a cancelled shipment's flags are history, not alerts
+    if (sh.billingStatus !== "Cost allocated") return;
     if (!arr(sh.costs).length) return;
     // v6.62.0: an OUTBOUND delivery never builds landed cost (v6.51.0), so
     // "no lot carries the allocation" is the correct outcome, not a stale flag.

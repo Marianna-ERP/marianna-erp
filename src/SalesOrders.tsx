@@ -1825,7 +1825,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
                     )}
                     <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
-                    <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
+                    <div style={{ minWidth: 96 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 2px", fontSize: 12, fontWeight: 700, color: "#111", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
                   <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
@@ -1917,8 +1917,10 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
           {(() => {
             // Issue Invoice button: only meaningful after Shipped, hidden if already invoiced.
             const shippedOrLater = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status);
-            const alreadyInvoiced = (order.linkedInvoices && order.linkedInvoices.length > 0)
-              || soInvoices.length > 0; // v6.33.0 (A3-6): register is the source of truth
+            // v6.66.0 (D-21): the register — non-cancelled SALES invoices only — is
+            // the SOLE truth. The stored order.linkedInvoices array is never cleared
+            // on cancel, so consulting it hid this button forever after a cancel.
+            const alreadyInvoiced = soInvoices.some((iv: any) => iv.paymentStatus !== "Cancelled");
             if (!shippedOrLater || alreadyInvoiced || !onIssueInvoice) return null;
             return (
               <button onClick={onIssueInvoice} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>

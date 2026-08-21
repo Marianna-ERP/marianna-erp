@@ -10,7 +10,7 @@ import {
 } from "./invoicing";
 import * as XLSX from "xlsx";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice } from "./fakturownia";
-import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES } from "./fakturowniaImport.domain";
+import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 
@@ -226,9 +226,17 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
               const rowPLN = Math.round((r.net || r.gross) * (r.fxRate || 1) * 100) / 100;
               return (
                 <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
-                  <input type="checkbox" checked={r.include} onChange={(e: any) => upd(r.key, { include: e.target.checked })} />
+                  <input type="checkbox" checked={r.include} onChange={(e: any) => {
+                    // v6.66.0 (D-30): re-including a flagged duplicate is a deliberate act.
+                    if (e.target.checked && r.dup) {
+                      const info = duplicateCostInvoiceInfo(r.number, invoices);
+                      const msg = info ? `"${r.number}" is ALREADY registered (${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? ", entered manually" : ""}). Importing it again double-counts the money.\n\nInclude it anyway?` : `"${r.number}" is already in the register. Include it anyway?`;
+                      if (!window.confirm(msg)) return;
+                    }
+                    upd(r.key, { include: e.target.checked });
+                  }} />
                   <div style={{ fontSize: 11.5, color: "#64748B" }}>{r.date}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.dup && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: "#B45309", background: "#FFFBEB", padding: "1px 6px", borderRadius: 4 }}>already in register</span>}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.dup && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
                   <div style={{ fontSize: 11.5, fontFamily: "ui-monospace, Menlo, monospace" }}>{r.number || "—"}</div>
                   <div style={{ fontSize: 12 }}>{(r.net || r.gross).toLocaleString("pl-PL")} {r.currency}</div>
                   <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
@@ -549,7 +557,7 @@ export default function Invoices(props: any) {
             return (
               <div key={i.id} onClick={() => { setSelId(i.id); setView("detail"); }} style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "11px 16px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><CatBadge cat={i.category} /></div>
-                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.number || "—"}</div><DirPill inv={i} /></div>
+                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: i.paymentStatus === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: i.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "ui-monospace, Menlo, monospace" }} title={i.paymentStatus === "Cancelled" ? "Cancelled — kept on record, excluded from the ledger" : undefined}>{i.number || "—"}</div><DirPill inv={i} /></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{i.counterparty?.name || "—"}</div>{i.counterparty?.nip && <div style={{ fontSize: 11, color: "#AAA" }}>NIP {i.counterparty.nip}</div>}</div>
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(i.issueDate) || "—"}</div>
                 <div><div style={{ fontSize: 12, color: od ? "#DC2626" : "#555", fontWeight: od ? 600 : 400 }}>{formatDMY(i.dueDate) || "—"}</div>{od && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>

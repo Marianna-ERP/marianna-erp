@@ -369,8 +369,11 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
       positions: safePositions,
     },
   };
-  if (opts.sellerName) body.invoice.seller_name = opts.sellerName;
-  if (opts.sellerTaxNo) body.invoice.seller_tax_no = opts.sellerTaxNo;
+  // v6.66.0 (D-07c): seller fields removed. Sending seller_name made Fakturownia
+  // try to CREATE a department, which the account's bank-account security level
+  // rightly blocks (API-injected departments are an invoice-fraud vector). A
+  // single-company account applies its default department automatically.
+
   if (opts.govSaveAndSend) body.gov_save_and_send = true; // default OFF (Q3-c)
   return body;
 }

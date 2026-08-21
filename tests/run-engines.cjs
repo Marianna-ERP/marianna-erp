@@ -1097,7 +1097,10 @@ T("checker: duplicate live shipment flagged; cancelled duplicate not", () => {
   assert.ok(!r2.issues.some(i => i.code === "DUP_LIVE_SHIPMENT"));
 });
 T("checker: stale 'Cost allocated' flag caught; real allocation not", () => {
-  const sh = { number: "SHP-2", status: "Cancelled", billingStatus: "Cost allocated", costs: [{ id: 9, amountPLN: 4000 }] };
+  // v6.66.0 (D-28, owner ruling): cancelled documents no longer raise alerts about
+  // themselves — and D-31 resets the flag on cancel anyway. The stale-flag check
+  // is therefore exercised on a LIVE shipment, which is where it matters.
+  const sh = { number: "SHP-2", status: "Delivered", billingStatus: "Cost allocated", costs: [{ id: 9, amountPLN: 4000 }] };
   const r = checkIntegrity({ shipments: [sh], lots: [{ number: "L1", costs: [] }] });
   assert.ok(r.issues.some(i => i.code === "STALE_BILLING_FLAG"));
   const r2 = checkIntegrity({ shipments: [sh], lots: [{ number: "L1", costs: [{ source: "SHP-2/9", pln: 4000 }] }] });

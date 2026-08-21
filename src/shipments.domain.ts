@@ -427,3 +427,33 @@ export function carriedRefs(sh: any): { poRefs: string[]; soRefs: string[]; lotR
   };
   return { poRefs: Array.from(pos), soRefs: Array.from(sos), lotRefs: Array.from(lots) };
 }
+
+
+// ── v6.66.0: OVER-SHIP GUARD (owner ruling, Round 3) ─────────────────────────
+// "Do we have a guard that would not allow to ship the same product twice?"
+// The picker already warns; this makes the SAVE itself confirm-gated. Pure and
+// testable: given the draft, all shipments and all SOs, name every goods row
+// that would push an SO line past what was ordered.
+export function overShipReport(draft: any, allShipments: any[], orders: any[]): Array<{ soRef: string; product: string; orderedKg: number; alreadyKg: number; thisKg: number; exceedKg: number }> {
+  const out: any[] = [];
+  const rows = (draft?.goods || []).filter((g: any) => g?.soRef && Number(g?.qtyKg) > 0);
+  const bySo: Record<string, { product: string; thisKg: number }[]> = {};
+  rows.forEach((g: any) => { (bySo[String(g.soRef)] = bySo[String(g.soRef)] || []).push({ product: String(g.product || ""), thisKg: Number(g.qtyKg) || 0 }); });
+  Object.keys(bySo).forEach(soRef => {
+    const so = (orders || []).find((o: any) => String(o.number) === String(soRef));
+    if (!so || so.status === "Cancelled") return;
+    const products = new Set(bySo[soRef].map(r => r.product));
+    products.forEach(product => {
+      const eqP = (v: any) => !product || String(v || "") === product;
+      const orderedKg = (so.items || []).filter((it: any) => eqP(it.product)).reduce((a: number, it: any) => a + (Number(it.qty) || 0), 0);
+      if (!(orderedKg > 0)) return; // no stated kg → nothing to guard against
+      const alreadyKg = (allShipments || [])
+        .filter((s: any) => s.status !== "Cancelled" && String(s.number) !== String(draft?.number))
+        .reduce((a: number, s: any) => a + (s.goods || []).filter((g: any) => String(g.soRef) === soRef && eqP(g.product)).reduce((x: number, g: any) => x + (Number(g.qtyKg) || 0), 0), 0);
+      const thisKg = bySo[soRef].filter(r => r.product === product).reduce((a, r) => a + r.thisKg, 0);
+      const exceedKg = Math.round((alreadyKg + thisKg - orderedKg) * 1000) / 1000;
+      if (exceedKg > 0) out.push({ soRef, product: product || "(any)", orderedKg, alreadyKg, thisKg, exceedKg });
+    });
+  });
+  return out;
+}

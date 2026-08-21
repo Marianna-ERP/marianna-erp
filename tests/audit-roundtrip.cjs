@@ -640,3 +640,46 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.65.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.66.0 REGRESSIONS — Round 3 batch ══
+(function v666(){
+  const fkt = B("fakturowniaImport.domain.js");
+  console.log("\n══ 21. v6.66.0: over-ship guard, duplicate info, note wiring ══");
+  t("over-ship: second full shipment of the same SO line is reported with exact kilos", () => {
+    const so = { number: "SO-18", status: "Confirmed", items: [{ product: "Capsicum", qty: 6300 }] };
+    const prior = { number: "SHP-A", status: "Loaded", goods: [{ soRef: "SO-18", product: "Capsicum", qtyKg: 6300 }] };
+    const draft = { number: "SHP-B", goods: [{ soRef: "SO-18", product: "Capsicum", qtyKg: 6300 }] };
+    const r = ship.overShipReport(draft, [prior], [so]);
+    eq(r.length, 1); approx(r[0].exceedKg, 6300); approx(r[0].orderedKg, 6300); approx(r[0].alreadyKg, 6300);
+  });
+  t("over-ship: partial split across trucks that SUMS to the order raises nothing", () => {
+    const so = { number: "SO-18", status: "Confirmed", items: [{ product: "Capsicum", qty: 6300 }] };
+    const prior = { number: "SHP-A", status: "Loaded", goods: [{ soRef: "SO-18", product: "Capsicum", qtyKg: 4000 }] };
+    const draft = { number: "SHP-B", goods: [{ soRef: "SO-18", product: "Capsicum", qtyKg: 2300 }] };
+    eq(ship.overShipReport(draft, [prior], [so]), []);
+  });
+  t("over-ship: cancelled shipments and cancelled SOs don't count against the order", () => {
+    const so = { number: "SO-18", status: "Confirmed", items: [{ product: "Capsicum", qty: 6300 }] };
+    const cancelled = { number: "SHP-A", status: "Cancelled", goods: [{ soRef: "SO-18", product: "Capsicum", qtyKg: 6300 }] };
+    const draft = { number: "SHP-B", goods: [{ soRef: "SO-18", product: "Capsicum", qtyKg: 6300 }] };
+    eq(ship.overShipReport(draft, [cancelled], [so]), [], "re-shipping after a cancel is the NORMAL flow");
+  });
+  t("over-ship: editing an existing shipment doesn't count itself twice", () => {
+    const so = { number: "SO-18", status: "Confirmed", items: [{ product: "Capsicum", qty: 6300 }] };
+    const self = { number: "SHP-B", status: "Loaded", goods: [{ soRef: "SO-18", product: "Capsicum", qtyKg: 6300 }] };
+    eq(ship.overShipReport(self, [self], [so]), []);
+  });
+  t("D-30: duplicateCostInvoiceInfo names the twin; cancelled twins don't block", () => {
+    const reg = [{ kind: "COST", number: "04/08/2026", paymentStatus: "Draft", grossAmount: 17435.51, source: "manual:1" }];
+    const info = fkt.duplicateCostInvoiceInfo("04/08/2026", reg);
+    eq(info.status, "Draft"); approx(info.grossAmount, 17435.51); ok(info.source.startsWith("manual"));
+    eq(fkt.duplicateCostInvoiceInfo("04/08/2026", [{ ...reg[0], paymentStatus: "Cancelled" }]), null);
+  });
+  t("D-07c: the payload sends NO seller fields (department creation stays blocked-safe)", () => {
+    const body = invc.buildFakturowniaPayload({ number: "FV/X", kind: "SALES", vatRate: 5, grossAmount: 100, netAmount: 95.24, positions: [{ name: "P", quantity: 1, unitPrice: 95.24, vatRate: 5 }] }, { apiToken: "t", sellerName: "MARIANNA", sellerTaxNo: "PL123" });
+    ok(!("seller_name" in body.invoice), "no seller_name");
+    ok(!("seller_tax_no" in body.invoice), "no seller_tax_no");
+  });
+  console.log("v6.66.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
