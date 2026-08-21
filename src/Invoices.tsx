@@ -170,7 +170,14 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
         whInvs.push(warehouseInvoiceFromRow(r, wh));
         return;
       }
-      if (r.tag === "OVERHEAD") { opCosts.push(operationalCostFromRow(r, r.category || "other")); }
+      if (r.tag === "OVERHEAD") {
+        // v6.64.1 (D-17): OVERHEAD rows write the operational cost ONLY — the
+        // register invoice is then created exactly once by migrateLegacyInvoices
+        // (source migrated:opCost:*). Writing both here AND letting the fold run
+        // produced two register invoices per overhead row (DUP_INVOICE alerts).
+        opCosts.push(operationalCostFromRow(r, r.category || "other"));
+        return;
+      }
       regs.push(buildCostInvoice(r, r.tag, { shipmentNumber: r.shipmentNumber, poNumber: r.poNumber }, contact));
       if ((r.tag === "FREIGHT" || r.tag === "CUSTOMS") && r.shipmentNumber) {
         let lineId = r.costLineId;

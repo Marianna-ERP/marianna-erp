@@ -563,3 +563,32 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("BATCH D RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ D-17 REGRESSIONS (v6.64.1) — overhead import double-write ══
+(function batchE(){
+  console.log("\n══ 19. D-17: one overhead row → exactly ONE register invoice ══");
+  t("fold skips an opCost whose number+party already exists as a register invoice", () => {
+    const existing = [{ id: 1, kind: "COST", number: "358/08/C/2026", paymentStatus: "Draft",
+      counterparty: { name: "Dantex Wilcza Sp. z o. o. (dawniej: Dantex Sp. z o.o. Wilcza sp. k.)" } }];
+    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
+      operationalCosts: [{ id: 9, invoiceNo: "358/08/c/2026", supplierName: "Dantex Wilcza Sp. z o. o. (dawniej: X)", amount: 133.13, currency: "PLN", fxRate: 1, category: "office_rent", date: "2026-08-20", status: "Received" }],
+      nextId: deps.nextId });
+    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 0, "no twin fold");
+  });
+  t("same number from a DIFFERENT counterparty still folds (legit collision preserved)", () => {
+    const existing = [{ id: 1, kind: "COST", number: "58/08/2026", paymentStatus: "Draft", counterparty: { name: "ORLEN S.A." } }];
+    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
+      operationalCosts: [{ id: 9, invoiceNo: "58/08/2026", supplierName: "Tomasz Wieśniak", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-20", status: "Received" }],
+      nextId: deps.nextId });
+    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 1);
+  });
+  t("cancelled register invoice does NOT block the fold (cancellation frees the number)", () => {
+    const existing = [{ id: 1, kind: "COST", number: "X/1", paymentStatus: "Cancelled", counterparty: { name: "A" } }];
+    const r = invc.migrateLegacyInvoices({ existing, creditNotes: [], warehouseInvoices: [],
+      operationalCosts: [{ id: 9, invoiceNo: "X/1", supplierName: "A", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-20", status: "Received" }],
+      nextId: deps.nextId });
+    eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 1);
+  });
+  console.log("D-17 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

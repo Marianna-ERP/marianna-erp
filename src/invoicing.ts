@@ -214,7 +214,20 @@ export function migrateLegacyInvoices(opts: {
   });
 
   // 2. COST / WAREHOUSE from warehouseInvoices (monthly shared)
+  // v6.64.1 (D-17): number-level twin guard. The fold's pushIf only knows its own
+  // source markers, so a register invoice written DIRECTLY (e.g. by an import)
+  // with the same legal number + counterparty was invisible to it and got folded
+  // again. Same number from a DIFFERENT counterparty is legitimate and still folds.
+  const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
+  const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
+  const registerTwins = new Set(
+    arr(opts.existing)
+      .filter((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim())
+      .map((i: any) => normNo(i.number) + "|" + normParty(i.counterparty?.name)));
+  const hasTwin = (number: any, party: any) => registerTwins.has(normNo(number) + "|" + normParty(party));
+
   arr(opts.warehouseInvoices).forEach((w: any) => {
+    if (hasTwin(w.invoiceNo, w.warehouseName)) return; // v6.64.1 (D-17)
     const src = `migrated:warehouseInvoice:${w.id}`;
     pushIf(src, () => {
       const fx = resolveFxRate(w.fxRate, w.currency);
@@ -240,6 +253,7 @@ export function migrateLegacyInvoices(opts: {
   // 3. COST from operationalCosts that carry an invoice number
   arr(opts.operationalCosts).forEach((c: any) => {
     if (!String(c.invoiceNo || "").trim()) return; // payroll/taxes without an invoice stay out
+    if (hasTwin(c.invoiceNo, c.supplierName)) return; // v6.64.1 (D-17)
     const src = `migrated:opCost:${c.id}`;
     pushIf(src, () => {
       const fx = resolveFxRate(c.fxRate, c.currency);
