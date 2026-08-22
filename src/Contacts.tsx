@@ -255,6 +255,10 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any
               </div>
               <div><Lbl>Country</Lbl><Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" /></div>
               <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
+              {/* v6.68.0 (F-3): credit control — confirming an SO that pushes this client's
+                  open receivables past the limit takes an explicit confirm. Blank = no limit. */}
+              <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
+              <div><Lbl>Payment terms (days)</Lbl><Inp value={form.paymentTermsDays ?? ""} onChange={e => sf("paymentTermsDays", e.target.value)} type="number" placeholder="e.g. 30" /></div>
               <div style={{ gridColumn: "span 2" }}><Lbl>Address</Lbl><Inp value={form.address} onChange={e => sf("address", e.target.value)} placeholder="Street, City, Postcode" /></div>
               <div><Lbl>Default currency</Lbl><Sel value={form.defaultCurrency} onChange={e => sf("defaultCurrency", e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</Sel></div>
               <div style={{ gridColumn: "span 2" }}>

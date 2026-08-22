@@ -415,3 +415,45 @@ export function groupAndAggregateNetMargins(
     .map(([key, groupOrders]) => ({ key, agg: aggregateNetMargins(groupOrders, lots, pos, shipments, mode, undefined, operationalCosts, filtered) }))
     .sort((a, b) => b.agg.totalNetMarginPLN - a.agg.totalNetMarginPLN);
 }
+
+
+// ── v6.68.0 (D-34): SINGLE-ENTRY OVERHEAD ────────────────────────────────────
+// The register is the source of truth. Every non-cancelled COST invoice with
+// costScope OVERHEAD mirrors into exactly one operational cost (source
+// `invoice:{id}`, replace-by-ref: edits follow, cancellation removes). Manual
+// operational costs — salaries, ZUS, taxes, anything without an invoice — are
+// untouched. The reverse mirror (import-tag OVERHEAD → opCost → folded invoice)
+// is excluded by source on both sides, so the two mirrors can never loop.
+export function opCostFromOverheadInvoice(inv: any, keepId?: any): OperationalCost {
+  const period = String(inv.issueDate || inv.saleDate || "").slice(0, 7);
+  const amount = safe(inv.grossAmount) || safe(inv.netAmount);
+  const fx = safe(inv.fxRate) || 1;
+  return {
+    id: keepId ?? inv.id,
+    category: "other",
+    description: `${inv.number || "(no number)"} — ${inv.counterparty?.name || ""}`.trim(),
+    supplierName: inv.counterparty?.name || "",
+    invoiceNo: inv.number || "",
+    amount, currency: inv.currency || "PLN", fxRate: fx,
+    amountPLN: safe(inv.grossPLN) || Math.round(amount * fx * 100) / 100,
+    date: inv.issueDate || "", period,
+    status: inv.paymentStatus === "Paid" ? "Paid" : "Received",
+    costCenter: "general",
+    allocationMethod: "by_revenue",
+    source: `invoice:${inv.id}`,
+  } as any;
+}
+
+export function syncOverheadOpCosts(invoices: any[], opCosts: OperationalCost[]): OperationalCost[] {
+  const manual = (opCosts || []).filter((c: any) => !String(c.source || "").startsWith("invoice:"));
+  const prevBySource = new Map((opCosts || []).filter((c: any) => String(c.source || "").startsWith("invoice:")).map((c: any) => [String(c.source), c]));
+  const mirrors: OperationalCost[] = [];
+  (invoices || []).forEach((inv: any) => {
+    if (inv?.kind !== "COST" || inv?.costScope !== "OVERHEAD") return;
+    if (inv?.paymentStatus === "Cancelled") return;                              // cancel removes the mirror
+    if (String(inv?.source || "").startsWith("migrated:opCost")) return;         // that invoice is itself a mirror
+    const prev: any = prevBySource.get(`invoice:${inv.id}`);
+    mirrors.push(opCostFromOverheadInvoice(inv, prev ? prev.id : undefined));
+  });
+  return [...manual, ...mirrors];
+}

@@ -27,6 +27,10 @@ export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: s
 export interface InvoicePosition { name: string; quantity: number; unit?: string; vatRate: number; netPrice?: number; grossTotal?: number; }
 
 export interface Invoice {
+  /** v6.68.1 (owner ruling): a pro-forma is the document an advance answers —
+   *  excluded from receivable/payable totals; pushes to Fakturownia as kind
+   *  "proforma"; the FINAL invoice is what advances get applied to. */
+  isProforma?: boolean;
   id: number;
   kind: InvoiceKind;
   category: InvoiceCategory;
@@ -262,6 +266,7 @@ export function migrateLegacyInvoices(opts: {
   // 3. COST from operationalCosts that carry an invoice number
   arr(opts.operationalCosts).forEach((c: any) => {
     if (!String(c.invoiceNo || "").trim()) return; // payroll/taxes without an invoice stay out
+    if (String(c.source || "").startsWith("invoice:")) return; // v6.68.0 (D-34): this opCost IS a mirror of a register invoice — folding it back would loop
     if (hasTwin(c.invoiceNo, c.supplierName)) return; // v6.64.1 (D-17)
     const src = `migrated:opCost:${c.id}`;
     pushIf(src, () => {
@@ -356,7 +361,7 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
   const body: any = {
     api_token: opts.apiToken,
     invoice: {
-      kind: "vat",
+      kind: inv.isProforma ? "proforma" : "vat", // v6.68.1: pro-formas push as pro-formas
       number: null,                 // Fakturownia auto-numbers (Q3-a)
       issue_date: inv.issueDate || undefined,
       sell_date: inv.saleDate || inv.issueDate || undefined,

@@ -744,3 +744,103 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.67.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.68.0 — FINANCE CLOSURE (F-1..F-4 + D-34), the last pre-Supabase schema batch ══
+(function v668(){
+  console.log("\n══ 23. v6.68.0: advances, realized FX, credit control, registry, single-entry overhead ══");
+  const adv = B("advances.domain.js");
+  const oc = B("operationalCosts.js");
+  const bank = B("bankReconciliation.domain.js");
+
+  t("F-1: advance applies partially, guards over-application and currency, and is idempotent by source", () => {
+    let a = adv.advanceFromBankLine({ id: "san:x:1:2026-08-07:5000,00:1", date: "2026-08-07", amount: 5000, currency: "PLN", counterparty: "Biedronka", title: "zaliczka" }, deps);
+    approx(adv.advanceRemaining(a), 5000);
+    let inv = { id: 9, kind: "SALES", number: "FV/9", currency: "PLN", fxRate: 1, grossAmount: 3000, paidAmount: 0, paymentStatus: "Sent", payments: [] };
+    const r1 = adv.applyAdvanceToInvoice(a, inv, 3000, deps);
+    ok(!r1.error); a = r1.advance; inv = r1.invoice;
+    approx(pay.outstandingAmount(inv), 0); approx(adv.advanceRemaining(a), 2000);
+    ok(String(inv.payments[0].source).startsWith("advance:"), "trail on the invoice");
+    ok(adv.applyAdvanceToInvoice(a, inv, 2500, deps).error, "over-application refused");
+    ok(adv.applyAdvanceToInvoice(a, { ...inv, currency: "EUR" }, 100, deps).error, "currency mismatch refused");
+    ok(adv.advanceSources([a]).has("bank:san:x:1:2026-08-07:5000,00:1"), "bank line can't become two advances");
+  });
+  t("F-2: realized FX — receivable settled below the locked rate is a LOSS; payable mirror is a GAIN", () => {
+    let inv = { kind: "SALES", currency: "EUR", fxRate: 4.30, grossAmount: 1000, payments: [] };
+    inv = pay.applyPaymentEvent(inv, { date: "2026-08-18", amount: 1000, settlementFxRate: 4.282 }, deps.nextId);
+    approx(pay.realizedFxPLN(inv), -18, "1000 × (4.282 − 4.30)");
+    approx(inv.payments[0].settledPLN, 4282);
+    let cost = { kind: "COST", currency: "EUR", fxRate: 4.30, grossAmount: 1000, payments: [] };
+    cost = pay.applyPaymentEvent(cost, { date: "2026-08-18", amount: 1000, settlementFxRate: 4.282 }, deps.nextId);
+    approx(pay.realizedFxPLN(cost), 18, "paying cheaper than locked = gain");
+  });
+  t("F-3: client exposure sums open receivables in PLN at each invoice's own rate", () => {
+    const invs = [
+      { kind: "SALES", counterparty: { name: "Biedronka" }, currency: "PLN", fxRate: 1, grossAmount: 2688, paidAmount: 128, paymentStatus: "Sent" },
+      { kind: "SALES", counterparty: { name: "Biedronka" }, currency: "EUR", fxRate: 4.3, grossAmount: 1000, paidAmount: 0, paymentStatus: "Issued" },
+      { kind: "SALES", counterparty: { name: "Biedronka" }, currency: "PLN", fxRate: 1, grossAmount: 999, paidAmount: 0, paymentStatus: "Cancelled" },
+      { kind: "SALES", counterparty: { name: "Lidl" }, currency: "PLN", fxRate: 1, grossAmount: 5, paidAmount: 0, paymentStatus: "Sent" },
+    ];
+    approx(pay.clientExposurePLN("Biedronka", invs), 2560 + 4300);
+  });
+  t("F-4: a statement registers its account once; re-import refreshes, never duplicates", () => {
+    const parsed = { format: "SANTANDER", account: "07109028510000000147238128", currency: "PLN",
+      lines: [{ raw: "07-08-2026;07-08-2026;t;c;acc;100,00;257,78;2;", amount: 100 }], skipped: 0 };
+    let accs = bank.upsertBankAccountFromStatement([], parsed, deps);
+    eq(accs.length, 1); eq(accs[0].bank, "Santander"); approx(accs[0].lastKnownBalance, 257.78);
+    accs = bank.upsertBankAccountFromStatement(accs, parsed, deps);
+    eq(accs.length, 1, "idempotent upsert");
+  });
+  t("D-34: an OVERHEAD register invoice mirrors into ONE opCost; edits follow; cancel removes; loops impossible", () => {
+    const inv = { id: 501, kind: "COST", costScope: "OVERHEAD", number: "F/55", paymentStatus: "Issued",
+      counterparty: { name: "Orlen" }, currency: "PLN", fxRate: 1, grossAmount: 300, grossPLN: 300, issueDate: "2026-08-05", source: "manual:x" };
+    const manual = { id: 1, category: "salary", description: "Salaries Aug", amountPLN: 20000, period: "2026-08", source: "" };
+    let ocs = oc.syncOverheadOpCosts([inv], [manual]);
+    eq(ocs.length, 2, "manual entry kept + one mirror");
+    const mirror = ocs.find(c => String(c.source) === "invoice:501");
+    approx(mirror.amountPLN, 300); eq(mirror.period, "2026-08");
+    // edit the invoice → mirror follows, same id (replace-by-ref)
+    ocs = oc.syncOverheadOpCosts([{ ...inv, grossAmount: 350, grossPLN: 350 }], ocs);
+    eq(ocs.length, 2); approx(ocs.find(c => String(c.source) === "invoice:501").amountPLN, 350);
+    eq(ocs.find(c => String(c.source) === "invoice:501").id, mirror.id, "stable id across edits");
+    // cancel → mirror vanishes; the folded-invoice direction is excluded by source
+    ocs = oc.syncOverheadOpCosts([{ ...inv, paymentStatus: "Cancelled" }], ocs);
+    eq(ocs.length, 1, "only the salary entry remains");
+    const folded = invc.migrateLegacyInvoices({ existing: [], creditNotes: [], warehouseInvoices: [],
+      operationalCosts: [{ id: 7, invoiceNo: "X/1", supplierName: "A", source: "invoice:501", amount: 10, currency: "PLN", fxRate: 1, category: "other", date: "2026-08-01", status: "Received" }], nextId: deps.nextId });
+    eq((Array.isArray(folded) ? folded : []).length, 0, "a sync-created opCost never folds back — no loop");
+  });
+  console.log("v6.68.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.68.1 — PRO-FORMA ruling: every advance answers one ══
+(function v6681(){
+  console.log("\n══ 24. v6.68.1: pro-forma invoices + advance linkage ══");
+  const adv = B("advances.domain.js");
+  const led = B("ledger.js");
+  t("a pro-forma never enters receivable/payable totals; the final invoice does", () => {
+    const base = { kind: "SALES", number: "PF/1", paymentStatus: "Issued", currency: "PLN", fxRate: 1, grossAmount: 1000, grossPLN: 1000, netPLN: 1000, paidAmount: 0, counterparty: { name: "X" }, dueDate: "2026-09-01" };
+    const withPF = led.buildLedger({ invoices: [{ ...base, isProforma: true }], financeNotes: [], orders: [], lots: [], pos: [], warehouseInvoices: [], operationalCosts: [] });
+    approx(withPF.totals.receivableOpenPLN, 0, "pro-forma is a request, not a receivable");
+    const withFinal = led.buildLedger({ invoices: [{ ...base, number: "FV/1" }], financeNotes: [], orders: [], lots: [], pos: [], warehouseInvoices: [], operationalCosts: [] });
+    approx(withFinal.totals.receivableOpenPLN, 1000);
+  });
+  t("credit exposure ignores pro-formas", () => {
+    approx(pay.clientExposurePLN("X", [{ kind: "SALES", isProforma: true, counterparty: { name: "X" }, currency: "PLN", fxRate: 1, grossAmount: 500, paidAmount: 0, paymentStatus: "Issued" }]), 0);
+  });
+  t("advance links only to a pro-forma, in its own currency; applying to a pro-forma is refused", () => {
+    let a = adv.advanceFromBankLine({ id: "l1", date: "2026-08-20", amount: 1000, currency: "PLN", counterparty: "X", title: "" }, deps);
+    ok(adv.linkAdvanceToProforma(a, { isProforma: false, currency: "PLN" }).error, "final invoice refused as link target");
+    ok(adv.linkAdvanceToProforma(a, { isProforma: true, currency: "EUR" }).error, "currency mismatch refused");
+    const linked = adv.linkAdvanceToProforma(a, { id: 5, isProforma: true, currency: "PLN", number: "PF/1" });
+    eq(linked.proformaNumber, "PF/1");
+    const r = adv.applyAdvanceToInvoice(linked, { id: 5, isProforma: true, currency: "PLN", paymentStatus: "Issued", grossAmount: 1000, payments: [] }, 1000, deps);
+    ok(r.error && r.error.includes("FINAL"), "money settles the final invoice, never the pro-forma");
+  });
+  t("pro-forma pushes to Fakturownia as kind 'proforma'", () => {
+    const body = invc.buildFakturowniaPayload({ number: "PF/1", kind: "SALES", isProforma: true, vatRate: 0, grossAmount: 100, netAmount: 100, positions: [{ name: "P", quantity: 1, unitPrice: 100, vatRate: 0 }] }, { apiToken: "t" });
+    eq(body.invoice.kind, "proforma");
+  });
+  console.log("v6.68.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

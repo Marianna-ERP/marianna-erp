@@ -14,6 +14,7 @@ import { parseNum } from "./numbers";
 // v6.32.0 (R7b-4): comma-aware canonical parser — "1,5" now parses as 1.5.
 const n = parseNum;
 function r2(v: number): number { return Math.round(v * 100) / 100; }
+const r2n4 = (v: number) => Math.round(v * 10000) / 10000;
 
 export interface PaymentEvent {
   id: any;
@@ -60,10 +61,13 @@ function statusFor(inv: any, paid: number): string {
 }
 
 /** Append a payment event; recomputes the derived paidAmount + paymentStatus. */
-export function applyPaymentEvent(inv: any, evt: { date: string; amount: any; method?: string; note?: string; source?: string }, nextId: () => any): any {
+export function applyPaymentEvent(inv: any, evt: { date: string; amount: any; method?: string; note?: string; source?: string; settlementFxRate?: any }, nextId: () => any): any {
   const events = [...normalizeInvoicePayments(inv), {
     id: nextId(), date: String(evt.date || "").slice(0, 10), amount: r2(n(evt.amount)),
     method: evt.method || "Bank transfer", note: evt.note || "",
+    // v6.68.0 (F-2): the bank's actual conversion rate for this payment — the
+    // realized FX gain/loss derives from (settlement − invoice) per event.
+    ...(n(evt.settlementFxRate) > 0 ? { settlementFxRate: r2n4(n(evt.settlementFxRate)), settledPLN: r2(r2n4(n(evt.settlementFxRate)) * r2(n(evt.amount))) } : {}),
     // v6.67.0 (D-33): bank-sourced events carry bank:{account}:{lineId} so a
     // re-imported statement can never double-post — same idempotency discipline
     // as claim: and WHINV- sources.
@@ -164,4 +168,38 @@ export function convertSettledRefsToEvents(invoices: any[], settledRefs: string[
     // ref dropped either way — the invoice now carries/derives its own paid state
   });
   return { invoices: nextInvoices, settledRefs: keep, converted };
+}
+
+
+// ── v6.68.0 (F-2): REALIZED FX DIFFERENCES ────────────────────────────────────
+/** Realized FX gain (+) / loss (−) in PLN across an invoice's payment events.
+ *  Receivable in EUR locked @4.30, money converted @4.28 → loss; a payable paid
+ *  cheaper than its locked rate → gain. Events without a settlement rate
+ *  contribute nothing (PLN invoices never do). */
+export function realizedFxPLN(inv: any): number {
+  const lockRate = n(inv?.fxRate) || 1;
+  const receivable = inv?.kind === "SALES";
+  let total = 0;
+  normalizeInvoicePayments(inv).forEach((p: any) => {
+    const sr = n(p?.settlementFxRate);
+    if (!(sr > 0) || !(lockRate > 0) || String(inv?.currency || "PLN").toUpperCase() === "PLN") return;
+    const diff = (sr - lockRate) * n(p.amount);
+    total += receivable ? diff : -diff;
+  });
+  return r2(total);
+}
+
+/** v6.68.0 (F-3): a client's open exposure in PLN — outstanding across all
+ *  non-cancelled sales invoices, at each invoice's own locked rate. */
+export function clientExposurePLN(clientName: any, invoices: any[]): number {
+  const key = String(clientName || "").trim().toLowerCase();
+  if (!key) return 0;
+  let total = 0;
+  (invoices || []).forEach((i: any) => {
+    if (i?.kind !== "SALES" || i?.paymentStatus === "Cancelled" || i?.isProforma) return;
+    if (String(i?.counterparty?.name || "").trim().toLowerCase() !== key) return;
+    const out = n(i.grossAmount) - n(i.paidAmount);
+    if (out > 0.005) total += out * (n(i.fxRate) || 1);
+  });
+  return r2(total);
 }

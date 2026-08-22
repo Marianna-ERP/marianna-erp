@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { clientExposurePLN } from "./payments.domain";
 import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
@@ -1143,7 +1144,7 @@ function soTermsMissing(o: any): string | null {
   return null;
 }
 
-function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
+function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail , allInvoices = [] }: any) {
   const { confirm: ofConfirm, alert: ofAlert, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning) + v6.63.0 (D-10 forward-only alert)
   // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
   // this session shows in the destination picker without a browser refresh.
@@ -1471,6 +1472,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     return;
                   }
                   if (willLock && !wasLocked) {
+                    // v6.68.0 (F-3): credit control at the moment of commitment.
+                    const clientRec = (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(order.client?.name || "").trim().toLowerCase());
+                    const limit = parseFloat(String(clientRec?.creditLimitPLN ?? "")) || 0;
+                    if (limit > 0) {
+                      const soPLN = (order.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) * (parseFloat(String(it.unitPrice)) || 0)), 0) * (parseFloat(String(order.fxRate)) || 1);
+                      const exposure = clientExposurePLN(order.client?.name, allInvoices || []);
+                      if (exposure + soPLN > limit) {
+                        const goOn = await ofConfirm({ tone: "danger", title: "Credit limit exceeded", message: `${order.client?.name}: open receivables ${exposure.toLocaleString("pl-PL")} PLN + this order ≈ ${Math.round(soPLN).toLocaleString("pl-PL")} PLN exceed the limit of ${limit.toLocaleString("pl-PL")} PLN.\n\nConfirm the order anyway?`, confirmLabel: "Confirm anyway", cancelLabel: "Hold the order" });
+                        if (!goOn) return;
+                      }
+                    }
                     const ok = await ofConfirm({ tone: "warn", title: `Move to ${nv}?`, message: `Once this sales order is ${nv}, it becomes LOCKED — line items, quantities, sourcing and the shipping address can no longer be changed. To correct something afterwards you'd issue a credit/debit note or a new order.\n\nProceed?`, confirmLabel: `Yes, move to ${nv}`, cancelLabel: "Not yet" });
                     if (!ok) return;
                   }
@@ -2658,7 +2670,7 @@ export default function SalesOrders({
             { const _m = soTermsMissing(form); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot email this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setEmailOrder(form);
           }}
-        />
+         allInvoices={extInvoices} />
       </>
     );
   }

@@ -26,6 +26,7 @@ import IntegrityBadge from "./IntegrityBadge";
 import { primeIdsFrom } from "./ids";
 import Invoices from "./Invoices";
 import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
+import { syncOverheadOpCosts } from "./operationalCosts";
 
 // Batch 5: migrate older-version stored data forward BEFORE any hook reads it
 // (module scope — runs before the App component's hooks read the stores).
@@ -191,6 +192,10 @@ export default function App() {
   const [claims, setClaims] = useLocalStoredState("claims", []);
   // v6.56.0: load plans group the shipments of one commercial movement.
   const [loadPlans, setLoadPlans] = useLocalStoredState("loadPlans", []);
+  // v6.68.0 (F-1/F-4): advance payments (zaliczki) + bank accounts registry —
+  // the two finance tables agreed pre-Supabase so the schema freezes complete.
+  const [advancePayments, setAdvancePayments] = useLocalStoredState("advancePayments", []);
+  const [bankAccounts, setBankAccounts] = useLocalStoredState("bankAccounts", []);
 
   // ─── v6.45.0 one-time DATA HEAL (test-round root causes B + C) ──────────────
   // Repairs: (C) shipments closed before the v6.44.0 close-posting fix (their
@@ -315,6 +320,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, warehouseInvoices, operationalCosts, pos]);
 
+  // v6.68.0 (D-34): SINGLE-ENTRY OVERHEAD — every register invoice with cost
+  // scope OVERHEAD mirrors into exactly one operational cost (replace-by-ref
+  // on source invoice:{id}); manual entries (salary, ZUS, taxes) untouched.
+  // Same-reference return when clean, so no effect loop; the fold above skips
+  // invoice:* sources, so the two mirrors can never chase each other.
+  useEffect(() => {
+    setOperationalCosts((prev: any[]) => {
+      const next = syncOverheadOpCosts(invoices, prev || []);
+      return JSON.stringify(next) !== JSON.stringify(prev || []) ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoices]);
+
   // v6.33.0 (A3-5 residue): one-shot fold of the legacy Finance creditNotes
   // array into the canonical notes model (idempotent by source tag), after
   // which they finally enter the receivable/payable totals (BP-37). The legacy
@@ -363,7 +381,7 @@ export default function App() {
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices} />;
       case "pos":

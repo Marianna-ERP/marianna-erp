@@ -72,6 +72,10 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
   // Invoices module now flow straight through to the ledger and P/L.
   (inp.invoices || []).forEach((inv: any) => {
     if (!inv || inv.paymentStatus === "Cancelled") return;
+    // v6.68.1 (owner ruling): a PRO-FORMA is the document an advance answers —
+    // a request for money, not yet a receivable/payable. It never enters the
+    // open totals; the FINAL invoice does, and the advance settles that one.
+    if (inv.isProforma) return;
     const isSales = inv.kind === "SALES";
     const gross = r2(n(inv.grossPLN) || n(inv.netPLN));
     if (gross <= 0 && !inv.number) return; // skip empty drafts (no number, no amount)

@@ -1,5 +1,7 @@
 import { useConfirm } from "./ui";
-import { parseBankCSV, matchBankLines, bankPaymentEvent } from "./bankReconciliation.domain";
+import { parseBankCSV, matchBankLines, bankPaymentEvent, upsertBankAccountFromStatement } from "./bankReconciliation.domain";
+import { advanceFromBankLine, advanceRemaining, applyAdvanceToInvoice, advanceSources, linkAdvanceToProforma } from "./advances.domain";
+import { realizedFxPLN } from "./payments.domain";
 import { applyPaymentEvent as bankApplyPaymentEvent } from "./payments.domain";
 import React, { useMemo, useState } from "react";
 import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
@@ -132,12 +134,80 @@ function newCostTemplate(): OperationalCost {
 
 // ─── v6.9: RECEIVABLES & PAYABLES VIEW ──────────────────────────────────────
 
+
+// ── v6.68.0 (F-1/F-4): ADVANCES ON ACCOUNT + BANK ACCOUNTS ────────────────────
+function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoices = [], setInvoices = null, bankAccounts = [] }: any) {
+  const [pick, setPick] = React.useState<Record<string, any>>({});
+  const [amt, setAmt] = React.useState<Record<string, string>>({});
+  const [err, setErr] = React.useState<Record<string, string>>({});
+  const openAdv = (advancePayments || []).filter((a: any) => advanceRemaining(a) > 0.005);
+  const outstandingOf = (i: any) => Math.round(((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)) * 100) / 100;
+  if (!openAdv.length && !(bankAccounts || []).length) return null;
+  function apply(a: any) {
+    const inv = (invoices || []).find((i: any) => String(i.id) === String(pick[a.id]));
+    if (!inv || typeof setInvoices !== "function" || typeof setAdvancePayments !== "function") return;
+    const r: any = applyAdvanceToInvoice(a, inv, amt[a.id] ?? Math.min(advanceRemaining(a), outstandingOf(inv)), { nextId, todayISO: () => new Date().toISOString().slice(0, 10) });
+    if (r.error) { setErr(e => ({ ...e, [a.id]: r.error })); return; }
+    setErr(e => ({ ...e, [a.id]: "" }));
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => String(i.id) === String(inv.id) ? r.invoice : i));
+    setAdvancePayments((prev: any[]) => (prev || []).map((x: any) => String(x.id) === String(a.id) ? r.advance : x));
+  }
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div style={{ flex: "1 1 380px", minWidth: 340 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>💠 Advances on account {openAdv.length ? `(${openAdv.length} open)` : ""}</div>
+          {!openAdv.length && <div style={{ fontSize: 11.5, color: "#94A3B8" }}>No unallocated advances. Record one from a bank line ("→ Advance").</div>}
+          {openAdv.map((a: any) => {
+            const rem = advanceRemaining(a);
+            const candidates = (invoices || []).filter((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && i.paymentStatus !== "Draft" && String(i.currency || "PLN").toUpperCase() === a.currency && outstandingOf(i) > 0.005);
+            return (
+              <div key={String(a.id)} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 190px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>{a.counterpartyName || "—"}</div>
+                  <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{a.date} · received {a.amount.toLocaleString("pl-PL")} {a.currency}</div>
+                  {a.proformaNumber
+                    ? <div style={{ fontSize: 10.5, fontWeight: 700, color: "#7C3AED" }}>↳ pro-forma {a.proformaNumber}</div>
+                    : (() => { const pf = (invoices || []).filter((i: any) => i.isProforma && i.paymentStatus !== "Cancelled" && String(i.currency || "PLN").toUpperCase() === a.currency);
+                        return pf.length ? <select value="" onChange={(e: any) => { const inv = pf.find((x: any) => String(x.id) === String(e.target.value)); if (!inv) return; const r: any = linkAdvanceToProforma(a, inv); if (!r.error) setAdvancePayments((prev: any[]) => (prev || []).map((x: any) => String(x.id) === String(a.id) ? r : x)); }} style={{ marginTop: 2, border: "1px dashed #DDD6FE", color: "#7C3AED", borderRadius: 6, padding: "3px 6px", fontSize: 10.5 }}>
+                          <option value="">link pro-forma… (owner ruling: every advance answers one)</option>
+                          {pf.map((i: any) => <option key={String(i.id)} value={i.id}>{i.number} · {i.counterparty?.name}</option>)}
+                        </select> : <div style={{ fontSize: 10, color: "#C4B5FD" }}>no pro-forma linked yet — mark one in Invoices (Document type → Pro-forma)</div>; })()}
+                </div>
+                <div style={{ fontSize: 12.5, fontWeight: 800, color: "#7C3AED", fontVariantNumeric: "tabular-nums" }}>{rem.toLocaleString("pl-PL")} {a.currency} left</div>
+                <select value={pick[a.id] ?? ""} onChange={(e: any) => setPick(p => ({ ...p, [a.id]: e.target.value }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, maxWidth: 230 }}>
+                  <option value="">— apply to invoice —</option>
+                  {candidates.map((i: any) => <option key={String(i.id)} value={i.id}>{i.number} · open {outstandingOf(i).toLocaleString("pl-PL")}</option>)}
+                </select>
+                <input type="number" value={amt[a.id] ?? ""} placeholder="amount" onChange={(e: any) => setAmt(m => ({ ...m, [a.id]: e.target.value }))} style={{ width: 92, border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 }} />
+                <button disabled={!pick[a.id]} onClick={() => apply(a)} style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: pick[a.id] ? "#7C3AED" : "#CBD5E1", color: "#fff", fontSize: 11.5, fontWeight: 800, cursor: pick[a.id] ? "pointer" : "not-allowed" }}>Apply</button>
+                {err[a.id] && <div style={{ width: "100%", fontSize: 11, color: "#B91C1C" }}>{err[a.id]}</div>}
+              </div>
+            );
+          })}
+        </div>
+        {(bankAccounts || []).length > 0 && (
+          <div style={{ flex: "0 1 260px" }}>
+            <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>🏛 Bank accounts</div>
+            {(bankAccounts || []).map((b: any) => (
+              <div key={String(b.id)} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11.5, padding: "4px 0", borderTop: "1px solid #F1F5F9" }}>
+                <div><b>{b.label || b.bank}</b> <span style={{ color: "#94A3B8" }}>{b.currency}</span></div>
+                <div style={{ fontVariantNumeric: "tabular-nums", color: "#334155" }}>{b.lastKnownBalance != null ? b.lastKnownBalance.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "—"}<span style={{ color: "#CBD5E1" }}> · {b.lastImportDate}</span></div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── v6.67.0 (D-33): BANK STATEMENT IMPORT — receivables-first, one-click confirm ──
 // Owner rulings: CSV (PKO + Santander formats auto-detected), matches are NEVER
 // auto-posted (the Confirm click is the act), tolerance ±0.05 in any currency.
 // A confirmed line becomes a standard payment event with source bank:{lineId} —
 // re-importing the same statement can never double-post.
-function BankImportPanel({ invoices = [], setInvoices = null, nextId }: any) {
+function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null }: any) {
   const [parsed, setParsed] = React.useState<any>(null);
   const [done, setDone] = React.useState<Record<string, string>>({});
   const [pick, setPick] = React.useState<Record<string, any>>({});
@@ -147,7 +217,12 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId }: any) {
   function onFile(f: any) {
     if (!f) return;
     const reader = new FileReader();
-    reader.onload = () => { setParsed(parseBankCSV(String(reader.result || ""))); setDone({}); setPick({}); };
+    reader.onload = () => {
+      const p = parseBankCSV(String(reader.result || ""));
+      setParsed(p); setDone({}); setPick({});
+      // v6.68.0 (F-4): every statement registers/refreshes its account.
+      if (typeof setBankAccounts === "function") setBankAccounts((prev: any[]) => upsertBankAccountFromStatement(prev || [], p, { nextId, todayISO: () => new Date().toISOString().slice(0, 10) }));
+    };
     reader.readAsText(f, "UTF-8");
   }
   function confirmLine(s: any, invoiceId: any) {
@@ -205,6 +280,9 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId }: any) {
                       ))}
                     </select>
                     <button disabled={chosen == null || chosen === ""} onClick={() => confirmLine(s, chosen)} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: chosen != null && chosen !== "" ? "#16A34A" : "#CBD5E1", color: "#fff", fontSize: 12, fontWeight: 800, cursor: chosen != null && chosen !== "" ? "pointer" : "not-allowed" }}>Confirm receipt</button>
+                    {typeof setAdvancePayments === "function" && (advanceSources(advancePayments).has(`bank:${s.line.id}`)
+                      ? <span style={{ fontSize: 11, fontWeight: 800, color: "#7C3AED" }}>✓ advance</span>
+                      : <button onClick={() => setAdvancePayments((prev: any[]) => [advanceFromBankLine(s.line, { nextId }), ...(prev || [])])} title="v6.68.0 (F-1): money received BEFORE any invoice exists — record it on account; apply it to invoices later from the Advances panel." style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>→ Advance</button>)}
                   </>
                 )}
               </div>
@@ -216,7 +294,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId }: any) {
   );
 }
 
-function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null }: any) {
+function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null }: any) {
   const { alert: lvAlert, dialogNode: lvNode } = useConfirm(); // P2-6
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
@@ -261,7 +339,10 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
   return (
     <>
       {lvNode}
-      <BankImportPanel invoices={invoices} setInvoices={setInvoices} nextId={nextId} />
+      {(() => { const fx = (invoices || []).reduce((s: number, i: any) => s + realizedFxPLN(i), 0);
+        return Math.abs(fx) > 0.005 ? <div style={{ fontSize: 11.5, fontWeight: 700, color: fx >= 0 ? "#065F46" : "#B91C1C", background: fx >= 0 ? "#ECFDF5" : "#FEF2F2", border: "1px solid " + (fx >= 0 ? "#A7F3D0" : "#FECACA"), borderRadius: 8, padding: "6px 12px", marginBottom: 10 }}>Realized FX {fx >= 0 ? "gain" : "loss"} to date: {fx.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN <span style={{ fontWeight: 400, color: "#64748B" }}>(from payments recorded with a bank settlement rate — v6.68.0 F-2)</span></div> : null; })()}
+      <BankImportPanel invoices={invoices} setInvoices={setInvoices} nextId={nextId} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
+      <AdvancesPanel advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} invoices={invoices} setInvoices={setInvoices} bankAccounts={bankAccounts} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#DC2626" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
@@ -489,6 +570,10 @@ export default function Finance({
   invoices = [],
   setInvoices = null,
   financeNotes = [],
+  advancePayments = [],
+  setAdvancePayments = null,
+  bankAccounts = [],
+  setBankAccounts = null,
 }: {
   orders?: any[];
   lots?: any[];
@@ -506,6 +591,10 @@ export default function Finance({
   setInvoices?: any;
   financeNotes?: any[];
   claims?: any[];
+  advancePayments?: any[];
+  setAdvancePayments?: any;
+  bankAccounts?: any[];
+  setBankAccounts?: any;
 }) {
   const { confirm: finConfirm, alert: finAlert, dialogNode: finNode } = useConfirm(); // P2-6
   const [mode, setMode] = useState<MarginMode>("forecast");
@@ -640,7 +729,7 @@ export default function Finance({
         </div>
 
         {tab === "ledger" ? (
-          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} />
+          <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
         ) : tab === "warehouse" ? (
           <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />
         ) : tab === "pl" ? (
@@ -653,7 +742,7 @@ export default function Finance({
                     the cost-ownership model. */}
                 <StatBlock label="COGS" value={fmtPLN(totalAgg.totalCOGSPLN)} valueColor="#7C3AED" sub="product / landed cost" />
                 <StatBlock label="DIRECT COSTS" value={fmtPLN(totalAgg.totalDirectPLN)} valueColor="#F59E0B" sub="shipments / logistics" />
-                <StatBlock label="CONTRIBUTION" value={fmtPLN(totalAgg.totalContributionPLN)} valueColor={totalAgg.totalContributionPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgContributionPct)} />
+                <StatBlock label="CONTRIBUTION (before overhead)" value={fmtPLN(totalAgg.totalContributionPLN)} valueColor={totalAgg.totalContributionPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgContributionPct)} />
                 <StatBlock label="OVERHEAD" value={fmtPLN(totalAgg.totalOverheadPLN)} valueColor="#64748B" sub="allocated operating cost" />
                 <StatBlock label="NET P/L" value={fmtPLN(totalAgg.totalNetMarginPLN)} valueColor={totalAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgNetMarginPct)} />
               </div>

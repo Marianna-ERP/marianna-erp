@@ -58,6 +58,7 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
   const remaining = outstandingAmount(inv);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [amount, setAmount] = useState(String(remaining || ""));
+  const [settleRate, setSettleRate] = useState(""); // v6.68.0 (F-2)
   const [method, setMethod] = useState("Bank transfer");
   const [note, setNote] = useState("");
   const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" } as any;
@@ -70,6 +71,10 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
         <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inp} />
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Amount ({inv.currency})</div>
         <input type="number" value={amount} onChange={e => setAmount(e.target.value)} style={inp} />
+        {String(inv.currency || "PLN").toUpperCase() !== "PLN" && (<>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#888", margin: "8px 0 3px" }}>Bank settlement rate → PLN <span style={{ fontWeight: 400 }}>(optional — records the realized FX gain/loss vs the invoice's locked {inv.fxRate})</span></div>
+          <input type="number" step="0.0001" value={settleRate} onChange={e => setSettleRate(e.target.value)} placeholder={`e.g. ${inv.fxRate}`} style={inp} />
+        </>)}
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Method</div>
         <select value={method} onChange={e => setMethod(e.target.value)} style={inp}>
           {PAYMENT_METHODS.map((m: string) => <option key={m}>{m}</option>)}
@@ -78,7 +83,7 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. bank ref, partial 1/2" style={inp} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
           <button onClick={onClose} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
-          <button onClick={() => onSave({ date, amount, method, note })} disabled={!(parseFloat(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseFloat(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseFloat(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
+          <button onClick={() => onSave({ date, amount, method, note, settlementFxRate: settleRate })} disabled={!(parseFloat(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseFloat(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseFloat(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
         </div>
       </div>
     </div>
@@ -557,7 +562,7 @@ export default function Invoices(props: any) {
             return (
               <div key={i.id} onClick={() => { setSelId(i.id); setView("detail"); }} style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "11px 16px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><CatBadge cat={i.category} /></div>
-                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: i.paymentStatus === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: i.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "ui-monospace, Menlo, monospace" }} title={i.paymentStatus === "Cancelled" ? "Cancelled — kept on record, excluded from the ledger" : undefined}>{i.number || "—"}</div><DirPill inv={i} /></div>
+                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: i.paymentStatus === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: i.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "ui-monospace, Menlo, monospace" }} title={i.paymentStatus === "Cancelled" ? "Cancelled — kept on record, excluded from the ledger" : undefined}>{i.number || "—"}</div>{i.isProforma && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", padding: "1px 5px", borderRadius: 4 }}>PRO-FORMA</span>}<DirPill inv={i} /></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{i.counterparty?.name || "—"}</div>{i.counterparty?.nip && <div style={{ fontSize: 11, color: "#AAA" }}>NIP {i.counterparty.nip}</div>}</div>
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(i.issueDate) || "—"}</div>
                 <div><div style={{ fontSize: 12, color: od ? "#DC2626" : "#555", fontWeight: od ? 600 : 400 }}>{formatDMY(i.dueDate) || "—"}</div>{od && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>
@@ -733,6 +738,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
           <Card style={{ marginBottom: 16 }}><SectionTitle>INVOICE DETAILS</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               {!isSales && <div><Lbl>Category</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{(["PURCHASE", "FORWARDER", "BROKER", "WAREHOUSE", "TRANSPORT", "OTHER"] as InvoiceCategory[]).map(c => <option key={c} value={c}>{CATEGORY_META[c].label}</option>)}</Sel></div>}
+              <div><Lbl>Document type</Lbl><Sel value={form.isProforma ? "PROFORMA" : "FINAL"} onChange={(e: any) => sf("isProforma", e.target.value === "PROFORMA")}><option value="FINAL">Final invoice</option><option value="PROFORMA">Pro-forma (advance request — not in the ledger)</option></Sel></div>
               {!isSales && <div><Lbl>Cost scope</Lbl><Sel value={form.costScope} onChange={(e: any) => sf("costScope", e.target.value)}><option value="SHIPMENT">Shipment-scoped</option><option value="MONTHLY_SHARED">Monthly shared</option><option value="OVERHEAD">Overhead</option></Sel></div>}
               <div><Lbl>Invoice number {isSales && <span style={{ color: "#BBB", fontWeight: 400 }}>(Fakturownia assigns on Send)</span>}</Lbl><Inp value={form.number} onChange={(e: any) => sf("number", e.target.value)} placeholder={isSales ? "auto / optional" : "supplier's number"} /></div>
               <div><Lbl>Issue date</Lbl><Inp type="date" value={form.issueDate} onChange={(e: any) => sf("issueDate", e.target.value)} /></div>
