@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { clientExposurePLN } from "./payments.domain";
 import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
@@ -1143,8 +1144,8 @@ function soTermsMissing(o: any): string | null {
   return null;
 }
 
-function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
-  const { confirm: ofConfirm, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning)
+function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail , allInvoices = [] }: any) {
+  const { confirm: ofConfirm, alert: ofAlert, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning) + v6.63.0 (D-10 forward-only alert)
   // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
   // this session shows in the destination picker without a browser refresh.
   const liveLocations = (() => {
@@ -1203,6 +1204,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
       if (clash) result[field] = clash.number;
     });
     return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order.importPermitNo, order.acidNo, order.id, allOrders]);
 
   // Source picker state
@@ -1460,7 +1462,27 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   const nv = e.target.value;
                   const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status));
                   const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
+                  // v6.63.0 (D-10, ruling D4): a locked SO moves FORWARD only.
+                  // The old dropdown let Shipped→Draft happen silently, with the
+                  // shipped kg and postings left orphaned behind the label (M2).
+                  const curOrd = (SO_STATUSES[order.status || "Draft"] || {}).order ?? 0;
+                  const nvOrd = (SO_STATUSES[nv] || {}).order ?? 0;
+                  if (wasLocked && nv !== "Cancelled" && nvOrd < curOrd) {
+                    await ofAlert({ tone: "warn", title: "Forward only", message: `This sales order is ${order.status} — goods have physically moved, so its status can only advance (or be Cancelled, which reverses the postings). Moving it back to ${nv} would leave shipped kilograms behind a label that denies them.` });
+                    return;
+                  }
                   if (willLock && !wasLocked) {
+                    // v6.68.0 (F-3): credit control at the moment of commitment.
+                    const clientRec = (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(order.client?.name || "").trim().toLowerCase());
+                    const limit = parseFloat(String(clientRec?.creditLimitPLN ?? "")) || 0;
+                    if (limit > 0) {
+                      const soPLN = (order.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) * (parseFloat(String(it.unitPrice)) || 0)), 0) * (parseFloat(String(order.fxRate)) || 1);
+                      const exposure = clientExposurePLN(order.client?.name, allInvoices || []);
+                      if (exposure + soPLN > limit) {
+                        const goOn = await ofConfirm({ tone: "danger", title: "Credit limit exceeded", message: `${order.client?.name}: open receivables ${exposure.toLocaleString("pl-PL")} PLN + this order ≈ ${Math.round(soPLN).toLocaleString("pl-PL")} PLN exceed the limit of ${limit.toLocaleString("pl-PL")} PLN.\n\nConfirm the order anyway?`, confirmLabel: "Confirm anyway", cancelLabel: "Hold the order" });
+                        if (!goOn) return;
+                      }
+                    }
                     const ok = await ofConfirm({ tone: "warn", title: `Move to ${nv}?`, message: `Once this sales order is ${nv}, it becomes LOCKED — line items, quantities, sourcing and the shipping address can no longer be changed. To correct something afterwards you'd issue a credit/debit note or a new order.\n\nProceed?`, confirmLabel: `Yes, move to ${nv}`, cancelLabel: "Not yet" });
                     if (!ok) return;
                   }
@@ -1471,7 +1493,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   {Object.keys(SO_STATUSES).map(s => {
                     // Draft and Cancelled are always available; everything else requires all lines to be
                     // (a) sourced AND (b) have enough combined available qty to cover the demanded qty.
-                    if (s === "Draft" || s === "Cancelled") return <option key={s} value={s}>{s}</option>;
+                    const curOrd2 = (SO_STATUSES[order.status || "Draft"] || {}).order ?? 0;
+                    const isBackward = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status)) && s !== "Cancelled" && ((SO_STATUSES[s] || {}).order ?? 0) < curOrd2;
+                    if (s === "Draft" || s === "Cancelled") return <option key={s} value={s} disabled={s === "Draft" && isBackward}>{s}{s === "Draft" && isBackward ? "  — forward only" : ""}</option>;
+                    if (isBackward) return <option key={s} value={s} disabled>{s}  — forward only</option>;
                     const needsSource = !sourcing.allSourced;
                     const needsSupply = overageCount > 0;
                     const needsPOReady = poReadinessIssues.length > 0;
@@ -1812,7 +1837,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
                     )}
                     <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
-                    <div style={{ minWidth: 0 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 4px", fontSize: 12.5, fontWeight: 700, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
+                    <div style={{ minWidth: 96 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 2px", fontSize: 12, fontWeight: 700, color: "#111", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
                   <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
@@ -1852,7 +1877,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
-  const computedLinks = computedSOLinks(order, { shipments, invoices: [], lots });
+  const computedLinks = computedSOLinks(order, { shipments, invoices: (soInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), lots });
   // P/L visibility rule:
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
@@ -1904,8 +1929,10 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
           {(() => {
             // Issue Invoice button: only meaningful after Shipped, hidden if already invoiced.
             const shippedOrLater = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status);
-            const alreadyInvoiced = (order.linkedInvoices && order.linkedInvoices.length > 0)
-              || soInvoices.length > 0; // v6.33.0 (A3-6): register is the source of truth
+            // v6.66.0 (D-21): the register — non-cancelled SALES invoices only — is
+            // the SOLE truth. The stored order.linkedInvoices array is never cleared
+            // on cancel, so consulting it hid this button forever after a cancel.
+            const alreadyInvoiced = soInvoices.some((iv: any) => iv.paymentStatus !== "Cancelled");
             if (!shippedOrLater || alreadyInvoiced || !onIssueInvoice) return null;
             return (
               <button onClick={onIssueInvoice} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
@@ -2182,6 +2209,7 @@ export default function SalesOrders({
   userName = "",
   productCatalog = [],
   setProductCatalog,
+  onStartClaim = null,
 }: any = {}) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: soDialogNode } = useConfirm(); // P2-6
   // v6.35.1: cancelled document numbers (POs, SOs, shipments) for struck-through refs.
@@ -2392,6 +2420,17 @@ export default function SalesOrders({
   }
 
   async function saveOrder(o) {
+    // v6.65.0 (D-18): kilos are the single stored quantity (v6.61 ruling), so a
+    // box-priced line must land in storage with its derived kg in `qty` and its
+    // box weight in `kgPerBox` — every engine (reservations, margin, settlement,
+    // allocation) reads those raw fields and must never learn about boxes.
+    o = { ...o, items: (o.items || []).map((it: any) => {
+      if (pricingUnitOf(it) !== "box") return it;
+      const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
+      if (kgPerBox <= 0) return it; // unresolved — the form already warns loudly
+      const boxes = Math.round(parseFloat(String(it.boxes || 0)) || 0);
+      return { ...it, kgPerBox, qty: Math.round(boxes * kgPerBox * 1000) / 1000 };
+    }) };
     // Batch 6b: hard confirm-gate — no SO past Draft without its sell terms.
     const termsMissing = soTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
@@ -2544,7 +2583,7 @@ export default function SalesOrders({
       });
     }
     if (extSetFinanceNotes) {
-      const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
+      const inv = (extInvoices || []).find((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => String(lk.number) === String(soDoc.number)));
       const cur = cc.cur || inv?.currency || soDoc.currency || "PLN";
       const fx = defaultFxRate(cur);
       extSetFinanceNotes((prev: any[]) => [...(prev || []), {
@@ -2631,7 +2670,7 @@ export default function SalesOrders({
             { const _m = soTermsMissing(form); if (_m) { await uiAlert({ tone: "warn", title: "Terms incomplete", message: `Cannot email this SO without ${_m} — the client must see the delivery terms.` }); return; } }
             setEmailOrder(form);
           }}
-        />
+         allInvoices={extInvoices} />
       </>
     );
   }
@@ -2677,7 +2716,25 @@ export default function SalesOrders({
           onIssueInvoice={() => setInvoiceOrder(selected)}
           onDelete={deleteOrder}
           onRecordCollection={() => setCollectionFor(selected)}
-          onRecordClientClaim={() => { setClientClaimFor(selected); setCc({ lotId: "", qty: "", value: "", cur: selected.currency || "PLN", note: "" }); }}
+          onRecordClientClaim={() => {
+            // v6.63.0 (D-13): one claims UI — this button now opens the Claims module
+            // pre-filled with the SO, its client and its sales invoice. The old local
+            // modal remains only as a fallback for standalone use.
+            if (typeof onStartClaim === "function") {
+              const sinv = (extInvoices || []).find((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => lk.type === "SO" && String(lk.number) === String(selected.number)));
+              const clientContact = (extContacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(selected.client?.name || "").trim().toLowerCase());
+              onStartClaim({
+                respondentKind: "Client", direction: "CONCESSION",
+                respondentName: selected.client?.name || "", contactId: clientContact ? clientContact.id : null,
+                subjects: [
+                  { kind: "SO", ref: selected.number },
+                  ...(sinv ? [{ kind: "INVOICE", ref: sinv.number }] : []),
+                ],
+                notes: `Client claim on ${selected.number}`,
+              });
+              return;
+            }
+            setClientClaimFor(selected); setCc({ lotId: "", qty: "", value: "", cur: selected.currency || "PLN", note: "" }); }}
         />
       </>
     );
@@ -2729,7 +2786,7 @@ export default function SalesOrders({
         {/* Table */}
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-            {["SO NUMBER", "CLIENT", "ORDER", "DELIVERY", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
+            {["SO NUMBER", "CLIENT", "ORDER DATE", "DELIVERY DATE", "STATUS", "TOTAL", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>

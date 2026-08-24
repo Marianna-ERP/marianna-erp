@@ -108,7 +108,17 @@ export async function createInvoice(c: FakturowniaConfig, body: any): Promise<Fk
       body: JSON.stringify({ ...body, api_token: c.apiToken }),
     });
     if (!res.ok) {
-      return { ok: false, status: res.status, error: res.status === 401 ? "Unauthorized — the API token may be read-only or invalid." : res.status === 422 ? "Fakturownia rejected the invoice data (HTTP 422) — check required fields." : `Fakturownia answered HTTP ${res.status}.` };
+      // v6.63.0 (D-07): Fakturownia's error body NAMES the offending fields —
+      // discarding it made every 422 undiagnosable ("check required fields").
+      let detail = "";
+      try {
+        const body = await res.json();
+        detail = typeof body === "string" ? body : JSON.stringify(body?.message ?? body?.errors ?? body).slice(0, 400);
+      } catch { try { detail = (await res.text()).slice(0, 400); } catch {} }
+      const base = res.status === 401 ? "Unauthorized — the API token may be read-only or invalid."
+        : res.status === 422 ? "Fakturownia rejected the invoice data (HTTP 422)."
+        : `Fakturownia answered HTTP ${res.status}.`;
+      return { ok: false, status: res.status, error: detail ? `${base} Details: ${detail}` : base };
     }
     return { ok: true, data: await res.json(), status: res.status };
   } catch (err: any) {

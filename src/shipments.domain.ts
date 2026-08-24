@@ -60,6 +60,12 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     const destId = lastLeg.toLocationId || sh.destinationLocationId || lot.locationId;
     const fromId = firstLeg.fromLocationId || lot.locationId;
     const currentPhysical = num(lot.physicalKg);
+    // v6.63.0 (D-03): anchor the lot's ORIGINAL location before this posting moves
+    // it. Cancellation voids the movements and recomputeLotFromMovements falls back
+    // to baseLocationId — without the anchor it fell back to lot.locationId, which
+    // this very posting had already overwritten with the DESTINATION, so a cancelled
+    // transfer left the lot showing at a place the goods never (officially) reached.
+    const baseAnchor = lot.baseLocationId ?? lot.locationId ?? fromId ?? null;
     const goodsSoRef = relatedGoods.map((g: any) => g.soRef).find(Boolean);
     // v6.51.0: stamp the movement with the date the goods actually MOVED, not the
     // day the record was created. Storage days and every date-based report depend
@@ -103,12 +109,12 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
 
     if (purpose === "TRANSFER") {
       const movement = { id: deps.nextId(), date, type: "TRANSFER", qtyKg: qty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `TRANSFER via ${sh.number}` };
-      return { ...lot, locationId: destId, movements: [...(lot.movements || []), movement] };
+      return { ...lot, baseLocationId: baseAnchor, locationId: destId, movements: [...(lot.movements || []), movement] };
     }
 
     if (purpose === "RETURN") {
       const movement = { id: deps.nextId(), date, type: "REVERSAL", qtyKg: qty, fromId, toId: destId, soRef: goodsSoRef || null, shipmentRef: sh.number, note: `RETURN via ${sh.number} — restored to stock pending inspection` };
-      return { ...lot, physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000, locationId: destId, movements: [...(lot.movements || []), movement] };
+      return { ...lot, baseLocationId: baseAnchor, physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000, locationId: destId, movements: [...(lot.movements || []), movement] };
     }
 
     // INBOUND
@@ -129,6 +135,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, fromId: destId, toId: destId, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — direct pass-through to client` };
       return {
         ...lot,
+        baseLocationId: baseAnchor,
         receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000,
         physicalKg: currentPhysical, // net zero — never in our stock
         locationId: destId,
@@ -141,6 +148,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       const movement = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number}` };
       return {
         ...lot,
+        baseLocationId: baseAnchor,
         locationId: destId,
         receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000,
         physicalKg: Math.round((currentPhysical + qty) * 1000) / 1000,
@@ -166,6 +174,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       const takeQty = Math.min(qty, stillOutstanding);
       const movement = { id: deps.nextId(), date, type: "IN", qtyKg: takeQty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — further delivery against ${lot.poRef || "the order"}` };
       return {
+        baseLocationId: baseAnchor,
         ...lot,
         locationId: destId,
         receivedKg: Math.round((receivedSoFar + takeQty) * 1000) / 1000,
@@ -417,4 +426,34 @@ export function carriedRefs(sh: any): { poRefs: string[]; soRefs: string[]; lotR
     poRefs: (sh?.poRefs || []).map(String), soRefs: (sh?.soRefs || []).map(String), lotRefs: (sh?.lotRefs || []).map(String),
   };
   return { poRefs: Array.from(pos), soRefs: Array.from(sos), lotRefs: Array.from(lots) };
+}
+
+
+// ── v6.66.0: OVER-SHIP GUARD (owner ruling, Round 3) ─────────────────────────
+// "Do we have a guard that would not allow to ship the same product twice?"
+// The picker already warns; this makes the SAVE itself confirm-gated. Pure and
+// testable: given the draft, all shipments and all SOs, name every goods row
+// that would push an SO line past what was ordered.
+export function overShipReport(draft: any, allShipments: any[], orders: any[]): Array<{ soRef: string; product: string; orderedKg: number; alreadyKg: number; thisKg: number; exceedKg: number }> {
+  const out: any[] = [];
+  const rows = (draft?.goods || []).filter((g: any) => g?.soRef && Number(g?.qtyKg) > 0);
+  const bySo: Record<string, { product: string; thisKg: number }[]> = {};
+  rows.forEach((g: any) => { (bySo[String(g.soRef)] = bySo[String(g.soRef)] || []).push({ product: String(g.product || ""), thisKg: Number(g.qtyKg) || 0 }); });
+  Object.keys(bySo).forEach(soRef => {
+    const so = (orders || []).find((o: any) => String(o.number) === String(soRef));
+    if (!so || so.status === "Cancelled") return;
+    const products = new Set(bySo[soRef].map(r => r.product));
+    products.forEach(product => {
+      const eqP = (v: any) => !product || String(v || "") === product;
+      const orderedKg = (so.items || []).filter((it: any) => eqP(it.product)).reduce((a: number, it: any) => a + (Number(it.qty) || 0), 0);
+      if (!(orderedKg > 0)) return; // no stated kg → nothing to guard against
+      const alreadyKg = (allShipments || [])
+        .filter((s: any) => s.status !== "Cancelled" && String(s.number) !== String(draft?.number))
+        .reduce((a: number, s: any) => a + (s.goods || []).filter((g: any) => String(g.soRef) === soRef && eqP(g.product)).reduce((x: number, g: any) => x + (Number(g.qtyKg) || 0), 0), 0);
+      const thisKg = bySo[soRef].filter(r => r.product === product).reduce((a, r) => a + r.thisKg, 0);
+      const exceedKg = Math.round((alreadyKg + thisKg - orderedKg) * 1000) / 1000;
+      if (exceedKg > 0) out.push({ soRef, product: product || "(any)", orderedKg, alreadyKg, thisKg, exceedKg });
+    });
+  });
+  return out;
 }

@@ -27,6 +27,10 @@ export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: s
 export interface InvoicePosition { name: string; quantity: number; unit?: string; vatRate: number; netPrice?: number; grossTotal?: number; }
 
 export interface Invoice {
+  /** v6.68.1 (owner ruling): a pro-forma is the document an advance answers —
+   *  excluded from receivable/payable totals; pushes to Fakturownia as kind
+   *  "proforma"; the FINAL invoice is what advances get applied to. */
+  isProforma?: boolean;
   id: number;
   kind: InvoiceKind;
   category: InvoiceCategory;
@@ -115,9 +119,18 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
     // previously only the product name and quantity were copied, so the invoice
     // showed amounts with no idea what had been sold.
     positions: arr(order.items).map((it: any) => {
-      const qty = n(it.qty), price = n(it.unitPrice);
+      // v6.65.0 (D-18): a box-priced line invoices in ITS unit — quantity is the
+      // box count, unitPrice per box; the kilos ride along in the description.
+      // (Previously quantity copied it.qty, which is empty until derived, so a
+      // box line produced a 0-quantity position and Fakturownia rejected it.)
+      const isBox = String(it.pricingUnit || "") === "box";
+      const boxes = Math.round(n(it.boxes));
+      const kgQty = n(it.qty) || (isBox && n(it.kgPerBox) > 0 ? r2(boxes * n(it.kgPerBox)) : 0);
+      const qty = isBox && boxes > 0 ? boxes : kgQty;
+      const price = n(it.unitPrice);
       const lineNet = r2(qty * price);
-      const descr = [it.product, it.variety, it.size ? `cal. ${it.size}` : "", it.quality ? `kl. ${it.quality}` : ""]
+      const descr = [it.product, it.variety, it.size ? `cal. ${it.size}` : "", it.quality ? `kl. ${it.quality}` : "",
+        isBox && kgQty ? `${boxes} × ${it.packaging || "box"} = ${kgQty.toLocaleString("pl-PL")} kg` : ""]
         .filter(Boolean).join(" · ");
       return {
         name: descr || it.product || "",
@@ -125,7 +138,7 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
         size: it.size || "", quality: it.quality || "",
         origin: it.origin || "", cnCode: it.cnCode || "",
         packaging: it.packaging || "", pallets: n(it.pallets) || undefined,
-        quantity: qty, unit: it.unit || "kg",
+        quantity: qty, unit: isBox ? "box" : (it.unit || "kg"),
         unitPrice: price || undefined,
         netTotal: lineNet || undefined,
         vatRate,
@@ -214,7 +227,20 @@ export function migrateLegacyInvoices(opts: {
   });
 
   // 2. COST / WAREHOUSE from warehouseInvoices (monthly shared)
+  // v6.64.1 (D-17): number-level twin guard. The fold's pushIf only knows its own
+  // source markers, so a register invoice written DIRECTLY (e.g. by an import)
+  // with the same legal number + counterparty was invisible to it and got folded
+  // again. Same number from a DIFFERENT counterparty is legitimate and still folds.
+  const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
+  const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
+  const registerTwins = new Set(
+    arr(opts.existing)
+      .filter((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && String(i.number || "").trim())
+      .map((i: any) => normNo(i.number) + "|" + normParty(i.counterparty?.name)));
+  const hasTwin = (number: any, party: any) => registerTwins.has(normNo(number) + "|" + normParty(party));
+
   arr(opts.warehouseInvoices).forEach((w: any) => {
+    if (hasTwin(w.invoiceNo, w.warehouseName)) return; // v6.64.1 (D-17)
     const src = `migrated:warehouseInvoice:${w.id}`;
     pushIf(src, () => {
       const fx = resolveFxRate(w.fxRate, w.currency);
@@ -240,6 +266,8 @@ export function migrateLegacyInvoices(opts: {
   // 3. COST from operationalCosts that carry an invoice number
   arr(opts.operationalCosts).forEach((c: any) => {
     if (!String(c.invoiceNo || "").trim()) return; // payroll/taxes without an invoice stay out
+    if (String(c.source || "").startsWith("invoice:")) return; // v6.68.0 (D-34): this opCost IS a mirror of a register invoice — folding it back would loop
+    if (hasTwin(c.invoiceNo, c.supplierName)) return; // v6.64.1 (D-17)
     const src = `migrated:opCost:${c.id}`;
     pushIf(src, () => {
       const fx = resolveFxRate(c.fxRate, c.currency);
@@ -304,14 +332,27 @@ export function migrateLegacyInvoices(opts: {
 // Builds the POST /invoices.json body for a SALES invoice. Auto-numbering (number:null).
 // gov_save_and_send defaults OFF — KSeF stays Fakturownia-managed for now.
 export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean }) {
-  const positions = arr<InvoicePosition>(inv.positions).map(p => ({
-    name: p.name || "—",
-    quantity: n(p.quantity) || 1,
-    quantity_unit: p.unit || "kg",
-    tax: n(p.vatRate),
-    total_price_gross: p.grossTotal != null ? r2(n(p.grossTotal)) : undefined,
-    total_price_net: p.grossTotal == null && p.netPrice != null ? r2(n(p.netPrice) * (n(p.quantity) || 1)) : undefined,
-  }));
+  // v6.65.0 (D-07b): Fakturownia requires total_price_gross per position and her
+  // first live push proved a position can arrive without stored totals. The
+  // payload now derives them in order of preference — stored gross → stored net
+  // ×(1+VAT) → quantity×unitPrice×(1+VAT) → the invoice's own gross when it is
+  // a single-position document — and never sends a blank.
+  const positions = arr<InvoicePosition>(inv.positions).map((p, _i, all) => {
+    const qty = n(p.quantity) || 1;
+    const vat = n(p.vatRate ?? inv.vatRate);
+    let gross = p.grossTotal != null ? r2(n(p.grossTotal)) : 0;
+    if (!gross && (p as any).netTotal != null) gross = r2(n((p as any).netTotal) * (1 + vat / 100));
+    if (!gross && (p as any).unitPrice != null) gross = r2(qty * n((p as any).unitPrice) * (1 + vat / 100));
+    if (!gross && (p as any).netPrice != null) gross = r2(qty * n((p as any).netPrice) * (1 + vat / 100));
+    if (!gross && all.length === 1) gross = r2(n(inv.grossAmount));
+    return {
+      name: p.name || "—",
+      quantity: qty,
+      quantity_unit: p.unit || "kg",
+      tax: vat,
+      total_price_gross: gross || r2(n(inv.grossAmount) / (all.length || 1)),
+    };
+  }).filter(p => n(p.total_price_gross) > 0);
   // If no per-line positions exist (migrated invoices), fall back to one summary line.
   const safePositions = positions.length ? positions : [{
     name: inv.notes?.slice(0, 80) || "Sales invoice", quantity: 1, quantity_unit: "szt.",
@@ -320,7 +361,7 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
   const body: any = {
     api_token: opts.apiToken,
     invoice: {
-      kind: "vat",
+      kind: inv.isProforma ? "proforma" : "vat", // v6.68.1: pro-formas push as pro-formas
       number: null,                 // Fakturownia auto-numbers (Q3-a)
       issue_date: inv.issueDate || undefined,
       sell_date: inv.saleDate || inv.issueDate || undefined,
@@ -333,8 +374,11 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
       positions: safePositions,
     },
   };
-  if (opts.sellerName) body.invoice.seller_name = opts.sellerName;
-  if (opts.sellerTaxNo) body.invoice.seller_tax_no = opts.sellerTaxNo;
+  // v6.66.0 (D-07c): seller fields removed. Sending seller_name made Fakturownia
+  // try to CREATE a department, which the account's bank-account security level
+  // rightly blocks (API-injected departments are an invoice-fraud vector). A
+  // single-company account applies its default department automatically.
+
   if (opts.govSaveAndSend) body.gov_save_and_send = true; // default OFF (Q3-c)
   return body;
 }
@@ -362,5 +406,12 @@ export interface FinanceNote {
 // Net adjustment a note applies to an invoice's effective amount (PLN).
 export function noteSignedPLN(note: FinanceNote): number {
   const mag = r2(n(note.amountPLN) || n(note.amount) * resolveFxRate(note.fxRate, note.currency));
-  return note.noteType === "DEBIT" ? mag : -mag;
+  const base = note.noteType === "DEBIT" ? mag : -mag;
+  // v6.63.0 (owner axiom): relative to the linked invoice's open amount, a note
+  // issued by the OTHER side of the usual issuer flips its sign — e.g. a DEBIT
+  // note WE issue against a supplier's cost invoice (claim recovery) REDUCES
+  // what remains payable on it. Legacy notes (no issuedBy) keep the old sign.
+  const issuedBy = String((note as any).issuedBy || "").toUpperCase();
+  const legacyDefault = note.direction === "incoming" ? "COUNTERPARTY" : "US";
+  return (issuedBy === "US" || issuedBy === "COUNTERPARTY") && issuedBy !== legacyDefault ? -base : base;
 }

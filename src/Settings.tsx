@@ -4,6 +4,8 @@ import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBack
 import { APP_VERSION } from "./version";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
+import { referencesToLocation } from "./referenceGuards";
+import { renameCatalogItem } from "./productCatalog";
 import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
@@ -55,7 +57,7 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
 // locations are fully editable; logistics points and counterparty warehouses are
 // listed read-only with a pointer to Parties. Changes reload the app so every
 // module that snapshots LOCATIONS at import picks them up (the documented pattern).
-function LocationsPanel() {
+function LocationsPanel({ refStores = {} }: any) {
   const { confirm: lpConfirm, alert: lpAlert, dialogNode: lpNode } = useConfirm(); // P2-6
   const [q, setQ] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState("All");
@@ -133,7 +135,16 @@ function LocationsPanel() {
                 </>) : (<>
                   {editable && <button onClick={() => startEdit(l)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Edit</button>}
                   {overridden && <button title="Restore the built-in details" onClick={() => { clearLocationOverride(Number(l.id)); reloadNote(); }} style={{ border: "1px solid #FDE68A", background: "#fff", color: "#B45309", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Reset</button>}
-                  {src === "Custom" && <button onClick={async () => { if (await lpConfirm({ tone: "danger", title: `Remove ${l.name}?`, message: "Documents that referenced it keep only the plain text.", confirmLabel: "Remove" })) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Remove</button>}
+                  {src === "Custom" && <button onClick={async () => {
+                    // v6.63.0 (D-04, M8): a location still referenced by lots, movements,
+                    // shipments/legs, PO/SO destinations or a warehouse tariff must not be
+                    // removable — removing it blanked the lot's location with no fallback.
+                    const refs = referencesToLocation(Number(l.id), refStores);
+                    if (refs.total > 0) {
+                      await lpAlert({ tone: "warn", title: `${l.name} is still in use`, message: `It can't be removed while referenced by:\n\n${refs.blockers.map((b: string) => "• " + b).join("\n")}\n\nRe-point or complete those documents first; an unused location can then be removed.` });
+                      return;
+                    }
+                    if (await lpConfirm({ tone: "danger", title: `Remove ${l.name}?`, message: "Nothing references this location. It will be removed.", confirmLabel: "Remove" })) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Remove</button>}
                 </>)}
               </div>
             </div>
@@ -259,19 +270,52 @@ function PackagingPanel({ types, setTypes }: any) {
   );
 }
 
-function ProductCatalogPanel({ catalog, setCatalog }: any) {
+function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
   const { confirm: pcConfirm, alert: pcAlert, dialogNode: pcNode } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
   const [vDraft, setVDraft] = useState<Record<string, string>>({});
+  const [catQuery, setCatQuery] = useState(""); // v6.63.0 (D-12) — declared with the other hooks (rules-of-hooks)
   const fileRef = useRef<HTMLInputElement>(null);
   if (!setCatalog) return null;
-  const items = catalog || [];
+  // v6.63.0 (D-12, M9): filter box + rename. Renames do NOT cascade into existing
+  // PO/SO lines and lots (they keep the typed name), so the dialog states exactly
+  // how many document lines will keep the old name.
+  const usageCount = (name: string) => {
+    const eqName = (v: any) => String(v || "").trim().toLowerCase() === String(name).trim().toLowerCase();
+    let n = 0;
+    (refStores.pos || []).forEach((p: any) => (p.items || []).forEach((it: any) => { if (eqName(it.product)) n++; }));
+    (refStores.orders || []).forEach((o: any) => (o.items || []).forEach((it: any) => { if (eqName(it.product)) n++; }));
+    (refStores.lots || []).forEach((l: any) => { if (eqName(l.product)) n++; });
+    return n;
+  };
+  const renameItem = async (item: string) => {
+    const used = usageCount(item);
+    const next = typeof window !== "undefined" ? window.prompt(`Rename "${item}" to:`, item) : null;
+    if (!next || !String(next).trim() || String(next).trim() === item) return;
+    const target = String(next).trim();
+    if ((catalog || []).some((c: any) => String(c.item).toLowerCase() === target.toLowerCase())) {
+      await pcAlert({ tone: "warn", title: "Name already exists", message: `"${target}" is already in the catalog. To merge two items, remove one and keep its varieties on the other.` });
+      return;
+    }
+    const note = used > 0 ? `\n\n⚠ ${used} existing PO/SO line(s) and lot(s) keep the OLD name "${item}" — renames don't cascade into issued documents. They will show as "(not in list)" until edited.` : "";
+    if (!(await pcConfirm({ tone: "warn", title: `Rename "${item}" → "${target}"?`, message: `New documents will offer "${target}".${note}`, confirmLabel: "Rename" }))) return;
+    setCatalog((c: any) => renameCatalogItem(c || [], item, target));
+  };
+  const itemsAll = catalog || [];
+  const items = catQuery.trim()
+    ? itemsAll.filter((c: any) => String(c.item).toLowerCase().includes(catQuery.trim().toLowerCase())
+        || (c.varieties || []).some((v: string) => String(v).toLowerCase().includes(catQuery.trim().toLowerCase())))
+    : itemsAll;
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13, fontFamily: "inherit", outline: "none" };
 
   const addItem = () => { const n = newItem.trim(); if (!n) return; setCatalog((c: any) => addCatalogItem(c || [], n)); setNewItem(""); };
   const addVar = (item: string) => { const v = (vDraft[item] || "").trim(); if (!v) return; setCatalog((c: any) => addCatalogVariety(c || [], item, v)); setVDraft(d => ({ ...d, [item]: "" })); };
   const rmVar = (item: string, v: string) => setCatalog((c: any) => removeCatalogVariety(c || [], item, v));
-  const rmItem = async (item: string) => { if (await pcConfirm({ tone: "danger", title: `Remove "${item}"?`, message: "This removes the item and its varieties from the catalog.", confirmLabel: "Remove" })) setCatalog((c: any) => removeCatalogItem(c || [], item)); };
+  const rmItem = async (item: string) => {
+    const used = usageCount(item);
+    const note = used > 0 ? ` ${used} existing document line(s)/lot(s) keep the name and will show "(not in list)".` : "";
+    if (await pcConfirm({ tone: "danger", title: `Remove "${item}"?`, message: `This removes the item and its varieties from the catalog.${note}`, confirmLabel: "Remove" })) setCatalog((c: any) => removeCatalogItem(c || [], item));
+  };
 
   function parseLine(line: string): string[] {
     const out: string[] = []; let f = "", inQ = false;
@@ -320,12 +364,16 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
         <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) importCsv(f); e.currentTarget.value = ""; }} />
       </div>
       <div style={{ maxHeight: 360, overflowY: "auto", border: "1px solid #F0F0F0", borderRadius: 8 }}>
-        {items.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#AAA", fontSize: 13 }}>No items yet. Add one above or import a CSV.</div>}
+        <div style={{ marginBottom: 10 }}>
+          <input value={catQuery} onChange={e => setCatQuery(e.target.value)} placeholder="Filter items or varieties…" style={{ ...inp, width: "100%" }} />
+        </div>
+        {items.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#AAA", fontSize: 13 }}>{catQuery ? "No items match the filter." : "No items yet. Add one above or import a CSV."}</div>}
         {items.map((c: any) => (
           <div key={c.item} style={{ padding: "12px 14px", borderBottom: "1px solid #F5F5F5" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{c.item} <span style={{ fontSize: 11, fontWeight: 400, color: "#AAA" }}>· {c.varieties.length} {c.varieties.length === 1 ? "variety" : "varieties"}</span></div>
               <input value={c.defaultCnCode || ""} onChange={e => setCatalog((cat: any) => setCatalogCnCode(cat || [], c.item, e.target.value))} placeholder="CN/HS" title="Default CN/HS customs code for this item — auto-fills new PO lines" style={{ ...inp, padding: "3px 8px", fontSize: 12, width: 90, marginRight: 8 }} />
+              <button onClick={() => renameItem(c.item)} title="Rename item (does not cascade into issued documents)" style={{ border: "1px solid #E5E7EB", color: "#374151", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600, marginRight: 6 }}>Rename</button>
               <button onClick={() => rmItem(c.item)} title="Remove item" style={{ border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600 }}>Remove</button>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -345,6 +393,7 @@ function ProductCatalogPanel({ catalog, setCatalog }: any) {
 
 export default function Settings({
   reloadFromStorage,
+  refStores = {},
   repairInventory = () => null,
   userRole,
   setUserRole,
@@ -356,6 +405,7 @@ export default function Settings({
   setPackagingTypes,
 }: {
   reloadFromStorage: () => void;
+  refStores?: any;
   repairInventory?: () => any;
   userRole?: string;
   setUserRole?: (r: string) => void;
@@ -626,12 +676,12 @@ export default function Settings({
         )}
         {manage === "products" && (
           <FullScreenModal title="Product catalog" onClose={() => setManage(null)}>
-            <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog} />
+            <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog}  refStores={refStores} />
           </FullScreenModal>
         )}
         {manage === "locations" && (
           <FullScreenModal title="Ports & locations" onClose={() => setManage(null)}>
-            <LocationsPanel />
+            <LocationsPanel refStores={refStores} />
           </FullScreenModal>
         )}
 

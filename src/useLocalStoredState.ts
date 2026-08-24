@@ -169,6 +169,14 @@ export const DATA_KEYS = [
   "claims",
   // v6.56.0: load plans — real data, must travel with export/import and backup.
   "loadPlans",
+  // v6.69.0: advance payments (v6.68.0 F-1) and the bank accounts registry
+  // (v6.68.0 F-4) were declared in App but NEVER REGISTERED HERE — so every
+  // export, auto-backup and import silently dropped them, exactly as happened
+  // to creditNotes/logisticsPoints in v6.17 and invoices/financeNotes in
+  // v6.18.1. Adding a store without adding it here is now a THIRD occurrence of
+  // the same trap; see the export-completeness test in tests/run-engines.cjs,
+  // which fails if a store is declared in App and missing from this list.
+  "advancePayments", "bankAccounts",
  "auditLog"];
 
 export function exportAllData(): string {

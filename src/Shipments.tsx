@@ -8,7 +8,7 @@ import LoadingProtocolModal from "./LoadingProtocolModal";
 import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } from "./loadingProtocol.domain";
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { lotStockCheck } from "./receipts.domain";
-import { carriedRefs } from "./shipments.domain";
+import { carriedRefs, overShipReport } from "./shipments.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -99,6 +99,10 @@ const BILLING_STATUSES = [
   "Ready for supplier invoice",
   "Supplier invoice received",
   "Cost allocated",
+  // v6.62.0: an outbound delivery's freight is a direct cost of the sale, not
+  // lot landed cost. It used to be forced into "Cost allocated", which then read
+  // as a stale flag because no lot carried anything.
+  "Direct cost of sale",
   "Closed",
 ];
 
@@ -130,7 +134,8 @@ function isFreightCostType(type) {
 function freightTypeForMode(mode) {
   return mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight";
 }
-function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier) {
+function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier, contactsList = []) {
+  const nameOf = (id) => { const c = (contactsList || []).find((x) => String(x.id) === String(id)); return c ? c.name : ""; };
   return (legs || []).map((leg, idx) => {
     const amt = parseNum(leg.costAmount, 0);
     const cur = leg.costCurrency || fallbackCurrency || "PLN";
@@ -142,7 +147,8 @@ function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier) {
       supplierId: leg.carrierId || leg.forwarderId || fallbackSupplier || null,
       amount: amt, currency: cur, fxRate: fx, amountPLN: Math.round(amt * fx * 100) / 100,
       invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
-      notes: `${leg.mode} leg`,
+      // v6.66.0 (D-24): the line says WHO gets paid — the leg's own carrier/forwarder.
+      notes: `${leg.mode} leg ${idx + 1}${nameOf(leg.carrierId || leg.forwarderId) ? " — " + nameOf(leg.carrierId || leg.forwarderId) : ""}`,
     };
   });
 }
@@ -621,16 +627,19 @@ function norm(v) {
 
 
 // v6.3.0: every newly built shipment starts with the standard document checklist.
-function buildShipmentFromPO(po, opts, shipments, lots, governingSO = null) { return withStandardDocs(buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO)); }
-function buildShipmentFromSO(so, opts, shipments, lots) { return withStandardDocs(buildShipmentFromSO__raw(so, opts, shipments, lots)); }
+function buildShipmentFromPO(po, opts, shipments, lots, governingSO = null, contactsList = []) { return withStandardDocs(buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO, contactsList)); }
+function buildShipmentFromSO(so, opts, shipments, lots, contactsList = []) { return withStandardDocs(buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList)); }
 function buildManualShipment(opts, shipments) { return withStandardDocs(buildManualShipment__raw(opts, shipments)); }
 
-function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null) {
+function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null, contactsList = []) {
   const id = nextId();
   const number = nextShipmentNumber(shipments);
   // v6.29.0: the shipment owns the trade direction — seeded from the PO's
   // provisional value here, editable on the shipment afterwards.
-  const tradeDirection = shipmentTradeDirection(null, po, governingSO, countryOfLocation);
+  // v6.62.0: no longer computed here. The header is left on Auto so the
+  // direction re-derives from the producer's country and the governing SO each
+  // time it is read, instead of freezing whatever was true at creation and
+  // being forgotten. Goods rows built from an SO still carry their own.
   const mode = opts.mode || "Road"; // v6.34.6: mode is a per-shipment choice; sea being part of the trade no longer forces Multimodal
   const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
@@ -673,7 +682,11 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
       id: gi + 1,
       poRef: po.number,
       poLineId: it.id ?? idx + 1,   // v6.34.4: stamp the source line so per-line shipped-kg is countable
-      tradeDirection,
+      // v6.62.0 (user ruling): a new shipment's header direction is left on
+      // AUTO so it re-derives from the producer's country and the governing SO,
+      // rather than freezing whatever was true at creation and being forgotten.
+      // The goods rows still carry their own computed direction for lot badges.
+      tradeDirection: null,
       soRef: soRefForPO,
       lotRef: lot,
       product: it.product || "Goods",
@@ -721,7 +734,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
     }];
   }
 
-  const costsFromLegs = freightCostsFromLegs(legs, currency, carrierId || forwarderId);
+  const costsFromLegs = freightCostsFromLegs(legs, currency, carrierId || forwarderId, contactsList);
 
   return {
     id,
@@ -765,7 +778,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null)
   };
 }
 
-function buildShipmentFromSO__raw(so, opts, shipments, lots) {
+function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) {
   // v6.45.0 (B): the shipment owns the trade direction — derived from its
   // governing SO (the from-PO builder already did this; this one never did,
   // which is why direct-export lots showed "Import").
@@ -866,7 +879,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots) {
     notes: `Created from ${so.number}. Delivery to ${so.client?.name || "client"}.`,
     legs: soLegs,
     goods,
-    costs: freightCostsFromLegs(soLegs, currency, carrierId || forwarderId),
+    costs: freightCostsFromLegs(soLegs, currency, carrierId || forwarderId, contactsList),
     documents: [
       { id: 1, type: "Transport order", ref: "", status: "Required", date: "", notes: "Generate and send to carrier" },
       { id: 2, type: "CMR", ref: "", status: "Required", date: "", notes: "Original CMR required for billing" },
@@ -1158,9 +1171,9 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
         ? linkedSOList.find(o => o.number === governingSoRef)
         : (governingSoRef === "__none__" ? null : (linkedSOList[0] || null));
       const soRefs = governing ? [governing.number] : [];
-      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing);
+      sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing, contacts);
     }
-    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys }, shipments, lots);
+    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys }, shipments, lots, contacts);
     else sh = buildManualShipment(form, shipments);
     // v6.10 (#11/#14): for a DDP purchase we don't order the carrier and carry no
     // freight cost on the supplier→warehouse leg. Seed the first road leg's unit
@@ -1543,18 +1556,26 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
   // an empty table typed from scratch. Zero-amount until priced; only fills a
   // truly empty cost table so nothing already entered is touched.
   React.useEffect(() => {
-    if ((draft.costs || []).length) return;
-    const legs = (draft.legs || []).filter((l: any) => l.mode);
+    // v6.62.0: the v6.58.0 rule only filled a TRULY EMPTY cost table, so typing
+    // a freight amount on the create form seeded one line and silently disabled
+    // the whole thing — which is why it worked on one trial and not the next.
+    // Now: ensure ONE line per leg that has a provider, adding only what is
+    // missing and never touching what has been entered.
+    const legs = (draft.legs || []).filter((l: any) => l.mode && (l.carrierId || l.forwarderId));
     if (legs.length < 2) return;
-    setDraft((prev: any) => (prev.costs || []).length ? prev : ({ ...prev, costs: legs.map((l: any, i: number) => ({
-      id: nextId() + i, type: "freight", legId: l.id,
+    const missing = legs.filter((l: any) => !(draft.costs || []).some((c: any) =>
+      String(c.legId ?? "") === String(l.id) ||
+      String(c.supplierId ?? "") === String(l.carrierId || l.forwarderId)));
+    if (!missing.length) return;
+    setDraft((prev: any) => ({ ...prev, costs: [...(prev.costs || []), ...missing.map((l: any, i: number) => ({
+      id: nextId() + i, type: l.mode === "Sea" ? "sea_freight" : l.mode === "Air" ? "air_freight" : l.mode === "Rail" ? "rail_freight" : "road_freight", legId: l.id,
       supplierId: l.carrierId || l.forwarderId || prev.carrierId || prev.forwarderId || 1001,
       amount: 0, currency: l.costCurrency || "PLN", fxRate: resolveFxRate(null, l.costCurrency || "PLN"),
       amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
       notes: `Leg ${i + 1} · ${l.mode}`,
-    })) }));
+    }))] }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [(draft.legs || []).length]);
+  }, [(draft.legs || []).length, (draft.legs || []).map((l: any) => `${l.carrierId || ""}/${l.forwarderId || ""}`).join(",")]);
 
   function addCost() {
     // New manual lines default to a non-freight type ("other") so they're freely
@@ -1631,7 +1652,14 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           forwarderId: prev.forwarderId || null,
           plannedPickupDate: prev.loadingDate || todayISO(),
           plannedDeliveryDate: prev.expectedDeliveryDate || todayISO(),
-          vehicles: [],
+          // v6.66.0 (D-23): multimodal redundancy — what the truck carried IS what
+          // the container carries. Each unit of the new leg starts with the previous
+          // leg's weight, pallets and temp-recorder number (all editable, for the
+          // collapsed-pallet repack case).
+          vehicles: transportUnitsForLeg(last || {}).map((u: any) => ({
+            ...blankTransportUnit(prev.mode === "Sea" ? "Sea" : "Road"),
+            qtyKg: u.qtyKg || 0, pallets: u.pallets || 0, tempRecorderNo: u.tempRecorderNo || "",
+          })),
           notes: ""
         }]
       };
@@ -1682,7 +1710,11 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
         <Card>
           <SectionTitle>Header</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-            <div><Lbl>Status</Lbl><Sel value={draft.status} onChange={e => sf("status", e.target.value)} disabled={draft.status === "Cancelled"} title={draft.status === "Cancelled" ? "This shipment is cancelled — read-only and can't be reactivated." : ""}>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
+            <div><Lbl>Status</Lbl>{/* v6.63.0 (D-11, ruling D3): the edit form no longer changes status —
+                the dropdown bypassed the next-action flow (Delivered→anything with no
+                posting reversal, M7). Statuses move only via the action buttons on the
+                shipment card; Cancel is the only backward path. */}
+              <Sel value={draft.status} onChange={() => {}} disabled title="Status changes only through the action buttons (Confirm booking / Mark loaded / Mark delivered / Cancel) — they post and reverse inventory correctly.">{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
             <div><Lbl>Mode</Lbl><Sel value={draft.mode} onChange={e => setDraft(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             {/* v6.58.0: courier tracking + originals-sent moved BACK to the
                 Closing stage beside documents (user ruling, reversing v6.50.0).
@@ -2444,7 +2476,8 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   // v6.16 (#6): for multimodal there are several providers — when the user switches
   // the provider, rebuild the body so it addresses the chosen carrier/forwarder
   // (and its own leg + freight), instead of keeping the first provider's text.
-  React.useEffect(() => { setBody(makeBody()); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [providerId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => { setBody(makeBody()); }, [providerId]);
   const recipient = provider.email || "";
   function openMailClient() {
     const mailto = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -2721,6 +2754,8 @@ export default function Shipments({
   orders: extOrders,
   setOrders: extSetOrders,
   onNavigate = () => {},
+  onStartClaim = null,
+  invoices: extInvoices = [],
 }: any = {}) {
   const { confirm: shConfirm, dialogNode: shDialogNode } = useConfirm(); // P2-6
   // v6.45.0 (A): synchronous mirror of the shipments array for chain-safe updates.
@@ -2737,12 +2772,14 @@ export default function Shipments({
   // not silently swap in the STANDALONE_* demo data. Stubs remain for true standalone
   // use only (props undefined).
   const pos = extPOs ?? localPOs;
+  // v6.63.0 (D-15): legacy link writes retired — setPOs kept for API symmetry.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const setPOs = extSetPOs || setLocalPOs;
   const lots = extLots ?? localLots;
   const setLots = extSetLots || setLocalLots;
   const orders = extOrders ?? localOrders;
   const setOrders = extSetOrders || setLocalOrders;
-  const contacts = extContacts || [];
+  const contacts = React.useMemo(() => extContacts || [], [extContacts]);
 
   const [selectedId, setSelectedId] = useState((shipments[0] || {}).id || null);
   const [query, setQuery] = useState("");
@@ -2816,11 +2853,18 @@ export default function Shipments({
     const inTransit = live.filter(s => ["Loaded", "Arrived"].includes(s.status));
     const missingDocs = live.filter(s => (s.documents || []).some(d => ["Required", "Missing"].includes(d.status))).length;
     const billingReady = live.filter(s => s.billingStatus === "Ready for supplier invoice").length;
-    const unallocated = live.filter(s => shipmentCostPLN(s) > 0 && !["Cost allocated", "Closed"].includes(s.billingStatus)).length;
+    const unallocated = live.filter(s => shipmentCostPLN(s) > 0 && !["Cost allocated", "Direct cost of sale", "Closed"].includes(s.billingStatus)).length;
     return { open: open.length, inTransit: inTransit.length, missingDocs, billingReady, unallocated };
   }, [shipments]);
 
-  function saveShipment(next) {
+  async function saveShipment(next) {
+    // v6.66.0 (owner ruling): over-shipping an SO is confirm-gated, not silent.
+    const over = overShipReport(next, shipments, extOrders || []);
+    if (over.length) {
+      const lines = over.map(o => `• ${o.soRef} · ${o.product}: ordered ${o.orderedKg.toLocaleString("pl-PL")} kg, already shipped ${o.alreadyKg.toLocaleString("pl-PL")}, this shipment adds ${o.thisKg.toLocaleString("pl-PL")} → OVER by ${o.exceedKg.toLocaleString("pl-PL")} kg`).join("\n");
+      const ok = await shConfirm({ tone: "danger", title: "This would ship MORE than was ordered", message: `${lines}\n\nThe same goods may already be on another live shipment. Ship anyway?`, confirmLabel: "Ship anyway", cancelLabel: "Go back" });
+      if (!ok) return;
+    }
     const { __isNew, ...clean } = next || {};
     if (__isNew) {
       setShipments(prev => [clean, ...prev]);
@@ -2865,13 +2909,11 @@ export default function Shipments({
     return updated;
   }
 
-  function linkShipmentToDocs(sh) {
-    if (typeof setPOs === "function" && (sh.poRefs || []).length) {
-      setPOs(prev => prev.map(p => (sh.poRefs || []).includes(p.number) ? { ...p, linkedShipments: uniq([...(p.linkedShipments || []), sh.number]) } : p));
-    }
-    if (typeof setOrders === "function" && (sh.soRefs || []).length) {
-      setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, linkedShipments: uniq([...(o.linkedShipments || []), sh.number]) } : o));
-    }
+  function linkShipmentToDocs(_sh) {
+    // v6.63.0 (D-15): retired. BP-49 made linked documents COMPUTED — the PO/SO
+    // screens now derive them from live data (documents.domain), so writing the
+    // legacy stored arrays only created half-alive state that went stale on
+    // cancel. The legacy arrays are read-only compat until stripped at migration.
   }
 
   function markConfirmationSent(sh) {
@@ -2892,6 +2934,27 @@ export default function Shipments({
   // the signed loading protocol and the CMR scan. The basis defaults to MIXED —
   // a transport claim is normally cargo lost PLUS the cost of putting it right.
   async function raiseTransportClaim(sh) {
+    // v6.63.0 (D-13): one claims UI — navigate to Claims pre-filled with the
+    // shipment, the responsible carrier/forwarder and its transport invoice.
+    if (typeof onStartClaim === "function") {
+      const findContact = (id: any) => id == null ? null : (contacts || []).find((c: any) => String(c.id) === String(id)) || null;
+      const carrier = findContact(sh.carrierId) || findContact(sh.forwarderId) || null;
+      const kind = sh.forwarderId && !sh.carrierId ? "Forwarder" : "Carrier";
+      const tInv = (extInvoices || []).find((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => lk.type === "Shipment" && String(lk.number) === String(sh.number)));
+      onStartClaim({
+        respondentKind: kind, direction: "RECOVERY",
+        respondentName: carrier?.name || "", contactId: carrier?.id ?? null,
+        cause: "Transport damage",
+        subjects: [
+          { kind: "SHIPMENT", ref: sh.number },
+          ...((sh.lotRefs || []).slice(0, 3).map((r: any) => ({ kind: "LOT", ref: r }))),
+          ...(tInv ? [{ kind: "INVOICE", ref: tInv.number }] : []),
+        ],
+        notes: `Transport claim on ${sh.number}`,
+      });
+      return;
+    }
+
     if (typeof setClaims !== "function") return;
     // v6.54.0 (user ruling): a cancelled shipment never happened, so there is
     // nothing to claim against. Blocked at the point of raising rather than
@@ -2975,6 +3038,12 @@ export default function Shipments({
       if (status === "Closed") {
         patch.billingStatus = s.billingStatus === "Not ready" ? "Ready for supplier invoice" : s.billingStatus;
       }
+      if (status === "Cancelled") {
+        // v6.66.0 (D-31): allocations are stripped on cancel, so the billing flag
+        // falls with them — "Cost allocated" on a cancelled shipment tripped
+        // STALE_BILLING_FLAG forever.
+        patch.billingStatus = "Not ready";
+      }
       return patch;
     });
     if (next) {
@@ -3034,7 +3103,7 @@ export default function Shipments({
         allocateCosts(next);
       }
       if (status === "Delivered" || status === "Closed") {
-        setOrders(prev => prev.map(o => (next.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Shipped" : o.status, linkedShipments: uniq([...(o.linkedShipments || []), next.number]) } : o));
+        setOrders(prev => prev.map(o => (next.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Shipped" : o.status } : o));
       }
     }
     setToast(`${sh.number} moved to ${status}.`);
@@ -3054,13 +3123,35 @@ export default function Shipments({
       setToast("No lot references on this shipment. Add a lotRef first, then allocate costs.");
       return;
     }
-    setLots(prev => allocateShipmentCostsToLots(sh, prev, {
-      inventoryType: costInventoryType,
-      label: costTypeLabel,
-    }));
-    updateShipment(sh.id, s => ({ ...s, billingStatus: "Cost allocated" }));
-    recordAudit({ module: "Shipments", docType: "Shipment", docNumber: sh.number, action: "allocated", summary: "Logistics costs allocated into lot landed cost" });
-    setToast(`${sh.number} logistics costs allocated to inventory lot costing.`);
+    // v6.62.0: the flag used to be set UNCONDITIONALLY, right after calling the
+    // engine — so the screen reported "Cost allocated" even when the engine had
+    // returned the lots untouched. That is exactly what happened here: an
+    // OUTBOUND shipment does not build landed cost (v6.51.0 — freight that
+    // DELIVERS goods to a client is a direct cost of that sale, not part of what
+    // the goods cost us), so the engine correctly did nothing and the flag
+    // claimed success anyway. Now the status follows what actually landed.
+    let landed = 0;
+    setLots(prev => {
+      const next = allocateShipmentCostsToLots(sh, prev, { inventoryType: costInventoryType, label: costTypeLabel });
+      const prefix = shipmentAllocationSourcePrefix(sh);
+      landed = (next || []).reduce((n: number, lot: any) =>
+        n + ((lot.costs || []).filter((c: any) => String(c.source || "").startsWith(prefix)).length), 0);
+      return next;
+    });
+    setTimeout(() => {
+      if (landed > 0) {
+        updateShipment(sh.id, s => ({ ...s, billingStatus: "Cost allocated" }));
+        recordAudit({ module: "Shipments", docType: "Shipment", docNumber: sh.number, action: "allocated", summary: `Logistics costs allocated into lot landed cost (${landed} line(s))` });
+        setToast(`${sh.number} logistics costs allocated to inventory lot costing.`);
+      } else if (String(sh.purpose || "").toUpperCase() === "OUTBOUND") {
+        // Not a failure — a different, correct destination for the money.
+        updateShipment(sh.id, s => ({ ...s, billingStatus: "Direct cost of sale" }));
+        recordAudit({ module: "Shipments", docType: "Shipment", docNumber: sh.number, action: "not allocated", summary: "Outbound delivery — freight is a direct cost of the sale, not lot landed cost" });
+        setToast(`${sh.number} is an outbound delivery, so its freight is a direct cost of the sale rather than lot landed cost. Nothing was added to the lots.`);
+      } else {
+        setToast(`${sh.number}: nothing could be allocated — check that the cost lines have amounts and that the lots exist.`);
+      }
+    }, 0);
   }
 
 
@@ -3086,7 +3177,7 @@ export default function Shipments({
     const purpose = derivePurpose(sh);
     setLots(prev => postShipmentToLots(sh, prev, { todayISO, nextId }).lots);
     if (purpose === "OUTBOUND") {
-      setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" || o.status === "Confirmed" || o.status === "Reserved" || o.status === "Loading" ? "Shipped" : o.status, linkedShipments: uniq([...(o.linkedShipments || []), sh.number]) } : o));
+      setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" || o.status === "Confirmed" || o.status === "Reserved" || o.status === "Loading" ? "Shipped" : o.status } : o));
     }
     linkShipmentToDocs(sh);
     setToast(`${sh.number} inventory movement applied where matching lot refs exist.`);

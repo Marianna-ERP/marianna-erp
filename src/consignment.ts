@@ -75,7 +75,9 @@ export function computeLotSettlement(
     (o.items || []).forEach((it: any) => {
       if (!lineSourcesLot(it, lot)) return;
       const kg = n(it.qty);
-      const price = n(it.unitPrice);
+      // v6.65.0 (D-19): box-priced lines carry unitPrice per BOX — settle per kg.
+      const price = String(it.pricingUnit || "") === "box" && n(it.kgPerBox) > 0
+        ? Math.round((n(it.unitPrice) / n(it.kgPerBox)) * 10000) / 10000 : n(it.unitPrice);
       const fx = n(o.fxRate) || 1;
       if (kg <= 0) return;
       if (price <= 0) warnings.push(`SO ${o.number}: line "${it.product}" has no selling price yet — settlement is incomplete.`);

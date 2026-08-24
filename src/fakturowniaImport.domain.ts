@@ -49,13 +49,28 @@ export interface StagedRow {
   description?: string;
 }
 
-export function stagedRowFromMapped(m: any, idx: number): StagedRow {
+/** v6.63.0 (D-08): a COST invoice's counterparty is the party that is NOT us.
+ *  Depending on account configuration Fakturownia can return our own company in
+ *  the seller slot of an expense record — importing that blindly made every cost
+ *  invoice show Marianna as its own supplier. Whichever side's tax number (or,
+ *  failing that, name) matches OUR company is us; the counterparty is the other. */
+function normTax(v: any): string { return String(v ?? "").toLowerCase().replace(/[^0-9a-z]/g, ""); }
+export function counterpartySideOfMapped(m: any, myTaxNo?: string, myName?: string): { name: string; taxNo: string } {
+  const sellerIsUs =
+    (!!myTaxNo && normTax(m.sellerTaxNo) !== "" && normTax(m.sellerTaxNo) === normTax(myTaxNo)) ||
+    (!!myName && String(m.sellerName || "").toLowerCase().includes(String(myName).toLowerCase()));
+  if (sellerIsUs) return { name: String(m.buyerName || ""), taxNo: String(m.buyerTaxNo || "") };
+  return { name: String(m.sellerName || ""), taxNo: String(m.sellerTaxNo || "") };
+}
+
+export function stagedRowFromMapped(m: any, idx: number, myTaxNo?: string, myName?: string): StagedRow {
   const cur = String(m.currency || "PLN").toUpperCase();
+  const party = counterpartySideOfMapped(m, myTaxNo, myName);
   return {
     key: `api:${m.fktId ?? idx}`,
     number: String(m.number || ""),
-    seller: String(m.sellerName || ""),
-    sellerTaxNo: String(m.sellerTaxNo || ""),
+    seller: party.name,
+    sellerTaxNo: party.taxNo,
     date: m.issueDate || m.sellDate || localTodayISO(),
     dueDate: m.dueDate || "",
     net: num(m.netTotal),
@@ -300,7 +315,7 @@ export function findInvoiceNoCol(headers: string[], rows?: any[][]): number {
       const v = String((rows[r] || [])[col] ?? "").trim();
       if (!v) continue;
       seen++;
-      if (/[/\-]/.test(v) && /\d/.test(v)) s += 2;          // separator + digit  → FV/79/06/2026
+      if (/[/-]/.test(v) && /\d/.test(v)) s += 2;          // separator + digit  → FV/79/06/2026
       else if (/[a-z]/i.test(v) && /\d/.test(v)) s += 2;     // letters + digits   → INV0007
       else if (/^\d+([.,]0+)?$/.test(v)) s -= 1;             // plain integer      → row counter
     }
@@ -334,4 +349,14 @@ export function findInvoiceNoCol(headers: string[], rows?: any[][]): number {
     if (best >= 0) return best;
   }
   return -1;
+}
+
+
+/** v6.66.0 (D-30): what an import row duplicates — for the staging badge. */
+export function duplicateCostInvoiceInfo(number: string, invoices: any[]): { number: string; status: string; grossAmount: number; source: string } | null {
+  const nrm = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
+  const n = nrm(number);
+  if (!n) return null;
+  const hit = (invoices || []).find((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && nrm(i.number) === n);
+  return hit ? { number: hit.number, status: hit.paymentStatus, grossAmount: Number(hit.grossAmount) || 0, source: String(hit.source || "") } : null;
 }

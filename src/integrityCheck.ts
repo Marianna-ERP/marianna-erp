@@ -42,6 +42,9 @@ export interface IntegrityInputs {
   creditNotes?: any[];
   invoices?: any[];
   financeNotes?: any[];
+  /** v6.63.0 (D-13/audit gaps): claims and load plans join the audit. */
+  claims?: any[];
+  loadPlans?: any[];
 }
 
 // ── small helpers (kept local so this module has zero imports) ──
@@ -242,6 +245,58 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // ── 9. Invoices & finance notes (v6.18.6, P0-7) ────────────────────────────
   const invoices = arr(inp.invoices);
   const financeNotes = arr(inp.financeNotes);
+
+  // ── v6.63.0: the six blind stores get eyes (audit gap closure) ──────────────
+  const claims = arr(inp.claims);
+  const loadPlans = arr(inp.loadPlans);
+  const docNumberSets = {
+    LOT: new Set(lots.map((x: any) => String(x.number))),
+    SO: new Set(orders.map((x: any) => String(x.number))),
+    PO: new Set(pos.map((x: any) => String(x.number))),
+    SHIPMENT: new Set(shipments.map((x: any) => String(x.number))),
+    INVOICE: new Set(invoices.map((x: any) => String(x.number))),
+  } as Record<string, Set<string>>;
+  const knownContactIds = new Set(contacts.map((c: any) => String(c.id)));
+
+  claims.forEach((c: any) => {
+    const label = c.number || "(unnumbered claim)";
+    (c.subjects || []).forEach((s: any) => {
+      if (s?.kind === "LEG") return; // legs live inside shipments; the shipment ref is the anchor
+      const set = docNumberSets[String(s?.kind)];
+      if (set && s?.ref && !set.has(String(s.ref)))
+        add("warning", "CLAIM_ORPHAN_SUBJECT", "Claims", label, `Subject ${s.kind} ${s.ref} no longer exists — the claim points at a ghost document.`);
+    });
+    const cid = c?.respondent?.contactId;
+    if (cid !== null && cid !== undefined && cid !== "" && !knownContactIds.has(String(cid)))
+      add("warning", "CLAIM_ORPHAN_CONTACT", "Claims", label, `Respondent contact (id ${cid}) no longer exists.`);
+    if (c?.financeNoteId && !financeNotes.some((nt: any) => String(nt.id) === String(c.financeNoteId)))
+      add("warning", "CLAIM_ORPHAN_NOTE", "Claims", label, `The credit/debit note this claim produced (id ${c.financeNoteId}) no longer exists.`);
+    if (c?.parentClaimId && !claims.some((p: any) => String(p.id) === String(c.parentClaimId)))
+      add("warning", "CLAIM_ORPHAN_PARENT", "Claims", label, `The client claim that triggered this recovery (id ${c.parentClaimId}) no longer exists.`);
+  });
+
+  loadPlans.forEach((lp: any) => {
+    const label = lp.number || lp.name || "(unnamed plan)";
+    const refs = new Set([...(lp.shipmentRefs || []), ...((lp.map || []).map((m: any) => m.shipmentRef))].filter(Boolean).map(String));
+    refs.forEach(ref => {
+      if (!docNumberSets.SHIPMENT.has(ref))
+        add("warning", "LOADPLAN_ORPHAN_SHIPMENT", "Load plans", label, `Plan references shipment ${ref}, which no longer exists — its totals silently exclude that cargo.`);
+    });
+  });
+
+  // Goods ROWS were never audited (only header refs) — yet posting reads the rows.
+  shipments.forEach((sh: any) => {
+    if (sh.status === "Cancelled") return;
+    const label = sh.number || "(unnumbered shipment)";
+    (sh.goods || []).forEach((g: any) => {
+      if (g?.lotRef && !docNumberSets.LOT.has(String(g.lotRef)))
+        add("warning", "SHIP_ROW_ORPHAN", "Shipments", label, `A goods row points at lot ${g.lotRef}, which doesn't exist — delivery would post nothing for it.`);
+      if (g?.soRef && !docNumberSets.SO.has(String(g.soRef)))
+        add("warning", "SHIP_ROW_ORPHAN", "Shipments", label, `A goods row points at sales order ${g.soRef}, which doesn't exist.`);
+      if (g?.poRef && !docNumberSets.PO.has(String(g.poRef)))
+        add("warning", "SHIP_ROW_ORPHAN", "Shipments", label, `A goods row points at purchase order ${g.poRef}, which doesn't exist.`);
+    });
+  });
   const shipByNumber = new Set(shipments.map((s: any) => String(s.number)));
   const invoiceById = new Map(invoices.map((i: any) => [String(i.id), i]));
 
@@ -294,7 +349,15 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // wasn't received/shipped (the "apply inventory" step was missed).
   shipments.forEach((sh: any) => {
     if (sh?.status !== "Delivered") return;
-    const lotRefs = new Set([...arr(sh.lotRefs), ...arr(sh.goods).map((g: any) => g.lotRef)].filter(Boolean).map(String));
+    // v6.62.0: judge only the lots this shipment ACTUALLY CARRIES. Header
+    // lotRefs are seeded from the source document at creation, so a shipment
+    // carrying one lot could list three — and the two it never touched, still
+    // Expected with no movements, raised this warning against a shipment that
+    // had done nothing wrong. Same root cause already fixed for the shipment
+    // header display (carriedRefs, v6.58.0) and for Inventory (shipmentsForLot,
+    // v6.59.0); this check was missed then.
+    const carried = arr(sh.goods).map((g: any) => g.lotRef).filter(Boolean).map(String);
+    const lotRefs = new Set(carried.length ? carried : arr(sh.lotRefs).filter(Boolean).map(String));
     if (!lotRefs.size) return;
     const anyMissing = [...lotRefs].some((lr) => {
       const lot = lotByNumber.get(lr);
@@ -308,6 +371,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // A delivered/arrived shipment carrying logistics costs that were never allocated
   // to inventory lot costing — those costs are missing from COGS.
   shipments.forEach((sh: any) => {
+    if (sh?.status === "Cancelled") return; // v6.66.0 (D-28)
     if (!["Delivered", "Arrived"].includes(sh?.status)) return;
     const hasCost = arr(sh.costs).some((c: any) => num(c.amountPLN) > 0);
     if (hasCost && sh.billingStatus !== "Cost allocated") {
@@ -323,6 +387,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   {
     const seen = new Map<string, string>();
     invoices.forEach((v: any) => {
+      if (v?.paymentStatus === "Cancelled") return; // v6.66.0 (D-28): a cancelled invoice frees its number
       const num = String(v.number || "").trim();
       if (!num) return; // drafts without official numbers are fine
       const key = `${String(v.counterparty?.name || "").trim().toLowerCase()}::${num.toLowerCase()}`;
@@ -472,8 +537,14 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // carries this shipment's allocation tags (Batch-1b replace-by-source) — the
   // allocation never ran or was reverted; the flag misleads the tester.
   shipments.forEach((sh: any) => {
-    if (!sh || sh.billingStatus !== "Cost allocated") return;
+    if (!sh || sh.status === "Cancelled") return; // v6.66.0 (D-28): a cancelled shipment's flags are history, not alerts
+    if (sh.billingStatus !== "Cost allocated") return;
     if (!arr(sh.costs).length) return;
+    // v6.62.0: an OUTBOUND delivery never builds landed cost (v6.51.0), so
+    // "no lot carries the allocation" is the correct outcome, not a stale flag.
+    // Such shipments now carry "Direct cost of sale" instead — but any left on
+    // the old flag must not be reported as broken.
+    if (String(sh.purpose || "").toUpperCase() === "OUTBOUND") return;
     const tagged = lots.some((l: any) => arr(l.costs).some((c: any) => String(c?.source || "").startsWith(`${sh.number}/`)));
     if (!tagged) add("warning", "STALE_BILLING_FLAG", "Shipments", sh.number || "(shipment)",
       `billingStatus is "Cost allocated" but no lot carries this shipment's cost allocation — the flag is stale (allocation never ran, was reverted, or the shipment was cancelled). Re-run the allocation or reset the status.`);

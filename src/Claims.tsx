@@ -2,9 +2,11 @@ import React, { useState, useMemo } from "react";
 import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { claimBlockReason, staleClaimWarnings } from "./cancellation.domain";
 import { inspectLink } from "./docLinks.domain";
+import { buildCostChain, toClaimCostLines, CLIENT_COST_PROMPTS, chainGaps } from "./claimCostChain.domain";
 import {
   CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS, CLAIM_BASES,
   isClaimOpen, claimsSummary, incidentNet, nextClaimNumber, blankClaim,
+  buildClaimFinanceNote, claimNoteMode,
   requestedFromBasis, buildClaimPostings, applyPostingsToLots, applyPostingsToOrders,
   reverseClaimPostings,
 } from "./claims.domain";
@@ -43,7 +45,7 @@ function Pill({ bg, fg, children, title }: any) {
   return <span title={title} style={{ background: bg, color: fg, borderRadius: 999, padding: "2px 9px", fontSize: 10.5, fontWeight: 800, whiteSpace: "nowrap" }}>{children}</span>;
 }
 
-export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [] }: any) {
+export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], claimSeed = null, onClaimSeedConsumed = null }: any) {
   // v6.54.0: "a cancelled document never happened, so there are no claims on it".
   const cancelledRefs = cancelledDocSet(shipments, orders, pos);
   // Resolve a claim subject ref to the actual document, whichever module owns it.
@@ -80,6 +82,55 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
 
   const patch = (id: any, changes: any) =>
     setClaims((prev: any[]) => (prev || []).map(c => String(c.id) === String(id) ? { ...c, ...changes } : c));
+
+  // v6.63.0 (D-13): arriving from another module with context — SO+SINV for a
+  // client claim, shipment+transport invoice for a carrier claim, lot+PO+PINV
+  // for a producer claim. One claim per seed; the seed is consumed immediately.
+  React.useEffect(() => {
+    if (!claimSeed) return;
+    const c = blankClaim({
+      id: nextId(),
+      number: nextClaimNumber(claims, new Date(today).getFullYear() || 2026),
+      date: today,
+      status: "Draft",
+      direction: claimSeed.direction || (String(claimSeed.respondentKind) === "Client" ? "CONCESSION" : "RECOVERY"),
+      respondent: { kind: claimSeed.respondentKind || "Supplier", contactId: claimSeed.contactId ?? null, name: claimSeed.respondentName || "" },
+      cause: claimSeed.cause || "Quality defect",
+      subjects: claimSeed.subjects || [],
+      notes: claimSeed.notes || "",
+    });
+    setClaims((prev: any[]) => [...(prev || []), c]);
+    setSelectedId(c.id);
+    if (typeof onClaimSeedConsumed === "function") onClaimSeedConsumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claimSeed]);
+
+  // v6.63.0 (D-13): finalisation produces the MONEY DOCUMENT, per the owner's
+  // rulings — client → credit note we issue; supplier/carrier → their credit
+  // note if received, otherwise a DEBIT note we issue (what we need to get).
+  const finaliseNote = async (c: any) => {
+    if (typeof setFinanceNotes !== "function") return;
+    if (c.financeNoteId || (financeNotes || []).some((nt: any) => String(nt.source) === `claim:${c.number}`)) {
+      await uiConfirm({ tone: "warn", title: "Already documented", message: `${c.number} already has its credit/debit note. Corrections go through a new note in Invoices.`, confirmLabel: "OK", cancelLabel: "Close" });
+      return;
+    }
+    if (!(Number(c.acceptedEUR) > 0) || !(Number(c.plnPerEur) > 0)) {
+      await uiConfirm({ tone: "warn", title: "No agreed amount", message: "Enter the accepted EUR amount and the PLN/EUR rate first — the note documents the money that was actually agreed.", confirmLabel: "OK", cancelLabel: "Close" });
+      return;
+    }
+    let mode;
+    if (String(c.respondent?.kind) === "Client") {
+      const ok = await uiConfirm({ tone: "warn", title: `Issue credit note to ${c.respondent?.name || "the client"}?`, message: `CREDIT note (we give back) for €${c.acceptedEUR} ≈ ${(Number(c.acceptedEUR) * Number(c.plnPerEur)).toLocaleString("pl-PL")} PLN, linked to ${c.number}.`, confirmLabel: "Issue credit note" });
+      if (!ok) return;
+      mode = claimNoteMode(c, false);
+    } else {
+      const theyIssued = await uiConfirm({ tone: "warn", title: `${c.respondent?.name || "The respondent"} — did they issue a credit note?`, message: `If YES: their CREDIT note is recorded (reduces what we owe them).\nIf NO: WE issue a DEBIT note to them for €${c.acceptedEUR} — what we need to get (owner ruling).`, confirmLabel: "Yes — record their credit note", cancelLabel: "No — we issue a debit note" });
+      mode = claimNoteMode(c, !!theyIssued);
+    }
+    const note = buildClaimFinanceNote(c, mode, { nextId, todayISO: () => today, invoices });
+    setFinanceNotes((prev: any[]) => [note, ...(prev || [])]);
+    patch(c.id, { financeNoteId: note.id, resolvedAt: c.resolvedAt || today, status: ["Settled", "Closed"].includes(String(c.status)) ? c.status : "Settled" });
+  };
 
   const addClaim = () => {
     const c = blankClaim({
@@ -136,6 +187,14 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
       parentClaimId: parent.id,
       date: today, status: "Draft",
       plnPerEur: parent.plnPerEur,
+      // v6.70.0 THE PRODUCER COST CHAIN. A recovery used to open with an empty
+      // cost table, so everything spent getting the fruit from the producer's
+      // gate to the client's warehouse was retyped from memory. The defect
+      // percentage carries over (it scales what we may fairly claim), and the
+      // client's own costs are prompted because they are the part nothing in
+      // this system can derive — they arrive inside HIS claim against us.
+      defectPct: parent.defectPct,
+      clientCosts: CLIENT_COST_PROMPTS.map(label => ({ label, amountPLN: "" })),
       notes: `Recovery against ${parent.number}`,
     });
     setClaims((prev: any[]) => [...(prev || []), c]);
@@ -265,7 +324,15 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div>
                     <Lbl>Direction</Lbl>
-                    <select value={selected.direction} onChange={e => patch(selected.id, { direction: e.target.value })} style={INP}>
+                    <select value={selected.direction} onChange={e => {
+                      // v6.66.0 (D-25): direction DETERMINES who can be on the other
+                      // side. A concession faces a Client; a recovery faces a
+                      // supplier/carrier/forwarder — never the other way round.
+                      const dirV = e.target.value;
+                      const k = selected.respondent?.kind || "Supplier";
+                      const fixedKind = dirV === "CONCESSION" ? "Client" : (k === "Client" ? "Supplier" : k);
+                      patch(selected.id, { direction: dirV, respondent: { ...(selected.respondent || {}), kind: fixedKind } });
+                    }} style={INP}>
                       {CLAIM_DIRECTIONS.map(d => <option key={d} value={d}>{DIR_STYLE[d].label} — {DIR_STYLE[d].hint}</option>)}
                     </select>
                   </div>
@@ -278,7 +345,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   <div>
                     <Lbl>Respondent — who is on the other side</Lbl>
                     <select value={selected.respondent?.kind || "Supplier"} onChange={e => patch(selected.id, { respondent: { ...(selected.respondent || {}), kind: e.target.value } })} style={INP}>
-                      {RESPONDENT_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
+                      {RESPONDENT_KINDS.filter((k: string) => selected.direction === "CONCESSION" ? k === "Client" : k !== "Client").map(k => <option key={k} value={k}>{k}</option>)}
                     </select>
                   </div>
                   <div>
@@ -362,6 +429,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                       ))}
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <SmallButton kind="dark" onClick={() => postClaim(selected)}>{posted ? "Re-post agreed amount" : "Post agreed amount to P/L"}</SmallButton>
+                        <SmallButton kind="green" onClick={() => finaliseNote(selected)} title="Client → credit note we issue. Supplier/carrier → their credit note, or a debit note we issue if they don't send one.">{selected.financeNoteId ? "Money document ✓" : "Create credit/debit note"}</SmallButton>
                         {posted && <SmallButton kind="red" onClick={() => unpostClaim(selected)}>Reverse posting</SmallButton>}
                         {posted && <span style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>✓ posted</span>}
                       </div>
@@ -383,6 +451,41 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
 
               <Card>
                 <SectionTitle>WHAT IT COVERS</SectionTitle>
+                {/* v6.66.0 (D-26): the root document drives the claim — picking it
+                    fills the respondent and shows what is being claimed and its value. */}
+                <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <select value="" onChange={e => {
+                    const [kind, ref] = String(e.target.value).split("::"); if (!ref) return;
+                    const add = (subs: any[]) => patch(selected.id, Object.assign({ subjects: [...(selected.subjects || []).filter((s: any) => s.ref !== ref), ...subs] },
+                      (() => {
+                        if (kind === "SO") { const o = (orders || []).find((x: any) => x.number === ref); const val = (o?.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (Number(it.boxes) || 0) : (Number(it.qty) || 0)) * (Number(it.unitPrice) || 0)), 0);
+                          return { direction: "CONCESSION", respondent: { kind: "Client", contactId: (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(o?.client?.name || "").trim().toLowerCase())?.id ?? null, name: o?.client?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (o?.items || []).map((it: any) => `${it.product} ${it.qty || it.boxes} ${it.pricingUnit === "box" ? "boxes" : "kg"} @ ${it.unitPrice}`).join(", ") + ` · document value ${val.toLocaleString("pl-PL")} ${o?.currency || "PLN"}` }; }
+                        if (kind === "PO") { const p = (pos || []).find((x: any) => x.number === ref); const val = (p?.items || []).reduce((a: number, it: any) => a + (Number(it.qty) || 0) * (Number(it.unitPrice) || 0), 0);
+                          return { direction: "RECOVERY", respondent: { kind: "Supplier", contactId: (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(p?.supplier?.name || "").trim().toLowerCase())?.id ?? null, name: p?.supplier?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (p?.items || []).map((it: any) => `${it.product} ${it.qty} kg @ ${it.unitPrice}`).join(", ") + ` · document value ${val.toLocaleString("pl-PL")} ${p?.currency || "PLN"}` }; }
+                        const sh = (shipments || []).find((x: any) => x.number === ref); const carrier = (contacts || []).find((c: any) => String(c.id) === String(sh?.carrierId || sh?.forwarderId));
+                        return { direction: "RECOVERY", respondent: { kind: sh?.forwarderId && !sh?.carrierId ? "Forwarder" : "Carrier", contactId: carrier?.id ?? null, name: carrier?.name || "" }, notes: (selected.notes ? selected.notes + "\n" : "") + `Root ${ref}: ` + (sh?.goods || []).map((g: any) => `${g.product || g.lotRef} ${g.qtyKg} kg`).join(", ") };
+                      })()));
+                    add([{ kind, ref }]);
+                  }} style={{ ...INP, maxWidth: 420 }}>
+                    <option value="">+ Link root document (fills respondent & value)…</option>
+                    <optgroup label="Sales Orders">{(orders || []).filter((o: any) => o.status !== "Cancelled").map((o: any) => <option key={"SO" + o.number} value={"SO::" + o.number}>SO {o.number} · {o.client?.name}</option>)}</optgroup>
+                    <optgroup label="Purchase Orders">{(pos || []).filter((p: any) => p.status !== "Cancelled").map((p: any) => <option key={"PO" + p.number} value={"PO::" + p.number}>PO {p.number} · {p.supplier?.name}</option>)}</optgroup>
+                    <optgroup label="Shipments">{(shipments || []).filter((s: any) => s.status !== "Cancelled").map((s: any) => <option key={"SH" + s.number} value={"SHIPMENT::" + s.number}>SHP {s.number}</option>)}</optgroup>
+                  </select>
+                  {selected.direction === "RECOVERY" && (
+                    <select value={selected.parentClaimId || ""} onChange={e => patch(selected.id, { parentClaimId: e.target.value || null })} style={{ ...INP, maxWidth: 320 }} title="v6.66.0 (D-27): the concession claim that raised this recovery — optional; most recoveries stand alone.">
+                      <option value="">— triggered by client claim (optional) —</option>
+                      {(claims || []).filter((c: any) => c.direction === "CONCESSION" && c.id !== selected.id).map((c: any) => <option key={c.id} value={c.id}>{c.number} · {c.respondent?.name}</option>)}
+                    </select>
+                  )}
+                </div>
+                {selected.parentClaimId && (() => { const par = (claims || []).find((c: any) => String(c.id) === String(selected.parentClaimId));
+                  return par ? <div style={{ fontSize: 11.5, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>↳ Raised by client claim {par.number} ({par.status}) — {par.respondent?.name}</div> : null; })()}
+                {(claims || []).some((c: any) => String(c.parentClaimId) === String(selected.id)) && (
+                  <div style={{ fontSize: 11.5, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>
+                    ↱ Recoveries raised from this claim: {(claims || []).filter((c: any) => String(c.parentClaimId) === String(selected.id)).map((c: any) => `${c.number} (${c.status})`).join(", ")}
+                  </div>
+                )}
                 {!(selected.subjects || []).length && <div style={{ fontSize: 12, color: "#94A3B8" }}>Nothing linked yet.</div>}
                 {(selected.subjects || []).map((s: any, i: number) => {
                   // v6.54.0: a subject cancelled AFTER the claim was raised. The
@@ -404,6 +507,70 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   A claim can cover several lots — one reefer failure damages a whole container, not one pallet. Phase 2 adds raising a claim straight from a shipment.
                 </div>
               </Card>
+
+              {/* ── v6.70.0 THE PRODUCER COST CHAIN ─────────────────────────
+                  What it cost to move this fruit from the producer's gate to
+                  the client's warehouse. Two origins, kept visibly apart: what
+                  the system already knows (the lots' landed cost) and what only
+                  the client knows (his clearance and his haulage). */}
+              {selected.direction === "RECOVERY" && (() => {
+                const lotRefs = (selected.subjects || []).filter((x: any) => String(x.kind).toUpperCase() === "LOT").map((x: any) => String(x.ref));
+                const pct = num(selected.defectPct);
+                const share = pct > 0 ? Math.min(1, pct / 100) : 1;
+                const clientLines = selected.clientCosts || [];
+                const chain = buildCostChain({ lots, lotRefs, affectedShare: share, clientLines, plnPerEur: selected.plnPerEur });
+                const gaps = chainGaps(chain, clientLines);
+                const setClient = (i: number, field: string, v: any) => patch(selected.id, {
+                  clientCosts: clientLines.map((x: any, xi: number) => xi === i ? { ...x, [field]: v } : x),
+                });
+                return (
+                  <Card>
+                    <SectionTitle right={
+                      <SmallButton kind="green" title="Copy the chain into this claim's cost lines. Existing lines are kept; nothing is duplicated."
+                        onClick={() => patch(selected.id, { costLines: [...(selected.costLines || []), ...toClaimCostLines(chain.lines.filter((l: any) => !(selected.costLines || []).some((e: any) => e.label === l.label)), selected.plnPerEur)] })}>
+                        Add to claim cost lines
+                      </SmallButton>}>COST CHAIN — PRODUCER'S GATE → CLIENT'S WAREHOUSE</SectionTitle>
+                    <div style={{ fontSize: 10.5, color: "#94A3B8", marginBottom: 10, lineHeight: 1.5 }}>
+                      You buy EXW and sell CIF, so the producer's paperwork shows his gate price and nothing else. Everything after it was spent by you or by your client — and when the fruit is defective and the temperature record shows the transport was sound, that spend is what this claim is for.
+                      {pct > 0 ? ` Scaled to the ${pct}% affected share.` : " Enter the defect % above to scale these to the affected share."}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
+                      {[["OUR COSTS", chain.oursPLN, "#334155"], ["CLIENT'S COSTS", chain.clientPLN, "#B45309"], ["TOTAL", chain.totalPLN, "#111"]].map(([k, v, c]: any) => (
+                        <div key={k} style={{ background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px" }}>
+                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{k}</div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: c, marginTop: 2 }}>{Math.round(v).toLocaleString("pl-PL")} PLN</div>
+                        </div>
+                      ))}
+                    </div>
+                    {chain.totalEUR > 0 && <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>≈ €{chain.totalEUR.toLocaleString("pl-PL")} at {selected.plnPerEur} PLN/EUR</div>}
+
+                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Ours — derived from the lots</div>
+                    {chain.lines.filter((l: any) => l.origin === "OURS").map((l: any) => (
+                      <div key={l.key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F8FAFC", fontSize: 11.5 }}>
+                        <span style={{ color: "#475569" }}>{l.label}</span>
+                        <span style={{ fontWeight: 600 }}>{Math.round(l.amountPLN).toLocaleString("pl-PL")}</span>
+                      </div>
+                    ))}
+                    {!chain.lines.some((l: any) => l.origin === "OURS") && <div style={{ fontSize: 11, color: "#94A3B8" }}>No allocated cost on these lots yet.</div>}
+
+                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", margin: "12px 0 5px" }}>The client&apos;s — he incurred them, he charged them to us</div>
+                    {clientLines.map((l: any, i: number) => (
+                      <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 120px 34px", gap: 7, marginBottom: 5 }}>
+                        <input value={l.label || ""} onChange={e => setClient(i, "label", e.target.value)} placeholder="What the client charged" style={{ ...INP, padding: "6px 8px" }} />
+                        <input type="number" value={l.amountPLN ?? ""} onChange={e => setClient(i, "amountPLN", e.target.value)} placeholder="PLN" style={{ ...INP, padding: "6px 8px" }} />
+                        <SmallButton kind="red" onClick={() => patch(selected.id, { clientCosts: clientLines.filter((_: any, xi: number) => xi !== i) })}>✕</SmallButton>
+                      </div>
+                    ))}
+                    <SmallButton onClick={() => patch(selected.id, { clientCosts: [...clientLines, { label: "", amountPLN: "" }] })}>+ Client cost</SmallButton>
+
+                    {gaps.length > 0 && (
+                      <div style={{ marginTop: 11, padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+                        {gaps.map((g: string, i: number) => <div key={i}>· {g}</div>)}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })()}
 
               <Card>
                 <SectionTitle>EVIDENCE</SectionTitle>

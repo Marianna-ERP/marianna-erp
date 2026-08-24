@@ -1097,7 +1097,10 @@ T("checker: duplicate live shipment flagged; cancelled duplicate not", () => {
   assert.ok(!r2.issues.some(i => i.code === "DUP_LIVE_SHIPMENT"));
 });
 T("checker: stale 'Cost allocated' flag caught; real allocation not", () => {
-  const sh = { number: "SHP-2", status: "Cancelled", billingStatus: "Cost allocated", costs: [{ id: 9, amountPLN: 4000 }] };
+  // v6.66.0 (D-28, owner ruling): cancelled documents no longer raise alerts about
+  // themselves — and D-31 resets the flag on cancel anyway. The stale-flag check
+  // is therefore exercised on a LIVE shipment, which is where it matters.
+  const sh = { number: "SHP-2", status: "Delivered", billingStatus: "Cost allocated", costs: [{ id: 9, amountPLN: 4000 }] };
   const r = checkIntegrity({ shipments: [sh], lots: [{ number: "L1", costs: [] }] });
   assert.ok(r.issues.some(i => i.code === "STALE_BILLING_FLAG"));
   const r2 = checkIntegrity({ shipments: [sh], lots: [{ number: "L1", costs: [{ source: "SHP-2/9", pln: 4000 }] }] });
@@ -2734,6 +2737,198 @@ T("no box weight means no invented number", () => {
 T("the price label says which unit it is", () => {
   assert.equal(PU.priceLabel({ pricingUnit: "box", unitPrice: 36.4 }, "EUR"), "36.4 EUR/box");
   assert.equal(PU.priceLabel({ unitPrice: 2.8 }, "EUR"), "2.8 EUR/kg");
+});
+
+console.log("");
+console.log("── v6.62.0: warnings that were wrong, and a flag that lied ──");
+
+const IC = require("./build/integrityCheck.js");
+
+T("a shipment is judged on the lots it CARRIES, not the ones it was seeded with", () => {
+  // SHP-2026-0001's real shape: header lists three lots, goods carry one. The
+  // other two are still Expected with no movements — correctly so — and were
+  // raising "Delivered but a lot has no inventory movement".
+  const shipments = [{ number: "SHP-1", status: "Delivered", purpose: "OUTBOUND",
+    lotRefs: ["LOT-1", "LOT-2", "LOT-4"], goods: [{ lotRef: "LOT-1", qtyKg: 4680 }], costs: [] }];
+  const lots = [
+    { number: "LOT-1", status: "Delivered (direct)", movements: [{ type: "IN", shipmentRef: "SHP-1" }] },
+    { number: "LOT-2", status: "Expected", movements: [] },
+    { number: "LOT-4", status: "Expected", movements: [] },
+  ];
+  const found = IC.checkIntegrity({ shipments, lots, pos: [], orders: [], claims: [], invoices: [], contacts: [] });
+  const hits = (found.issues || []).filter(i => i.code === "SHIPMENT_NO_MOVEMENT");
+  assert.equal(hits.length, 0, "the two lots this shipment never carried must not accuse it");
+});
+
+T("an outbound delivery's freight is not a stale allocation flag", () => {
+  // An OUTBOUND shipment never builds landed cost (v6.51.0), so "no lot carries
+  // the allocation" is the correct outcome — not a fault to report.
+  const shipments = [{ number: "SHP-2", status: "Delivered", purpose: "OUTBOUND",
+    billingStatus: "Cost allocated", lotRefs: ["LOT-3"], goods: [{ lotRef: "LOT-3", qtyKg: 100 }],
+    costs: [{ type: "road_freight", amountPLN: 1700 }] }];
+  const lots = [{ number: "LOT-3", status: "Delivered (direct)", movements: [{ type: "IN", shipmentRef: "SHP-2" }], costs: [{ type: "purchase" }] }];
+  const found = IC.checkIntegrity({ shipments, lots, pos: [], orders: [], claims: [], invoices: [], contacts: [] });
+  assert.equal((found.issues || []).filter(i => i.code === "STALE_BILLING_FLAG").length, 0);
+
+  // An INBOUND shipment with the flag and nothing on the lots is still wrong.
+  const inbound = [{ ...shipments[0], number: "SHP-3", purpose: "INBOUND" }];
+  const found2 = IC.checkIntegrity({ shipments: inbound, lots, pos: [], orders: [], claims: [], invoices: [], contacts: [] });
+  assert.equal((found2.issues || []).filter(i => i.code === "STALE_BILLING_FLAG").length, 1,
+    "the check must still catch a genuinely stale flag");
+});
+
+console.log("");
+console.log("── v6.69.0: export completeness, and a recall report that tells the truth ──");
+
+const fs = require("fs");
+const path = require("path");
+
+T("EXPORT COMPLETENESS: every store App declares is registered in DATA_KEYS", () => {
+  // This has now gone wrong three times — creditNotes/logisticsPoints (v6.17),
+  // invoices/financeNotes (v6.18.1), advancePayments/bankAccounts (v6.68.0).
+  // A store missing from DATA_KEYS is silently dropped from every export,
+  // auto-backup and import: the data exists in one browser and nowhere else.
+  // The trap is now a test rather than a comment nobody re-reads.
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "src", "App.tsx"), "utf8");
+  const storeSrc = fs.readFileSync(path.join(__dirname, "..", "src", "useLocalStoredState.ts"), "utf8");
+  const declared = Array.from(appSrc.matchAll(/useLocalStoredState\(\s*"([^"]+)"/g)).map(m => m[1]);
+  const block = storeSrc.slice(storeSrc.indexOf("export const DATA_KEYS"), storeSrc.indexOf("export function exportAllData"));
+  const registered = new Set(Array.from(block.matchAll(/"([a-zA-Z]+)"/g)).map(m => m[1]));
+  // Per-user preferences are deliberately NOT data — sharing a file must not
+  // overwrite a colleague's name, role or dismissed banners.
+  const PREFERENCES = new Set(["userRole", "userName", "backupReminderDismissed"]);
+  const missing = declared.filter(k => !PREFERENCES.has(k) && !registered.has(k));
+  assert.deepEqual(missing, [], `stores declared in App but missing from DATA_KEYS: ${missing.join(", ")}`);
+  assert.ok(registered.has("advancePayments") && registered.has("bankAccounts"), "the two v6.68.0 stores are registered");
+});
+
+console.log("");
+console.log("── trace.domain: the recall report names only what carried the lot ──");
+
+const TR = require("./build/trace.domain.js");
+
+// The real shape from the owner's data: three lots off ONE purchase order, two
+// shipments, two sales orders. Only SHP-1 carried LOT-1; only SO-1 sold it.
+const traceFixture = () => ({
+  lot: { number: "LOT-1", poRef: "PO-1", poLineId: "L1", product: "Apples", variety: "Gala", receivedKg: 19422 },
+  pos: [{ number: "PO-1", supplier: { name: "Producer A" }, items: [{ id: "L1", origin: "Poland" }] }],
+  shipments: [
+    { number: "SHP-1", status: "Delivered", poRefs: ["PO-1"], lotRefs: ["LOT-1", "LOT-2", "LOT-3"], goods: [{ lotRef: "LOT-1", poRef: "PO-1", qtyKg: 19422 }] },
+    { number: "SHP-2", status: "Delivered", poRefs: ["PO-1"], lotRefs: ["LOT-2"], goods: [{ lotRef: "LOT-3", poRef: "PO-1", qtyKg: 10296 }] },
+  ],
+  orders: [
+    { number: "SO-1", status: "Shipped", client: { name: "Client One" }, items: [{ product: "Apples", variety: "Gala", qty: 19422, sourceType: "PO", sourceRef: "PO-1", sourceLineId: "L1" }] },
+    { number: "SO-2", status: "Shipped", client: { name: "Client Two" }, items: [{ product: "Apples", variety: "Idared", qty: 9126, sourceType: "PO", sourceRef: "PO-1", sourceLineId: "L9" }] },
+  ],
+  invoices: [],
+});
+
+T("a recall names only the shipments that CARRIED the lot", () => {
+  const f = traceFixture();
+  const t = TR.buildTraceTree(f.lot, f, "2026-08-22");
+  assert.deepEqual(t.shipments.map(s => s.number), ["SHP-1"],
+    "SHP-2 shares the PO and even lists a lot in its header, but its goods carry a different lot");
+});
+
+T("a recall names only the clients who RECEIVED the lot", () => {
+  const f = traceFixture();
+  const t = TR.buildTraceTree(f.lot, f, "2026-08-22");
+  assert.equal(t.sales.length, 1, "matching the whole PO reported sales of other lots as this lot's");
+  assert.equal(t.sales[0].soNumber, "SO-1");
+  assert.equal(t.sales[0].qtyKg, 19422, "not more than the lot holds");
+  assert.equal(t.sales[0].client, "Client One", "Client Two bought a different lot and must not be contacted");
+});
+
+T("a booking with no goods rows still trusts its header lotRefs", () => {
+  const f = traceFixture();
+  f.shipments = [{ number: "SHP-9", status: "Booked", lotRefs: ["LOT-1"], goods: [] }];
+  const t = TR.buildTraceTree(f.lot, f, "2026-08-22");
+  assert.deepEqual(t.shipments.map(s => s.number), ["SHP-9"]);
+});
+
+T("a stock-sourced sale still traces, and the origin still resolves", () => {
+  const f = traceFixture();
+  f.orders.push({ number: "SO-3", status: "Shipped", client: { name: "Client Three" }, items: [{ product: "Apples", qty: 500, sourceType: "STOCK", sourceRef: "LOT-1" }] });
+  const t = TR.buildTraceTree(f.lot, f, "2026-08-22");
+  assert.deepEqual(t.sales.map(s => s.soNumber).sort(), ["SO-1", "SO-3"]);
+  assert.equal(t.origin.supplier, "Producer A");
+  assert.equal(t.origin.poNumber, "PO-1");
+});
+
+console.log("");
+console.log("── claimCostChain: the producer's gate → the client's warehouse (v6.70.0) ──");
+
+const CC = require("./build/claimCostChain.domain.js");
+
+// The owner's flow: buy EXW from a Polish producer, sell CIF. The producer's
+// paperwork shows his gate price; everything after it was spent by us or by the
+// client, and a defect claim has to put a number on all of it.
+const chainLots = () => ([{
+  number: "LOT-1", product: "Apples",
+  costs: [
+    { type: "purchase", label: "Purchase — PO-1", source: "PO-1", pln: 56000 },
+    { type: "road_freight", label: "Road freight (SHP-1)", source: "SHP-1/1", pln: 1800 },
+    { type: "sea_freight", label: "Sea freight (SHP-1)", source: "SHP-1/2", pln: 2000 },
+    { type: "customs", label: "Customs (SHP-1)", source: "SHP-1/3", pln: 200 },
+    { type: "commission credit", label: "Our commission", source: "CONSIGNC-1", pln: -3000 },
+    { type: "claim", label: "A previous claim posting", source: "CLAIM-9", pln: -500 },
+  ],
+}]);
+
+T("our side derives from the lot — commission and prior claims stay out", () => {
+  const lines = CC.ourChainCosts(chainLots(), ["LOT-1"]);
+  const labels = lines.map(l => l.label).join(" | ");
+  assert.equal(lines.length, 4, "purchase + road + sea + customs");
+  assert.ok(!/commission/i.test(labels), "our commission is ours whatever the fruit was like");
+  assert.ok(!/previous claim/i.test(labels), "a prior claim posting is not a transport cost");
+  assert.equal(lines.reduce((s, l) => s + l.amountPLN, 0), 60000);
+  assert.ok(lines.every(l => l.origin === "OURS" && l.lotRef === "LOT-1"));
+});
+
+T("the claim is scaled to the affected share, not the whole consignment", () => {
+  // A 42% defect claims 42% of what it cost to bring the fruit in. Claiming the
+  // full landed cost for a partial defect is how a whole claim gets dismissed.
+  const lines = CC.ourChainCosts(chainLots(), ["LOT-1"], 0.42);
+  assert.equal(lines.reduce((s, l) => s + l.amountPLN, 0), 25200, "42% of 60 000");
+  assert.ok(lines[0].note.includes("42%"), "the sheet says why the figure is not the full cost");
+});
+
+T("THE POINT: the client's own costs have no home in our books and must be entered", () => {
+  const client = [
+    { label: "Client's import customs clearance", amountPLN: 3200 },
+    { label: "Client's transport, port to their warehouse", amountPLN: 4100 },
+    { label: "An empty prompt nobody filled", amountPLN: "" },
+  ];
+  const chain = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1"], affectedShare: 0.42, clientLines: client, plnPerEur: 4.25 });
+  assert.equal(chain.clientPLN, 7300, "his clearance and haulage — nothing in this system could derive them");
+  assert.equal(chain.oursPLN, 25200);
+  assert.equal(chain.totalPLN, 32500);
+  assert.equal(chain.totalEUR, 7647.06, "converted at the claim's own rate");
+  assert.equal(chain.lines.filter(l => l.origin === "CLIENT").length, 2, "the empty prompt is not a cost");
+  assert.ok(chain.lines.find(l => l.origin === "CLIENT").note.includes("not on our books"));
+});
+
+T("re-deriving never doubles a figure", () => {
+  const first = CC.ourChainCosts(chainLots(), ["LOT-1"]);
+  const merged = CC.mergeChainLines(first, CC.ourChainCosts(chainLots(), ["LOT-1"]));
+  assert.equal(merged.length, first.length, "same keys, so the second derivation adds nothing");
+});
+
+T("gaps name what would weaken the claim", () => {
+  const bare = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1", "LOT-NOCOST"], clientLines: [] });
+  const gaps = CC.chainGaps(bare, []);
+  assert.ok(gaps.some(g => g.includes("LOT-NOCOST")), "a lot with no allocated cost is worth knowing about");
+  assert.ok(gaps.some(g => g.includes("client-side")), "his costs are usually the largest part he charges us");
+  const full = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1"], clientLines: [{ label: "clearance", amountPLN: 100 }] });
+  assert.deepEqual(CC.chainGaps(full, [{ label: "clearance", amountPLN: 100 }]), []);
+});
+
+T("chain lines convert into the claim's existing cost-line shape", () => {
+  const chain = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1"], clientLines: [{ label: "His clearance", amountPLN: 3200 }], plnPerEur: 4.25 });
+  const claimLines = CC.toClaimCostLines(chain.lines, 4.25);
+  assert.ok(claimLines.every(l => l.currency === "PLN" && l.rate === 4.25));
+  const clientLine = claimLines.find(l => l.party === "Client");
+  assert.ok(clientLine.label.includes("client's cost"), "the producer can see which costs were not ours");
 });
 
 console.log("");

@@ -10,7 +10,7 @@ import {
 } from "./invoicing";
 import * as XLSX from "xlsx";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice } from "./fakturownia";
-import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES } from "./fakturowniaImport.domain";
+import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 
@@ -20,7 +20,12 @@ const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 function Card({ children, style }: any) { return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", ...style }}>{children}</div>; }
 function SectionTitle({ children, right }: any) { return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{children}</div>{right}</div>; }
 function Lbl({ children }: any) { return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>; }
-function Inp({ value, onChange, type, placeholder, disabled, style }: any) { return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: disabled ? "#999" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />; }
+function Inp({ value, onChange, type, placeholder, disabled, style }: any) {
+  // v6.63.0 (D-09, M4): a controlled numeric input seeded with 0 rendered a zero
+  // that could never be deleted (each keystroke re-parsed to a number). A stored
+  // 0 now renders as an empty box; the parser already treats "" as 0 on save.
+  const shown = (type === "number" && (value === 0 || value === "0")) ? "" : (value ?? "");
+  return <input value={shown} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: disabled ? "#999" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />; }
 function Sel({ value, onChange, children, disabled, style }: any) { return <select value={value ?? ""} onChange={onChange} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }}>{children}</select>; }
 
 const CATEGORY_META: Record<InvoiceCategory, { label: string; color: string; bg: string }> = {
@@ -53,6 +58,7 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
   const remaining = outstandingAmount(inv);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [amount, setAmount] = useState(String(remaining || ""));
+  const [settleRate, setSettleRate] = useState(""); // v6.68.0 (F-2)
   const [method, setMethod] = useState("Bank transfer");
   const [note, setNote] = useState("");
   const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" } as any;
@@ -65,6 +71,10 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
         <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inp} />
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Amount ({inv.currency})</div>
         <input type="number" value={amount} onChange={e => setAmount(e.target.value)} style={inp} />
+        {String(inv.currency || "PLN").toUpperCase() !== "PLN" && (<>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#888", margin: "8px 0 3px" }}>Bank settlement rate → PLN <span style={{ fontWeight: 400 }}>(optional — records the realized FX gain/loss vs the invoice's locked {inv.fxRate})</span></div>
+          <input type="number" step="0.0001" value={settleRate} onChange={e => setSettleRate(e.target.value)} placeholder={`e.g. ${inv.fxRate}`} style={inp} />
+        </>)}
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Method</div>
         <select value={method} onChange={e => setMethod(e.target.value)} style={inp}>
           {PAYMENT_METHODS.map((m: string) => <option key={m}>{m}</option>)}
@@ -73,7 +83,7 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. bank ref, partial 1/2" style={inp} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
           <button onClick={onClose} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
-          <button onClick={() => onSave({ date, amount, method, note })} disabled={!(parseFloat(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseFloat(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseFloat(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
+          <button onClick={() => onSave({ date, amount, method, note, settlementFxRate: settleRate })} disabled={!(parseFloat(amount) > 0)} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: parseFloat(amount) > 0 ? "#16A34A" : "#D1D5DB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: parseFloat(amount) > 0 ? "pointer" : "not-allowed" }}>Add payment</button>
         </div>
       </div>
     </div>
@@ -114,7 +124,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     const r = await fetchInvoices(cfg, { income: 0, period });
     setBusy(false);
     if (!r.ok) { setError(r.corsLikely ? "The browser couldn't reach Fakturownia directly (CORS) — use the file export instead." : (r.error || "Fetch failed.")); return; }
-    stage((r.data || []).map(mapInvoice).map((m: any, i: number) => stagedRowFromMapped(m, i)));
+    stage((r.data || []).map(mapInvoice).map((m: any, i: number) => stagedRowFromMapped(m, i, COMPANY.nip, COMPANY.name)));
   }
 
   function onFile(e: any) {
@@ -165,7 +175,14 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
         whInvs.push(warehouseInvoiceFromRow(r, wh));
         return;
       }
-      if (r.tag === "OVERHEAD") { opCosts.push(operationalCostFromRow(r, r.category || "other")); }
+      if (r.tag === "OVERHEAD") {
+        // v6.64.1 (D-17): OVERHEAD rows write the operational cost ONLY — the
+        // register invoice is then created exactly once by migrateLegacyInvoices
+        // (source migrated:opCost:*). Writing both here AND letting the fold run
+        // produced two register invoices per overhead row (DUP_INVOICE alerts).
+        opCosts.push(operationalCostFromRow(r, r.category || "other"));
+        return;
+      }
       regs.push(buildCostInvoice(r, r.tag, { shipmentNumber: r.shipmentNumber, poNumber: r.poNumber }, contact));
       if ((r.tag === "FREIGHT" || r.tag === "CUSTOMS") && r.shipmentNumber) {
         let lineId = r.costLineId;
@@ -214,9 +231,17 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
               const rowPLN = Math.round((r.net || r.gross) * (r.fxRate || 1) * 100) / 100;
               return (
                 <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
-                  <input type="checkbox" checked={r.include} onChange={(e: any) => upd(r.key, { include: e.target.checked })} />
+                  <input type="checkbox" checked={r.include} onChange={(e: any) => {
+                    // v6.66.0 (D-30): re-including a flagged duplicate is a deliberate act.
+                    if (e.target.checked && r.dup) {
+                      const info = duplicateCostInvoiceInfo(r.number, invoices);
+                      const msg = info ? `"${r.number}" is ALREADY registered (${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? ", entered manually" : ""}). Importing it again double-counts the money.\n\nInclude it anyway?` : `"${r.number}" is already in the register. Include it anyway?`;
+                      if (!window.confirm(msg)) return;
+                    }
+                    upd(r.key, { include: e.target.checked });
+                  }} />
                   <div style={{ fontSize: 11.5, color: "#64748B" }}>{r.date}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.dup && <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: "#B45309", background: "#FFFBEB", padding: "1px 6px", borderRadius: 4 }}>already in register</span>}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.dup && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
                   <div style={{ fontSize: 11.5, fontFamily: "ui-monospace, Menlo, monospace" }}>{r.number || "—"}</div>
                   <div style={{ fontSize: 12 }}>{(r.net || r.gross).toLocaleString("pl-PL")} {r.currency}</div>
                   <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
@@ -267,7 +292,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
 export default function Invoices(props: any) {
   const { confirm: invConfirm, alert: invAlert, prompt: invPrompt, dialogNode: invNode } = useConfirm(); // P2-6
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
-    setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null } = props;
+    setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null, setOrders = null } = props;
   const [showImport, setShowImport] = useState(false); // v6.39.0
   // v6.39.0: everything a posted import touches, in one place.
   async function handleImportPost({ regs, flips, opCosts, whInvs }: any) {
@@ -359,7 +384,39 @@ export default function Invoices(props: any) {
     });
     setView("list"); setForm(null);
   }
-  function markStatus(inv: Invoice, status: PaymentStatus) {
+  // v6.63.0 (D-05, ruling D1): the workflow statuses are FORWARD-ONLY —
+  // Draft → Issued → Sent (Sent locks permanently; corrections via credit note).
+  // Cancelled is reachable from any non-Paid state with an explicit confirm,
+  // and cancelling a SALES invoice returns its linked SO from Invoiced to
+  // Delivered so a corrected invoice can be issued (M3 dead end).
+  async function markStatus(inv: Invoice, status: PaymentStatus) {
+    const order = ["Draft", "Issued", "Sent"];
+    if (order.includes(status)) {
+      const from = order.indexOf(String(inv.paymentStatus));
+      const to = order.indexOf(status);
+      if (from >= 0 && to <= from) {
+        await invAlert({ tone: "warn", title: "Forward only", message: `An invoice moves Draft → Issued → Sent and never back (ruling D1). To correct a ${inv.paymentStatus} invoice, cancel it or issue a credit/debit note.` });
+        return;
+      }
+      if (status === "Sent") {
+        const ok = await invConfirm({ tone: "warn", title: "Mark as Sent?", message: "Once Sent, this invoice LOCKS permanently — no edits, ever. Corrections happen only via credit or debit note.\n\nProceed?", confirmLabel: "Mark Sent & lock", cancelLabel: "Not yet" });
+        if (!ok) return;
+      }
+    }
+    if (status === "Cancelled") {
+      if (inv.paymentStatus === "Paid") { await invAlert({ tone: "warn", title: "Paid invoice", message: "A paid invoice can't be cancelled — remove or reverse its payment events first." }); return; }
+      const extra = isLocked(inv) ? "\n\n⚠ This invoice was SENT/EXPORTED. Cancel it here only if it is also corrected or cancelled in Fakturownia/KSeF — the register must match the legal record." : "";
+      const ok = await invConfirm({ tone: "danger", title: `Cancel invoice ${inv.number || "(draft)"}?`, message: `It stays on record as Cancelled (excluded from the ledger).${extra}`, confirmLabel: "Cancel invoice", cancelLabel: "Keep" });
+      if (!ok) return;
+      // Revert the linked SO(s): Invoiced → Delivered, so re-invoicing is possible.
+      if (inv.kind === "SALES" && typeof setOrders === "function") {
+        const soNumbers = (inv.links || []).filter((l: any) => l.type === "SO").map((l: any) => String(l.number));
+        if (soNumbers.length) {
+          setOrders((prev: any[]) => (prev || []).map((o: any) =>
+            soNumbers.includes(String(o.number)) && o.status === "Invoiced" ? { ...o, status: "Delivered" } : o));
+        }
+      }
+    }
     setInvoices((prev: Invoice[]) => prev.map(p => p.id === inv.id ? { ...p, paymentStatus: status, locked: status === "Sent" ? true : p.locked } : p));
     recordAudit({ module: "Invoices", docType: "Invoice", docNumber: inv.number || "(draft)", action: status === "Cancelled" ? "cancelled" : "status", summary: `Payment status → ${status}` });
   }
@@ -460,7 +517,9 @@ export default function Invoices(props: any) {
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>Invoices</div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button onClick={() => newInvoice("SALES")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Sales invoice</button>
+          {/* v6.65.0 (owner question): "+ Sales invoice" removed — every SINV is issued
+              from its Sales Order (Issue invoice on the SO), so the register can never
+              hold a sales invoice with no order behind it. Cost invoices remain manual. */}
           <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Cost invoice</button>
           <button onClick={() => setShowImport(true)} title="Fetch received cost invoices from Fakturownia, tag them (goods / freight / customs / warehouse / overhead) and post them where they belong." style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Import from Fakturownia</button>
           {showImport && <ImportFakturowniaModal invoices={invoices} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
@@ -503,7 +562,7 @@ export default function Invoices(props: any) {
             return (
               <div key={i.id} onClick={() => { setSelId(i.id); setView("detail"); }} style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "11px 16px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><CatBadge cat={i.category} /></div>
-                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.number || "—"}</div><DirPill inv={i} /></div>
+                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: i.paymentStatus === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: i.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "ui-monospace, Menlo, monospace" }} title={i.paymentStatus === "Cancelled" ? "Cancelled — kept on record, excluded from the ledger" : undefined}>{i.number || "—"}</div>{i.isProforma && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", padding: "1px 5px", borderRadius: 4 }}>PRO-FORMA</span>}<DirPill inv={i} /></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{i.counterparty?.name || "—"}</div>{i.counterparty?.nip && <div style={{ fontSize: 11, color: "#AAA" }}>NIP {i.counterparty.nip}</div>}</div>
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(i.issueDate) || "—"}</div>
                 <div><div style={{ fontSize: 12, color: od ? "#DC2626" : "#555", fontWeight: od ? 600 : 400 }}>{formatDMY(i.dueDate) || "—"}</div>{od && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>
@@ -550,6 +609,9 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Invoices</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          {inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark issued</button>}
+          {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
+          {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel invoice</button>}
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
           {(() => {
@@ -571,7 +633,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
             );
           })()}
           {inv.kind === "SALES" && inv.paymentStatus === "Issued" && <button onClick={onSend} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#0284C7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>→ Send to Fakturownia</button>}
-          {inv.kind === "SALES" && inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark Issued</button>}
+          {/* v6.65.0: duplicate "Mark Issued" removed — the status buttons above are the single path. */}
           <button onClick={onNote} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>↩ Credit/Debit note</button>
         </div>
       </div>
@@ -631,7 +693,30 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
   const isSales = form.kind === "SALES";
   const wanted = isSales ? ["Client"] : form.category === "FORWARDER" ? ["Forwarder"] : form.category === "BROKER" ? ["Broker"] : form.category === "WAREHOUSE" ? ["Warehouse"] : form.category === "TRANSPORT" ? ["Carrier"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
   const partyOptions = (contacts || []).filter((c: any) => { const ts = [c.type, ...(c.additionalTypes || [])]; return ts.some((t: string) => wanted.includes(t)); });
-  const docOptions = [...(orders || []).map((o: any) => ({ type: "SO", number: o.number })), ...(pos || []).map((p: any) => ({ type: "PO", number: p.number })), ...(shipments || []).map((s: any) => ({ type: "Shipment", number: s.number }))];
+  // v6.63.0 (D-06, M3/M4): the old picker concatenated ALL SOs+POs+shipments and
+  // hard-capped the render at 40 buttons — any PO past position 40 simply never
+  // appeared, and the wall of unfiltered buttons was unusable. Now: search box,
+  // no cap, linked documents pinned first, and ordering by invoice category
+  // (PURCHASE → POs first, TRANSPORT/FORWARDER/BROKER → shipments first,
+  // SINV/COMMISSION → SOs first).
+  const [linkQuery, setLinkQuery] = React.useState("");
+  const docOptions = React.useMemo(() => {
+    const soOpts = (orders || []).map((o: any) => ({ type: "SO", number: o.number }));
+    const poOpts = (pos || []).map((p: any) => ({ type: "PO", number: p.number }));
+    const shOpts = (shipments || []).map((s: any) => ({ type: "Shipment", number: s.number }));
+    const cat = String(form.category || "");
+    const ordered = cat === "PURCHASE" ? [...poOpts, ...shOpts, ...soOpts]
+      : (cat === "TRANSPORT" || cat === "FORWARDER" || cat === "BROKER") ? [...shOpts, ...poOpts, ...soOpts]
+      : (cat === "SINV" || cat === "COMMISSION") ? [...soOpts, ...shOpts, ...poOpts]
+      : [...soOpts, ...poOpts, ...shOpts];
+    const q = linkQuery.trim().toLowerCase();
+    const linkedSet = new Set((form.links || []).map((l: any) => String(l.number)));
+    const filtered = q ? ordered.filter((d: any) => String(d.number).toLowerCase().includes(q) || String(d.type).toLowerCase().includes(q)) : ordered;
+    // linked ones always visible and pinned first, even if the filter would hide them
+    const linkedOpts = ordered.filter((d: any) => linkedSet.has(String(d.number)));
+    const rest = filtered.filter((d: any) => !linkedSet.has(String(d.number)));
+    return [...linkedOpts, ...rest];
+  }, [orders, pos, shipments, form.category, form.links, linkQuery]);
 
   function setParty(id: string) { const c = partyOptions.find((x: any) => String(x.id) === String(id)); sf("counterparty", c ? { id: c.id, name: c.name, nip: c.nip || c.vatEuId } : null); }
   function toggleLink(d: any) { const ex = (form.links || []).find((l: any) => l.number === d.number); sf("links", ex ? form.links.filter((l: any) => l.number !== d.number) : [...(form.links || []), d]); }
@@ -653,6 +738,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
           <Card style={{ marginBottom: 16 }}><SectionTitle>INVOICE DETAILS</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               {!isSales && <div><Lbl>Category</Lbl><Sel value={form.category} onChange={(e: any) => sf("category", e.target.value)}>{(["PURCHASE", "FORWARDER", "BROKER", "WAREHOUSE", "TRANSPORT", "OTHER"] as InvoiceCategory[]).map(c => <option key={c} value={c}>{CATEGORY_META[c].label}</option>)}</Sel></div>}
+              <div><Lbl>Document type</Lbl><Sel value={form.isProforma ? "PROFORMA" : "FINAL"} onChange={(e: any) => sf("isProforma", e.target.value === "PROFORMA")}><option value="FINAL">Final invoice</option><option value="PROFORMA">Pro-forma (advance request — not in the ledger)</option></Sel></div>
               {!isSales && <div><Lbl>Cost scope</Lbl><Sel value={form.costScope} onChange={(e: any) => sf("costScope", e.target.value)}><option value="SHIPMENT">Shipment-scoped</option><option value="MONTHLY_SHARED">Monthly shared</option><option value="OVERHEAD">Overhead</option></Sel></div>}
               <div><Lbl>Invoice number {isSales && <span style={{ color: "#BBB", fontWeight: 400 }}>(Fakturownia assigns on Send)</span>}</Lbl><Inp value={form.number} onChange={(e: any) => sf("number", e.target.value)} placeholder={isSales ? "auto / optional" : "supplier's number"} /></div>
               <div><Lbl>Issue date</Lbl><Inp type="date" value={form.issueDate} onChange={(e: any) => sf("issueDate", e.target.value)} /></div>
@@ -680,7 +766,10 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
 
           <Card style={{ marginBottom: 16 }}><SectionTitle>LINKED DOCUMENTS</SectionTitle>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {docOptions.slice(0, 40).map((d: any) => { const on = (form.links || []).find((l: any) => l.number === d.number); return <button key={d.type + d.number} onClick={() => toggleLink(d)} style={{ padding: "6px 12px", border: `1px solid ${on ? "#2563EB" : "#E5E7EB"}`, background: on ? "#EFF6FF" : "#fff", borderRadius: 8, fontSize: 12, color: on ? "#1D4ED8" : "#555", cursor: "pointer", fontWeight: on ? 600 : 400 }}>{on && "✓ "}{d.type} {d.number}</button>; })}
+              <div style={{ width: "100%", marginBottom: 8 }}>
+                <Inp value={linkQuery} onChange={(e: any) => setLinkQuery(e.target.value)} placeholder="Search documents to link (e.g. PO-2026, SHP, client SO number)…" />
+              </div>
+              {docOptions.map((d: any) => { const on = (form.links || []).find((l: any) => l.number === d.number); return <button key={d.type + d.number} onClick={() => toggleLink(d)} style={{ padding: "6px 12px", border: `1px solid ${on ? "#2563EB" : "#E5E7EB"}`, background: on ? "#EFF6FF" : "#fff", borderRadius: 8, fontSize: 12, color: on ? "#1D4ED8" : "#555", cursor: "pointer", fontWeight: on ? 600 : 400 }}>{on && "✓ "}{d.type} {d.number}</button>; })}
               {docOptions.length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No SOs / POs / shipments to link yet.</div>}
             </div>
           </Card>

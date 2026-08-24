@@ -23,12 +23,34 @@ export function buildTraceTree(lot: any, inp: { pos?: any[]; orders?: any[]; shi
   const pos = arr(inp.pos), orders = arr(inp.orders), shipments = arr(inp.shipments), invoices = arr(inp.invoices);
   const po = pos.find(p => p.number === lot.poRef) || null;
 
-  // Shipments touching this lot: header lotRefs, goods lotRef, or the lot's PO.
-  const ship = shipments.filter(s =>
-    refs(s.lotRefs).includes(lot.number) ||
-    arr(s.goods).some((g: any) => g.lotRef === lot.number) ||
-    (lot.poRef && (refs(s.poRefs).includes(lot.poRef) || arr(s.goods).some((g: any) => g.poRef === lot.poRef)))
-  ).map(s => ({
+  // v6.69.0: shipments that CARRIED this lot — nothing wider.
+  //
+  // This used to match any shipment sharing the lot's PO, which is the same
+  // over-broad predicate removed from Inventory in v6.59.0 and from the
+  // shipment header in v6.58.0. Here it mattered more than on a screen: a
+  // recall report that names a shipment which never carried the lot sends you
+  // to clients who never received the goods, and hands a counterparty a
+  // document that falls apart the moment they check one line.
+  //
+  // The rule is the one used everywhere else — the GOODS decide. Header lotRefs
+  // are trusted only for a shipment that has no goods rows yet (a booking),
+  // because those refs are seeded from the source document at creation.
+  // A RECALL ERRS TOWARD INCLUDING. Excluding a shipment that did carry the lot
+  // means a client eats the goods; including one that didn't costs a phone call.
+  // So this narrows only where there is POSITIVE EVIDENCE of a different lot —
+  // never where the data simply cannot tell.
+  const carriesLot = (s: any) => {
+    const goods = arr(s.goods);
+    if (goods.some((g: any) => String(g.lotRef || "") === String(lot.number))) return true;
+    // Goods rows naming OTHER lots are proof this shipment carried those, not
+    // this one — the case that put SHP-2026-0002 in LOT-2026-0001's report.
+    if (goods.some((g: any) => g.lotRef)) return false;
+    if (refs(s.lotRefs).includes(String(lot.number))) return true;
+    // No lot evidence either way (a booking, or a shipment recorded before goods
+    // rows existed): fall back to the PO link rather than dropping it silently.
+    return !!(lot.poRef && (refs(s.poRefs).includes(lot.poRef) || goods.some((g: any) => g.poRef === lot.poRef)));
+  };
+  const ship = shipments.filter(carriesLot).map(s => ({
     number: s.number, status: s.status, direction: s.tradeDirection || undefined,
     carrier: s.carrierName || undefined,
     from: s.originText || s.legs?.[0]?.fromCustom || undefined,
@@ -41,8 +63,24 @@ export function buildTraceTree(lot: any, inp: { pos?: any[]; orders?: any[]; shi
   orders.forEach(o => {
     if (o.status === "Cancelled") return;
     arr(o.items).forEach((it: any) => {
-      const hits = (it.sourceType === "STOCK" && it.sourceRef === lot.number) ||
-        (it.sourceType === "PO" && lot.poRef && it.sourceRef === lot.poRef);
+      // v6.69.0: a PO-sourced line sells THIS lot only when it draws on the same
+      // PO LINE. Matching the whole PO listed every lot of that order against
+      // every sale from it — LOT-2026-0001 (19 422 kg) reported 38 844 kg sold
+      // across three lines, one of them to a client who bought a different lot.
+      // poLineId is authoritative when both sides carry it; without it, fall
+      // back to the PO plus a product match rather than the PO alone.
+      // Same principle: narrow only on positive evidence of a DIFFERENT line.
+      // poLineId is authoritative when both sides carry it. Otherwise, a stated
+      // product/variety that differs proves it is another line; anything the
+      // data cannot distinguish stays IN the report.
+      const lineDiffers = (it.sourceLineId != null && lot.poLineId != null)
+        ? String(it.sourceLineId) !== String(lot.poLineId)
+        : (!!it.product && !!lot.product &&
+           (String(it.product).trim().toLowerCase() !== String(lot.product).trim().toLowerCase() ||
+            (!!it.variety && !!lot.variety && String(it.variety).trim().toLowerCase() !== String(lot.variety).trim().toLowerCase())));
+      const sameLine = !lineDiffers;
+      const hits = (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) ||
+        (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef) && sameLine);
       if (hits) sales.push({
         soNumber: o.number, client: o.client?.name || "(client)",
         qtyKg: parseFloat(it.qty) || 0, status: o.status,

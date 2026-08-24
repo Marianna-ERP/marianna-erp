@@ -99,10 +99,14 @@ saved until Save. Pick the source PO or SO explicitly (no silent default).
 
 ### Status and inventory
 The lifecycle is **Draft → Booked → Loaded → Delivered → Closed** (plus
-Cancelled), and only the **next** logical action button shows. Marking
-**Delivered** is what posts inventory: receipt for inbound, SHIP_OUT for
+Cancelled), and only the **next** logical action button shows. Inventory posts
+**automatically as the status advances** — since v6.58.0 marking **Loaded**
+already posts (for an outbound shipment, leaving the dock IS the movement), and
+Delivered/Closed post their stage too: receipt for inbound, SHIP_OUT for
 outbound, moves for transfers — driven by the shipment's purpose, never typed
-by hand. Direct/EXW pass-through sales post the IN+SHIP_OUT pair at handover.
+by hand. Posting is idempotent, so each stage posts exactly once. The header
+keeps a **Re-post inventory** button for corrections after editing goods; you
+should never need it in the normal flow. Direct/EXW pass-through sales post the IN+SHIP_OUT pair at handover.
 
 ### Costs
 - Freight and FX live as **cost lines**, not in the create step. Each line has

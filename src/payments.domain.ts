@@ -14,6 +14,7 @@ import { parseNum } from "./numbers";
 // v6.32.0 (R7b-4): comma-aware canonical parser — "1,5" now parses as 1.5.
 const n = parseNum;
 function r2(v: number): number { return Math.round(v * 100) / 100; }
+const r2n4 = (v: number) => Math.round(v * 10000) / 10000;
 
 export interface PaymentEvent {
   id: any;
@@ -60,10 +61,17 @@ function statusFor(inv: any, paid: number): string {
 }
 
 /** Append a payment event; recomputes the derived paidAmount + paymentStatus. */
-export function applyPaymentEvent(inv: any, evt: { date: string; amount: any; method?: string; note?: string }, nextId: () => any): any {
+export function applyPaymentEvent(inv: any, evt: { date: string; amount: any; method?: string; note?: string; source?: string; settlementFxRate?: any }, nextId: () => any): any {
   const events = [...normalizeInvoicePayments(inv), {
     id: nextId(), date: String(evt.date || "").slice(0, 10), amount: r2(n(evt.amount)),
     method: evt.method || "Bank transfer", note: evt.note || "",
+    // v6.68.0 (F-2): the bank's actual conversion rate for this payment — the
+    // realized FX gain/loss derives from (settlement − invoice) per event.
+    ...(n(evt.settlementFxRate) > 0 ? { settlementFxRate: r2n4(n(evt.settlementFxRate)), settledPLN: r2(r2n4(n(evt.settlementFxRate)) * r2(n(evt.amount))) } : {}),
+    // v6.67.0 (D-33): bank-sourced events carry bank:{account}:{lineId} so a
+    // re-imported statement can never double-post — same idempotency discipline
+    // as claim: and WHINV- sources.
+    ...(evt.source ? { source: String(evt.source) } : {}),
   }];
   const paid = r2(events.reduce((s, p) => s + n(p.amount), 0));
   return { ...inv, payments: events, paidAmount: paid, paymentStatus: statusFor(inv, paid) };
@@ -80,15 +88,36 @@ export function removePaymentEvent(inv: any, evtId: any): any {
 // direction "outgoing" = a note WE issued to a client (receivable side);
 // direction "incoming" = a note from a supplier to us (payable side).
 // CREDIT reduces the open amount on its side; DEBIT increases it.
+// ── v6.63.0 (owner axiom): "a credit note is what we give back; a debit note is
+// what we get." Generalised: THE ISSUER OF A CREDIT NOTE PAYS; THE ISSUER OF A
+// DEBIT NOTE COLLECTS. Every note carries issuedBy ("US" | "COUNTERPARTY");
+// legacy notes without it derive it from direction (outgoing → US, incoming →
+// COUNTERPARTY), which reproduces the old behaviour EXACTLY. The new capability
+// this unlocks: a DEBIT note WE issue to a supplier/carrier (claim recovery)
+// now correctly REDUCES the payable instead of increasing it.
+export function noteIssuedBy(nt: any): "US" | "COUNTERPARTY" {
+  const v = String(nt?.issuedBy || "").toUpperCase();
+  if (v === "US" || v === "COUNTERPARTY") return v as any;
+  return nt?.direction === "incoming" ? "COUNTERPARTY" : "US";
+}
+
+/** Signed PLN effect of one note on its side's OPEN total.
+ *  sign = issuer(US:+1/THEM:−1) × type(DEBIT:+1/CREDIT:−1) × side(receivable:+1/payable:−1) */
+export function noteLedgerEffect(nt: any): { side: "receivable" | "payable"; deltaPLN: number } {
+  const pln = n(nt?.amountPLN) || n(nt?.amount) * (n(nt?.fxRate) || 1);
+  const side: "receivable" | "payable" = nt?.direction === "incoming" ? "payable" : "receivable";
+  if (!nt || nt.status === "Cancelled" || pln <= 0) return { side, deltaPLN: 0 };
+  const issuer = noteIssuedBy(nt) === "US" ? 1 : -1;
+  const type = (nt.noteType === "DEBIT" || nt.noteKind === "DEBIT") ? 1 : -1;
+  const sideSign = side === "receivable" ? 1 : -1;
+  return { side, deltaPLN: r2(issuer * type * sideSign * pln) };
+}
+
 export function notesTotalsAdjustment(financeNotes: any[]): { receivableAdjPLN: number; payableAdjPLN: number } {
   let recv = 0, pay = 0;
   (financeNotes || []).forEach((nt: any) => {
-    if (!nt || nt.status === "Cancelled") return;
-    const pln = n(nt.amountPLN) || n(nt.amount) * (n(nt.fxRate) || 1);
-    if (pln <= 0) return;
-    const sign = (nt.noteType === "DEBIT" || nt.noteKind === "DEBIT") ? +1 : -1; // CREDIT reduces
-    if (nt.direction === "incoming") pay += sign * pln;
-    else recv += sign * pln;
+    const eff = noteLedgerEffect(nt);
+    if (eff.side === "payable") pay += eff.deltaPLN; else recv += eff.deltaPLN;
   });
   return { receivableAdjPLN: r2(recv), payableAdjPLN: r2(pay) };
 }
@@ -139,4 +168,38 @@ export function convertSettledRefsToEvents(invoices: any[], settledRefs: string[
     // ref dropped either way — the invoice now carries/derives its own paid state
   });
   return { invoices: nextInvoices, settledRefs: keep, converted };
+}
+
+
+// ── v6.68.0 (F-2): REALIZED FX DIFFERENCES ────────────────────────────────────
+/** Realized FX gain (+) / loss (−) in PLN across an invoice's payment events.
+ *  Receivable in EUR locked @4.30, money converted @4.28 → loss; a payable paid
+ *  cheaper than its locked rate → gain. Events without a settlement rate
+ *  contribute nothing (PLN invoices never do). */
+export function realizedFxPLN(inv: any): number {
+  const lockRate = n(inv?.fxRate) || 1;
+  const receivable = inv?.kind === "SALES";
+  let total = 0;
+  normalizeInvoicePayments(inv).forEach((p: any) => {
+    const sr = n(p?.settlementFxRate);
+    if (!(sr > 0) || !(lockRate > 0) || String(inv?.currency || "PLN").toUpperCase() === "PLN") return;
+    const diff = (sr - lockRate) * n(p.amount);
+    total += receivable ? diff : -diff;
+  });
+  return r2(total);
+}
+
+/** v6.68.0 (F-3): a client's open exposure in PLN — outstanding across all
+ *  non-cancelled sales invoices, at each invoice's own locked rate. */
+export function clientExposurePLN(clientName: any, invoices: any[]): number {
+  const key = String(clientName || "").trim().toLowerCase();
+  if (!key) return 0;
+  let total = 0;
+  (invoices || []).forEach((i: any) => {
+    if (i?.kind !== "SALES" || i?.paymentStatus === "Cancelled" || i?.isProforma) return;
+    if (String(i?.counterparty?.name || "").trim().toLowerCase() !== key) return;
+    const out = n(i.grossAmount) - n(i.paidAmount);
+    if (out > 0.005) total += out * (n(i.fxRate) || 1);
+  });
+  return r2(total);
 }

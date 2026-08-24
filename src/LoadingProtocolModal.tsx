@@ -67,6 +67,7 @@ function BL({ k, align = "left" }: any) {
 }
 
 const TD: any = { border: "1px solid #333", padding: "3px 4px", fontSize: 9.5, verticalAlign: "middle" };
+const SUMTD: any = { ...TD, border: "2px solid #111", background: "#F8FAFC" };
 const TH: any = { ...TD, background: "#F3F4F6", fontWeight: 700, textAlign: "center" };
 const INP: any = { width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 5, padding: "5px 7px", fontSize: 12 };
 
@@ -404,37 +405,28 @@ export default function LoadingProtocolModal({
 
         {/* ── THE PRINTED DOCUMENT ── */}
         <div id="loading-protocol-print" style={{ padding: 22, background: "#fff", color: "#111", fontFamily: "Arial, Helvetica, sans-serif" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
-            <tbody>
-              <tr>
-                {/* v6.53.0 house header: the sheet goes to a producer and is
-                    signed by a carrier's driver — it has to identify us fully,
-                    not by trading name alone. */}
-                <td style={{ ...TD, width: "26%", textAlign: "center" }}>
-                  {/* v6.57.1: the real logo, exactly as the PO and SO print it. */}
-                  <PrintLogo width={150} />
-                  <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.5, marginTop: 2 }}>{company?.name || p.receiverName || "MARIANNA"}</div>
-                  {company?.address1 ? <div style={{ fontSize: 8 }}>{company.address1}</div> : null}
-                  {company?.address2 ? <div style={{ fontSize: 8 }}>{company.address2}</div> : null}
-                  {company?.nip ? <div style={{ fontSize: 8 }}>NIP: {company.nip}</div> : null}
-                </td>
-                <td style={{ ...TD, width: "40%", fontSize: 8.5 }} rowSpan={2}>
-                  <div style={{ fontWeight: 700, fontSize: 9 }}>{TXT.recorders.pl}</div>
-                  <div style={{ fontStyle: "italic", color: "#555" }}>{TXT.recorders.en}</div>
-                  <div style={{ marginTop: 3, fontFamily: "monospace", fontSize: 10, minHeight: 26 }}>
-                    {(p.recorderNos || []).length ? (p.recorderNos || []).map((n: string, i: number) => <div key={i}>{n}</div>) : <div style={{ color: "#999" }}>……………………………………</div>}
-                  </div>
-                </td>
-              </tr>
-              {/* v6.58.0: the "AUTHENTIC TASTE OF QUALITY" strapline row is
-                  removed — it is marketing on a document a producer signs. */}
-              {/* v6.57.1: the Wersja (form version) box and its value are gone —
-                  they belonged to the printed stationery, not to a document the
-                  producer signs. The page number moved to the footer, where a
-                  reader looks for it. */}
-              <tr><td style={{ ...TD, textAlign: "center", fontWeight: 800, fontSize: 12, letterSpacing: 0.5 }} colSpan={2}>{TXT.title.pl} / {TXT.title.en}</td></tr>
-            </tbody>
-          </table>
+          <div style={{ border: "1.5px solid #111", marginBottom: 8 }}>
+            {/* v6.66.0 (R-UI3): ONE outer border holds the whole header — company,
+                temperature recorders and the document title. The old two-column
+                table drew cell borders that intersected and cut across the title. */}
+            <div style={{ display: "flex", alignItems: "stretch" }}>
+              <div style={{ width: "34%", padding: "6px 8px", textAlign: "center", borderRight: "1px solid #999" }}>
+                <PrintLogo width={150} />
+                <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 0.5, marginTop: 2 }}>{company?.name || p.receiverName || "MARIANNA"}</div>
+                {company?.address1 ? <div style={{ fontSize: 8 }}>{company.address1}</div> : null}
+                {company?.address2 ? <div style={{ fontSize: 8 }}>{company.address2}</div> : null}
+                {company?.nip ? <div style={{ fontSize: 8 }}>NIP: {company.nip}</div> : null}
+              </div>
+              <div style={{ flex: 1, padding: "6px 8px", fontSize: 8.5 }}>
+                <div style={{ fontWeight: 700, fontSize: 9 }}>{TXT.recorders.pl}</div>
+                <div style={{ fontStyle: "italic", color: "#555" }}>{TXT.recorders.en}</div>
+                <div style={{ marginTop: 3, fontFamily: "monospace", fontSize: 10, minHeight: 26 }}>
+                  {(p.recorderNos || []).length ? (p.recorderNos || []).map((n: string, i: number) => <div key={i}>{n}</div>) : <div style={{ color: "#999" }}>……………………………………</div>}
+                </div>
+              </div>
+            </div>
+            <div style={{ borderTop: "1px solid #999", padding: "7px 6px", textAlign: "center", fontWeight: 800, fontSize: 12.5, letterSpacing: 0.5, lineHeight: 1.35 }}>{TXT.title.pl} / {TXT.title.en}</div>
+          </div>
 
           <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
             <tbody>
@@ -505,9 +497,12 @@ export default function LoadingProtocolModal({
               })}
               {(p.rows || []).length > 0 && (
                 <tr>
-                  <td style={{ ...TD, fontWeight: 800, textAlign: "center" }}>{totals.pallets}</td>
-                  <td style={{ ...TD, fontWeight: 800, textAlign: "center" }}>{totals.boxes} szt</td>
-                  <td style={{ ...TD, fontWeight: 700, fontSize: 8.5 }} colSpan={6}>
+                  {/* v6.62.0 (user ruling): the summary is boxed in a heavier
+                      border so the totals read as their own block rather than
+                      as one more pallet line. */}
+                  <td style={{ ...SUMTD, fontWeight: 800, textAlign: "center" }}>{totals.pallets}</td>
+                  <td style={{ ...SUMTD, fontWeight: 800, textAlign: "center" }}>{totals.boxes} szt</td>
+                  <td style={{ ...SUMTD, fontWeight: 700, fontSize: 8.5 }} colSpan={6}>
                     Netto / Net {totals.netKg.toLocaleString("pl-PL")} kg · Brutto / Gross {totals.grossKg.toLocaleString("pl-PL")} kg
                     <span style={{ fontWeight: 400, color: "#555" }}> (opakowania / packaging {totals.boxTareTotalKg.toLocaleString("pl-PL")} kg + palety / pallets {totals.palletTareTotalKg.toLocaleString("pl-PL")} kg)</span>
                   </td>
