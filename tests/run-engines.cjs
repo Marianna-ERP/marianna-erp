@@ -2932,5 +2932,179 @@ T("chain lines convert into the claim's existing cost-line shape", () => {
 });
 
 console.log("");
+console.log("── claimReadiness: deadlines, evidence, money-vs-paper (v6.71.0) ──");
+
+const CR = require("./build/claimReadiness.domain.js");
+const okLink = (v) => /^https?:\/\//i.test(String(v || ""));
+
+T("the notice deadline suggests itself from WHO the claim is against", () => {
+  // The periods differ by respondent, and a missed notice loses the claim
+  // whatever its merits. CMR gives 7 days; Hague-Visby 3.
+  const carrier = CR.suggestNoticeDeadline({ respondent: { kind: "Carrier" }, date: "2026-08-01" });
+  assert.equal(carrier.deadline, "2026-08-08");
+  assert.ok(carrier.basis.includes("CMR"));
+  const line = CR.suggestNoticeDeadline({ respondent: { kind: "ShippingLine" }, date: "2026-08-01" });
+  assert.equal(line.deadline, "2026-08-04", "sea is far shorter than road — this is the one people miss");
+  assert.equal(CR.suggestNoticeDeadline({ respondent: { kind: "Supplier" }, date: "2026-08-01" }).deadline, "2026-08-15");
+  assert.equal(CR.suggestNoticeDeadline({ respondent: {} , date: "2026-08-01" }), null, "no respondent, no suggestion");
+});
+
+T("a deadline someone typed is never overwritten by a default", () => {
+  const typed = { respondent: { kind: "Carrier" }, date: "2026-08-01", noticeDeadline: "2026-08-20" };
+  assert.equal(CR.applyDeadlineDefault(typed).noticeDeadline, "2026-08-20", "a typed deadline is a decision");
+  assert.equal(CR.applyDeadlineDefault({ respondent: { kind: "Carrier" }, date: "2026-08-01" }).noticeDeadline, "2026-08-08");
+  // The delivery date wins over the claim date when one is known.
+  assert.equal(CR.applyDeadlineDefault({ respondent: { kind: "Carrier" }, date: "2026-08-10" }, "2026-08-01").noticeDeadline, "2026-08-08");
+});
+
+T("deadline state, and what it means", () => {
+  const c = { respondent: { kind: "Carrier" }, noticeDeadline: "2026-08-10" };
+  assert.equal(CR.deadlineStatus(c, "2026-08-05").state, "ok");
+  assert.equal(CR.deadlineStatus(c, "2026-08-09").state, "due-soon");
+  const late = CR.deadlineStatus(c, "2026-08-14");
+  assert.equal(late.state, "passed");
+  assert.equal(late.daysLeft, -4);
+  assert.ok(late.message.includes("refused on the notice period"), "it says what the consequence is, not just that a date passed");
+  assert.equal(CR.deadlineStatus({ ...c, notifiedAt: "2026-08-06" }, "2026-08-14").state, "notified",
+    "notifying satisfies the period — a late deadline on a notified claim is not a problem");
+});
+
+T("THE AGING VIEW: what is lost this week if nothing is done, worst first", () => {
+  const claims = [
+    { number: "CLM-1", status: "Sent", respondent: { kind: "Carrier" }, noticeDeadline: "2026-08-01" },
+    { number: "CLM-2", status: "Draft", respondent: { kind: "Carrier" }, noticeDeadline: "2026-08-11" },
+    { number: "CLM-3", status: "Draft", respondent: { kind: "Carrier" }, noticeDeadline: "2026-09-30" },
+    { number: "CLM-4", status: "Settled", respondent: { kind: "Carrier" }, noticeDeadline: "2026-08-01" },
+    { number: "CLM-5", status: "Sent", respondent: { kind: "Carrier" }, noticeDeadline: "2026-08-01", notifiedAt: "2026-07-30" },
+  ];
+  const due = CR.claimsNeedingNotice(claims, "2026-08-10");
+  assert.deepEqual(due.map(d => d.claim.number), ["CLM-1", "CLM-2"], "settled and already-notified claims drop out");
+  assert.equal(due[0].status.state, "passed", "worst first");
+});
+
+T("required evidence depends on the respondent — each claim is lost differently", () => {
+  const carrier = CR.claimEvidenceGaps({ respondent: { kind: "Carrier" }, evidence: [] }, okLink).map(g => g.kind);
+  assert.ok(carrier.includes("CMR"), "a carrier claim dies without CMR remarks at delivery");
+  const reefer = CR.claimEvidenceGaps({ respondent: { kind: "ShippingLine" }, evidence: [] }, okLink).map(g => g.kind);
+  assert.ok(reefer.includes("Temperature record"), "a reefer claim without the download is an assertion");
+  const producer = CR.claimEvidenceGaps({ respondent: { kind: "Supplier" }, evidence: [] }, okLink).map(g => g.kind);
+  assert.ok(producer.includes("Loading protocol") && producer.includes("Temperature record"),
+    "the producer claim needs BOTH: his dock condition, and proof the transport was sound");
+});
+
+T("THE CASE WORTH CATCHING: named but no scan linked", () => {
+  const claim = {
+    respondent: { kind: "Carrier" },
+    evidence: [
+      { kind: "CMR with remarks", link: "" },
+      { kind: "Loading protocol", link: "https://dropbox.com/x" },
+      { kind: "Photos", link: "https://dropbox.com/y" },
+    ],
+  };
+  const gaps = CR.claimEvidenceGaps(claim, okLink);
+  assert.equal(gaps.length, 1);
+  assert.equal(gaps[0].kind, "CMR");
+  assert.equal(gaps[0].state, "no-link", "'we have it' is not the same as being able to produce it");
+  // Loose matching: "CMR with remarks" satisfies "CMR" — a gate that fires on
+  // wording is a gate that gets ignored.
+  const linked = { ...claim, evidence: claim.evidence.map(e => e.kind.startsWith("CMR") ? { ...e, link: "https://dropbox.com/z" } : e) };
+  assert.deepEqual(CR.claimEvidenceGaps(linked, okLink), []);
+});
+
+T("the evidence warning explains, and never blocks", () => {
+  const gaps = CR.claimEvidenceGaps({ respondent: { kind: "Carrier" }, evidence: [] }, okLink);
+  const w = CR.evidenceWarning(gaps);
+  assert.ok(w.includes("not attached"));
+  assert.ok(w.includes("send it anyway"), "the notice period does not wait for the survey");
+  assert.equal(CR.evidenceWarning([]), "");
+});
+
+T("the agreed amount and the credit note must say the same thing", () => {
+  const notes = [{ id: 9, number: "CN-1", noteType: "CREDIT", currency: "EUR", amount: 6180 }];
+  const find = (id) => notes.find(x => String(x.id) === String(id));
+  assert.equal(CR.reconcileClaimNote({ status: "Settled", acceptedEUR: 6180, financeNoteId: 9 }, find).state, "matched");
+  const noNote = CR.reconcileClaimNote({ status: "Settled", acceptedEUR: 6180, financeNoteId: null }, find);
+  assert.equal(noNote.state, "no-note");
+  assert.ok(noNote.message.includes("P/L has moved and the legal document does not exist"));
+  const differs = CR.reconcileClaimNote({ status: "Settled", acceptedEUR: 6180, financeNoteId: 9 }, () => ({ id: 9, number: "CN-1", currency: "EUR", amount: 6000 }));
+  assert.equal(differs.state, "differs");
+  assert.equal(differs.differenceEUR, 180);
+  assert.ok(differs.message.includes("the P/L follows the claim, the ledger follows the note"));
+  assert.equal(CR.reconcileClaimNote({ status: "Draft", acceptedEUR: 0 }, find).state, "no-amount");
+});
+
+T("register-wide: every settled claim whose money and paper disagree", () => {
+  const notes = [{ id: 9, currency: "EUR", amount: 6000 }];
+  const find = (id) => notes.find(x => String(x.id) === String(id));
+  const claims = [
+    { number: "CLM-1", status: "Settled", acceptedEUR: 6180, financeNoteId: 9 },
+    { number: "CLM-2", status: "Settled", acceptedEUR: 500, financeNoteId: null },
+    { number: "CLM-3", status: "Draft", acceptedEUR: 900, financeNoteId: null },
+  ];
+  const bad = CR.claimNoteMismatches(claims, find);
+  assert.deepEqual(bad.map(b => b.number), ["CLM-1", "CLM-2"], "a draft has agreed nothing yet");
+});
+
+console.log("");
+console.log("── purchaseOrderGuards: what stops a PO, and what merely warns (v6.72.0) ──");
+
+const POG = require("./build/purchaseOrderGuards.js");
+
+const goodPO = () => ({
+  number: "PO-2026-0001",
+  supplier: { name: "Sadypol", id: 11 },
+  buyIncoterm: "EXW",
+  destinationText: "Grójec",
+  loadingDate: "2026-09-01",
+  items: [{ product: "Apples", variety: "Gala", cnCode: "080810", size: "70-80", packaging: "13 kg wooden boxes", qty: 19422, unitPrice: 2.9 }],
+});
+
+T("THE GATES: supplier, incoterm, named place — in that order", () => {
+  assert.equal(POG.poTermsMissing(goodPO()), null);
+  // The supplier is checked FIRST: confirming creates lots that carry poRef back
+  // here, so a PO with nobody on it produces stock whose owner cannot be resolved.
+  assert.equal(POG.poTermsMissing({ ...goodPO(), supplier: null, supplierId: null }), "the supplier");
+  assert.equal(POG.poTermsMissing({ ...goodPO(), buyIncoterm: "" }), "the purchase incoterm");
+  assert.ok(POG.poTermsMissing({ ...goodPO(), destinationText: "", destinationLocationId: null }).includes("named place"));
+  // A supplier known only by id still counts — the name may be resolved live.
+  assert.equal(POG.poTermsMissing({ ...goodPO(), supplier: null, supplierId: 11 }), null);
+});
+
+T("a blank supplier NAME with no id does not slip through", () => {
+  assert.equal(POG.poTermsMissing({ ...goodPO(), supplier: { name: "   " }, supplierId: null }), "the supplier");
+});
+
+T("THE WARNINGS: they say what it costs, not just that a field is empty", () => {
+  assert.deepEqual(POG.poWarnings(goodPO()), [], "a complete order warns about nothing");
+  const noPack = POG.poWarnings({ ...goodPO(), items: [{ ...goodPO().items[0], packaging: "", packagingId: null }] });
+  assert.equal(noPack.length, 1);
+  assert.ok(noPack[0].includes("pallet table"), "the consequence is named — you find out at the dock");
+  const noCn = POG.poWarnings({ ...goodPO(), items: [{ ...goodPO().items[0], cnCode: "" }] });
+  assert.ok(noCn[0].includes("customs"));
+  const noDate = POG.poWarnings({ ...goodPO(), loadingDate: "" });
+  assert.ok(noDate.some(w => w.includes("expected lot")));
+});
+
+T("warnings count the LINES affected, and ignore empty rows", () => {
+  const po = { ...goodPO(), items: [
+    { product: "Apples", variety: "Gala", cnCode: "080810", size: "70-80", packaging: "13 kg wooden boxes" },
+    { product: "Apples", variety: "", cnCode: "", size: "", packaging: "" },
+    { product: "", variety: "", cnCode: "" },   // a blank row being typed — not a fault
+  ] };
+  const w = POG.poWarnings(po);
+  assert.ok(w.some(x => x.startsWith("1 line(s) with no variety")), "one real line, not two");
+  assert.ok(w.some(x => x.startsWith("1 line(s) with no CN/HS")));
+});
+
+T("a warning is never a gate — an incomplete PO is still confirmable", () => {
+  // The whole point of the split: an order the supplier is waiting for must not
+  // stop for a CN code that can be added before the truck loads.
+  const thin = { supplier: { name: "Sadypol" }, buyIncoterm: "EXW", destinationText: "Grójec",
+    items: [{ product: "Apples", qty: 1000, unitPrice: 2 }] };
+  assert.equal(POG.poTermsMissing(thin), null, "nothing blocks it");
+  assert.ok(POG.poWarnings(thin).length >= 4, "but it is visibly incomplete");
+});
+
+console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

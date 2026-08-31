@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
+import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
 import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, MOVEMENT_LABELS, poDirectFromSOs } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { LOGO_DATA_URL } from "./brand";
@@ -742,12 +743,6 @@ function LifecycleTimeline({ status }: any) {
 // Batch 6b hard gate: a PO leaving Draft — or being printed/emailed to the
 // producer — must carry its purchase terms. "CIF" without "CIF Alexandria" is
 // only half the contract, so the incoterm and its named place gate together.
-function poTermsMissing(o: any): string | null {
-  if (!o?.buyIncoterm) return "the purchase incoterm";
-  if (!(o?.destinationLocationId || (o?.destinationText || "").trim())) return `the named place for ${o.buyIncoterm}`;
-  return null;
-}
-
 function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
   const { alert: ofAlert, dialogNode: ofPONode } = useConfirm(); // P2-6 completion
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
@@ -991,6 +986,35 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   return (
                     <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF", fontSize: 11.5, color: "#4338CA", lineHeight: 1.45 }}>
                       {handoverSentence(order.buyIncoterm, placeName)}
+                    </div>
+                  );
+                })()}
+                {/* v6.72.0 READINESS. Everything that would stop or weaken this
+                    order, shown WHILE you are filling it in rather than at the
+                    moment you press save — the difference between a note and an
+                    obstacle. Red is a hard gate, amber costs you later. */}
+                {(() => {
+                  const gate = poTermsMissing(order);
+                  const warn = poWarnings(order);
+                  if (!gate && !warn.length) {
+                    return order.status === "Draft" ? (
+                      <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#F0FDF4", border: "1px solid #BBF7D0", fontSize: 11.5, color: "#166534" }}>
+                        ✓ Ready to confirm — terms complete, every line has what the protocol and customs will need.
+                      </div>
+                    ) : null;
+                  }
+                  return (
+                    <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, fontSize: 11.5,
+                      background: gate ? "#FEF2F2" : "#FFFBEB",
+                      border: `1px solid ${gate ? "#FECACA" : "#FDE68A"}`,
+                      color: gate ? "#991B1B" : "#92400E" }}>
+                      {gate && <div style={{ fontWeight: 700, marginBottom: warn.length ? 5 : 0 }}>
+                        Cannot be confirmed without {gate}.
+                      </div>}
+                      {warn.length > 0 && <>
+                        {gate ? <div style={{ fontWeight: 700, marginBottom: 4, color: "#92400E" }}>Also incomplete — these do not block:</div> : null}
+                        <div style={{ lineHeight: 1.5, color: "#92400E" }}>{warn.map((w, i) => <div key={i}>· {w}</div>)}</div>
+                      </>}
                     </div>
                   );
                 })()}
@@ -1604,6 +1628,22 @@ ${blockNote}`.trim(),
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
       await uiAlert({ tone: "warn", title: "Terms incomplete", message: `This PO cannot be ${o.status === "Confirmed" ? "confirmed" : "saved as " + o.status} without ${termsMissing}. The purchase terms are the contract — the producer must see them.` });
       return;
+    }
+    // v6.72.0 (owner ruling): everything else REPORTS and proceeds. These are
+    // the fields whose absence costs you later — at the dock, at customs, or on
+    // the protocol the producer signs — but none of them is worth stopping an
+    // order the supplier is waiting for. Shown once, on the way past Draft.
+    if (!["Draft", "Cancelled"].includes(o.status)) {
+      const warn = poWarnings(o);
+      if (warn.length) {
+        const ok = await uiConfirm({
+          tone: "warn",
+          title: `${o.number} is incomplete — confirm anyway?`,
+          message: `${warn.map(w => "· " + w).join("\n")}\n\nNone of these stops the order. Confirm now and fill them in before the truck loads, or go back and complete them.`,
+          confirmLabel: "Confirm anyway", cancelLabel: "Go back",
+        });
+        if (!ok) return;
+      }
     }
     // BP-57 Phase B: the internal flow is composed from the terms + the SALES
     // reality — a governing SO that sends goods onward makes this PO direct.

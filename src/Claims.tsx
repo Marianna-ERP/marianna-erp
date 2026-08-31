@@ -3,6 +3,8 @@ import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfi
 import { claimBlockReason, staleClaimWarnings } from "./cancellation.domain";
 import { inspectLink } from "./docLinks.domain";
 import { buildCostChain, toClaimCostLines, CLIENT_COST_PROMPTS, chainGaps } from "./claimCostChain.domain";
+import { applyDeadlineDefault, suggestNoticeDeadline, deadlineStatus, claimsNeedingNotice,
+         claimEvidenceGaps, evidenceWarning, EVIDENCE_KINDS, reconcileClaimNote } from "./claimReadiness.domain";
 import {
   CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS, CLAIM_BASES,
   isClaimOpen, claimsSummary, incidentNet, nextClaimNumber, blankClaim,
@@ -57,7 +59,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
       || (pos || []).find((x: any) => String(x.number) === ref) || null;
   }, [shipments, orders, pos]);
   const staleClaims = useMemo(() => staleClaimWarnings(claims, lookupSubject), [claims, lookupSubject]);
-  const { confirm: uiConfirm, dialogNode } = useConfirm();
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();
   const [selectedId, setSelectedId] = useState<any>(null);
   const [q, setQ] = useState("");
   const [dirFilter, setDirFilter] = useState("All");
@@ -253,6 +255,28 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
         {/* ── register ── */}
         <Card>
           <SectionTitle>REGISTER ({rows.length})</SectionTitle>
+          {/* v6.71.0 THE AGING VIEW: what will be lost this week if nothing is
+              done. A claim notified after its notice period is usually refused
+              on the period alone, whatever its merits. */}
+          {(() => {
+            const due = claimsNeedingNotice(claims, today);
+            if (!due.length) return null;
+            const passed = due.filter(d => d.status.state === "passed");
+            return <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7,
+              background: passed.length ? "#FEF2F2" : "#FFFBEB",
+              border: `1px solid ${passed.length ? "#FECACA" : "#FDE68A"}`,
+              fontSize: 11.5, color: passed.length ? "#991B1B" : "#92400E" }}>
+              <strong>{passed.length ? `${passed.length} claim(s) past their notice deadline` : `${due.length} claim(s) due for notice`}</strong>
+              <div style={{ marginTop: 4, lineHeight: 1.5 }}>
+                {due.slice(0, 6).map(d => (
+                  <div key={d.claim.number} onClick={() => setSelectedId(d.claim.id)} style={{ cursor: "pointer" }}>
+                    · <strong>{d.claim.number}</strong> ({String(d.claim.respondent?.name || d.claim.respondent?.kind || "")}) — {d.status.state === "passed" ? `${-(d.status.daysLeft ?? 0)} day(s) late` : `due in ${d.status.daysLeft} day(s)`}
+                  </div>
+                ))}
+                {due.length > 6 && <div>· and {due.length - 6} more</div>}
+              </div>
+            </div>;
+          })()}
           {/* v6.54.0: a live claim whose subject was cancelled AFTER it was raised.
               Never auto-voided — it may already be with the counterparty — but it
               cannot sit silently, because it now rests on a movement that never
@@ -338,7 +362,18 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   </div>
                   <div>
                     <Lbl>Status</Lbl>
-                    <select value={selected.status} onChange={e => patch(selected.id, { status: e.target.value })} style={INP}>
+                    {/* v6.71.0: sending a claim WARNS about missing evidence and
+                        proceeds anyway (owner ruling). The notice period does not
+                        wait for the survey, so a block here would cost more than
+                        it saves — but nobody should send without being told. */}
+                    <select value={selected.status} onChange={async e => {
+                      const next = e.target.value;
+                      if (next !== selected.status && ["Sent", "Notified", "Under review"].includes(next)) {
+                        const w = evidenceWarning(claimEvidenceGaps(selected, (v: any) => inspectLink(v).ok));
+                        if (w) await uiAlert({ tone: "warn", title: `Sending ${selected.number} without full evidence`, message: w });
+                      }
+                      patch(selected.id, { status: next });
+                    }} style={INP}>
                       {CLAIM_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                   </div>
@@ -361,8 +396,26 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   <div><Lbl>Claim date</Lbl><input type="date" value={selected.date || ""} onChange={e => patch(selected.id, { date: e.target.value })} style={INP} /></div>
                   <div><Lbl>Notified on</Lbl><input type="date" value={selected.notifiedAt || ""} onChange={e => patch(selected.id, { notifiedAt: e.target.value })} style={INP} /></div>
                   <div>
-                    <Lbl>Notice deadline{selected.noticeDeadline && !selected.notifiedAt && selected.noticeDeadline < today ? <span style={{ color: "#DC2626", fontWeight: 700 }}> · passed</span> : null}</Lbl>
+                    {/* v6.71.0: the deadline now SUGGESTS itself from the
+                        respondent — a notice period missed loses the claim
+                        whatever its merits, and the periods differ by who you
+                        are claiming against (CMR 7 days, Hague-Visby 3…). The
+                        suggestion never overwrites a date someone has typed. */}
+                    {(() => { const ds = deadlineStatus(selected, today);
+                      return <Lbl>Notice deadline{ds.state === "passed" ? <span style={{ color: "#DC2626", fontWeight: 700 }}> · passed</span>
+                        : ds.state === "due-soon" ? <span style={{ color: "#B45309", fontWeight: 700 }}> · due in {ds.daysLeft}d</span>
+                        : ds.state === "notified" ? <span style={{ color: "#16A34A", fontWeight: 700 }}> · notified</span> : null}</Lbl>; })()}
                     <input type="date" value={selected.noticeDeadline || ""} onChange={e => patch(selected.id, { noticeDeadline: e.target.value })} style={INP} />
+                    {(() => {
+                      const sug = suggestNoticeDeadline(selected);
+                      if (!sug) return null;
+                      const ds = deadlineStatus(selected, today);
+                      return <div style={{ fontSize: 10, color: ds.state === "passed" ? "#B91C1C" : "#94A3B8", marginTop: 3, lineHeight: 1.45 }}>
+                        {!selected.noticeDeadline
+                          ? <>Suggested {sug.deadline} — {sug.basis}. <span onClick={() => patch(selected.id, applyDeadlineDefault(selected))} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use it</span></>
+                          : ds.message}
+                      </div>;
+                    })()}
                   </div>
                   <div><Lbl>Requested (EUR)</Lbl><input type="number" value={selected.requestedEUR ?? ""} onChange={e => patch(selected.id, { requestedEUR: e.target.value })} style={INP} /></div>
                   <div>
@@ -433,6 +486,19 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                         {posted && <SmallButton kind="red" onClick={() => unpostClaim(selected)}>Reverse posting</SmallButton>}
                         {posted && <span style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>✓ posted</span>}
                       </div>
+                      {/* v6.71.0: does the money agree with the paper? The
+                          accepted amount moves the P/L; the note is the legal
+                          document. They could drift apart with nothing saying so. */}
+                      {(() => {
+                        const rec = reconcileClaimNote(selected, (id: any) => (financeNotes || []).find((nt: any) => String(nt.id) === String(id)));
+                        if (rec.state === "no-amount" || rec.state === "matched") return null;
+                        return <div style={{ marginTop: 9, padding: "8px 11px", borderRadius: 7, fontSize: 11.5,
+                          background: rec.state === "differs" ? "#FEF2F2" : "#FFFBEB",
+                          border: `1px solid ${rec.state === "differs" ? "#FECACA" : "#FDE68A"}`,
+                          color: rec.state === "differs" ? "#991B1B" : "#92400E" }}>
+                          {rec.message}
+                        </div>;
+                      })()}
                     </>;
                   })()}
                 </div>
@@ -574,6 +640,27 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
 
               <Card>
                 <SectionTitle>EVIDENCE</SectionTitle>
+                {/* v6.71.0 THE EVIDENCE GATE. What a claim needs depends on WHO
+                    it is against: a carrier claim dies without CMR remarks, a
+                    reefer claim without the temperature download, a producer
+                    claim without the protocol signed at HIS dock. Reported, not
+                    blocked (owner ruling) — you sometimes notify before the
+                    survey is back, because the deadline will not wait. */}
+                {(() => {
+                  const gaps = claimEvidenceGaps(selected, (v: any) => inspectLink(v).ok);
+                  if (!gaps.length) return (selected.evidence || []).length
+                    ? <div style={{ fontSize: 11.5, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, padding: "7px 10px", marginBottom: 9 }}>
+                        ✓ Everything a {String(selected.respondent?.kind || "claim").toLowerCase()} claim is normally argued on is attached and linked.
+                      </div>
+                    : null;
+                  return <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "8px 11px", marginBottom: 9 }}>
+                    <strong>Evidence a {String(selected.respondent?.kind || "").toLowerCase()} claim is argued on</strong>
+                    <div style={{ marginTop: 4, lineHeight: 1.5 }}>
+                      {gaps.map((g, i) => <div key={i}>· <strong>{g.kind}</strong>{g.state === "no-link" ? " — named but no scan linked" : ""}: {g.why}</div>)}
+                    </div>
+                    <div style={{ marginTop: 5, fontSize: 10.5, color: "#A16207" }}>Nothing is blocked — notify within the deadline even if these are still being gathered.</div>
+                  </div>;
+                })()}
                 {!(selected.evidence || []).length && (
                   <div style={{ fontSize: 12, color: "#94A3B8" }}>No evidence linked. A claim lives or dies on the survey report, the temperature log, the CMR remarks and the signed loading protocol.</div>
                 )}
@@ -581,7 +668,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   const info = inspectLink(e.link);
                   return (
                     <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: "1px solid #F1F5F9" }}>
-                      <input value={e.kind || ""} onChange={ev => patch(selected.id, { evidence: (selected.evidence || []).map((x: any, xi: number) => xi === i ? { ...x, kind: ev.target.value } : x) })} placeholder="CMR / Temperature log" style={{ ...INP, padding: "5px 7px", fontSize: 12 }} />
+                      <input value={e.kind || ""} onChange={ev => patch(selected.id, { evidence: (selected.evidence || []).map((x: any, xi: number) => xi === i ? { ...x, kind: ev.target.value } : x) })} placeholder="CMR / Temperature log" list="clm-evidence-kinds" style={{ ...INP, padding: "5px 7px", fontSize: 12 }} />
                       <input value={e.link || ""} onChange={ev => patch(selected.id, { evidence: (selected.evidence || []).map((x: any, xi: number) => xi === i ? { ...x, link: ev.target.value } : x) })} placeholder="https://www.dropbox.com/…" style={{ ...INP, padding: "5px 7px", fontSize: 12, ...(e.link && !info.ok ? { borderColor: "#FCA5A5", background: "#FEF2F2" } : {}) }} />
                       <div style={{ fontSize: 11, minWidth: 74 }}>
                         {e.link ? (info.ok ? <a href={e.link} target="_blank" rel="noreferrer" style={{ color: "#2563EB", fontWeight: 700, textDecoration: "none" }}>📎 {info.label} ↗</a> : <span style={{ color: "#DC2626", fontWeight: 700 }}>⚠ bad</span>) : <span style={{ color: "#CBD5E1" }}>—</span>}
@@ -591,6 +678,9 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   );
                 })}
                 <div style={{ marginTop: 8 }}>
+                  {/* v6.71.0: a known list so the gate can match reliably —
+                      free text still allowed for anything unusual. */}
+                  <datalist id="clm-evidence-kinds">{EVIDENCE_KINDS.map(k => <option key={k} value={k} />)}</datalist>
                   <SmallButton onClick={() => patch(selected.id, { evidence: [...(selected.evidence || []), { kind: "", ref: "", link: "" }] })}>+ Evidence</SmallButton>
                 </div>
               </Card>
