@@ -127,7 +127,19 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     const goodsAreExport = relatedGoods.some((g: any) => String(g.tradeDirection || "").toUpperCase() === "EXPORT");
     const isDirect = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected" || (goodsAreSold && goodsAreExport);
     const notYetReceived = !(num(lot.receivedKg) > 0) && currentPhysical <= 0;
-    if (isDirect) {
+    // v6.73.0 THE DOUBLE-RECEIPT FIX. This guard was COMPUTED HERE and never
+    // used — the OUTBOUND branch above checks the same condition, this one did
+    // not. On a producer → port → container export both legs see `isDirect`
+    // (the goods are sold and marked EXPORT), so each posted a full
+    // pass-through pair. Whether that doubled depended purely on the ORDER the
+    // legs were marked Loaded: sea first, then road, and the road truck posted
+    // a SECOND receipt into a lot already received. 19 lots in the owner's data
+    // carried 96 408 kg of receipts that never happened.
+    //
+    // A lot cannot be received twice. Goods already in our ownership move; they
+    // do not arrive again. Once received, the branch below posts the plain
+    // SHIP_OUT, which is what the second leg of a multi-hop journey actually is.
+    if (isDirect && notYetReceived) {
       // Decision 2 (pass-through pair): goods enter our ownership at the handover
       // point and leave to the client in the same event — never our warehouse.
       const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;

@@ -3106,5 +3106,94 @@ T("a warning is never a gate — an incomplete PO is still confirmable", () => {
 });
 
 console.log("");
+console.log("── v6.73.0: phantom receipts, false duplicates, countries, locations ──");
+
+const SHD2 = require("./build/shipments.domain.js");
+// heal.v645 already required above as HEAL
+const LOC = require("./build/locations.js");
+
+const postDeps = { todayISO: () => "2026-03-10", nextId: (() => { let i = 1; return () => i++; })() };
+const exportLot = () => ({ number: "LOT-1", poRef: "PO-1", expectedKg: 5382, receivedKg: 0, physicalKg: 0, movements: [] });
+const roadLeg = { number: "SHP-ROAD", purpose: "INBOUND", status: "Loaded", soRefs: ["SO-1"], legs: [{ mode: "Road" }],
+  goods: [{ lotRef: "LOT-1", qtyKg: 5382, soRef: "SO-1", tradeDirection: "EXPORT" }] };
+const seaLeg = { number: "SHP-SEA", purpose: "OUTBOUND", status: "Loaded", soRefs: ["SO-1"], legs: [{ mode: "Sea" }],
+  goods: [{ lotRef: "LOT-1", qtyKg: 5382, soRef: "SO-1", tradeDirection: "EXPORT" }] };
+
+T("A LOT CANNOT BE RECEIVED TWICE — whichever leg posts first", () => {
+  // The defect: the INBOUND branch computed a "not yet received" guard and never
+  // applied it, so on a producer -> port -> container export BOTH legs posted a
+  // pass-through pair. Whether it doubled depended purely on posting ORDER.
+  let a = [exportLot()];
+  a = SHD2.postShipmentToLots(seaLeg, a, postDeps).lots;
+  a = SHD2.postShipmentToLots(roadLeg, a, postDeps).lots;
+  assert.equal(a[0].receivedKg, 5382, "sea first, then road — this is the order that doubled");
+
+  let b = [exportLot()];
+  b = SHD2.postShipmentToLots(roadLeg, b, postDeps).lots;
+  b = SHD2.postShipmentToLots(seaLeg, b, postDeps).lots;
+  assert.equal(b[0].receivedKg, 5382, "road first, then sea");
+
+  // The second leg still ships the goods out — it moves stock, it does not create it.
+  assert.ok(a[0].movements.filter(m => m.type === "SHIP_OUT").length >= 1);
+  assert.equal(a[0].physicalKg, 0, "pass-through nets to zero either way");
+});
+
+T("the heal removes phantom receipts but NEVER a genuine second delivery", () => {
+  // A 42 000 kg order delivered by two trucks of 21 000 is received twice,
+  // correctly. An earlier draft of this heal would have voided half of it —
+  // LOT-2026-0021 in the owner's data is exactly that shape.
+  const genuine = { number: "LOT-TWO-TRUCKS", expectedKg: 42000, receivedKg: 42000, physicalKg: 0, movements: [
+    { id: 1, type: "IN", qtyKg: 21000, date: "2026-02-01", shipmentRef: "SHP-A" },
+    { id: 2, type: "IN", qtyKg: 21000, date: "2026-02-05", shipmentRef: "SHP-B" },
+    { id: 3, type: "SHIP_OUT", qtyKg: 42000, date: "2026-02-10", shipmentRef: "SHP-C" },
+  ] };
+  const phantom = { number: "LOT-PHANTOM", expectedKg: 5382, receivedKg: 10764, physicalKg: 0, movements: [
+    { id: 4, type: "IN", qtyKg: 5382, date: "2026-03-02", shipmentRef: "SHP-ROAD" },
+    { id: 5, type: "SHIP_OUT", qtyKg: 5382, date: "2026-03-02", shipmentRef: "SHP-ROAD" },
+    { id: 6, type: "IN", qtyKg: 5382, date: "2026-03-07", shipmentRef: "SHP-SEA" },
+    { id: 7, type: "SHIP_OUT", qtyKg: 5382, date: "2026-03-07", shipmentRef: "SHP-SEA" },
+  ] };
+  const r = HEAL.healPhantomReceipts({ lots: [genuine, phantom] });
+  const g = r.lots.find(l => l.number === "LOT-TWO-TRUCKS");
+  const p = r.lots.find(l => l.number === "LOT-PHANTOM");
+  assert.equal(g.receivedKg, 42000, "two trucks against a 42 t order is not a duplicate");
+  assert.equal(p.receivedKg, 5382, "the re-post is voided");
+  assert.equal(p.movements.filter(m => m.voided).length, 2, "the phantom IN and its paired SHIP_OUT — dropping the IN alone leaves an unmatched issue");
+  assert.ok(p.movements.every(m => m.voidNote ? m.voidNote.includes("received twice") : true));
+  assert.ok(r.notes.some(n => n.includes("LOT-PHANTOM")));
+});
+
+T("the heal is idempotent", () => {
+  const lot = { number: "L", expectedKg: 1000, receivedKg: 2000, physicalKg: 0, movements: [
+    { id: 1, type: "IN", qtyKg: 1000, date: "2026-01-01", shipmentRef: "A" },
+    { id: 2, type: "IN", qtyKg: 1000, date: "2026-01-02", shipmentRef: "B" },
+  ] };
+  const once = HEAL.healPhantomReceipts({ lots: [lot] });
+  const twice = HEAL.healPhantomReceipts({ lots: once.lots });
+  assert.equal(twice.lots[0].receivedKg, 1000);
+  assert.equal(twice.changed, false, "a second run finds nothing left to do");
+});
+
+T("a misspelled country is caught, and the fix suggested", () => {
+  // One record read "Poalnd". The EU lookup failed, so a Polish producer selling
+  // to Egypt classified as CROSS_TRADE instead of EXPORT — a wrong customs
+  // classification from a single transposed letter.
+  assert.equal(LOC.isKnownCountry("Poalnd"), false);
+  assert.equal(LOC.suggestCountry("Poalnd"), "Poland", "it names the fix, not just the fault");
+  assert.equal(LOC.isKnownCountry("Poland"), true);
+  assert.equal(LOC.isKnownCountry(""), true, "blank is not an error — unknown is");
+  assert.ok(LOC.COUNTRY_LIST.includes("Egypt") && LOC.COUNTRY_LIST.includes("Jordan"));
+});
+
+T("locations sort A-Z and a built-in can be hidden", () => {
+  const list = [{ id: 1, name: "Zebra port" }, { id: 2, name: "Alpha warehouse" }, { id: 3, name: "Middle" }];
+  assert.deepEqual(LOC.sortLocations(list).map(l => l.name), ["Alpha warehouse", "Middle", "Zebra port"]);
+  // Owner ruling: no built-in data that cannot be edited or removed.
+  assert.deepEqual(LOC.applyLocationOverrides(list, { "1": { hidden: true } }).map(l => l.id), [2, 3]);
+  assert.equal(LOC.applyLocationOverrides(list, { "2": { name: "Renamed" } })[1].name, "Renamed");
+  assert.deepEqual(LOC.applyLocationOverrides(list, {}).map(l => l.id), [1, 2, 3], "no overrides changes nothing");
+});
+
+console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

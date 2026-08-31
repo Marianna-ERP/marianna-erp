@@ -213,3 +213,80 @@ export function healRound645(input: { shipments: any[]; lots: any[]; orders: any
 
   return { shipments, lots, changed, notes };
 }
+
+
+// ─── v6.73.0 heal — PHANTOM RECEIPTS ─────────────────────────────────────────
+// A lot cannot be received twice. Before v6.73.0 the INBOUND posting branch
+// computed a "not yet received" guard and never applied it, so on a
+// producer → port → container export BOTH legs could post a pass-through pair.
+// Whether it doubled depended on the order the legs were marked Loaded.
+//
+// This voids the SECOND receipt and its matching ship-out on any lot that shows
+// more than one live IN for the same quantity from different shipments, then
+// rebuilds the derived figures. Voided, never deleted (owner ruling) — the
+// history stays readable and says why.
+//
+// Physical stock was never wrong: every phantom IN had a matching SHIP_OUT, so
+// quantities always netted out. What was wrong is receivedKg, and everything
+// that reads it — received-vs-expected variance and the supply calculations.
+export function healPhantomReceipts(input: { lots: any[] }): { lots: any[]; changed: boolean; notes: string[] } {
+  const notes: string[] = [];
+  let changed = false;
+
+  const lots = (input.lots || []).map((lot: any) => {
+    const live = (lot.movements || []).filter((m: any) => m && !m.voided);
+    const ins = live.filter((m: any) => m.type === "IN");
+    if (ins.length < 2) return lot;
+
+    // Keep the EARLIEST receipt — the goods genuinely arrived once, on the first
+    // leg that brought them in. Later identical receipts are the phantom.
+    const ordered = [...ins].sort((a: any, b: any) =>
+      String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0));
+    // A SECOND RECEIPT IS NOT AUTOMATICALLY PHANTOM. A 42 000 kg order delivered
+    // by two trucks of 21 000 is received twice, correctly — LOT-2026-0021 in
+    // the owner's data is exactly that, and an earlier draft of this heal would
+    // have voided half of a genuine delivery. Two receipts are only phantom when
+    // they OVERFILL the order: the goods cannot have arrived more than once.
+    const orderedKg = num(lot.expectedKg);
+    const totalIn = ordered.reduce((a: number, m: any) => a + num(m.qtyKg), 0);
+    // 1 kg of slack for whole-box rounding; producers over-load, and an
+    // over-DELIVERY is a variance to record, not a duplicate to erase. Only a
+    // receipt that takes the lot to roughly DOUBLE its order is a re-post.
+    if (!(orderedKg > 0) || totalIn <= orderedKg * 1.5) return lot;
+
+    // Drop later receipts, newest first, until what remains fits the order.
+    const drop: any[] = [];
+    let running = totalIn;
+    for (let i = ordered.length - 1; i > 0 && running > orderedKg + 1; i--) {
+      drop.push(ordered[i]);
+      running -= num(ordered[i].qtyKg);
+    }
+    if (!drop.length) return lot;
+
+    const dropShipments = new Set(drop.map((m: any) => String(m.shipmentRef || "")));
+    const movements = (lot.movements || []).map((m: any) => {
+      if (m.voided) return m;
+      const mine = dropShipments.has(String(m.shipmentRef || ""));
+      // Void the phantom receipt AND the ship-out it was paired with — dropping
+      // the IN alone would leave an unmatched issue and a negative balance.
+      if (mine && (m.type === "IN" || m.type === "SHIP_OUT")) {
+        return { ...m, voided: true, voidNote: "v6.73.0 heal: goods already received on an earlier leg — a lot cannot be received twice" };
+      }
+      return m;
+    });
+
+    const receivedKg = movements.filter((m: any) => !m.voided && m.type === "IN").reduce((a: number, m: any) => a + num(m.qtyKg), 0);
+    const shippedKg = movements.filter((m: any) => !m.voided && m.type === "SHIP_OUT").reduce((a: number, m: any) => a + num(m.qtyKg), 0);
+    const physicalKg = Math.max(0, Math.round((receivedKg - shippedKg) * 1000) / 1000);
+    changed = true;
+    notes.push(`${lot.number}: ${drop.length} phantom receipt(s) voided (${dropShipments.size ? Array.from(dropShipments).join(", ") : "?"}) — receivedKg ${num(lot.receivedKg)} → ${receivedKg}`);
+    return {
+      ...lot, movements,
+      receivedKg: Math.round(receivedKg * 1000) / 1000,
+      physicalKg,
+      overIssuedKg: Math.max(0, Math.round((shippedKg - receivedKg) * 1000) / 1000),
+    };
+  });
+
+  return { lots, changed, notes };
+}

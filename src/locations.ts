@@ -358,8 +358,54 @@ export function locationsByLegacyType(legacyType: string): Location[] {
 }
 
 // All non-alias locations (for datalists / full dropdowns)
+// ─── v6.73.0: BUILT-IN LOCATIONS ARE EDITABLE AND DELETABLE ─────────────────
+// Owner ruling: "I do not need any data that is built in by default that can
+// not be edited or changed."
+//
+// The seed table above stays as it is — it is reference data shipped with the
+// build, and rewriting it per user would make every install different. Instead
+// an OVERRIDE layer sits on top: a hidden flag, or replacement fields, stored
+// per id. allLocations() applies it on read. Nothing is destroyed, so a
+// location hidden by mistake can be restored, and an override is dropped
+// automatically once its id no longer exists in a future seed.
+//
+// This is the same read-forward discipline used for legacy customs roles and
+// per-truck protocols: change what is SHOWN, never rewrite what is STORED.
+// The existing override layer above already stores name/country/address per
+// built-in id. v6.73.0 adds the two things the owner asked for and it lacked:
+// a HIDDEN flag (the user's "delete" for a built-in they never use) and
+// alphabetical ordering. Hiding is reversible by design — nothing is destroyed,
+// so a location hidden by mistake comes back.
+
+export function hideBuiltInLocation(id: number): void { writeLocationOverride(id, { hidden: true } as any); }
+export function restoreBuiltInLocation(id: number): void {
+  const all = readLocationOverrides() as any;
+  const o = all[String(id)];
+  if (!o) return;
+  delete o.hidden;
+  if (!Object.keys(o).length) clearLocationOverride(id);
+  else writeLocationOverride(id, o);
+}
+
+/** Pure form, for tests: apply an override map to a location list. */
+export function applyLocationOverrides(list: Location[], overrides: Record<string, any>): Location[] {
+  return (list || [])
+    .filter(l => !(overrides || {})[String(l.id)]?.hidden)
+    .map(l => {
+      const o = (overrides || {})[String(l.id)];
+      if (!o) return l;
+      return { ...l, ...(o.name ? { name: o.name } : {}), ...(o.country ? { country: o.country } : {}), ...(o.address ? { address: o.address } : {}) };
+    });
+}
+
+/** v6.73.0: A→Z by name. New entries used to land at the bottom of every
+ *  dropdown in entry order, which makes a list of eighty places unusable. */
+export function sortLocations(list: Location[]): Location[] {
+  return [...(list || [])].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pl"));
+}
+
 export function allLocations(): Location[] {
-  return LOCATIONS.filter(l => !l.aliasOf);
+  return sortLocations(applyLocationOverrides(LOCATIONS.filter(l => !l.aliasOf), readLocationOverrides()));
 }
 
 // ─── v6.10: WAREHOUSE COUNTERPARTIES AS LOCATIONS ───────────────────────────
@@ -504,3 +550,51 @@ function readContactsFromStorage(): any[] {
 
 // Bootstrap at module load — runs to completion before importers snapshot LOCATIONS.
 registerCounterpartyLocations(readContactsFromStorage());
+
+
+// ─── v6.73.0: COUNTRY IS A PICKLIST, NOT FREE TEXT ──────────────────────────
+// A supplier's country was typed by hand and one record read "Poalnd". The EU
+// membership lookup failed on the misspelling, so a Polish producer selling to
+// Egypt classified as CROSS_TRADE instead of EXPORT — a wrong customs
+// classification produced silently by a single transposed letter.
+//
+// The list carries every EU state (which is what the movement matrix tests) plus
+// the countries this business actually trades with. Free text is still accepted
+// for anywhere unusual, but the field offers the list first and the integrity
+// checker flags a country it does not recognise.
+export const COUNTRY_LIST: string[] = [
+  // EU-27 — these decide import/export/intra-EU classification
+  "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark", "Estonia",
+  "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia",
+  "Lithuania", "Luxembourg", "Malta", "Netherlands", "Poland", "Portugal", "Romania",
+  "Slovakia", "Slovenia", "Spain", "Sweden",
+  // Trading partners outside the EU
+  "Albania", "Belarus", "Bosnia and Herzegovina", "Egypt", "Georgia", "Iraq", "Israel",
+  "Jordan", "Kuwait", "Lebanon", "Libya", "Moldova", "Montenegro", "Morocco", "North Macedonia",
+  "Norway", "Oman", "Qatar", "Saudi Arabia", "Serbia", "Switzerland", "Tunisia", "Türkiye",
+  "Ukraine", "United Arab Emirates", "United Kingdom",
+  // Further afield, seen in the data
+  "Cambodia", "Chile", "Colombia", "India", "Kenya", "South Africa", "United States",
+];
+
+const COUNTRY_SET = new Set(COUNTRY_LIST.map(c => c.toLowerCase()));
+
+/** Is this a country the system recognises? Blank is not an error — unknown is. */
+export function isKnownCountry(v: any): boolean {
+  const s = String(v ?? "").trim().toLowerCase();
+  return !s || COUNTRY_SET.has(s);
+}
+
+/** Closest known country to a misspelling, or "" — so a warning can suggest the
+ *  fix rather than only reporting the fault. One transposition away is enough. */
+export function suggestCountry(v: any): string {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s || COUNTRY_SET.has(s)) return "";
+  const sorted = (x: string) => x.split("").sort().join("");
+  const target = sorted(s);
+  const hit = COUNTRY_LIST.find(c => {
+    const l = c.toLowerCase();
+    return Math.abs(l.length - s.length) <= 1 && sorted(l) === target;
+  });
+  return hit || "";
+}

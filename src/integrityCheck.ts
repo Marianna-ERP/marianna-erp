@@ -516,11 +516,18 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // freight in the SO's P/L. (Found live: SHP-2026-0005 / 0006.)
   {
     const live = shipments.filter((s: any) => s && s.status !== "Cancelled");
+    // v6.73.0: the LOTS CARRIED are part of the identity. Matching only on
+    // sales order + kilos + cost total flagged five trucks of equal size against
+    // one order as duplicates of each other — which is precisely the owner's
+    // normal flow (five trucks collect from producers and feed four containers,
+    // all against one sale). Two shipments carrying DIFFERENT lots are two
+    // trucks, however alike their totals look.
     const key = (s: any) => {
       const sos = arr(s.soRefs).filter(Boolean).map(String).sort().join("+");
       const kg = arr(s.goods).reduce((t: number, g: any) => t + num(g?.qtyKg), 0);
       const cost = arr(s.costs).reduce((t: number, c: any) => t + (num(c?.amountPLN) || num(c?.amount) * (num(c?.fxRate) || 1)), 0);
-      return sos ? `${sos}|${Math.round(kg)}|${Math.round(cost)}` : null;
+      const lots = Array.from(new Set(arr(s.goods).map((g: any) => String(g?.lotRef || "")).filter(Boolean))).sort().join("+");
+      return sos ? `${sos}|${Math.round(kg)}|${Math.round(cost)}|${lots}` : null;
     };
     const seen = new Map<string, string>();
     live.forEach((s: any) => {

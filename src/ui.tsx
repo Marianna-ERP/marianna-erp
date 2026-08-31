@@ -43,6 +43,47 @@ export function SmallButton({ children, onClick, kind = "default", disabled = fa
 }
 
 
+// ─── v6.73.0: STANDARD ACTION BUTTONS ───────────────────────────────────────
+// Owner ruling: "make sure that the function buttons across all the modules have
+// the same format and colour… we need them to be standardised becoming user
+// friendly."
+//
+// Before this, each screen chose its own colour and wording for the same action:
+// "+ New", "+ Add", "Add new" — some green, some plain. A user learns a button
+// by its SHAPE AND COLOUR long before they read it, so the same action must look
+// the same in every module, and two different actions must never look alike.
+//
+// One table, one meaning per row. To add an action, add it HERE — not in a
+// screen — so the next module cannot drift.
+export const ACTIONS: Record<string, { icon: string; label: string; kind: string; title: string }> = {
+  create:      { icon: "+",  label: "Add new",            kind: "green",  title: "Create a new record" },
+  importCsv:   { icon: "⤒",  label: "Import CSV",         kind: "default", title: "Import records from a CSV file" },
+  exportCsv:   { icon: "⤓",  label: "Export CSV",         kind: "default", title: "Export these records to a CSV file" },
+  importFkt:   { icon: "⤒",  label: "Import from Fakturownia", kind: "blue", title: "Fetch documents from Fakturownia" },
+  print:       { icon: "⎙",  label: "Print / PDF",        kind: "dark",   title: "Print or save as PDF" },
+  email:       { icon: "✉",  label: "Email",              kind: "dark",   title: "Open the email draft" },
+  save:        { icon: "",   label: "Save",               kind: "dark",   title: "Save changes" },
+  cancelDoc:   { icon: "",   label: "Cancel",             kind: "red",    title: "Cancel this document — it stays on record" },
+  remove:      { icon: "✕",  label: "Remove",             kind: "red",    title: "Remove this line" },
+  confirmDoc:  { icon: "✓",  label: "Confirm",            kind: "green",  title: "Confirm this document" },
+  allocate:    { icon: "⇄",  label: "Allocate",           kind: "amber",  title: "Allocate costs" },
+  refresh:     { icon: "↻",  label: "Refresh",            kind: "default", title: "Recompute from source" },
+};
+
+/** The one way to render a standard action. Screens name the ACTION, never the
+ *  colour — which is what stops the same action looking different in two places.
+ *  `label` overrides the wording where a screen needs to be specific
+ *  ("Add new supplier"); the icon and colour never change. */
+export function ActionButton({ action, onClick, disabled = false, label, title }: any) {
+  const a = ACTIONS[action];
+  if (!a) return null;
+  return (
+    <SmallButton kind={a.kind} onClick={onClick} disabled={disabled} title={title || a.title}>
+      {a.icon ? `${a.icon} ` : ""}{label || a.label}
+    </SmallButton>
+  );
+}
+
 // ── v6.35.1: system-wide struck-through rendering for cancelled/voided documents ──
 // Documents are soft-cancelled (kept on record), never hard-deleted. Anywhere a doc
 // number is shown as a reference, wrap it in <DocRef> so a cancelled one is visibly
