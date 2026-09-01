@@ -2,6 +2,8 @@ import { useConfirm, SmallButton } from "./ui";
 import React, { useRef, useState } from "react";
 import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
+import { fetchDepartments } from "./fakturownia";
+import { mapDepartments } from "./fakturowniaDepartments.domain";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
 import { referencesToLocation } from "./referenceGuards";
@@ -431,6 +433,24 @@ export default function Settings({
   const [fktSub, setFktSub] = useState(existingFkt?.subdomain || "");
   const [fktToken, setFktToken] = useState(existingFkt?.apiToken || "");
   const [fktLiveWrite, setFktLiveWrite] = useState(existingFkt?.liveWriteEnabled === true);
+  const [fktDepts, setFktDepts] = useState<any[]>(() => {
+    try { return JSON.parse(window.localStorage.getItem("marianna-erp:fktDepartments") || "[]"); } catch { return []; }
+  });
+  const [fktDeptDefaults, setFktDeptDefaults] = useState<Record<string, any>>(() => {
+    try { return JSON.parse(window.localStorage.getItem("marianna-erp:fktDepartmentDefaults") || "{}"); } catch { return {}; }
+  });
+  async function handleFktDepartments() {
+    const cfg = readFakturowniaConfig();
+    if (!cfg) { setFktMsg({ kind: "error", text: "Save the account and token first." }); return; }
+    setFktBusy(true);
+    const r = await fetchDepartments(cfg);
+    setFktBusy(false);
+    if (!r.ok) { setFktMsg({ kind: "error", text: r.corsLikely ? "The browser blocked the call. This needs the backend." : (r.error || "Fakturownia did not answer.") }); return; }
+    const mapped = mapDepartments(r.data || []);
+    setFktDepts(mapped);
+    try { window.localStorage.setItem("marianna-erp:fktDepartments", JSON.stringify(mapped)); } catch {}
+    setFktMsg({ kind: "success", text: `${mapped.length} bank account(s) read. Set a default for each currency you invoice in.` });
+  }
   const [fktBusy, setFktBusy] = useState(false);
   const [fktMsg, setFktMsg] = useState<{ kind: "success" | "error" | "info"; text: string } | null>(null);
 
@@ -726,6 +746,33 @@ export default function Settings({
               </span>
             </label>
           </div>
+
+          {/* v6.75.0 BANK ACCOUNTS. Fakturownia holds each bank account as a
+              "department". This account has several per currency, and until now
+              every pushed invoice took whichever one Fakturownia treats as its
+              main — so a PLN or USD invoice printed a EUR account number to the
+              client. Set a default per currency and an invoice never has to ask. */}
+          <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Bank accounts (Fakturownia departments)</div>
+            <div style={{ fontSize: 11, color: "#64748B", lineHeight: 1.5, marginBottom: 8 }}>
+              Each account issues in one currency. Choose which one an invoice should carry for each currency you invoice in — a wrong account number on a document that has reached KSeF can only be corrected by issuing another one.
+            </div>
+            {!fktDepts.length && <div style={{ fontSize: 11.5, color: "#94A3B8", marginBottom: 8 }}>No accounts loaded yet — read them from Fakturownia.</div>}
+            {Array.from(new Set(fktDepts.map((d: any) => d.currency))).sort().map((cur: any) => (
+              <div key={cur} style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center", marginBottom: 5 }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>{cur}</div>
+                <select value={fktDeptDefaults[cur] ?? ""} onChange={e => { const m = { ...fktDeptDefaults, [cur]: e.target.value }; setFktDeptDefaults(m); try { window.localStorage.setItem("marianna-erp:fktDepartmentDefaults", JSON.stringify(m)); } catch {} }}
+                  style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12.5 }}>
+                  <option value="">— ask each time —</option>
+                  {fktDepts.filter((d: any) => d.currency === cur).map((d: any) => (
+                    <option key={d.id} value={d.id}>{d.name}{d.taxNo ? ` · ${d.taxNo}` : ""}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+            <Button onClick={handleFktDepartments} disabled={fktBusy}>Read bank accounts from Fakturownia</Button>
+          </div>
+
           <div style={{ display: "flex", gap: 10 }}>
             <Button onClick={handleFktSave} variant="primary">Save connection</Button>
             <Button onClick={handleFktTest} disabled={fktBusy || !fktSub.trim() || !fktToken.trim()}>{fktBusy ? "Testing…" : "Test connection"}</Button>

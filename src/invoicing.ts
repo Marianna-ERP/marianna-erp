@@ -331,7 +331,7 @@ export function migrateLegacyInvoices(opts: {
 // ── FAKTUROWNIA PUSH PAYLOAD (verified contract, spec §10) ──
 // Builds the POST /invoices.json body for a SALES invoice. Auto-numbering (number:null).
 // gov_save_and_send defaults OFF — KSeF stays Fakturownia-managed for now.
-export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean }) {
+export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean ; departmentId?: any}) {
   // v6.65.0 (D-07b): Fakturownia requires total_price_gross per position and her
   // first live push proved a position can arrive without stored totals. The
   // payload now derives them in order of preference — stored gross → stored net
@@ -376,8 +376,21 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
   };
   // v6.66.0 (D-07c): seller fields removed. Sending seller_name made Fakturownia
   // try to CREATE a department, which the account's bank-account security level
-  // rightly blocks (API-injected departments are an invoice-fraud vector). A
-  // single-company account applies its default department automatically.
+  // rightly blocks (API-injected departments are an invoice-fraud vector).
+  //
+  // v6.75.0: the note that used to sit here said "a single-company account
+  // applies its default department automatically". This account is NOT
+  // single-company — seven departments across two legal entities, each holding
+  // one bank account in one currency. So every pushed invoice took the default
+  // (Marianna EUR PKO) and a PLN or USD invoice printed a EUR account number to
+  // the client, on a document that had already reached KSeF.
+  //
+  // department_id SELECTS an existing department rather than creating one, so it
+  // is safe where seller_name was not. The caller resolves it through
+  // chooseDepartment() and must not push while the choice is ambiguous.
+  if (opts.departmentId != null && String(opts.departmentId)) {
+    body.invoice.department_id = opts.departmentId;
+  }
 
   if (opts.govSaveAndSend) body.gov_save_and_send = true; // default OFF (Q3-c)
   return body;

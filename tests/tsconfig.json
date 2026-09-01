@@ -7,7 +7,7 @@
   "files": [
     "../src/auditTrail.domain.ts","../src/cancellation.domain.ts","../src/customs.domain.ts",
     "../src/claim.domain.ts","../src/claims.domain.ts","../src/claimCostChain.domain.ts","../src/claimReadiness.domain.ts","../src/consignment.ts","../src/costAllocation.ts",
-    "../src/docLinks.domain.ts","../src/documents.domain.ts","../src/fakturowniaImport.domain.ts",
+    "../src/docLinks.domain.ts","../src/documents.domain.ts","../src/fakturowniaImport.domain.ts","../src/fakturowniaDepartments.domain.ts",
     "../src/flowCleanup.migration.ts","../src/fx.ts","../src/heal.v645.ts","../src/ids.ts",
     "../src/integrityCheck.ts","../src/inventory.domain.ts","../src/invoicing.ts","../src/ledger.ts",
     "../src/loadPlan.domain.ts","../src/loadingProtocol.domain.ts","../src/locations.ts","../src/marginCalculations.ts",

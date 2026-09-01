@@ -1,3 +1,4 @@
+import { chooseDepartment, departmentBlockReason } from "./fakturowniaDepartments.domain";
 import { useConfirm } from "./ui";
 import React, { useMemo, useState } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
@@ -290,6 +291,19 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
 }
 
 export default function Invoices(props: any) {
+  // v6.75.0: the account's departments (each = one bank account in one currency)
+  // and the stated default per currency. Fetched from Fakturownia on demand and
+  // kept in this browser beside the token, since they are account configuration
+  // rather than business data — a shared export must not carry them.
+  const [fktDepartments] = useState<any[]>(() => {
+    try { return JSON.parse(window.localStorage.getItem("marianna-erp:fktDepartments") || "[]"); } catch { return []; }
+  });
+  const [fktDepartmentDefaults] = useState<Record<string, any>>(() => {
+    try { return JSON.parse(window.localStorage.getItem("marianna-erp:fktDepartmentDefaults") || "{}"); } catch { return {}; }
+  });
+  // Settings owns reading the accounts and setting the default per currency;
+  // Invoices only READS them at push time. One owner per fact.
+
   const { confirm: invConfirm, alert: invAlert, prompt: invPrompt, dialogNode: invNode } = useConfirm(); // P2-6
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
     setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null, setOrders = null } = props;
@@ -446,7 +460,17 @@ export default function Invoices(props: any) {
     }
     if (!(await invConfirm({ tone: "danger", title: `Send ${inv.number || "this invoice"} to Fakturownia?`, message: "This creates a REAL invoice there (Fakturownia assigns the legal number) and locks it here — further changes will need a credit/debit note.", confirmLabel: "Send" }))) return;
     setPushState({ id: inv.id, msg: "Sending to Fakturownia…", tone: "#2563EB" });
-    const payload = buildFakturowniaPayload(inv, { apiToken: cfg.apiToken, sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false });
+    // v6.75.0: choose the BANK ACCOUNT (Fakturownia department) before sending.
+    // Without this every invoice took the account's main department, so a PLN or
+    // USD invoice printed a EUR account number to the client — on a document
+    // that had already reached KSeF, where the only remedy is another document.
+    const choice = chooseDepartment(inv, fktDepartments, fktDepartmentDefaults);
+    const blocked = departmentBlockReason(choice);
+    if (blocked) {
+      await invAlert({ tone: "warn", title: "Which bank account?", message: `${blocked}\n\nThe invoice is not sent. Wrong payment details on a document that has reached KSeF can only be corrected by issuing another one.` });
+      return;
+    }
+    const payload = buildFakturowniaPayload(inv, { apiToken: cfg.apiToken, sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false, departmentId: choice.department?.id });
     const res = await createInvoice(cfg, payload);
     if (res.ok) {
       const legal = res.data?.number || inv.number;

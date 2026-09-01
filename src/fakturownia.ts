@@ -87,6 +87,15 @@ export async function fetchInvoices(c: FakturowniaConfig, opts: FetchInvoicesOpt
   return { ok: true, data: all };
 }
 
+/** v6.75.0: the account's departments — each one holds a bank account in a
+ *  currency. Read-only; the ERP never creates a department (Fakturownia blocks
+ *  that for good reason), it only chooses among those that exist. */
+export async function fetchDepartments(c: FakturowniaConfig): Promise<FktResult<any[]>> {
+  const r = await fktGet(c, "/departments.json", { page: 1, per_page: 100 });
+  if (!r.ok) return r as FktResult<any[]>;
+  return { ok: true, data: Array.isArray(r.data) ? r.data : [] };
+}
+
 export async function testConnection(c: FakturowniaConfig): Promise<FktResult<{ count: number }>> {
   const r = await fktGet(c, "/invoices.json", { page: 1, per_page: 1, period: "this_month" });
   if (!r.ok) return r as any;

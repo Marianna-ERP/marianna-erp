@@ -3243,5 +3243,82 @@ T("free-typed packaging still resolves", () => {
 });
 
 console.log("");
+console.log("── fakturowniaDepartments: the right bank account (v6.75.0) ──");
+
+const FD = require("./build/fakturowniaDepartments.domain.js");
+
+// The owner's real account, from their Fakturownia departments page.
+const DEPTS = [
+  { id: 1, name: "Marianna EUR PKO",     currency: "EUR", taxNo: "5252842787", isMain: true },
+  { id: 2, name: "Marianna EUR ERSTE",   currency: "EUR", taxNo: "5252842787" },
+  { id: 3, name: "Marianna EUR WISE",    currency: "EUR", taxNo: "5252842787" },
+  { id: 4, name: "Marianna PLN ERSTE",   currency: "PLN", taxNo: "5252842787" },
+  { id: 5, name: "Marianna PLN PKO",     currency: "PLN", taxNo: "5252842787" },
+  { id: 6, name: "Marianna USD PKO",     currency: "USD", taxNo: "5252842787" },
+  { id: 7, name: "Marianna SLO EUR PKO", currency: "EUR", taxNo: "SI46357335" },
+];
+
+T("THE DEFECT: a PLN invoice must not take the EUR default", () => {
+  // Every pushed invoice used to take Fakturownia's main department — EUR PKO —
+  // so a PLN invoice printed a EUR account number to the client, on a document
+  // that had already reached KSeF.
+  const c = FD.chooseDepartment({ currency: "PLN" }, DEPTS, { PLN: 5 });
+  assert.equal(c.department.name, "Marianna PLN PKO");
+  assert.equal(c.ambiguous, false);
+  assert.ok(c.reason.includes("Default account for PLN"));
+});
+
+T("one candidate settles itself; several without a default do NOT", () => {
+  const usd = FD.chooseDepartment({ currency: "USD" }, DEPTS, {});
+  assert.equal(usd.department.name, "Marianna USD PKO", "the only USD account");
+  assert.equal(usd.ambiguous, false);
+
+  // FOUR EUR accounts once both entities are in scope — three Polish and the
+  // Slovenian one. Currency alone cannot decide, so it asks rather than guesses,
+  // and it names every candidate so the choice is informed.
+  const eur = FD.chooseDepartment({ currency: "EUR" }, DEPTS, {});
+  assert.equal(eur.department, null);
+  assert.equal(eur.ambiguous, true);
+  assert.ok(eur.reason.includes("4 accounts"), eur.reason);
+  assert.ok(eur.reason.includes("Marianna EUR WISE") && eur.reason.includes("Marianna SLO EUR PKO"),
+    "an invoice that has not stated its selling entity may legitimately be either company's");
+  assert.ok(FD.departmentBlockReason(eur) !== "", "the push is blocked until it is settled");
+});
+
+T("a second legal entity never issues on the other's account", () => {
+  // Marianna SLO is a different company (SI46357335). Currency would have offered
+  // it three Polish EUR accounts.
+  const c = FD.chooseDepartment({ currency: "EUR", sellerTaxNo: "SI46357335" }, DEPTS, {});
+  assert.equal(c.department.name, "Marianna SLO EUR PKO");
+  assert.equal(c.ambiguous, false, "scoping to the entity leaves exactly one");
+  assert.deepEqual(FD.entitiesOf(DEPTS).sort(), ["5252842787", "SI46357335"]);
+});
+
+T("an explicit choice wins, and a currency mismatch is questioned not obeyed", () => {
+  const ok = FD.chooseDepartment({ currency: "EUR", fakturowniaDepartmentId: 3 }, DEPTS, { EUR: 1 });
+  assert.equal(ok.department.name, "Marianna EUR WISE", "the invoice's own choice beats the default");
+  const wrong = FD.chooseDepartment({ currency: "PLN", fakturowniaDepartmentId: 1 }, DEPTS, {});
+  assert.equal(wrong.ambiguous, true, "a EUR account on a PLN invoice is flagged before sending");
+  assert.ok(wrong.reason.includes("Check before sending"));
+});
+
+T("no account for the currency explains what would otherwise happen", () => {
+  const c = FD.chooseDepartment({ currency: "GBP" }, DEPTS, {});
+  assert.equal(c.department, null);
+  assert.ok(c.reason.includes("main"), "it names the consequence: the default account would be used");
+});
+
+T("Fakturownia's rows map onto our shape, currency read from the name if absent", () => {
+  const mapped = FD.mapDepartments([
+    { id: 9, name: "Marianna PLN PKO", bank_account: "PL96...", tax_no: "5252842787", main: true },
+    { id: 10, name: "Something", currency: "usd" },
+    { name: "no id — dropped" },
+  ]);
+  assert.equal(mapped.length, 2, "a row without an id cannot be sent as department_id");
+  assert.equal(mapped[0].currency, "PLN", "read out of the name, which is how they are labelled");
+  assert.equal(mapped[1].currency, "USD");
+});
+
+console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
