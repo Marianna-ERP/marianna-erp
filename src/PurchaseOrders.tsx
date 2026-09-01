@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
 import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, MOVEMENT_LABELS, poDirectFromSOs } from "./tradeFlow.domain";
-import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
+import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
@@ -1882,7 +1882,7 @@ ${blockNote}`.trim(),
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Purchase Orders</div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button onClick={newOrder} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ New PO</button>
+          <ActionButton action="create" label="Add new PO" onClick={newOrder} />
         </div>
       </div>
 

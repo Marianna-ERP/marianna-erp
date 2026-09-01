@@ -177,6 +177,18 @@ export default function LoadingProtocolModal({
   // Fall back to the truck's goods rather than re-deriving (which would discard
   // whatever the producer already wrote), so old sheets print an Item too.
   const legacyProduct = String((truckGoods || [])[0]?.product || "");
+  // v6.74.0: the registration numbers are read LIVE from the transport unit.
+  // They were captured when the sheet was CREATED, so a protocol drafted before
+  // the plates were typed printed "Nr rejestracyjny pojazdu" permanently blank —
+  // and re-deriving to pick them up would have discarded everything the producer
+  // had written. The unit is the truth about which truck this is; the stored
+  // value only answers for a sheet whose unit has since been removed.
+  const livePlates = {
+    truckPlate: String(current?.unit?.truckPlate || current?.unit?.vehiclePlate || p.truckPlate || ""),
+    trailerPlate: String(current?.unit?.trailerPlate || p.trailerPlate || ""),
+    driverName: String(current?.unit?.driverName || p.driverName || ""),
+    containerNumber: String(current?.unit?.containerNumber || (p as any).containerNumber || ""),
+  };
   // v6.57.1: if a goods line has no resolvable packaging there is no box weight,
   // so no pallet split is possible and the table comes out empty. Say so.
   const pkgCheck = packagingResolution(truckGoods, packagingTypes);
@@ -359,8 +371,12 @@ export default function LoadingProtocolModal({
                 {(p.rows || []).map((r: any, i: number) => (
                   <tr key={i} style={{ borderTop: "1px solid #F1F5F9", background: isBlankRow(r) ? "#FCFCFD" : "#fff", opacity: isBlankRow(r) ? 0.62 : 1 }}>
                     <td style={{ padding: "3px 7px", fontWeight: 700, color: isBlankRow(r) ? "#9CA3AF" : "#111" }}>{r.no}</td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" value={r.boxes} onChange={e => sr(i, "boxes", parseFloat(e.target.value) || 0)} style={{ ...INP, width: 66, padding: "3px 5px" }} /></td>
-                    <td style={{ padding: "3px 4px" }}><input type="number" value={r.kgPerBox} onChange={e => sr(i, "kgPerBox", parseFloat(e.target.value) || 0)} style={{ ...INP, width: 62, padding: "3px 5px" }} /></td>
+                    {/* v6.74.0: a spare line's 0 used to sit in the box and could
+                        not be cleared — you had to select it and type over. An
+                        empty line should LOOK empty; 0 is only shown once someone
+                        has actually typed it. */}
+                    <td style={{ padding: "3px 4px" }}><input type="number" value={r.boxes || ""} placeholder="—" onChange={e => sr(i, "boxes", e.target.value === "" ? 0 : (parseFloat(e.target.value) || 0))} style={{ ...INP, width: 66, padding: "3px 5px" }} /></td>
+                    <td style={{ padding: "3px 4px" }}><input type="number" value={r.kgPerBox || ""} placeholder="—" onChange={e => sr(i, "kgPerBox", e.target.value === "" ? 0 : (parseFloat(e.target.value) || 0))} style={{ ...INP, width: 62, padding: "3px 5px" }} /></td>
                     <td style={{ padding: "3px 4px" }}><input value={r.size || ""} onChange={e => sr(i, "size", e.target.value)} placeholder="70-80" style={{ ...INP, width: 74, padding: "3px 5px" }} /></td>
                     {(["boxesOk", "goodsOk"] as any).map((k: any) => (
                       <td key={k} style={{ padding: "3px 4px" }}>
@@ -436,7 +452,7 @@ export default function LoadingProtocolModal({
                   <div style={{ fontSize: 11, minHeight: 15, borderBottom: "1px dotted #999", marginBottom: 7 }}>{p.supplierName || ""}</div>
                   <BL k="plates" />
                   <div style={{ fontSize: 11, fontWeight: 700, minHeight: 15, borderBottom: "1px dotted #999", marginBottom: 7 }}>
-                    {[p.truckPlate, p.trailerPlate].filter(Boolean).join(" / ") || ""}
+                    {[livePlates.truckPlate, livePlates.trailerPlate].filter(Boolean).join(" / ") || livePlates.containerNumber || ""}
                   </div>
                   <BL k="assortment" />
                   <div style={{ fontSize: 11, minHeight: 15, borderBottom: "1px dotted #999", marginBottom: 7 }}>{p.assortment || ""}</div>

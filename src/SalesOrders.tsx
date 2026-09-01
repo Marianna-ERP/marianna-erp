@@ -3,7 +3,7 @@ import { clientExposurePLN } from "./payments.domain";
 import { computedSOLinks } from "./documents.domain";
 import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
-import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm } from "./ui";
+import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { PACKAGING_SEED } from "./packaging.domain";
 import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
@@ -2746,7 +2746,7 @@ export default function SalesOrders({
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Sales Orders</div>
         <div style={{ marginLeft: "auto" }}>
-          <button onClick={newOrder} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ New SO</button>
+          <ActionButton action="create" label="Add new SO" onClick={newOrder} />
         </div>
       </div>
 

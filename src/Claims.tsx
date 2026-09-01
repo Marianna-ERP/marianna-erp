@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
+import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { claimBlockReason, staleClaimWarnings } from "./cancellation.domain";
 import { inspectLink } from "./docLinks.domain";
 import { buildCostChain, toClaimCostLines, CLIENT_COST_PROMPTS, chainGaps } from "./claimCostChain.domain";
@@ -220,7 +220,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
             {summary.total} total · {summary.open} open · recovery {eur(summary.openRecoveryEUR)} · concession {eur(summary.openConcessionEUR)}
           </div>
           <div style={{ flex: 1 }} />
-          <SmallButton kind="dark" onClick={addClaim}>+ New claim</SmallButton>
+          <ActionButton action="create" label="Add new claim" onClick={addClaim} />
         </div>
 
         {(summary.overdue.length > 0 || summary.noEvidence.length > 0) && (

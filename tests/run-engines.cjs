@@ -3195,5 +3195,53 @@ T("locations sort A-Z and a built-in can be hidden", () => {
 });
 
 console.log("");
+console.log("── v6.74.0: the loading protocol as the producer actually fills it ──");
+
+T("TWO TRUCKS, ONE LOAD: each sheet shows its own half", () => {
+  // SHP-2026-0028: 38 844 kg on two trucks with no explicit per-unit assignment.
+  // Both sheets used to derive from the WHOLE shipment — 42 pallets on each,
+  // where the truth is 21 on each. The owner had to retype an entire sheet.
+  const sh = { number: "S", goods: [{ product: "Apples", variety: "Naidared", size: "70-80", qtyKg: 38844, packaging: "13kg wooden boxes" }] };
+  const leg = { id: 1, mode: "Road", vehicles: [{ id: "A", truckPlate: "First truck" }, { id: "B", truckPlate: "Second truck" }] };
+  const mk = (u) => LP.filledRows(LP.buildLoadingProtocol({ shipment: sh, leg, unit: u, types: PKG.PACKAGING_SEED },
+    { todayISO: () => "2026-08-31", nextId: () => 1 }).rows);
+  const t1 = mk(leg.vehicles[0]), t2 = mk(leg.vehicles[1]);
+  assert.equal(t1.length, 21, "19 422 kg = 1 494 boxes = 20 x 72 + 1 x 54");
+  assert.equal(t2.length, 21);
+  assert.equal(t1.filter(r => r.boxes === 72).length, 20);
+  assert.equal(t1[20].boxes, 54, "the part-filled pallet, exactly as the paper sheet reads");
+  assert.ok(t1.every(r => r.variety === "Naidared" && r.size === "70-80"), "variety and calibre on every line");
+});
+
+T("an explicit per-unit assignment still wins over the even split", () => {
+  const sh = { number: "S", goods: [{ id: 1, product: "Apples", qtyKg: 38844, packaging: "13kg wooden boxes" }] };
+  const leg = { id: 1, mode: "Road", vehicles: [
+    { id: "A", load: [{ goodsLineId: 1, qtyKg: 25000 }] },
+    { id: "B", load: [{ goodsLineId: 1, qtyKg: 13844 }] },
+  ] };
+  const kg = (u) => LP.filledRows(LP.buildLoadingProtocol({ shipment: sh, leg, unit: u, types: PKG.PACKAGING_SEED },
+    { todayISO: () => "2026-08-31", nextId: () => 1 }).rows).reduce((a, r) => a + r.boxes * r.kgPerBox, 0);
+  assert.ok(kg(leg.vehicles[0]) >= 25000 && kg(leg.vehicles[0]) < 25013, "an uneven split the user stated is honoured");
+  assert.ok(kg(leg.vehicles[1]) >= 13844 && kg(leg.vehicles[1]) < 13857);
+});
+
+T("one truck is unaffected", () => {
+  const sh = { number: "S", goods: [{ product: "Apples", qtyKg: 19422, packaging: "13kg wooden boxes" }] };
+  const leg = { id: 1, mode: "Road", vehicles: [{ id: "A" }] };
+  const rows = LP.filledRows(LP.buildLoadingProtocol({ shipment: sh, leg, unit: leg.vehicles[0], types: PKG.PACKAGING_SEED },
+    { todayISO: () => "2026-08-31", nextId: () => 1 }).rows);
+  assert.equal(rows.length, 21, "a single truck still carries the whole load");
+});
+
+T("free-typed packaging still resolves", () => {
+  // The catalogue reads "13 kg wooden boxes"; the goods line read "13kg wooden
+  // boxes" with no space. It resolves through the product default rather than
+  // failing and printing a blank sheet.
+  const rows = LP.filledRows(LP.deriveRows([{ product: "Apples", qtyKg: 19422, packaging: "13kg wooden boxes" }], PKG.PACKAGING_SEED));
+  assert.equal(rows.length, 21);
+  assert.equal(rows[0].kgPerBox, 13);
+});
+
+console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

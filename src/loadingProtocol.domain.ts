@@ -356,7 +356,17 @@ export function buildLoadingProtocol(input: {
   const unit = input.unit || (leg.vehicles || [])[0] || {};
   // v6.53.0: the sheet covers THIS TRUCK's load, not the shipment's. With no
   // assignment recorded the truck carries everything — the single-truck norm.
-  const goods = unitGoodsLines(allGoods, unit);
+  // v6.74.0: with SEVERAL TRUCKS and no explicit per-unit assignment, each
+  // truck's sheet used to derive from the WHOLE shipment — a two-truck load of
+  // 38 844 kg printed 42 pallets on BOTH sheets instead of 21 on each, and the
+  // producer had to be handed a corrected sheet or the driver retyped it.
+  // An even split is the honest default: it is what "two trucks, one load"
+  // means until someone says otherwise, and an explicit unit.load still wins.
+  const unitCount = (leg.vehicles || []).length || 1;
+  const hasExplicitLoad = ((unit as any)?.load || []).some((a: any) => num(a?.qtyKg) > 0);
+  const goods = hasExplicitLoad || unitCount < 2
+    ? unitGoodsLines(allGoods, unit)
+    : (allGoods || []).map((g: any) => ({ ...g, qtyKg: num(g.qtyKg) / unitCount, qty: num(g.qtyKg) / unitCount, pallets: undefined }));
   const products = Array.from(new Set((goods || []).map((g: any) => String(g.product || "").trim()).filter(Boolean)));
 
   return {

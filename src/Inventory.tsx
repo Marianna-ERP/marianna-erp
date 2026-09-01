@@ -4,7 +4,7 @@ import { computeClaim, buildClaimNote } from "./claim.domain";
 import { nextClaimNumber, blankClaim, claimsForLot } from "./claims.domain";
 import { buildTraceTree } from "./trace.domain";
 import { fmtNum } from "./format";
-import { Card, Lbl, useConfirm, DocRef, cancelledDocSet } from "./ui";
+import { Card, Lbl, useConfirm, DocRef, cancelledDocSet, ActionButton} from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
@@ -1208,7 +1208,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Inventory</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          <button onClick={onMove} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Record movement</button>
+          <ActionButton action="create" label="Record movement" onClick={onMove} />
           <button onClick={onQualityIssue} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
           {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
             <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>

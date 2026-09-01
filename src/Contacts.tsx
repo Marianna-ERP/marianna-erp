@@ -1,6 +1,6 @@
 import { referencesToContact } from "./referenceGuards";
 import React, { useState, useMemo, useRef } from "react";
-import { Lbl, useConfirm } from "./ui";
+import { Lbl, useConfirm, ActionButton} from "./ui";
 import { nextId } from "./ids";
 import { contactAddresses, warehouseCpLocId, LOGISTICS_POINT_KINDS, readLogisticsPoints, writeLogisticsPoints } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
@@ -1634,8 +1634,8 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
             </button>
           ))}
         </div>
-        <button onClick={() => { setImportSource("fakturownia"); setShowImport(true); }} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import from Fakturownia</button>
-        <button onClick={() => { setImportSource("csv"); setShowImport(true); }} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", fontSize: 12, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>📥 Import CSV</button>
+        <ActionButton action="importFkt" onClick={() => { setImportSource("fakturownia"); setShowImport(true); }} />
+        <ActionButton action="importCsv" onClick={() => { setImportSource("csv"); setShowImport(true); }} />
         <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ Export CSV</button>
         <button onClick={scanForDuplicates} title="Scan all counterparties for suspected duplicates (same tax ID or similar name)" style={{ background: "#fff", color: "#2563EB", border: "1px solid #BFDBFE", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>⧉ Find duplicates</button>
         <button onClick={() => setModal("new")} style={{ background: "#16A34A", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
