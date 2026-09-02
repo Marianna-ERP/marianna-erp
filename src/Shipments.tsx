@@ -8,6 +8,7 @@ import LoadingProtocolModal from "./LoadingProtocolModal";
 import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } from "./loadingProtocol.domain";
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { lotStockCheck } from "./receipts.domain";
+import { shipmentPostBlockReason, shipmentWarnings, newestFirst } from "./moduleGuards.domain";
 import { carriedRefs, overShipReport } from "./shipments.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
@@ -2600,6 +2601,20 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
             fields that real data does not populate (legs carry the truth), so
             the box confidently showed the wrong place. The checklist returns
             to the top of the card. */}
+        {/* v6.78.0: what is incomplete, while you work rather than at the save
+            button. Plates only count once goods are moving — a booking sent to
+            the carrier before the registration is known is complete as it is. */}
+        {(() => {
+          const w = shipmentWarnings(shipment, {
+            strict: ["Loaded", "Arrived", "Delivered", "Closed"].includes(canonicalStatus(shipment.status)),
+            isExport: String(shipment.tradeDirection || "") === "EXPORT",
+          });
+          if (!w.length) return null;
+          return <div style={{ marginBottom: 12, padding: "9px 11px", borderRadius: 8, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+            <strong>Incomplete — none of this blocks</strong>
+            <div style={{ marginTop: 4, lineHeight: 1.5 }}>{w.map((x, i) => <div key={i}>· {x.why}</div>)}</div>
+          </div>;
+        })()}
         <SectionTitle>Operational checklist</SectionTitle>
         <ChecklistLine ok={!!provider} label="Carrier / forwarder selected" />
         <ChecklistLine ok={(shipment.goods || []).length > 0} label="Goods lines present" />
@@ -3014,6 +3029,15 @@ export default function Shipments({
   }
 
   async function quickStatus(sh, status) {
+    // v6.78.0 THE ONE GATE. Since v6.58.0 these statuses POST INVENTORY. A
+    // shipment with no goods posts nothing and still reports the movement as
+    // done — the same class as the phantom receipts. Booking is never gated:
+    // the transport order goes to the carrier before the goods are final.
+    const postBlock = shipmentPostBlockReason(sh, status);
+    if (postBlock) {
+      await shConfirm({ tone: "warn", title: `${sh.number} has no goods`, message: postBlock, confirmLabel: "OK" });
+      return;
+    }
     // v6.35.0: destructive transition needs an explicit confirmation (2-step).
     if (status === "Cancelled") {
       const ok = await shConfirm({ tone: "danger", title: `Cancel shipment ${sh.number}?`, message: "It will be kept on record as Cancelled (read-only) and will no longer count toward its PO/SO budget. Any inventory movements it already posted (receipts / ship-outs) will be reversed. This can't be undone.", confirmLabel: "Cancel shipment", cancelLabel: "Keep" });
@@ -3130,15 +3154,18 @@ export default function Shipments({
     // DELIVERS goods to a client is a direct cost of that sale, not part of what
     // the goods cost us), so the engine correctly did nothing and the flag
     // claimed success anyway. Now the status follows what actually landed.
-    let landed = 0;
-    setLots(prev => {
-      const next = allocateShipmentCostsToLots(sh, prev, { inventoryType: costInventoryType, label: costTypeLabel });
-      const prefix = shipmentAllocationSourcePrefix(sh);
-      landed = (next || []).reduce((n: number, lot: any) =>
-        n + ((lot.costs || []).filter((c: any) => String(c.source || "").startsWith(prefix)).length), 0);
-      return next;
-    });
-    setTimeout(() => {
+    // v6.76.0: this used to compute `landed` INSIDE the state updater and read it
+    // in a setTimeout. Under React 18 the updater is not guaranteed to have run
+    // by then, so `landed` read 0, the flag was never set, and the integrity
+    // check reported unallocated costs on shipments whose costs HAD allocated —
+    // the user pressed the button, the lots gained their lines, and the warning
+    // stayed. Computed up front from the same inputs the engine uses: no timing
+    // dependency at all.
+    const prefixNow = shipmentAllocationSourcePrefix(sh);
+    const landed = (allocateShipmentCostsToLots(sh, lots, { inventoryType: costInventoryType, label: costTypeLabel }) || [])
+      .reduce((n: number, lot: any) => n + ((lot.costs || []).filter((c: any) => String(c.source || "").startsWith(prefixNow)).length), 0);
+    setLots(prev => allocateShipmentCostsToLots(sh, prev, { inventoryType: costInventoryType, label: costTypeLabel }));
+    (() => {
       if (landed > 0) {
         updateShipment(sh.id, s => ({ ...s, billingStatus: "Cost allocated" }));
         recordAudit({ module: "Shipments", docType: "Shipment", docNumber: sh.number, action: "allocated", summary: `Logistics costs allocated into lot landed cost (${landed} line(s))` });
@@ -3151,7 +3178,7 @@ export default function Shipments({
       } else {
         setToast(`${sh.number}: nothing could be allocated — check that the cost lines have amounts and that the lots exist.`);
       }
-    }, 0);
+    })();
   }
 
 
@@ -3230,7 +3257,7 @@ export default function Shipments({
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s}>{s}</option>)}</Sel></div>
           </div>
           <div style={{ overflow: "auto", flex: 1 }}>
-            {filtered.length ? filtered.map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} planNumber={planNumberFor(sh.number)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
+            {filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} planNumber={planNumberFor(sh.number)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>

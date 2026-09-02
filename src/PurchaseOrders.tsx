@@ -1,3 +1,4 @@
+import { newestFirst } from "./moduleGuards.domain";
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
@@ -767,7 +768,14 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
     (sh.goods || []).some((g: any) => String(g.lotRef) === String(lotNo)));
   const lotReceivedOrMoved = (lots || []).some((l: any) => {
     if (l.poRef !== poNum) return false;
-    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0);
+    // v6.76.0: VOIDED movements must not lock the PO. Record a receipt on a
+    // direct-DDP lot, then void it because it was wrong, and `movements.length`
+    // still counted it — so a Confirmed PO with no sales order and no live
+    // movement could never return to Draft. Nothing is deleted in this system,
+    // so "there is history here" is never the same question as "something
+    // depends on this". Only LIVE movements and real kilos lock it.
+    const liveMoves = (l.movements || []).filter((m: any) => m && !m.voided);
+    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || liveMoves.length > 0;
     if (!received) return false;
     // If this lot has any linked shipment, only a NON-cancelled one keeps it "live".
     const shs = shipmentsForLot(l.number);
@@ -1777,7 +1785,14 @@ ${blockNote}`.trim(),
     (sh.goods || []).some((g: any) => String(g.lotRef) === String(lotNo)));
   const lotReceivedOrMoved = (lots || []).some((l: any) => {
     if (l.poRef !== poNum) return false;
-    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || ((l.movements || []).length > 0);
+    // v6.76.0: VOIDED movements must not lock the PO. Record a receipt on a
+    // direct-DDP lot, then void it because it was wrong, and `movements.length`
+    // still counted it — so a Confirmed PO with no sales order and no live
+    // movement could never return to Draft. Nothing is deleted in this system,
+    // so "there is history here" is never the same question as "something
+    // depends on this". Only LIVE movements and real kilos lock it.
+    const liveMoves = (l.movements || []).filter((m: any) => m && !m.voided);
+    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || liveMoves.length > 0;
     if (!received) return false;
     // If this lot has any linked shipment, only a NON-cancelled one keeps it "live".
     const shs = shipmentsForLot(l.number);
@@ -1937,7 +1952,9 @@ ${blockNote}`.trim(),
             ))}
           </div>
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No POs match the current filters.</div>}
-          {filtered.map((o, idx) => {
+          {/* v6.78.0: newest first — a register is a record of what happened, and
+                  the row you want is almost always the one you just made. */}
+              {newestFirst(filtered).map((o, idx) => {
             const total = netTotal(o.items);
             const totalKg = totalQtyKg(o.items);
             const totalPLN = plnTotal(o);

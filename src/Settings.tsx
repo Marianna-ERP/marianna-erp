@@ -758,14 +758,33 @@ export default function Settings({
               Each account issues in one currency. Choose which one an invoice should carry for each currency you invoice in — a wrong account number on a document that has reached KSeF can only be corrected by issuing another one.
             </div>
             {!fktDepts.length && <div style={{ fontSize: 11.5, color: "#94A3B8", marginBottom: 8 }}>No accounts loaded yet — read them from Fakturownia.</div>}
-            {Array.from(new Set(fktDepts.map((d: any) => d.currency))).sort().map((cur: any) => (
+            {/* v6.76.0: every account listed with its bank number, and its
+                currency SET BY HAND where it could not be read. Parsing a label
+                is guesswork; seven rows set once is not. */}
+            {fktDepts.length > 0 && <div style={{ marginBottom: 10 }}>
+              {fktDepts.map((d: any) => (
+                <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr 150px 80px", gap: 8, alignItems: "center", marginBottom: 4, fontSize: 11.5 }}>
+                  <div><strong>{d.name}</strong>{d.taxNo ? <span style={{ color: "#94A3B8" }}> · {d.taxNo}</span> : null}</div>
+                  <div style={{ color: "#64748B", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 10.5, overflow: "hidden", textOverflow: "ellipsis" }} title={d.bankAccount}>{d.bankAccount || "—"}</div>
+                  <select value={d.currency || ""} onChange={e => {
+                      const next = fktDepts.map((x: any) => x.id === d.id ? { ...x, currency: e.target.value } : x);
+                      setFktDepts(next);
+                      try { window.localStorage.setItem("marianna-erp:fktDepartments", JSON.stringify(next)); } catch {}
+                    }} style={{ border: `1px solid ${d.currency ? "#E5E7EB" : "#FCA5A5"}`, borderRadius: 6, padding: "4px 6px", fontSize: 11.5 }}>
+                    <option value="">— set —</option>
+                    {["PLN", "EUR", "USD", "GBP", "CHF"].map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>}
+            {Array.from(new Set(fktDepts.map((d: any) => d.currency).filter(Boolean))).sort().map((cur: any) => (
               <div key={cur} style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center", marginBottom: 5 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>{cur}</div>
                 <select value={fktDeptDefaults[cur] ?? ""} onChange={e => { const m = { ...fktDeptDefaults, [cur]: e.target.value }; setFktDeptDefaults(m); try { window.localStorage.setItem("marianna-erp:fktDepartmentDefaults", JSON.stringify(m)); } catch {} }}
                   style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12.5 }}>
                   <option value="">— ask each time —</option>
                   {fktDepts.filter((d: any) => d.currency === cur).map((d: any) => (
-                    <option key={d.id} value={d.id}>{d.name}{d.taxNo ? ` · ${d.taxNo}` : ""}</option>
+                    <option key={d.id} value={d.id}>{d.name}{d.bankAccount ? ` · …${String(d.bankAccount).slice(-6)}` : ""}</option>
                   ))}
                 </select>
               </div>

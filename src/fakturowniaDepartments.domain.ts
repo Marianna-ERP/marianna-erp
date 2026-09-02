@@ -32,6 +32,7 @@ export interface FktDepartment {
   currency: string;         // "EUR"
   bankAccount?: string;
   taxNo?: string;           // a different tax id means a different legal entity
+  legalName?: string;       // identical across departments of one company
   isMain?: boolean;
 }
 
@@ -114,16 +115,47 @@ export function departmentBlockReason(choice: DepartmentChoice): string {
 
 /** Map Fakturownia's /departments.json rows onto our shape. */
 export function mapDepartments(raw: any[]): FktDepartment[] {
-  return (raw || []).map((d: any) => ({
-    id: d?.id,
-    name: S(d?.name || d?.shortcut || `Department ${d?.id}`),
-    // Fakturownia holds the currency on the account; fall back to reading it
-    // out of the name, which is how the owner's are labelled ("Marianna EUR PKO").
-    currency: CUR(d?.currency || (S(d?.name).match(/\b(EUR|PLN|USD|GBP|CHF)\b/i) || [])[1] || "PLN"),
-    bankAccount: S(d?.bank_account || d?.bank_account_number),
-    taxNo: S(d?.tax_no),
-    isMain: d?.main === true || d?.main === "1",
-  })).filter(d => d.id != null);
+  return (raw || []).map((d: any) => {
+    // v6.76.0: the LABEL is the shortcut ("Marianna EUR PKO"), not `name` —
+    // `name` is the LEGAL name and is identical on every department
+    // ("Marianna Hazem Osman"). Reading `name` first made all seven accounts
+    // display the same text, and since that text contains no currency they all
+    // fell back to PLN. Two columns on Fakturownia's own page; we were reading
+    // the wrong one.
+    const label = S(d?.shortcut || d?.department_name || d?.name || `Department ${d?.id}`);
+    const account = S(d?.bank_account || d?.bank_account_number || d?.account_number);
+    // Currency, in order of trust: an explicit field · the currency named in the
+    // label · the currency named on the account. NEVER defaulted to PLN — an
+    // account whose currency we cannot read is left BLANK so the user sets it,
+    // because a wrong guess here is a wrong account number on a real invoice.
+    const named = (S(label).match(/\b(EUR|PLN|USD|GBP|CHF|CZK|SEK)\b/i) || [])[1]
+      || (S(account).match(/\b(EUR|PLN|USD|GBP|CHF|CZK|SEK)\b/i) || [])[1];
+    return {
+      id: d?.id,
+      name: label,
+      legalName: S(d?.name),
+      currency: d?.currency ? CUR(d.currency) : (named ? CUR(named) : ""),
+      bankAccount: account,
+      taxNo: S(d?.tax_no),
+      isMain: d?.main === true || d?.main === "1",
+    };
+  }).filter(d => d.id != null);
+}
+
+/** Apply the currencies the user set by hand in Settings. Parsing a label is
+ *  guesswork; seven rows set once is not. The stored map wins over anything
+ *  derived, so a correction always sticks. */
+export function applyDepartmentCurrencies(all: FktDepartment[], overrides: Record<string, any>): FktDepartment[] {
+  return (all || []).map(d => {
+    const o = (overrides || {})[String(d.id)];
+    return o ? { ...d, currency: CUR(o) } : d;
+  });
+}
+
+/** Accounts whose currency is still unknown — they cannot be chosen until it is
+ *  set, and saying so is better than silently treating them as PLN. */
+export function departmentsNeedingCurrency(all: FktDepartment[]): FktDepartment[] {
+  return (all || []).filter(d => !S(d.currency));
 }
 
 /** Distinct legal entities in the department list — a different tax id is a

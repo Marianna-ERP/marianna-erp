@@ -3320,5 +3320,207 @@ T("Fakturownia's rows map onto our shape, currency read from the name if absent"
 });
 
 console.log("");
+console.log("── v6.76.0: the department label, and what really locks a PO ──");
+
+T("the account LABEL is the shortcut, not the legal name", () => {
+  // Fakturownia's page shows two columns: "Marianna EUR PKO" (the department)
+  // and "Marianna Hazem Osman" (the legal name, identical on all seven).
+  // Reading `name` made every account display the same text — and since that
+  // text names no currency, all seven fell back to PLN.
+  const m = FD.mapDepartments([
+    { id: 1, shortcut: "Marianna EUR PKO", name: "Marianna Hazem Osman", bank_account: "PL1010...", tax_no: "5252842787", main: true },
+    { id: 5, shortcut: "Marianna PLN PKO", name: "Marianna Hazem Osman", bank_account: "PL9610...", tax_no: "5252842787" },
+    { id: 7, shortcut: "Marianna SLO EUR PKO", name: "Marianna Hazem Osman", tax_no: "SI46357335" },
+  ]);
+  assert.deepEqual(m.map(d => d.name), ["Marianna EUR PKO", "Marianna PLN PKO", "Marianna SLO EUR PKO"]);
+  assert.deepEqual(m.map(d => d.currency), ["EUR", "PLN", "EUR"]);
+  assert.equal(m[0].legalName, "Marianna Hazem Osman", "kept, but not used as the label");
+});
+
+T("an unreadable currency is left BLANK, never defaulted to PLN", () => {
+  const m = FD.mapDepartments([{ id: 9, shortcut: "Nieznane konto", name: "Marianna Hazem Osman", bank_account: "PL11" }]);
+  assert.equal(m[0].currency, "", "a wrong guess here is a wrong account number on a real invoice");
+  assert.equal(FD.departmentsNeedingCurrency(m).length, 1);
+  // Set by hand in Settings, and the correction always sticks.
+  const fixed = FD.applyDepartmentCurrencies(m, { "9": "usd" });
+  assert.equal(fixed[0].currency, "USD");
+  assert.equal(FD.departmentsNeedingCurrency(fixed).length, 0);
+  // A hand-set currency overrides even one that was read.
+  const over = FD.applyDepartmentCurrencies(FD.mapDepartments([{ id: 1, shortcut: "Marianna EUR PKO", name: "X" }]), { "1": "PLN" });
+  assert.equal(over[0].currency, "PLN");
+});
+
+T("a VOIDED movement does not lock a purchase order", () => {
+  // Record a receipt on a direct-DDP lot, void it because it was wrong, and the
+  // PO could never return to Draft — `movements.length` counted the voided one.
+  // Nothing is deleted here, so "there is history" is never the same question as
+  // "something depends on this".
+  const locks = (lot) => {
+    const live = (lot.movements || []).filter(m => m && !m.voided);
+    return (parseFloat(lot.receivedKg) > 0) || (parseFloat(lot.physicalKg) > 0) || live.length > 0;
+  };
+  assert.equal(locks({ receivedKg: 0, physicalKg: 0, movements: [{ type: "IN", qtyKg: 100, voided: true }] }), false);
+  assert.equal(locks({ receivedKg: 0, physicalKg: 0, movements: [{ type: "IN", qtyKg: 100 }] }), true, "a live movement still locks");
+  assert.equal(locks({ receivedKg: 5000, physicalKg: 0, movements: [] }), true, "real received kilos still lock");
+});
+
+console.log("");
+console.log("── statusOwnership: the shipment owns what moved (v6.77.0) ──");
+
+const SO_ = require("./build/statusOwnership.domain.js");
+
+const order10k = () => ({ number: "SO-1", status: "Confirmed", items: [{ qty: 6000 }, { qty: 4000 }] });
+const ship = (n, st, kg, soRef = "SO-1") => ({ number: n, status: st, soRefs: [soRef], goods: [{ soRef, qtyKg: kg }] });
+
+T("ALL OR NOTHING (owner ruling): part-loaded is not shipped", () => {
+  // "Order becomes shipped when all of its goods move, otherwise we won't know
+  // what is left to be shipped."
+  const part = SO_.deriveSoStatus(order10k(), [ship("SHP-1", "Loaded", 6000)]);
+  assert.equal(part.status, "Loading");
+  assert.ok(part.reason.includes("4 000 kg still to load") || part.reason.includes("4000 kg still to load"), part.reason);
+  const all = SO_.deriveSoStatus(order10k(), [ship("SHP-1", "Loaded", 6000), ship("SHP-2", "Loaded", 4000)]);
+  assert.equal(all.status, "Shipped");
+  assert.equal(all.derived, true);
+});
+
+T("GROUPAGE: one truck serving two orders advances neither prematurely", () => {
+  const truck = { number: "SHP-G", status: "Loaded", soRefs: ["SO-1", "SO-2"], goods: [
+    { soRef: "SO-1", qtyKg: 6000 }, { soRef: "SO-2", qtyKg: 3000 },
+  ] };
+  // SO-1 ordered 10 000 and only 6 000 of it is on this truck.
+  assert.equal(SO_.deriveSoStatus(order10k(), [truck]).status, "Loading");
+  // SO-2 ordered exactly 3 000 — all of ITS goods moved.
+  assert.equal(SO_.deriveSoStatus({ number: "SO-2", status: "Confirmed", items: [{ qty: 3000 }] }, [truck]).status, "Shipped");
+});
+
+T("delivered outranks loaded; a cancelled shipment counts for nothing", () => {
+  assert.equal(SO_.deriveSoStatus(order10k(), [ship("SHP-1", "Delivered", 6000), ship("SHP-2", "Delivered", 4000)]).status, "Delivered");
+  const withCancelled = SO_.deriveSoStatus(order10k(), [ship("SHP-1", "Loaded", 6000), ship("SHP-2", "Cancelled", 4000)]);
+  assert.equal(withCancelled.status, "Loading", "a cancelled truck never moved anything");
+});
+
+T("commercial statuses win — the sales order owns them", () => {
+  const loaded = [ship("SHP-1", "Loaded", 6000), ship("SHP-2", "Loaded", 4000)];
+  assert.equal(SO_.deriveSoStatus({ ...order10k(), status: "Draft" }, loaded).status, "Draft", "a draft has committed to nothing");
+  assert.equal(SO_.deriveSoStatus({ ...order10k(), status: "Cancelled" }, loaded).status, "Cancelled");
+  assert.equal(SO_.deriveSoStatus({ ...order10k(), status: "Invoiced" }, loaded).status, "Invoiced", "a commercial conclusion after delivery");
+  assert.equal(SO_.deriveSoStatus(order10k(), []).status, "Confirmed", "no shipment, nothing to derive");
+});
+
+T("an override is honoured AND visible — never silently blended", () => {
+  const o = SO_.applyStatusOverride(order10k(), "Shipped", "driver left, shipment not updated", "2026-09-02");
+  const d = SO_.deriveSoStatus(o, []);
+  assert.equal(d.status, "Shipped");
+  assert.equal(d.overridden, true);
+  assert.equal(d.derived, false);
+  assert.ok(d.reason.includes("Set by hand") && d.reason.includes("driver left"));
+  assert.ok(d.reason.includes("no shipment exists"), "it still says what the shipments actually show");
+  // Clearing it returns to derivation.
+  assert.equal(SO_.deriveSoStatus(SO_.applyStatusOverride(o, "", "", ""), []).overridden, false);
+});
+
+T("THE DRIFT THIS REMOVES: Shipped with no dispatch is called out", () => {
+  // Six of the owner's orders were Shipped or Invoiced with no shipment at all,
+  // and their COGS read zero. Nothing said so at the time.
+  const c = SO_.statusContradiction({ number: "SO-7", status: "Invoiced", items: [{ qty: 10000 }] }, []);
+  assert.ok(c.includes("no shipment carries this order"));
+  assert.ok(c.includes("cost of goods will read as zero"));
+  const partial = SO_.statusContradiction({ number: "SO-8", status: "Shipped", items: [{ qty: 10000 }] }, [ship("SHP-1", "Loaded", 6000, "SO-8")]);
+  assert.ok(partial.includes("4 000 kg has not left") || partial.includes("4000 kg has not left"), partial);
+  assert.equal(SO_.statusContradiction({ number: "SO-9", status: "Confirmed", items: [{ qty: 100 }] }, []), "", "a confirmed order claims nothing physical");
+  // An explicit override is a stated decision, not drift.
+  assert.equal(SO_.statusContradiction({ number: "SO-10", status: "Shipped", statusOverride: "Shipped", items: [{ qty: 100 }] }, []), "");
+});
+
+T("the ownership split is explicit", () => {
+  assert.ok(SO_.isCommercialStatus("Confirmed") && SO_.isCommercialStatus("Invoiced"));
+  assert.ok(SO_.isPhysicalStatus("Shipped") && SO_.isPhysicalStatus("Delivered"));
+  assert.equal(SO_.isCommercialStatus("Shipped"), false, "the sales order may no longer type this");
+});
+
+console.log("");
+console.log("── moduleGuards: shipments, inventory, list order (v6.78.0) ──");
+
+const MG = require("./build/moduleGuards.domain.js");
+
+T("THE ONE SHIPMENT GATE: no goods, no posting", () => {
+  // Marking Loaded posts inventory. An empty shipment posts nothing and still
+  // reports the movement as done — the same class as the phantom receipts.
+  const empty = { number: "SHP-1", goods: [] };
+  assert.ok(MG.shipmentPostBlockReason(empty, "Loaded").includes("carries no goods"));
+  assert.ok(MG.shipmentPostBlockReason(empty, "Delivered") !== "");
+  assert.equal(MG.shipmentPostBlockReason(empty, "Booked"), "", "BOOKING is never gated — the transport order goes out before the goods are final");
+  assert.equal(MG.shipmentPostBlockReason(empty, "Draft"), "");
+  assert.equal(MG.shipmentPostBlockReason({ goods: [{ qtyKg: 100 }] }, "Loaded"), "");
+  assert.ok(MG.shipmentPostBlockReason({ goods: [{ qtyKg: 0 }] }, "Loaded") !== "", "a zero-kg row moves nothing");
+});
+
+T("PLATES ARE A WARNING, NEVER A GATE — the owner books before they are known", () => {
+  // "Sometimes we create a shipment to send the order to the carrier before
+  // getting the truck plates and the container number."
+  const booking = { number: "SHP-2", carrierId: 7, loadingDate: "2026-09-10", expectedDeliveryDate: "2026-09-14",
+    legs: [{ mode: "Road", carrierId: 7, vehicles: [{ id: "A" }] }], goods: [{ qtyKg: 19422 }] };
+  assert.deepEqual(MG.shipmentWarnings(booking, { strict: false }), [], "a booking with no plates is complete");
+  const moving = MG.shipmentWarnings(booking, { strict: true });
+  assert.equal(moving.length, 1);
+  assert.equal(moving[0].field, "registration");
+  assert.ok(moving[0].why.includes("protocol"), "it names what it costs");
+});
+
+T("shipment warnings name their consequence", () => {
+  const bare = { number: "SHP-3", legs: [{ mode: "Road" }], goods: [{ qtyKg: 100 }] };
+  const w = MG.shipmentWarnings(bare);
+  const fields = w.map(x => x.field);
+  assert.ok(fields.includes("carrier") && fields.includes("loading date") && fields.includes("delivery date"));
+  assert.ok(w.find(x => x.field === "carrier").why.includes("transport order"));
+  // Two trucks with no split: each protocol halves the load, which may be wrong.
+  const twoTrucks = MG.shipmentWarnings({ ...bare, legs: [{ mode: "Road", vehicles: [{ id: "A" }, { id: "B" }] }] });
+  assert.ok(twoTrucks.some(x => x.field === "leg 1 load" && x.why.includes("equal share")));
+  // One truck, or an explicit split, says nothing.
+  assert.ok(!MG.shipmentWarnings({ ...bare, legs: [{ mode: "Road", vehicles: [{ id: "A", load: [{ qtyKg: 50 }] }, { id: "B", load: [{ qtyKg: 50 }] }] }] })
+    .some(x => x.field.endsWith(" load")), "an explicit split says nothing — note 'loading date' also contains 'load'");
+});
+
+T("THE INVENTORY GATE: stock cannot go negative", () => {
+  const lot = { number: "LOT-1", physicalKg: 5000 };
+  assert.equal(MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 5000 }), "");
+  const over = MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 8000 });
+  assert.ok(over.includes("5 000 kg") || over.includes("5000 kg"), over);
+  assert.ok(over.includes("cannot go negative"));
+  assert.equal(MG.movementBlockReason(lot, { type: "IN", qtyKg: 99999 }), "", "a receipt ADDS stock — never blocked");
+  assert.equal(MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 5000.5 }), "", "whole-box rounding is not an overdraw");
+});
+
+T("a lot expected more than ten days is called out (owner's number)", () => {
+  const base = { number: "LOT-2", status: "Expected", expectedKg: 19422, loadingDate: "2026-09-01" };
+  assert.deepEqual(MG.lotWarnings(base, "2026-09-09").filter(w => w.field === "still expected"), []);
+  const late = MG.lotWarnings(base, "2026-09-20").find(w => w.field === "still expected");
+  assert.ok(late, "19 days is past ten");
+  assert.ok(late.why.includes("closed short"), "it names both explanations, and what to do about each");
+  assert.equal(MG.LOT_AGEING_DAYS, 10);
+});
+
+T("variance, unexplained movements and ageing stock", () => {
+  const short = MG.lotWarnings({ number: "L", status: "Received", expectedKg: 19422, receivedKg: 15000, movements: [] }, "2026-09-20");
+  assert.ok(short.find(w => w.field === "variance").why.includes("short by"));
+  assert.deepEqual(MG.lotWarnings({ number: "L", expectedKg: 1000, receivedKg: 1020, movements: [] }, "2026-09-20").filter(w => w.field === "variance"), [],
+    "2% is ordinary over-delivery, not a variance worth raising");
+  const noReason = MG.lotWarnings({ number: "L", movements: [{ type: "SHIP_OUT", qtyKg: 100 }] }, "2026-09-20");
+  assert.ok(noReason.find(w => w.field === "unexplained movements"));
+  const stale = MG.lotWarnings({ number: "L", physicalKg: 5000, movements: [{ type: "IN", qtyKg: 5000, date: "2026-07-01", note: "x" }] }, "2026-09-20");
+  assert.ok(stale.find(w => w.field === "ageing stock").why.includes("storage is charged"));
+});
+
+T("LIST ORDER: documents newest first, reference data A-Z", () => {
+  // Owner ruling. A register is a record of what happened and the thing you want
+  // is almost always the thing you just made; reference data is looked up by name.
+  const docs = [{ number: "PO-2026-0002" }, { number: "PO-2026-0010" }, { number: "PO-2026-0001" }];
+  assert.deepEqual(MG.newestFirst(docs).map(d => d.number), ["PO-2026-0010", "PO-2026-0002", "PO-2026-0001"],
+    "0010 sorts above 0002 — numeric, not lexical");
+  const refs = [{ name: "Zielona" }, { name: "Łukasz" }, { name: "Adam" }];
+  assert.deepEqual(MG.alphabetical(refs).map(r => r.name), ["Adam", "Łukasz", "Zielona"], "Polish collation puts Ł where a reader expects");
+});
+
+console.log("");
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

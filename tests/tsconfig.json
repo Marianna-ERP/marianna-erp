@@ -10,14 +10,14 @@
     "../src/docLinks.domain.ts","../src/documents.domain.ts","../src/fakturowniaImport.domain.ts","../src/fakturowniaDepartments.domain.ts",
     "../src/flowCleanup.migration.ts","../src/fx.ts","../src/heal.v645.ts","../src/ids.ts",
     "../src/integrityCheck.ts","../src/inventory.domain.ts","../src/invoicing.ts","../src/ledger.ts",
-    "../src/loadPlan.domain.ts","../src/loadingProtocol.domain.ts","../src/locations.ts","../src/marginCalculations.ts",
+    "../src/loadPlan.domain.ts","../src/loadingProtocol.domain.ts","../src/locations.ts","../src/marginCalculations.ts","../src/moduleGuards.domain.ts",
     "../src/numbers.ts","../src/packaging.domain.ts","../src/pricingUnit.domain.ts","../src/payments.domain.ts",
     "../src/productCatalog.ts",
     "../src/purchaseOrderGuards.ts","../src/receipts.domain.ts",
     "../src/referenceGuards.ts",
     "../src/bankReconciliation.domain.ts",
     "../src/advances.domain.ts",
-    "../src/operationalCosts.ts","../src/salesOrders.domain.ts",
+    "../src/operationalCosts.ts","../src/salesOrders.domain.ts","../src/statusOwnership.domain.ts",
     "../src/settlement.domain.ts","../src/shipments.domain.ts","../src/trace.domain.ts",
     "../src/tradeFlow.domain.ts","../src/types.ts","../src/warehouseCharges.ts"
   ]

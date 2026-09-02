@@ -1,3 +1,4 @@
+import { newestFirst } from "./moduleGuards.domain";
 import React, { useState, useMemo } from "react";
 import { clientExposurePLN } from "./payments.domain";
 import { computedSOLinks } from "./documents.domain";
@@ -5,6 +6,7 @@ import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { PACKAGING_SEED } from "./packaging.domain";
+import { deriveSoStatus, statusContradiction, isPhysicalStatus } from "./statusOwnership.domain";
 import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
@@ -1458,6 +1460,24 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
               <div style={{ order: -1 }}><Lbl>Status</Lbl>
+                {/* v6.77.0 STATUS OWNERSHIP. The sales order owns the COMMERCIAL
+                    statuses (Draft, Confirmed, Invoiced, Closed, Cancelled). The
+                    PHYSICAL ones — Reserved, Loading, Shipped, Delivered — are
+                    the shipments' to state, and are shown here as a derived badge
+                    rather than typed. Owner rulings: no partial state, an order
+                    ships only when ALL of its goods have moved, and an override
+                    is allowed but must say so. */}
+                {(() => {
+                  const d = deriveSoStatus(order, SHIPMENTS_REF);
+                  if (!d.derived && !d.overridden) return null;
+                  return <div style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, fontSize: 11.5,
+                    background: d.overridden ? "#FFFBEB" : "#F0F9FF",
+                    border: `1px solid ${d.overridden ? "#FDE68A" : "#BAE6FD"}`,
+                    color: d.overridden ? "#92400E" : "#0369A1" }}>
+                    <strong>{d.status}</strong>{d.overridden ? " · set by hand" : " · from the shipments"}
+                    <div style={{ marginTop: 3, lineHeight: 1.45 }}>{d.reason}</div>
+                  </div>;
+                })()}
                 <Sel value={order.status || "Draft"} onChange={async e => {
                   const nv = e.target.value;
                   const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status));
@@ -1470,6 +1490,21 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   if (wasLocked && nv !== "Cancelled" && nvOrd < curOrd) {
                     await ofAlert({ tone: "warn", title: "Forward only", message: `This sales order is ${order.status} — goods have physically moved, so its status can only advance (or be Cancelled, which reverses the postings). Moving it back to ${nv} would leave shipped kilograms behind a label that denies them.` });
                     return;
+                  }
+                  // v6.77.0: typing a PHYSICAL status the shipments do not support
+                  // is exactly the drift that left six orders Shipped or Invoiced
+                  // with no dispatch and a zero COGS. Warned, not blocked — and
+                  // proceeding records it as a deliberate override so it never
+                  // looks like a derived fact.
+                  if (isPhysicalStatus(nv)) {
+                    const clash = statusContradiction({ ...order, status: nv, statusOverride: "" }, SHIPMENTS_REF);
+                    if (clash) {
+                      const go = await ofConfirm({ tone: "warn", title: `Set ${nv} by hand?`,
+                        message: `${clash}\n\nSetting it here records an override, so the screen will show it was set by hand rather than taken from the shipments.`,
+                        confirmLabel: `Set ${nv} anyway`, cancelLabel: "Go back" });
+                      if (!go) return;
+                      setOrder((o: any) => ({ ...o, statusOverride: nv, statusOverrideReason: "Set by hand — shipments do not show it yet", statusOverrideAt: localTodayISO() }));
+                    }
                   }
                   if (willLock && !wasLocked) {
                     // v6.68.0 (F-3): credit control at the moment of commitment.
@@ -2791,7 +2826,9 @@ export default function SalesOrders({
             ))}
           </div>
           {filtered.length === 0 && <div style={{ padding: "40px 20px", textAlign: "center", color: "#AAA", fontSize: 13 }}>No sales orders found.</div>}
-          {filtered.map((o, idx) => {
+          {/* v6.78.0: newest first — a register is a record of what happened, and
+                  the row you want is almost always the one you just made. */}
+              {newestFirst(filtered).map((o, idx) => {
             // Build a small sources summary string
             const sources: string[] = o.items
               .map((it: any) => it.sourceRef ? `${it.sourceType === "STOCK" ? "📦" : "🚚"}${it.sourceRef}` : null)
