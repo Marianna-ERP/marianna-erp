@@ -57,7 +57,7 @@ function DirPill({ inv }: { inv: Invoice }) { const r = invoiceDirection(inv) ==
 
 function PaymentEventModal({ inv, onClose, onSave }: any) {
   const remaining = outstandingAmount(inv);
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(localTodayISO());
   const [amount, setAmount] = useState(String(remaining || ""));
   const [settleRate, setSettleRate] = useState(""); // v6.68.0 (F-2)
   const [method, setMethod] = useState("Bank transfer");
@@ -427,7 +427,7 @@ export default function Invoices(props: any) {
         const soNumbers = (inv.links || []).filter((l: any) => l.type === "SO").map((l: any) => String(l.number));
         if (soNumbers.length) {
           setOrders((prev: any[]) => (prev || []).map((o: any) =>
-            soNumbers.includes(String(o.number)) && o.status === "Invoiced" ? { ...o, status: "Delivered" } : o));
+            soNumbers.includes(String(o.number)) && o.status === "Invoiced" ? { ...o, status: "Confirmed" } : o)); // v6.79.0 (W-1): commercial state; Delivered is derived
         }
       }
     }

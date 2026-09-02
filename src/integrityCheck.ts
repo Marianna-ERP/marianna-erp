@@ -1,3 +1,4 @@
+import { claimNoteMismatches } from "./claimReadiness.domain";
 // ─── DATA INTEGRITY CHECKER ─────────────────────────────────────────────────
 //
 // A single pure function that scans the whole dataset for structural problems —
@@ -45,6 +46,10 @@ export interface IntegrityInputs {
   /** v6.63.0 (D-13/audit gaps): claims and load plans join the audit. */
   claims?: any[];
   loadPlans?: any[];
+  /** v6.79.0: previously unaudited stores */
+  advancePayments?: any[];
+  bankAccounts?: any[];
+  productCatalog?: any[];
 }
 
 // ── small helpers (kept local so this module has zero imports) ──
@@ -283,6 +288,56 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
         add("warning", "LOADPLAN_ORPHAN_SHIPMENT", "Load plans", label, `Plan references shipment ${ref}, which no longer exists — its totals silently exclude that cargo.`);
     });
   });
+
+  // ── v6.79.0 (review): the stores that had NO checks ────────────────────────
+  const advances = arr((inp as any).advancePayments);
+  const bankAccounts = arr((inp as any).bankAccounts);
+  const opCosts = arr((inp as any).operationalCosts);
+  const catalog = arr((inp as any).productCatalog);
+  const invById79 = new Map(invoices.map((i: any) => [String(i.id), i]));
+
+  advances.forEach((a: any) => {
+    const label = `${a.counterpartyName || "advance"} ${a.date || ""} ${a.amount} ${a.currency || ""}`.trim();
+    const allocated = (a.allocations || []).reduce((s: number, x: any) => s + (Number(x.amount) || 0), 0);
+    if (allocated - (Number(a.amount) || 0) > 0.01)
+      add("error", "ADVANCE_OVERALLOCATED", "Finance", label, `Allocated ${allocated.toLocaleString("pl-PL")} against an advance of ${Number(a.amount).toLocaleString("pl-PL")} — money applied that was never received.`);
+    if (a.proformaId != null && a.proformaId !== "" && !invById79.has(String(a.proformaId)))
+      add("warning", "ADVANCE_ORPHAN_PROFORMA", "Finance", label, `The pro-forma this advance answers (id ${a.proformaId}) no longer exists.`);
+    (a.allocations || []).forEach((x: any) => {
+      if (!invById79.has(String(x.invoiceId)))
+        add("warning", "ADVANCE_ALLOC_ORPHAN", "Finance", label, `An allocation of ${Number(x.amount).toLocaleString("pl-PL")} points at invoice ${x.invoiceNumber || x.invoiceId}, which no longer exists.`);
+    });
+    if (!(a.proformaId != null && a.proformaId !== ""))
+      add("info", "ADVANCE_NO_PROFORMA", "Finance", label, "Advance not linked to its pro-forma (owner ruling: every advance answers one).");
+  });
+
+  const seenAcct = new Set<string>();
+  bankAccounts.forEach((b: any) => {
+    const k = String(b.accountDigits || "");
+    if (k && seenAcct.has(k)) add("warning", "BANKACCOUNT_DUP", "Finance", b.label || k, `Bank account …${k.slice(-4)} is registered twice.`);
+    seenAcct.add(k);
+  });
+
+  opCosts.forEach((c: any) => {
+    const s = String(c.source || "");
+    if (!s.startsWith("invoice:")) return;
+    const inv = invById79.get(s.slice(8));
+    if (!inv) add("warning", "OPCOST_MIRROR_ORPHAN", "Finance", c.invoiceNo || c.description || "cost", "This overhead line mirrors a register invoice that no longer exists — the sync should have removed it.");
+    else if (inv.paymentStatus === "Cancelled") add("warning", "OPCOST_MIRROR_CANCELLED", "Finance", c.invoiceNo || "cost", "This overhead line mirrors a CANCELLED invoice — it should not count in overhead.");
+  });
+
+  if (catalog.length) {
+    const items = new Set(catalog.map((c: any) => String(c.item || "").trim().toLowerCase()));
+    const used = new Map<string, Set<string>>();
+    const mark = (name: any, doc: string) => { const k = String(name || "").trim().toLowerCase(); if (!k || items.has(k)) return; (used.get(k) || used.set(k, new Set()).get(k)!).add(doc); };
+    pos.forEach((p: any) => p.status !== "Cancelled" && (p.items || []).forEach((it: any) => mark(it.product, p.number)));
+    orders.forEach((o: any) => o.status !== "Cancelled" && (o.items || []).forEach((it: any) => mark(it.product, o.number)));
+    used.forEach((docs, name) => add("info", "CATALOG_ITEM_UNKNOWN", "Settings", name, `"${name}" is used on ${docs.size} live document(s) but is not in the product catalog (renamed or removed).`));
+  }
+
+  // v6.79.0: claim money vs paper — an agreed amount moves the P/L; the note is the legal document.
+  claimNoteMismatches(claims, (id: any) => financeNotes.find((nt: any) => String(nt.id) === String(id)))
+    .forEach(x => add("warning", "CLAIM_NOTE_MISMATCH", "Claims", x.number, x.recon.message));
 
   // Goods ROWS were never audited (only header refs) — yet posting reads the rows.
   shipments.forEach((sh: any) => {

@@ -7,6 +7,8 @@ import { mapDepartments } from "./fakturowniaDepartments.domain";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
 import { referencesToLocation } from "./referenceGuards";
+import { blankUser, MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
+import { nextId as mintId } from "./ids";
 import { renameCatalogItem } from "./productCatalog";
 import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
 
@@ -393,6 +395,50 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
   );
 }
 
+
+// ── v6.79.0 (F-5, owner ruling): USERS & TICK-BOX PERMISSIONS ─────────────────
+// Each user sees only the modules ticked; Finance P/L, client analysis and
+// budgets default to the OWNER only. Convenience gate on localStorage; becomes
+// row-level security on Supabase with exactly this shape.
+function UsersPanel({ users = [], setUsers = null }: any) {
+  const [name, setName] = useState("");
+  if (typeof setUsers !== "function") return null;
+  const MOD_LABEL: Record<string, string> = { dashboard: "Dashboard", pos: "Purchase Orders", lots: "Inventory", orders: "Sales Orders", shipments: "Shipments", loadplans: "Load plans", invoices: "Invoices", claims: "Claims", finance: "Finance", contacts: "Counterparties", audit: "Audit trail", settings: "Settings" };
+  const FIN_LABEL: Record<string, string> = { ledger: "Receivables & Payables", bank: "Bank import", costs: "Operational costs", warehouse: "Warehouse charges", pl: "Sales P/L (owner)", clients: "Client analysis (owner)", budget: "Budgets (owner)" };
+  const gaps = usersGaps(users);
+  const toggle = (u: any, group: "modules" | "finance", k: string) => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, [group]: { ...(x[group] || {}), [k]: !(x[group] || {})[k] } } : x));
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>👥 Users & permissions</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Tick what each user may open. With no users defined everyone sees everything; the first user should be the owner. The user is recognised by the name entered in Settings → "Your name".</div>
+      {gaps.map((g, i) => <div key={i} style={{ fontSize: 11.5, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", marginBottom: 6 }}>{g}</div>)}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="User's name (exactly as they enter it)" style={{ flex: 1, border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13 }} />
+        <button onClick={() => { if (!name.trim()) return; setUsers((prev: any[]) => [...(prev || []), blankUser(mintId(), name, !(prev || []).length)]); setName(""); }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add user</button>
+      </div>
+      {(users || []).map((u: any) => (
+        <div key={String(u.id)} style={{ borderTop: "1px solid #F1F5F9", padding: "10px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            <div style={{ fontSize: 13, fontWeight: 800 }}>{u.name}</div>
+            <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!u.isOwner} onChange={() => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, isOwner: !x.isOwner } : x))} /> owner (sees everything)</label>
+            <input value={u.role || ""} onChange={e => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, role: e.target.value } : x))} placeholder="role label" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "3px 8px", fontSize: 11.5, width: 150 }} />
+            <button onClick={() => setUsers((prev: any[]) => (prev || []).filter((x: any) => x.id !== u.id))} style={{ marginLeft: "auto", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Remove</button>
+          </div>
+          {!u.isOwner && (<>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 11.5 }}>
+              {MODULE_KEYS.map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={u.modules?.[k] !== false} onChange={() => toggle(u, "modules", k)} />{MOD_LABEL[k]}</label>)}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 11.5, marginTop: 6, color: "#334155" }}>
+              <span style={{ fontWeight: 700, color: "#94A3B8" }}>Finance:</span>
+              {FINANCE_KEYS.map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={u.finance?.[k] === true} onChange={() => toggle(u, "finance", k)} />{FIN_LABEL[k]}</label>)}
+            </div>
+          </>)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Settings({
   reloadFromStorage,
   refStores = {},
@@ -405,6 +451,8 @@ export default function Settings({
   setProductCatalog,
   packagingTypes = [],
   setPackagingTypes,
+  users = [],
+  setUsers = null,
 }: {
   reloadFromStorage: () => void;
   refStores?: any;
@@ -417,6 +465,8 @@ export default function Settings({
   setProductCatalog?: (v: any) => void;
   packagingTypes?: any[];
   setPackagingTypes?: (v: any) => void;
+  users?: any[];
+  setUsers?: any;
 }) {
   const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
   const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
@@ -696,6 +746,7 @@ export default function Settings({
         )}
         {manage === "products" && (
           <FullScreenModal title="Product catalog" onClose={() => setManage(null)}>
+            <UsersPanel users={users} setUsers={setUsers} />
             <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog}  refStores={refStores} />
           </FullScreenModal>
         )}

@@ -3127,7 +3127,8 @@ export default function Shipments({
         allocateCosts(next);
       }
       if (status === "Delivered" || status === "Closed") {
-        setOrders(prev => prev.map(o => (next.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Shipped" : o.status } : o));
+        // v6.79.0 (W-1): physical status is DERIVED from this shipment — nothing to write. A Draft order that ships is confirmed by the fact.
+        setOrders(prev => prev.map(o => (next.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Confirmed" : o.status } : o));
       }
     }
     setToast(`${sh.number} moved to ${status}.`);
@@ -3204,7 +3205,8 @@ export default function Shipments({
     const purpose = derivePurpose(sh);
     setLots(prev => postShipmentToLots(sh, prev, { todayISO, nextId }).lots);
     if (purpose === "OUTBOUND") {
-      setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" || o.status === "Confirmed" || o.status === "Reserved" || o.status === "Loading" ? "Shipped" : o.status } : o));
+      // v6.79.0 (W-1): derived — only a Draft is promoted to Confirmed; Shipped/Delivered come from the shipments.
+      setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Confirmed" : o.status } : o));
     }
     linkShipmentToDocs(sh);
     setToast(`${sh.number} inventory movement applied where matching lot refs exist.`);

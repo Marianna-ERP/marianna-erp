@@ -6,7 +6,7 @@ import { buildCollectionShipment } from "./shipments.domain";
 import { localTodayISO as domainToday } from "./dates";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { deriveSoStatus, statusContradiction, isPhysicalStatus } from "./statusOwnership.domain";
+import { deriveSoStatus, statusContradiction, isPhysicalStatus, effectiveSoStatus, isShippedOrLater, soRank } from "./statusOwnership.domain";
 import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
@@ -442,7 +442,7 @@ function supplierNameForPO(poRef: any): string {
 
 // ─── LIFECYCLE BAR ────────────────────────────────────────────────────────
 function LifecycleBar({ status }: any) {
-  const stages = ["Draft", "Confirmed", "Reserved", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"];
+  const stages = ["Draft", "Confirmed", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"]; // v6.79.0: Reserved dropped (W-1)
   const currentOrder = SO_STATUSES[status]?.order ?? 0;
   const isCancelled = status === "Cancelled";
   return (
@@ -1101,7 +1101,7 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
               </thead>
               <tbody>
                 {order.items.map((it, i) => {
-                  const lt = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
+                  const lt = lineTotalPU(it, PACKAGING_TYPES_REF); // v6.79.0: box-aware
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                       <td style={{ padding: "6px 8px" }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</td>
@@ -1157,10 +1157,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
     return [...byId.values()];
   })();
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
-  const soFullyLocked = (st: any) => ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(st));
-  const si = (i, k, v) => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
-  const addItem = () => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
-  const removeItem = (i) => setOrder(o => soFullyLocked(o.status) ? o : ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
+  // v6.79.0 (W-1): locks read the EFFECTIVE status — a typed label cannot unlock what the shipments locked, or lock what never moved.
+  const soFullyLocked = (_st: any, o?: any) => isShippedOrLater(o || order, SHIPMENTS_REF);
+  const si = (i, k, v) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
+  const addItem = () => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
+  const removeItem = (i) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
     setOrder(o => {
@@ -1236,14 +1237,14 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   }
 
   // Status lock: once Confirmed+, currency/fx and pricing fields lock to prevent accidental edits
-  const lockedStatuses = new Set(["Confirmed", "Reserved", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"]);
-  const isLocked = lockedStatuses.has(order.status);
+  const lockedStatuses = new Set(["Confirmed", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"]);
+  const isLocked = lockedStatuses.has(effectiveSoStatus(order, SHIPMENTS_REF)); // v6.79.0 (W-1)
   // v6.44.0 (test-round #6, ruling): from SHIPPED onward the SO is FULLY locked —
   // line items, quantities, sourcing and shipping addresses can no longer change
   // (the goods are on their way; the commercial deal is fixed). A warning is shown
   // before this lock takes effect (see the banner below).
   const FULLY_LOCKED_STATUSES = new Set(["Shipped", "Delivered", "Invoiced", "Closed"]);
-  const fullyLocked = FULLY_LOCKED_STATUSES.has(order.status);
+  const fullyLocked = FULLY_LOCKED_STATUSES.has(effectiveSoStatus(order, SHIPMENTS_REF)); // v6.79.0 (W-1)
 
   // Sourcing rule: every line must be sourced (stock lot OR PO in any status) before
   // the SO can move past Draft. This is a hard business rule — we can't promise goods
@@ -1480,12 +1481,14 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 })()}
                 <Sel value={order.status || "Draft"} onChange={async e => {
                   const nv = e.target.value;
-                  const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status));
+                  // v6.79.0 (W-1): the lock reads the EFFECTIVE status — what the shipments say.
+                  const effNow = effectiveSoStatus(order, SHIPMENTS_REF);
+                  const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(effNow);
                   const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
                   // v6.63.0 (D-10, ruling D4): a locked SO moves FORWARD only.
                   // The old dropdown let Shipped→Draft happen silently, with the
                   // shipped kg and postings left orphaned behind the label (M2).
-                  const curOrd = (SO_STATUSES[order.status || "Draft"] || {}).order ?? 0;
+                  const curOrd = soRank(effNow); // v6.79.0 (W-1)
                   const nvOrd = (SO_STATUSES[nv] || {}).order ?? 0;
                   if (wasLocked && nv !== "Cancelled" && nvOrd < curOrd) {
                     await ofAlert({ tone: "warn", title: "Forward only", message: `This sales order is ${order.status} — goods have physically moved, so its status can only advance (or be Cancelled, which reverses the postings). Moving it back to ${nv} would leave shipped kilograms behind a label that denies them.` });
@@ -1963,7 +1966,7 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
           })()}
           {(() => {
             // Issue Invoice button: only meaningful after Shipped, hidden if already invoiced.
-            const shippedOrLater = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(order.status);
+            const shippedOrLater = isShippedOrLater(order, shipments); // v6.79.0 (W-1): the shipments decide
             // v6.66.0 (D-21): the register — non-cancelled SALES invoices only — is
             // the SOLE truth. The stored order.linkedInvoices array is never cleared
             // on cancel, so consulting it hid this button forever after a cancel.
@@ -2057,7 +2060,7 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                   </thead>
                   <tbody>
                     {order.items.map((it, i) => {
-                      const lt = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
+                      const lt = lineTotalPU(it, PACKAGING_TYPES_REF); // v6.79.0: box-aware
                       const av = availability[i] || {};
                       return (
                         <tr key={i} style={{ borderBottom: "1px solid #F9FAFB", background: av.hasOverage ? "#FFFBEB" : undefined }}>
@@ -2351,9 +2354,9 @@ export default function SalesOrders({
   }, [orders]);
 
   // KPIs
-  const activeStatuses = new Set(["Draft", "Confirmed", "Reserved", "Loading", "Shipped"]);
+  const activeStatuses = new Set(["Draft", "Confirmed", "Loading", "Shipped"]);
   const activeCount = orders.filter(o => activeStatuses.has(o.status)).length;
-  const deliveredNotInvoicedCount = orders.filter(o => o.status === "Delivered").length;
+  const deliveredNotInvoicedCount = orders.filter(o => effectiveSoStatus(o, SHIPMENTS_REF) === "Delivered").length; // v6.79.0 (W-1)
   const activeValuePLN = orders
     .filter(o => activeStatuses.has(o.status))
     .reduce((sum, o) => sum + netTotal(o.items) * (o.fxRate || 1), 0);

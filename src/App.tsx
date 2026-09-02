@@ -14,7 +14,7 @@ import { migrateClaims } from "./claims.domain";
 import Claims from "./Claims";
 import { costTypeLabel, costInventoryType } from "./Shipments";
 import { localTodayISO } from "./dates";
-import { nextId as globalNextId } from "./ids";
+import { nextId as globalNextId, nextId } from "./ids";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
 import { setAuditSink, recordAudit } from "./audit";
@@ -27,6 +27,8 @@ import { primeIdsFrom } from "./ids";
 import Invoices from "./Invoices";
 import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
 import { syncOverheadOpCosts } from "./operationalCosts";
+import { normaliseStoredSoStatus } from "./statusOwnership.domain";
+import { canOpenModule } from "./permissions.domain";
 
 // Batch 5: migrate older-version stored data forward BEFORE any hook reads it
 // (module scope — runs before the App component's hooks read the stores).
@@ -128,7 +130,7 @@ const NAV_GROUPS: { items: { key: string; icon: string; label: string; short: st
   ] },
 ];
 
-function TopNav({ active, onNav = () => {}, rightSlot = null }: any) {
+function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: string) => true }: any) {
   return (
     <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", minHeight: 56, display: "flex", alignItems: "center", gap: 0, flexShrink: 0, overflowX: "auto" }}>
       <div style={{ fontSize: 17, fontWeight: 700, color: "#111", letterSpacing: "-0.3px", marginRight: 24, whiteSpace: "nowrap" }}>
@@ -139,7 +141,7 @@ function TopNav({ active, onNav = () => {}, rightSlot = null }: any) {
           <React.Fragment key={gi}>
             {gi > 0 && <div style={{ width: 1, height: 22, background: "#ECECEC", margin: "0 8px", flexShrink: 0 }} />}
             <div style={{ display: "flex", gap: 2 }}>
-              {group.items.map(n => {
+              {group.items.filter((n: any) => canOpen(n.key)).map(n => {
                 const isActive = active === n.key;
                 return (
                   <button key={n.key} onClick={() => onNav(n.key)} title={n.label}
@@ -196,6 +198,9 @@ export default function App() {
   // the two finance tables agreed pre-Supabase so the schema freezes complete.
   const [advancePayments, setAdvancePayments] = useLocalStoredState("advancePayments", []);
   const [bankAccounts, setBankAccounts] = useLocalStoredState("bankAccounts", []);
+  // v6.79.0 (F-5/F-6, owner rulings): users & tick-box permissions; monthly budgets.
+  const [users, setUsers] = useLocalStoredState("users", []);
+  const [budgets, setBudgets] = useLocalStoredState("budgets", []);
 
   // ─── v6.45.0 one-time DATA HEAL (test-round root causes B + C) ──────────────
   // Repairs: (C) shipments closed before the v6.44.0 close-posting fix (their
@@ -282,7 +287,7 @@ export default function App() {
   // v6.40.0: the audit logbook — passive, capped, exported with everything else.
   const [auditLog, setAuditLog] = useLocalStoredState("auditLog", []);
   setAuditSink((e: any) => setAuditLog((prev: any[]) => appendAudit(prev || [], {
-    id: Date.now() * 10 + Math.floor(Math.random() * 10),
+    id: nextId(), // v6.79.0 (W-7): central counter — burst writes collided under Date.now()
     ts: new Date().toISOString(),
     user: userName || "user",
     ...e,
@@ -319,6 +324,18 @@ export default function App() {
     setOrders((prev: any[]) => stripPendingInvoices(prev).orders);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, warehouseInvoices, operationalCosts, pos]);
+
+  // v6.79.0 (W-1): stored SO status is COMMERCIAL only. Typed physical statuses
+  // from before derivation existed are normalised once: supported by shipments →
+  // Confirmed (the derivation shows Shipped/Delivered); unsupported → a visible
+  // override, never a silent fact. "Reserved" → Confirmed (status dropped).
+  useEffect(() => {
+    setOrders((prev: any[]) => {
+      const next = (prev || []).map((o: any) => normaliseStoredSoStatus(o, shipments || []));
+      return JSON.stringify(next) !== JSON.stringify(prev || []) ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // v6.68.0 (D-34): SINGLE-ENTRY OVERHEAD — every register invoice with cost
   // scope OVERHEAD mirrors into exactly one operational cost (replace-by-ref
@@ -363,7 +380,7 @@ export default function App() {
     settledConversionDone.current = true;
     const invRefs = (settledRefs || []).filter((r: string) => String(r).startsWith("INV:") || String(r).startsWith("SINV:"));
     if (!invRefs.length) return;
-    const res = convertSettledRefsToEvents(invoices, settledRefs, { todayISO: () => new Date().toISOString().slice(0, 10), nextId: () => Date.now() + Math.floor(Math.random() * 1000) });
+    const res = convertSettledRefsToEvents(invoices, settledRefs, { todayISO: () => localTodayISO(), nextId });  // v6.79.0 (W-7)
     if (res.converted > 0) { setInvoices(res.invoices); setSettledRefs(res.settledRefs); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -381,13 +398,13 @@ export default function App() {
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={userName} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices} />;
       case "pos":
         return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
       case "lots":
-        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
+        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim} />;
       case "orders":
         return <SalesOrders orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
@@ -395,7 +412,7 @@ export default function App() {
       case "invoices":
         return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory} />;
+        return <Settings reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers} />;
       default:
         return null;
     }
@@ -403,9 +420,9 @@ export default function App() {
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
-      <TopNav active={activeModule} onNav={setActiveModule} rightSlot={
+      <TopNav active={activeModule} onNav={setActiveModule} canOpen={(k: string) => canOpenModule(users, userName, k === "loadPlans" ? "loadplans" : k)} rightSlot={
         <IntegrityBadge
-          data={{ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans }}
+          data={{ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog }}
           onNavigate={setActiveModule}
         />
       } />

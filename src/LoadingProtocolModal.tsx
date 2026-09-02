@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { localTodayISO } from "./dates";
 import { PrintLogo } from "./brand";
 import { SmallButton, Lbl, useConfirm } from "./ui";
 import { printHtmlNode } from "./documentService";
@@ -131,7 +132,7 @@ export default function LoadingProtocolModal({
     return buildLoadingProtocol(
       { shipment, leg: t.leg, unit: t.unit, goods: shipment?.goods, supplier, receiverName: companyName,
         carrierName: carrier?.name || "", types: packagingTypes, existingProtocols: others },
-      { todayISO: () => new Date().toISOString().slice(0, 10), nextId: () => Date.now() },
+      { todayISO: () => localTodayISO(), nextId: () => Date.now() },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shipment, pos, contacts, allShipments, companyName, packagingTypes]);
@@ -214,7 +215,7 @@ export default function LoadingProtocolModal({
       await uiAlert({ tone: "warn", title: "Order not confirmed", message: gateReason });
       return;
     }
-    const next = status ? { ...p, status, returnedAt: status === "Returned" ? (p.returnedAt || new Date().toISOString().slice(0, 10)) : p.returnedAt } : p;
+    const next = status ? { ...p, status, returnedAt: status === "Returned" ? (p.returnedAt || localTodayISO()) : p.returnedAt } : p;
     if (status === "Returned" && gaps.length) {
       const ok = await uiConfirm({
         tone: "warn", title: "Record as returned anyway?",

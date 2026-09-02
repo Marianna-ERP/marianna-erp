@@ -121,33 +121,11 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     });
   });
 
-  // ── PAYABLES: firm-price PO purchases not yet represented by a purchase invoice ──
-  // v6.18.9 (#5): once a PO is Arrived it's folded into a PURCHASE invoice (counted in
-  // the invoices loop above), so here we only count firm POs that don't yet have one —
-  // i.e. the Confirmed-but-not-arrived commitment. Same total, counted exactly once.
-  const poNumbersWithInvoice = new Set(
-    (inp.invoices || [])
-      .filter((inv: any) => inv && inv.kind === "COST")
-      .flatMap((inv: any) => (inv.links || []).filter((l: any) => l.type === "PO").map((l: any) => String(l.number)))
-  );
-  (inp.pos || []).forEach((po: any) => {
-    if ((po.pricingMode || "firm") === "consignment") return;
-    if (!["Confirmed", "Received", "Closed", "Arrived"].includes(po.status)) return;
-    if (poNumbersWithInvoice.has(String(po.number))) return; // now represented by a purchase invoice
-    const total = (po.items || []).reduce((s: number, it: any) => s + n(it.qty) * n(it.unitPrice), 0);
-    if (total <= 0) return;
-    const fx = n(po.fxRate) || 1;
-    const ref = `PO:${po.number}`;
-    items.push({
-      ref, direction: "payable", kind: "PO purchase",
-      counterparty: po.supplier?.name || "Supplier",
-      documentNo: po.number, date: po.orderDate || "", dueDate: po.paymentDueDate || "",
-      amountPLN: r2(total * fx), currency: po.currency || "PLN", amountOrig: r2(total),
-      status: classify(po.paymentDueDate, settled.has(ref), today),
-      sourceModule: "Purchase Orders", note: po.buyIncoterm ? `Buy ${po.buyIncoterm}` : "",
-    });
-  });
-
+  // ── v6.79.0 (W-3, owner ruling): un-invoiced PO commitments are NO LONGER ledger
+  // rows. A purchase becomes PAYABLE when its invoice exists — the invoice loop
+  // above already carries it. The old commitment rows settled by a legacy FLAG
+  // (settledRefs "PO:…"), a second "paid" mechanism beside payment events that
+  // the payables side of bank reconciliation cannot be built on.
   // Batch 5b (BP-37): credit/debit notes now ENTER the totals. A credit note we
   // issued reduces open receivables; a supplier's credit note reduces open payables;
   // debit notes increase their side. (This flip was deliberately test-pinned in the

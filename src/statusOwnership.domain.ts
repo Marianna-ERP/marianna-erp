@@ -34,7 +34,10 @@ const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")
 /** Statuses the SALES ORDER owns. Everything else is derived. */
 export const COMMERCIAL_SO_STATUSES = ["Draft", "Confirmed", "Invoiced", "Closed", "Cancelled"];
 /** Statuses the SHIPMENTS own. These may no longer be typed on a sales order. */
-export const PHYSICAL_SO_STATUSES = ["Reserved", "Loading", "Shipped", "Delivered"];
+// v6.79.0 (owner ruling, W-1): "Reserved" DROPPED as a status — reservation is an
+// INVENTORY fact (kg allocated to the order, shown as a figure on the lot), not
+// something a shipment can know. Only these three are shipment-derived.
+export const PHYSICAL_SO_STATUSES = ["Loading", "Shipped", "Delivered"];
 
 export function isCommercialStatus(s: any): boolean { return COMMERCIAL_SO_STATUSES.includes(S(s)); }
 export function isPhysicalStatus(s: any): boolean { return PHYSICAL_SO_STATUSES.includes(S(s)); }
@@ -169,4 +172,32 @@ export function statusContradiction(order: any, shipments: any[]): string {
 export function applyStatusOverride(order: any, status: string, reason: string, todayISO: string): any {
   if (!S(status)) return { ...order, statusOverride: "", statusOverrideReason: "", statusOverrideAt: "" };
   return { ...order, statusOverride: S(status), statusOverrideReason: S(reason), statusOverrideAt: S(todayISO) };
+}
+
+
+// ── v6.79.0 (W-1): ONE truth for every gate ───────────────────────────────────
+// Before this, the derived status was only DISPLAYED while twelve gates still
+// read the STORED status — a shipment could deliver and the Issue-invoice button
+// stay hidden. Every gate now asks these two functions and nothing else.
+const RANK: Record<string, number> = { Draft: 0, Confirmed: 1, Loading: 2, Shipped: 3, Delivered: 4, Invoiced: 5, Closed: 6, Cancelled: 99 };
+export function effectiveSoStatus(order: any, shipments: any[]): string {
+  return deriveSoStatus(order, shipments || []).status;
+}
+export function soRank(status: any): number { return RANK[S(status)] ?? 0; }
+/** Goods have physically left (or later) — the gate for invoicing and locking. */
+export function isShippedOrLater(order: any, shipments: any[]): boolean {
+  const s = effectiveSoStatus(order, shipments);
+  return ["Shipped", "Delivered", "Invoiced", "Closed"].includes(s);
+}
+/** Stored status must be COMMERCIAL. A typed physical status (pre-v6.79 data)
+ *  is normalised: supported by shipments → Confirmed (the derivation shows it);
+ *  not supported → kept as a visible OVERRIDE, never as a silent fact. */
+export function normaliseStoredSoStatus(order: any, shipments: any[]): any {
+  const held = S(order?.status);
+  if (held === "Reserved") return { ...order, status: "Confirmed" };
+  if (!PHYSICAL_SO_STATUSES.includes(held)) return order;
+  const p = soShipmentProgress(order, shipments || []);
+  const supported = held === "Delivered" ? p.allDelivered : held === "Shipped" ? p.allMoved : (p.movedKg > 0 || p.bookedKg > 0);
+  if (supported) return { ...order, status: "Confirmed" };
+  return { ...order, status: "Confirmed", statusOverride: held, statusOverrideReason: order?.statusOverrideReason || "Migrated v6.79.0 — typed before status derivation existed; shipments do not show it", statusOverrideAt: order?.statusOverrideAt || "" };
 }

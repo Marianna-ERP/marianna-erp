@@ -2,6 +2,9 @@ import { useConfirm } from "./ui";
 import { parseBankCSV, matchBankLines, bankPaymentEvent, upsertBankAccountFromStatement } from "./bankReconciliation.domain";
 import { advanceFromBankLine, advanceRemaining, applyAdvanceToInvoice, advanceSources, linkAdvanceToProforma } from "./advances.domain";
 import { realizedFxPLN } from "./payments.domain";
+import { canOpenFinance } from "./permissions.domain";
+import { isShippedOrLater } from "./statusOwnership.domain";
+import { upsertBudget, budgetVariance, BUDGET_MEASURES } from "./budgets.domain";
 import { applyPaymentEvent as bankApplyPaymentEvent } from "./payments.domain";
 import React, { useMemo, useState } from "react";
 import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
@@ -146,7 +149,7 @@ function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoic
   function apply(a: any) {
     const inv = (invoices || []).find((i: any) => String(i.id) === String(pick[a.id]));
     if (!inv || typeof setInvoices !== "function" || typeof setAdvancePayments !== "function") return;
-    const r: any = applyAdvanceToInvoice(a, inv, amt[a.id] ?? Math.min(advanceRemaining(a), outstandingOf(inv)), { nextId, todayISO: () => new Date().toISOString().slice(0, 10) });
+    const r: any = applyAdvanceToInvoice(a, inv, amt[a.id] ?? Math.min(advanceRemaining(a), outstandingOf(inv)), { nextId, todayISO: () => localTodayISO() });
     if (r.error) { setErr(e => ({ ...e, [a.id]: r.error })); return; }
     setErr(e => ({ ...e, [a.id]: "" }));
     setInvoices((prev: any[]) => (prev || []).map((i: any) => String(i.id) === String(inv.id) ? r.invoice : i));
@@ -221,7 +224,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
       const p = parseBankCSV(String(reader.result || ""));
       setParsed(p); setDone({}); setPick({});
       // v6.68.0 (F-4): every statement registers/refreshes its account.
-      if (typeof setBankAccounts === "function") setBankAccounts((prev: any[]) => upsertBankAccountFromStatement(prev || [], p, { nextId, todayISO: () => new Date().toISOString().slice(0, 10) }));
+      if (typeof setBankAccounts === "function") setBankAccounts((prev: any[]) => upsertBankAccountFromStatement(prev || [], p, { nextId, todayISO: () => localTodayISO() }));
     };
     reader.readAsText(f, "UTF-8");
   }
@@ -574,6 +577,10 @@ export default function Finance({
   setAdvancePayments = null,
   bankAccounts = [],
   setBankAccounts = null,
+  budgets = [],
+  setBudgets = null,
+  users = [],
+  userName = "",
 }: {
   orders?: any[];
   lots?: any[];
@@ -595,6 +602,10 @@ export default function Finance({
   setAdvancePayments?: any;
   bankAccounts?: any[];
   setBankAccounts?: any;
+  budgets?: any[];
+  setBudgets?: any;
+  users?: any[];
+  userName?: string;
 }) {
   const { confirm: finConfirm, alert: finAlert, dialogNode: finNode } = useConfirm(); // P2-6
   const [mode, setMode] = useState<MarginMode>("forecast");
@@ -607,7 +618,7 @@ export default function Finance({
 
   const committedFilter = (o: any) => o.status !== "Draft";
   const totalAgg = useMemo(() => aggregateNetMargins(orders, lots, pos, shipments, mode, committedFilter, operationalCosts, orders), [orders, lots, pos, shipments, mode, operationalCosts]);
-  const deliveredAgg = useMemo(() => aggregateNetMargins(orders, lots, pos, shipments, mode, (o: any) => ["Shipped", "Delivered", "Invoiced", "Closed"].includes(o.status), operationalCosts, orders), [orders, lots, pos, shipments, mode, operationalCosts]);
+  const deliveredAgg = useMemo(() => aggregateNetMargins(orders, lots, pos, shipments, mode, (o: any) => isShippedOrLater(o, shipments), operationalCosts, orders), [orders, lots, pos, shipments, mode, operationalCosts]);
   const pipelineAgg = useMemo(() => aggregateNetMargins(orders, lots, pos, shipments, mode, (o: any) => ["Confirmed", "Reserved", "Loading"].includes(o.status), operationalCosts, orders), [orders, lots, pos, shipments, mode, operationalCosts]);
   const byClient = useMemo(() => groupAndAggregateNetMargins(orders, lots, pos, shipments, mode, (o: any) => o.client?.name || "—", committedFilter, operationalCosts).slice(0, 10), [orders, lots, pos, shipments, mode, operationalCosts]);
   const byProduct = useMemo(() => groupAndAggregateNetMargins(orders, lots, pos, shipments, mode, (o: any) => (o.items && o.items[0]?.product) || "—", committedFilter, operationalCosts).slice(0, 10), [orders, lots, pos, shipments, mode, operationalCosts]);
@@ -710,7 +721,7 @@ export default function Finance({
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 6, background: "#F3F4F6", padding: 3, borderRadius: 8 }}>
-              {(["pl", "costs", "warehouse", "ledger"] as const).map(t => {
+              {(["pl", "costs", "warehouse", "ledger"] as const).filter(t => canOpenFinance(users, userName, t)).map(t => {
                 const active = tab === t;
                 const label = t === "pl" ? "Sales P/L" : t === "costs" ? "Operational Costs" : t === "warehouse" ? "Warehouse charges" : "Receivables & Payables";
                 return <button key={t} onClick={() => setTab(t)} style={{
@@ -746,6 +757,29 @@ export default function Finance({
                 <StatBlock label="OVERHEAD" value={fmtPLN(totalAgg.totalOverheadPLN)} valueColor="#64748B" sub="allocated operating cost" />
                 <StatBlock label="NET P/L" value={fmtPLN(totalAgg.totalNetMarginPLN)} valueColor={totalAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgNetMarginPct)} />
               </div>
+              {canOpenFinance(users, userName, "budget") && typeof setBudgets === "function" && (() => {
+                const period = localTodayISO().slice(0, 7);
+                const actuals: any = { revenue: totalAgg.totalRevenuePLN, contribution: totalAgg.totalContributionPLN, overhead: totalAgg.totalOverheadPLN, net: totalAgg.totalNetMarginPLN ?? 0 };
+                const rows = budgetVariance(budgets, period, actuals);
+                return (
+                  <div style={{ marginTop: 10, border: "1px dashed #DDD6FE", borderRadius: 8, padding: "8px 12px", fontSize: 11.5 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <b style={{ color: "#7C3AED" }}>Budget vs actual · {period}</b>
+                      <span style={{ color: "#94A3B8" }}>(v6.79.0 F-6 — owner only; set a monthly target per measure)</span>
+                      {BUDGET_MEASURES.map(mz => (
+                        <label key={mz} style={{ display: "flex", gap: 4, alignItems: "center" }}>{mz}
+                          <input type="number" placeholder="PLN" defaultValue={(budgets || []).find((b: any) => b.period === period && b.measure === mz)?.amountPLN ?? ""}
+                            onBlur={(e: any) => { const v = parseFloat(e.target.value); if (!isFinite(v)) return; setBudgets((prev: any[]) => upsertBudget(prev || [], { id: `${period}:${mz}`, period, measure: mz, amountPLN: v })); }}
+                            style={{ width: 96, border: "1px solid #E5E7EB", borderRadius: 6, padding: "3px 6px", fontSize: 11 }} />
+                        </label>
+                      ))}
+                    </div>
+                    {rows.length > 0 && <div style={{ marginTop: 6, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                      {rows.map(r => <span key={r.measure} style={{ color: r.variancePLN >= 0 ? "#065F46" : "#B91C1C", fontWeight: 700 }}>{r.measure}: {r.actualPLN.toLocaleString("pl-PL")} vs {r.budgetPLN.toLocaleString("pl-PL")} ({r.variancePLN >= 0 ? "+" : ""}{r.variancePLN.toLocaleString("pl-PL")}{r.variancePct != null ? ` · ${r.variancePct}%` : ""})</span>)}
+                    </div>}
+                  </div>
+                );
+              })()}
             </Card>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>

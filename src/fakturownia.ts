@@ -201,7 +201,9 @@ export function matchInvoiceToSO(inv: MappedInvoice, so: any): { match: boolean;
   }
   const clientName = String(so.client?.name || "").trim().toLowerCase();
   const buyer = inv.buyerName.trim().toLowerCase();
-  const soTotal = (so.items || []).reduce((s: number, it: any) => s + (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0), 0);
+  // v6.79.0: box-aware — a box-priced line is boxes × price-per-box, not kg × price-per-box.
+  const lineNet = (it: any) => (String(it.pricingUnit || "") === "box" ? (parseFloat(it.boxes) || 0) : (parseFloat(it.qty) || 0)) * (parseFloat(it.unitPrice) || 0);
+  const soTotal = (so.items || []).reduce((s: number, it: any) => s + lineNet(it), 0);
   const amountClose = soTotal > 0 && Math.abs(inv.netTotal - soTotal) <= Math.max(1, soTotal * 0.005);
   const sameCurrency = inv.currency === String(so.currency || "PLN").toUpperCase();
   const nameClose = clientName && buyer && (buyer.includes(clientName.slice(0, 12)) || clientName.includes(buyer.slice(0, 12)));
@@ -217,9 +219,9 @@ export function buildInvoicePayloadFromSO(so: any, shipments: any[] = []): any {
   const positions = (so.items || []).map((it: any) => ({
     name: [it.product, it.size ? `Size ${it.size}` : "", it.quality ? `Class ${it.quality}` : "", it.packaging || ""].filter(Boolean).join(" ")
       + (it.cnCode ? ` (CN: ${it.cnCode})` : ""),
-    quantity: parseFloat(it.qty) || 0,
-    quantity_unit: "kg",
-    total_price_gross: Math.round((parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0) * 100) / 100,
+    quantity: String(it.pricingUnit || "") === "box" ? (parseFloat(it.boxes) || 0) : (parseFloat(it.qty) || 0),
+    quantity_unit: String(it.pricingUnit || "") === "box" ? "box" : "kg",
+    total_price_gross: Math.round((String(it.pricingUnit || "") === "box" ? (parseFloat(it.boxes) || 0) : (parseFloat(it.qty) || 0)) * (parseFloat(it.unitPrice) || 0) * 100) / 100, // v6.79.0 box-aware
     tax: 0,
   }));
   const linked = (shipments || []).filter((sh: any) => (sh.soRefs || []).includes(so.number) || (sh.goods || []).some((g: any) => g.soRef === so.number));

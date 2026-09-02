@@ -177,7 +177,9 @@ export const DATA_KEYS = [
   // the same trap; see the export-completeness test in tests/run-engines.cjs,
   // which fails if a store is declared in App and missing from this list.
   "advancePayments", "bankAccounts",
- "auditLog"];
+  // v6.79.0 (F-5/F-6): users & permissions; monthly budgets.
+  "users", "budgets",
+  "auditLog"];
 
 export function exportAllData(): string {
   const data: any = {
@@ -189,7 +191,11 @@ export function exportAllData(): string {
     },
   };
   for (const key of DATA_KEYS) {
-    data[key] = readFromStorage(key, null);
+    const v = readFromStorage(key, null);
+    // v6.79.0 (W-10): creditNotes is a DEPRECATED store (folded into financeNotes on load).
+    // It stays importable so old backups still fold, but an empty one is not exported.
+    if (key === "creditNotes" && Array.isArray(v) && v.length === 0) continue;
+    data[key] = v;
   }
   return JSON.stringify(data, null, 2);
 }

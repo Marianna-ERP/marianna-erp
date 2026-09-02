@@ -9,6 +9,7 @@ import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./locations";
+import { recomputeLotFromMovements } from "./inventory.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { cnCodeForItem } from "./productCatalog";
@@ -1136,7 +1137,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 }
 
 // ─── ORDER DETAIL ───────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null }: any) {
+function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -1248,6 +1249,16 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
                 <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
                 <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" />
+                {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
+                    note — so receiving lives HERE too, not only on the lot in Inventory. */}
+                {typeof onReceiveLot === "function" && (expectedLots || []).length > 0 && (
+                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
+                    {expectedLots.map((l: any) => (
+                      <button key={String(l.id)} onClick={() => onReceiveLot(l)} title="DDP / supplier-delivered arrival with no shipment of ours — posts the receipt movement" style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 Receive {l.number} ({Math.round(parseFloat(l.expectedKg) || 0).toLocaleString("pl-PL")} kg)</button>
+                    ))}
+                  </div>
+                )}
                 {/* v6.63.0 (BUG #2 fix): invoices are DERIVED from the register via its links[]
                     — the stored legacy array was never updated by the Invoices module, so a
                     cost invoice linked to this PO was invisible here. */}
@@ -1585,7 +1596,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
       if (filterStatus !== "All" && filterStatus !== "Active" && o.status !== filterStatus) return false;
       if (filterSupplier !== "All" && o.supplier?.name !== filterSupplier) return false;
       if (q) {
-        const hay = `${o.number} ${o.supplier?.name || ""} ${o.items.map(i => i.product).join(" ")} ${o.linkedShipments?.join(" ") || ""} ${o.linkedLots?.join(" ") || ""}`.toLowerCase();
+        const hay = `${o.number} ${o.supplier?.name || ""} ${o.items.map(i => i.product).join(" ")}`.toLowerCase(); // v6.79.0 (W-8): legacy arrays no longer searched
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -1718,9 +1729,7 @@ ${blockNote}`.trim(),
     const updated = {
       ...o,
       id: savedId,
-      linkedShipments: o.linkedShipments || [],
-      linkedLots: uniqRefs([...(o.linkedLots || []), ...(inventoryPlan.lotRefs || [])]).filter(n => !orphanLotNumbers.has(n) && !withdrawLotNumbers.has(String(n))),
-      linkedInvoices: o.linkedInvoices || [],
+      // v6.79.0 (W-8): linked documents are DERIVED (documents.domain); the stored arrays are no longer written.
     };
 
     if (updated.status === "Confirmed" && !updated.fxLockedAt) {
@@ -1766,7 +1775,7 @@ ${blockNote}`.trim(),
       currency: "PLN", fxRate: 1, fxLockedAt: null,
       items: [{ id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
       notes: "",
-      linkedShipments: [], linkedLots: [], linkedInvoices: [], variance: null,
+      variance: null,
     });
     setView("form");
   }
@@ -1862,6 +1871,20 @@ ${blockNote}`.trim(),
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         <OrderDetail
           order={selected}
+          expectedLots={(extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))}
+          onReceiveLot={async (l: any) => {
+            const kg = parseFloat(String(l.expectedKg)) || 0;
+            if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No expected quantity", message: "This lot has no expected kilos — set the PO line quantity first." }); return; }
+            const ok = await uiConfirm({ tone: "warn", title: `Receive ${kg.toLocaleString("pl-PL")} kg of ${l.number} into stock?`, message: `Direct receipt (DDP / delivered by the supplier — no shipment of ours). The stock becomes available at the lot's location; the movement appears in its history and can be voided.`, confirmLabel: "Receive into stock" });
+            if (!ok || typeof extSetLots !== "function") return;
+            const today = localTodayISO();
+            const locById = (id: any) => (SHARED_LOCATIONS as any[]).find((x: any) => String(x.id) === String(id)) || null;
+            extSetLots((prev: any[]) => (prev || []).map((x: any) => {
+              if (x.id !== l.id) return x;
+              const mv = { id: nextId(), date: today, type: "IN", qtyKg: kg, toId: x.locationId ?? null, soRef: null, shipmentRef: null, note: `Direct receipt (DDP) — ${x.poRef || "no PO"}` };
+              return recomputeLotFromMovements({ ...x, directFlow: false, status: x.status === "Direct Expected" ? "Expected" : x.status }, [...(x.movements || []), mv], locById);
+            }));
+          }}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
           computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
           computedLots={(extLots || []).filter((l: any) => String(l.poRef) === String(selected.number)).map((l: any) => l.number)}

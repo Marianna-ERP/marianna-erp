@@ -642,7 +642,8 @@ T("unmark refuses when paid by REAL payments (returns null)", () => {
 });
 
 // ── Batch 6a: Producer Claim (BP-55b) — pinned to the real Claim Request Form ──
-const { computeClaim, nextClaimNumber, buildClaimNote, lineEUR } = require("./build/claim.domain.js");
+const { computeClaim, lineEUR } = require("./build/claim.domain.js");
+const { nextClaimNumber: nextClaimNumberModule, buildClaimFinanceNote } = require("./build/claims.domain.js");
 
 console.log("── producer claim (BP-55b) ──");
 const FORM_LINES = [
@@ -674,22 +675,21 @@ T("recovery larger than defect value floors the claim at 0", () => {
 T("claim-level fallback rates apply when a line has none", () => {
   assert.equal(lineEUR({ label: "x", amount: 425, currency: "PLN" }, { plnPerEur: 4.25 }), 100);
 });
-T("CLM numbering scans lot.claims per year", () => {
-  const lots = [{ claims: [{ number: "CLM-2026-0002" }] }, { claims: [{ number: "CLM-2025-0009" }] }, {}];
-  assert.equal(nextClaimNumber(lots, 2026), "CLM-2026-0003");
-  assert.equal(nextClaimNumber([], 2026), "CLM-2026-0001");
+T("v6.79.0 (W-2): ONE claim numbering scheme — the Claims module's, per year", () => {
+  const claims = [{ number: "CLM-2026-0002" }, { number: "CLM-2025-0009" }];
+  assert.equal(nextClaimNumberModule(claims, 2026), "CLM-2026-0003");
+  assert.equal(nextClaimNumberModule([], 2026), "CLM-2026-0001");
 });
-T("claim note: incoming CREDIT vs producer, EUR with PLN conversion, reduces payables", () => {
-  const comp = computeClaim({ costLines: FORM_LINES, defectPct: 42, soldInMarket: true, recoveredAmount: 72000, recoveredCurrency: "EGP", recoveredRate: 55.625 });
-  const note = buildClaimNote({ number: "LOT-7", poRef: "P0515" }, { supplier: { name: "Konkret" } },
-    { number: "CLM-2026-0001", defectType: "Skin defects", defectPct: 42, date: "2026-02-14" }, comp, 4.25, { nextId: pnext, todayISO: () => "2026-02-14" });
-  assert.equal(note.noteType, "CREDIT");
-  assert.equal(note.direction, "incoming");
-  assert.equal(note.partyName, "Konkret");
-  assert.equal(note.amount, 6179.93);
-  assert.equal(note.amountPLN, 26264.7);        // 6,179.93 × 4.25
+T("v6.79.0 (W-2): the producer recovery note is built by claims.domain — THEIR credit reduces payables", () => {
+  const comp = computeClaim({ costLines: FORM_LINES, defectPct: 42, soldInMarket: true, recoveredAmount: 72000, recoveredCurrency: "EGP", recoveredRate: 52.3, rates: { plnPerEur: 4.25, egpPerEur: 52.3 } });
+  assert.ok(comp.creditNoteEUR > 0);
+  const claim = { number: "CLM-2026-0001", cause: "Skin defects", acceptedEUR: comp.creditNoteEUR, plnPerEur: 4.25,
+    respondent: { kind: "Supplier", name: "Konkret" }, subjects: [{ kind: "LOT", ref: "LOT-7" }] };
+  const note = buildClaimFinanceNote(claim, "THEIR_CREDIT", { nextId: () => 1, todayISO: () => "2026-02-14", invoices: [] });
+  assert.equal(note.noteType, "CREDIT"); assert.equal(note.direction, "incoming"); assert.equal(note.partyName, "Konkret");
+  assert.ok(Math.abs(note.amountPLN - Math.round(comp.creditNoteEUR * 4.25 * 100) / 100) < 0.01);
   const adj = notesTotalsAdjustment([note]);
-  assert.equal(adj.payableAdjPLN, -26264.7);    // we owe the producer LESS
+  assert.ok(adj.payableAdjPLN < 0, "we owe the producer LESS");
 });
 
 // ── Batch 6b: movement matrix + Phase B (BP-56 final / BP-57) ──

@@ -79,35 +79,8 @@ export function computeClaim(input: {
   return { lines, totalCostEUR, defectValueEUR, recoveredEUR, creditNoteEUR };
 }
 
-/** Next claim number, scanning existing lot.claims[].number values. */
-export function nextClaimNumber(lots: any[], year: number): string {
-  let max = 0;
-  (lots || []).forEach(l => {
-    (l?.claims || []).forEach((c: any) => {
-      const m = String(c?.number || "").match(/^CLM-(\d{4})-(\d{4})$/);
-      if (m && Number(m[1]) === year) max = Math.max(max, Number(m[2]));
-    });
-  });
-  return `CLM-${year}-${String(max + 1).padStart(4, "0")}`;
-}
-
-/** The requested credit note as a FinanceNote (direction "incoming": it reduces
- *  what we owe the producer — the BP-37 ledger flip counts it immediately). */
-export function buildClaimNote(lot: any, po: any, claim: any, comp: ClaimComputation, eurPlnRate: any, deps: { nextId: () => any; todayISO: () => string }): any {
-  const fx = n(eurPlnRate) || 1;
-  return {
-    id: deps.nextId(),
-    noteType: "CREDIT",
-    direction: "incoming",
-    partyName: po?.supplier?.name || claim.supplierName || "Producer",
-    category: "Quality complaint",
-    amount: comp.creditNoteEUR,
-    currency: "EUR",
-    fxRate: fx,
-    amountPLN: r2(comp.creditNoteEUR * fx),
-    status: "Draft",
-    reason: `Producer claim ${claim.number || ""} — ${claim.defectType || "quality defect"} ${n(claim.defectPct)}% of consignment (lot ${lot.number}${lot.poRef ? ", " + lot.poRef : ""})`.trim(),
-    date: claim.date || deps.todayISO(),
-    relatedRef: claim.number || lot.number,
-  };
-}
+// v6.79.0 (W-2): nextClaimNumber and buildClaimNote were REMOVED from this file.
+// They were a second numbering scheme (scanning lot.claims[]) and a second note
+// builder beside claims.domain's — two generators for one number series. This
+// module now holds the defect MATHS only (lineEUR / computeClaim), which the
+// Claims module's cost lines still use.

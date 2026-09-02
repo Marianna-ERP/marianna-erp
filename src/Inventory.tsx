@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
-import { computeClaim, buildClaimNote } from "./claim.domain";
-import { nextClaimNumber, blankClaim, claimsForLot } from "./claims.domain";
+import { claimsForLot } from "./claims.domain";
 import { buildTraceTree } from "./trace.domain";
 import { fmtNum } from "./format";
 import { Card, Lbl, useConfirm, DocRef, cancelledDocSet, ActionButton} from "./ui";
@@ -1152,7 +1151,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   const [cost, setCost] = useState("");
   const [currency, setCurrency] = useState(lot.currency || "PLN");
   const [fxRate, setFxRate] = useState((lot.currency || "PLN") === "PLN" ? "1" : "");
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(localTodayISO());
   const [reason, setReason] = useState("");
   const kgN = parseNum(kg);
   const valid = kgN > 0 && !!toId;
@@ -1696,165 +1695,10 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
 
 // ── Batch 6a (BP-55b): Producer Claim modal — mirrors the Claim Request Form ──
-function ClaimModal({ lot, po, existing = null, onCancel, onSave }: any) {
-  const CUR = ["PLN", "EUR", "EGP"];
-  const seedLines = () => {
-    if (existing?.costLines?.length) return existing.costLines;
-    const fromCosts = (lot.costs || []).filter((c: any) => ["PLN", "EUR"].includes(c.currency)).map((c: any) => ({
-      id: nextId(), label: c.label || c.type || "Cost", party: "", invoiceNo: c.source || "", amount: c.amount, currency: c.currency, rate: "",
-    }));
-    return fromCosts.length ? fromCosts : [
-      { id: nextId(), label: `Product — ${lot.product || ""}`.trim(), party: po?.supplier?.name || "", invoiceNo: "", amount: "", currency: "PLN", rate: "" },
-      { id: nextId(), label: "Transport to port of loading", party: "", invoiceNo: "", amount: "", currency: "EUR", rate: "" },
-      { id: nextId(), label: "Container cost", party: "", invoiceNo: "", amount: "", currency: "EUR", rate: "" },
-      { id: nextId(), label: "Customs + transport at destination", party: "", invoiceNo: "", amount: "", currency: "EGP", rate: "" },
-      { id: nextId(), label: "Sorting", party: "", invoiceNo: "", amount: "", currency: "EGP", rate: "" },
-    ];
-  };
-  const [claim, setClaim] = useState(() => existing ? { ...existing } : {
-    number: "", date: localTodayISO(), containerNo: "", supplierName: po?.supplier?.name || "",
-    defectType: "", defectPct: "", soldInMarket: true, recoveredAmount: "", recoveredCurrency: "EGP", recoveredRate: "",
-    eurPlnRate: "", notes: "", status: "Draft",
-    // Batch 6c (BP-33): physical + lifecycle dimensions of the claim
-    affectedKg: "", acceptedEUR: "", resolutionNote: "", resolvedAt: null,
-  });
-  const [lines, setLines] = useState(seedLines);
-  const cf = (k: any, v: any) => setClaim((c: any) => ({ ...c, [k]: v }));
-  const lf = (id: any, k: any, v: any) => setLines((prev: any[]) => prev.map(l => l.id === id ? { ...l, [k]: v } : l));
-  const comp = computeClaim({
-    costLines: lines, defectPct: claim.defectPct, soldInMarket: !!claim.soldInMarket,
-    recoveredAmount: claim.recoveredAmount, recoveredCurrency: claim.recoveredCurrency, recoveredRate: claim.recoveredRate,
-  });
-  const eur = (v: number) => `€${(v || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 8px", fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" } as any;
-  const th = { padding: "5px 6px", fontSize: 10, color: "#94A3B8", textAlign: "left", borderBottom: "1px solid #E5E7EB", fontWeight: 700, letterSpacing: "0.03em" } as any;
-  const td = { padding: "4px 4px", verticalAlign: "middle" } as any;
-  const canIssue = comp.totalCostEUR > 0 && parseFloat(String(claim.defectPct)) > 0 && parseFloat(String(claim.eurPlnRate)) > 0;
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 7000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "24px 16px", overflowY: "auto" }} onClick={onCancel}>
-      <div onClick={(e: any) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 920, maxWidth: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.3)", padding: 22, marginBottom: 40 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-          <div style={{ fontSize: 15, fontWeight: 800 }}>Producer claim / Reklamacja do producenta</div>
-          {claim.number ? <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 800, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "1px 8px" }}>{claim.number}</span> : <span style={{ fontSize: 11, color: "#94A3B8" }}>draft — number assigned on issue</span>}
-        </div>
-        <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>Lot <b>{lot.number}</b>{lot.poRef ? <> · PO <b>{lot.poRef}</b></> : null}{lot.product ? <> · {lot.product}</> : null} — quantify the damage, deduct market recovery, request the balance from the producer as a credit note.</div>
+// v6.79.0 (W-2): the legacy lot-side Claim Request Form was retired — claims are
+// one document type with one numbering scheme in the Claims module (D-13).
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
-          <div><Lbl>Claim date</Lbl><input type="date" value={claim.date} onChange={(e: any) => cf("date", e.target.value)} style={inp} /></div>
-          <div><Lbl>Container no.</Lbl><input value={claim.containerNo} onChange={(e: any) => cf("containerNo", e.target.value)} placeholder="e.g. SEGU9867650" style={inp} /></div>
-          <div><Lbl>Supplier / producer</Lbl><input value={claim.supplierName} onChange={(e: any) => cf("supplierName", e.target.value)} style={inp} /></div>
-          <div><Lbl>EUR→PLN rate (for the note)</Lbl><input type="number" value={claim.eurPlnRate} onChange={(e: any) => cf("eurPlnRate", e.target.value)} placeholder="e.g. 4.25" style={inp} /></div>
-        </div>
-
-        <SectionTitle>COST OF THE CONSIGNMENT AT CLIENT'S WAREHOUSE</SectionTitle>
-        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 6 }}>
-          <thead><tr>
-            <th style={th}>COST ITEM</th><th style={th}>PARTY</th><th style={th}>INVOICE NO.</th>
-            <th style={{ ...th, width: 110 }}>AMOUNT</th><th style={{ ...th, width: 64 }}>CUR</th>
-            <th style={{ ...th, width: 84 }} title="PLN: NBP PLN-per-EUR · EGP: EGP-per-EUR">RATE→EUR</th>
-            <th style={{ ...th, width: 96, textAlign: "right" }}>EUR</th><th style={{ ...th, width: 30 }}></th>
-          </tr></thead>
-          <tbody>
-            {comp.lines.map((l: any) => (
-              <tr key={String(l.id)} style={{ borderBottom: "1px solid #F8FAFC" }}>
-                <td style={td}><input value={l.label} onChange={(e: any) => lf(l.id, "label", e.target.value)} style={inp} /></td>
-                <td style={td}><input value={l.party || ""} onChange={(e: any) => lf(l.id, "party", e.target.value)} style={inp} /></td>
-                <td style={td}><input value={l.invoiceNo || ""} onChange={(e: any) => lf(l.id, "invoiceNo", e.target.value)} style={inp} /></td>
-                <td style={td}><input type="number" value={l.amount} onChange={(e: any) => lf(l.id, "amount", e.target.value)} style={inp} /></td>
-                <td style={td}><select value={l.currency} onChange={(e: any) => lf(l.id, "currency", e.target.value)} style={inp}>{CUR.map(c => <option key={c}>{c}</option>)}</select></td>
-                <td style={td}>{l.currency === "EUR" ? <span style={{ fontSize: 10.5, color: "#CBD5E1" }}>—</span> : <input type="number" value={l.rate || ""} onChange={(e: any) => lf(l.id, "rate", e.target.value)} placeholder={l.currency === "PLN" ? "NBP" : "EGP/€"} style={inp} />}</td>
-                <td style={{ ...td, textAlign: "right", fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>{eur(l.eur)}</td>
-                <td style={td}><button onClick={() => setLines((prev: any[]) => prev.filter(x => x.id !== l.id))} style={{ border: "none", background: "transparent", color: "#DC2626", cursor: "pointer", fontSize: 13 }}>✕</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <button onClick={() => setLines((prev: any[]) => [...prev, { id: nextId(), label: "", party: "", invoiceNo: "", amount: "", currency: "EUR", rate: "" }])} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginBottom: 14 }}>+ Add cost line</button>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 12 }}>
-          <div style={{ border: "1px solid #FEE2E2", background: "#FEF2F2", borderRadius: 10, padding: "10px 12px" }}>
-            <div style={{ fontSize: 10.5, fontWeight: 800, color: "#B91C1C", letterSpacing: "0.04em", marginBottom: 8 }}>DEFECT</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 84px 120px", gap: 8 }}>
-              <div><Lbl>Type of defects</Lbl><input value={claim.defectType} onChange={(e: any) => cf("defectType", e.target.value)} placeholder="e.g. Skin defects" style={inp} /></div>
-              <div><Lbl>% of consignment</Lbl><input type="number" value={claim.defectPct} onChange={(e: any) => cf("defectPct", e.target.value)} placeholder="42" style={inp} /></div>
-              <div>
-                <Lbl>Affected qty (kg)</Lbl>
-                <input type="number" value={claim.affectedKg ?? ""} onChange={(e: any) => cf("affectedKg", e.target.value)} placeholder={String(Math.round((parseFloat(claim.defectPct) || 0) / 100 * (lot.receivedKg || 0)) || "")} style={inp} />
-                {(parseFloat(claim.defectPct) > 0 && lot.receivedKg > 0 && !claim.affectedKg) && (
-                  <button type="button" onClick={() => cf("affectedKg", String(Math.round((parseFloat(claim.defectPct) || 0) / 100 * lot.receivedKg)))} style={{ fontSize: 9.5, border: "none", background: "transparent", color: "#B45309", cursor: "pointer", padding: "2px 0", fontWeight: 700 }}>use {Math.round((parseFloat(claim.defectPct) || 0) / 100 * lot.receivedKg).toLocaleString("pl-PL")} kg ({claim.defectPct}% of received)</button>
-                )}
-              </div>
-            </div>
-          </div>
-          <div style={{ border: "1px solid #DCFCE7", background: "#F0FDF4", borderRadius: 10, padding: "10px 12px" }}>
-            <div style={{ fontSize: 10.5, fontWeight: 800, color: "#15803D", letterSpacing: "0.04em", marginBottom: 8 }}>RECOVERY — DEFECTED PRODUCT SOLD IN THE MARKET?</div>
-            <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 70px 84px", gap: 8, alignItems: "end" }}>
-              <div><Lbl>Sold?</Lbl><select value={claim.soldInMarket ? "yes" : "no"} onChange={(e: any) => cf("soldInMarket", e.target.value === "yes")} style={inp}><option value="yes">Yes</option><option value="no">No</option></select></div>
-              <div><Lbl>Recovered amount</Lbl><input type="number" disabled={!claim.soldInMarket} value={claim.recoveredAmount} onChange={(e: any) => cf("recoveredAmount", e.target.value)} style={{ ...inp, opacity: claim.soldInMarket ? 1 : 0.5 }} /></div>
-              <div><Lbl>Cur</Lbl><select disabled={!claim.soldInMarket} value={claim.recoveredCurrency} onChange={(e: any) => cf("recoveredCurrency", e.target.value)} style={{ ...inp, opacity: claim.soldInMarket ? 1 : 0.5 }}>{CUR.map(c => <option key={c}>{c}</option>)}</select></div>
-              <div><Lbl>Rate→EUR</Lbl><input type="number" disabled={!claim.soldInMarket || claim.recoveredCurrency === "EUR"} value={claim.recoveredRate} onChange={(e: any) => cf("recoveredRate", e.target.value)} style={{ ...inp, opacity: claim.soldInMarket && claim.recoveredCurrency !== "EUR" ? 1 : 0.5 }} /></div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
-          {[["Total cost at client's WH", comp.totalCostEUR, "#334155"], ["Defect value", comp.defectValueEUR, "#B91C1C"], ["Recovered", comp.recoveredEUR, "#15803D"], ["REQUESTED CREDIT NOTE", comp.creditNoteEUR, "#B45309"]].map((x: any) => (
-            <div key={String(x[0])} style={{ border: "1px solid #E5E7EB", borderRadius: 10, padding: "10px 12px", background: "#FAFAFA" }}>
-              <div style={{ fontSize: 9.5, fontWeight: 800, color: "#94A3B8", letterSpacing: "0.04em" }}>{x[0]}</div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: x[2], fontFamily: "ui-monospace, Menlo, monospace" }}>{eur(x[1])}</div>
-            </div>
-          ))}
-        </div>
-
-        {claim.status && claim.status !== "Draft" && (
-          <div style={{ border: "1px solid #E0E7FF", background: "#F5F7FF", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
-            <div style={{ fontSize: 10.5, fontWeight: 800, color: "#4338CA", letterSpacing: "0.04em", marginBottom: 8 }}>RESOLUTION — PRODUCER'S ANSWER</div>
-            <div style={{ display: "grid", gridTemplateColumns: "150px 130px 1fr", gap: 8 }}>
-              <div><Lbl>Status</Lbl><select value={claim.status} onChange={(e: any) => setClaim((c: any) => ({ ...c, status: e.target.value, resolvedAt: ["Accepted", "Rejected", "Settled"].includes(e.target.value) ? (c.resolvedAt || localTodayISO()) : null }))} style={inp}>
-                {["Issued", "Accepted", "Rejected", "Settled"].map((s: string) => <option key={s}>{s}</option>)}
-              </select></div>
-              <div><Lbl>Accepted (EUR)</Lbl><input type="number" value={claim.acceptedEUR ?? ""} onChange={(e: any) => cf("acceptedEUR", e.target.value)} placeholder={String(comp.creditNoteEUR || "")} style={inp} disabled={claim.status === "Rejected"} /></div>
-              <div><Lbl>Resolution note</Lbl><input value={claim.resolutionNote ?? ""} onChange={(e: any) => cf("resolutionNote", e.target.value)} placeholder="e.g. producer accepted 5,000 EUR — credit note KN 12/2026" style={inp} /></div>
-            </div>
-            {claim.acceptedEUR && parseFloat(claim.acceptedEUR) !== comp.creditNoteEUR && (
-              <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 6 }}>Accepted differs from requested ({comp.creditNoteEUR.toFixed(2)} EUR) — remember to adjust the draft credit note in the Invoices module (it owns the note).</div>
-            )}
-          </div>
-        )}
-        <div style={{ marginBottom: 12 }}><Lbl>Notes</Lbl><textarea value={claim.notes} onChange={(e: any) => cf("notes", e.target.value)} rows={2} style={{ ...inp, resize: "vertical" }} /></div>
-
-        {/* printable bilingual document */}
-        <div id="producer-claim-doc" style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", color: "#111", fontFamily: "Arial, sans-serif", fontSize: 12, padding: 24 }}>
-          <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 2 }}>CLAIM REQUEST / WNIOSEK REKLAMACYJNY {claim.number ? `— ${claim.number}` : ""}</div>
-          <div style={{ marginBottom: 10 }}>Date / Data: {claim.date} · PO: {lot.poRef || "—"} · Container / Kontener: {claim.containerNo || "—"} · Supplier / Dostawca: {claim.supplierName || "—"} · Lot: {lot.number}</div>
-          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8 }}>
-            <thead><tr>{["Cost item / Pozycja", "Party / Strona", "Invoice / Faktura", "Amount / Kwota", "Cur", "Rate / Kurs", "EUR"].map(h => <th key={h} style={{ border: "1px solid #999", padding: "4px 6px", fontSize: 10.5, background: "#F3F4F6", textAlign: "left" }}>{h}</th>)}</tr></thead>
-            <tbody>{comp.lines.map((l: any) => (
-              <tr key={String(l.id)}>{[l.label, l.party || "—", l.invoiceNo || "—", (parseFloat(l.amount) || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 }), l.currency, l.currency === "EUR" ? "—" : (l.rate || "—"), eur(l.eur)].map((v: any, k: number) => <td key={String(k)} style={{ border: "1px solid #999", padding: "4px 6px", fontSize: 11 }}>{v}</td>)}</tr>
-            ))}</tbody>
-          </table>
-          <div>Total cost of the consignment at client's warehouse / Koszt całkowity: <b>{eur(comp.totalCostEUR)}</b></div>
-          <div>Type of defects / Rodzaj wad: <b>{claim.defectType || "—"}</b> · {claim.defectPct || 0}% of consignment / partii</div>
-          <div>Value of defects / Wartość wad: <b>{eur(comp.defectValueEUR)}</b></div>
-          <div>Defected product sold in the market / Sprzedaż wadliwego towaru: <b>{claim.soldInMarket ? "YES / TAK" : "NO / NIE"}</b>{claim.soldInMarket ? <> · recovered / odzyskano: <b>{eur(comp.recoveredEUR)}</b></> : null}</div>
-          <div style={{ fontSize: 14, fontWeight: 800, marginTop: 8 }}>REQUESTED CREDIT NOTE / WNIOSKOWANA NOTA KREDYTOWA: {eur(comp.creditNoteEUR)}</div>
-          {claim.notes ? <div style={{ marginTop: 8 }}>Notes / Uwagi: {claim.notes}</div> : null}
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-          <button onClick={() => printHtmlNodeInv("producer-claim-doc", `Claim-${claim.number || lot.number}`)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Print / PDF claim</button>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={onCancel} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onSave({ ...claim, costLines: lines }, comp, false)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #B45309", background: "#fff", color: "#B45309", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Save</button>
-            <button disabled={!canIssue || claim.status === "Issued"} onClick={() => onSave({ ...claim, costLines: lines }, comp, true)} title={claim.status === "Issued" ? "Already issued" : !canIssue ? "Needs cost lines, a defect % and the EUR→PLN rate" : "Assigns the CLM number and drafts the incoming credit note"} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: (!canIssue || claim.status === "Issued") ? "#D1D5DB" : "#B45309", color: "#fff", fontSize: 12, fontWeight: 700, cursor: (!canIssue || claim.status === "Issued") ? "not-allowed" : "pointer" }}>{claim.status === "Issued" ? "Issued ✓" : "Issue claim"}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], setClaims: extSetClaims = null , onStartClaim = null }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null }: any = {}) {
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
@@ -1872,7 +1716,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   const [movementMode, setMovementMode] = useState<"movement" | "quality">("movement");
   const [sortingLot, setSortingLot] = useState(null); // v6.5: lot for the sorting-event modal
   const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
-  const [claimLot, setClaimLot] = useState(null); // Batch 6a (BP-55b): lot for the producer-claim modal
   const [editingMovement, setEditingMovement] = useState(null);
   const [showReturn, setShowReturn] = useState(false); // v6.18.12 (#4): return-to-warehouse modal
   const [showInspection, setShowInspection] = useState(false);
@@ -2099,109 +1942,6 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         }} />}
 
         {showReturn && selected && <ReturnModal lot={selected} contacts={extContacts} onCancel={() => setShowReturn(false)} onConfirm={returnToWarehouse} />}
-
-        {claimLot && <ClaimModal
-          lot={lots.find(l => l.id === claimLot.id) || claimLot}
-          po={(extPOs || []).find((p: any) => p.number === (lots.find(l => l.id === claimLot.id) || claimLot).poRef) || null}
-          {...{} /* v6.48.0: the claim document comes from the claims store now */}
-          existing={(() => {
-            const lotNo = (lots.find(l => l.id === claimLot.id) || claimLot).number;
-            const mine = claimsForLot(extClaims || [], lotNo).filter((c: any) => c.direction === "RECOVERY");
-            const c = mine[0];
-            if (!c) return null;
-            // adapt the stored record back to the shape ClaimModal edits
-            return { id: c.id, number: c.number, date: c.date, lines: c.costLines || [],
-              defectType: c.defectType, defectPct: c.defectPct, soldInMarket: c.soldInMarket,
-              recoveredEGP: c.recoveredEGP, egpPerEur: c.egpPerEur, eurPlnRate: c.plnPerEur,
-              affectedKg: (c.subjects || []).find((x: any) => x.kind === "LOT" && String(x.ref) === String(lotNo))?.affectedKg ?? "",
-              status: c.status === "Draft" ? "Draft" : "Issued", notes: c.notes,
-              requestedCreditEUR: c.requestedEUR };
-          })()}
-          onCancel={() => setClaimLot(null)}
-          onSave={(claim, comp, issue) => {
-            // Batch 6a (BP-55b): issuing assigns the CLM number and drafts the
-            // incoming credit note against the producer (idempotent by number).
-            if (issue && !claim.number) {
-              claim = { ...claim, number: nextClaimNumber(extClaims || [], new Date().getFullYear()) };
-            }
-            if (issue) claim = { ...claim, status: "Issued", requestedCreditEUR: comp.creditNoteEUR, totalCostEUR: comp.totalCostEUR, defectValueEUR: comp.defectValueEUR, recoveredEUR: comp.recoveredEUR };
-            const lotNow = lots.find(l => l.id === claimLot.id) || claimLot;
-            const poForClaim = (extPOs || []).find((p: any) => p.number === lotNow.poRef) || null;
-            if (issue && extSetFinanceNotes) {
-              const clmNo = claim.number;
-              const claimForNote = claim;
-              const compForNote = comp;
-              const poForNote = (extPOs || []).find((p: any) => p.number === lotNow.poRef) || null;
-              extSetFinanceNotes((prev: any[]) => {
-                const exists = (prev || []).some((nt: any) => nt.relatedRef === clmNo);
-                if (exists) return prev;
-                const note = buildClaimNote(lotNow, poForNote, claimForNote, compForNote, claimForNote.eurPlnRate, { nextId, todayISO: localTodayISO });
-                return [note, ...(prev || [])];
-              });
-            }
-            // v6.48.0 (Phase 1): the claim DOCUMENT lives in the claims store now.
-            // The old code wrote it into lot.claims[] with a filter that dropped
-            // every existing claim whenever a new one was saved (defect D1), and a
-            // lot can genuinely carry more than one claim. The lot keeps only what
-            // is inventory truth: the CLAIM movement and claimedKg.
-            const withId = claim.id ? claim : { ...claim, id: nextId() };
-            if (typeof extSetClaims === "function") {
-              const lotNoForClaim = lotNow.number;
-              extSetClaims((prev: any[]) => {
-                const list = prev || [];
-                const idx = list.findIndex((c: any) => String(c.id) === String(withId.id) || (withId.number && String(c.number) === String(withId.number)));
-                const record = {
-                  ...blankClaim(),
-                  ...(idx >= 0 ? list[idx] : {}),
-                  id: idx >= 0 ? list[idx].id : withId.id,
-                  number: withId.number || (idx >= 0 ? list[idx].number : ""),
-                  direction: "RECOVERY",
-                  respondent: { kind: "Supplier", contactId: poForClaim?.supplierId ?? null, name: poForClaim?.supplier?.name || "" },
-                  cause: "Quality defect",
-                  subjects: [
-                    { kind: "LOT", ref: lotNoForClaim, affectedKg: parseFloat(String(withId.affectedKg || "")) || undefined },
-                    ...(lotNow.poRef ? [{ kind: "PO", ref: lotNow.poRef }] : []),
-                  ],
-                  date: withId.date || localTodayISO(),
-                  costLines: withId.lines || [],
-                  defectType: withId.defectType || "",
-                  defectPct: withId.defectPct ?? "",
-                  soldInMarket: withId.soldInMarket ?? null,
-                  recoveredEGP: withId.recoveredEGP ?? "",
-                  egpPerEur: withId.egpPerEur ?? "",
-                  plnPerEur: withId.eurPlnRate ?? "",
-                  totalCostEUR: comp?.totalCostEUR ?? 0,
-                  defectValueEUR: comp?.defectValueEUR ?? 0,
-                  recoveredEUR: comp?.recoveredEUR ?? 0,
-                  requestedEUR: comp?.creditNoteEUR ?? withId.requestedCreditEUR ?? 0,
-                  status: issue ? "Submitted" : "Draft",
-                  notes: withId.notes || "",
-                };
-                return idx >= 0 ? list.map((c: any, i: number) => i === idx ? record : c) : [...list, record];
-              });
-            }
-            setLots(prev => prev.map(l => {
-              if (l.id !== claimLot.id) return l;
-              let next = { ...l };
-              // Batch 6c (BP-33): issuing a claim with an affected quantity logs a
-              // CLAIM movement — client-side, NO warehouse stock effect (reducer
-              // semantics v6.18.10 #5) — so the lot's claimedKg reflects reality.
-              const kg = parseFloat(String(claim.affectedKg || "")) || 0;
-              if (issue && kg > 0) {
-                const already = (l.movements || []).some((m: any) => m.type === "CLAIM" && String(m.note || "").includes(withId.number));
-                if (!already) {
-                  next = {
-                    ...next,
-                    movements: [...(l.movements || []), { id: nextId(), date: claim.date || localTodayISO(), type: "CLAIM", qtyKg: kg, note: `Producer claim ${withId.number} — ${claim.defectType || "quality defect"} ${claim.defectPct || 0}%` }],
-                    claimedKg: (l.claimedKg || 0) + kg,
-                  };
-                }
-              }
-              return next;
-            }));
-            if (issue) setClaimLot(null);
-          }}
-        />}
         {settlementLot && <SettlementModal lot={lots.find(l => l.id === settlementLot.id) || settlementLot} orders={liveSOs} contacts={extContacts} pos={extPOs}
           onCancel={() => setSettlementLot(null)}
           onSave={(settlement, close) => {
@@ -2298,7 +2038,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
               });
               return;
             }
-            setClaimLot(l); }}
+            /* v6.79.0 (W-2): no legacy fallback — claims live in the Claims module */ }}
           tracePOs={extPOs}
           traceInvoices={extInvoices}
         />

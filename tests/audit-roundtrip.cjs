@@ -170,11 +170,12 @@ t("Cancelled invoice never enters the ledger", () => {
   const r = ledger.buildLedger({ invoices: [{ id:1, kind:"SALES", number:"FV1", grossPLN: 100, paymentStatus:"Cancelled", dueDate:"2026-01-01" }], todayISO: "2026-08-20" });
   eq(r.items.length, 0);
 });
-t("a firm PO stops counting once a PURCHASE invoice links it (counted exactly once)", () => {
+t("W-3: a purchase becomes payable when its invoice exists — never twice, never before", () => {
   const pos = [{ number: "PO-1", status: "Arrived", pricingMode: "firm", currency: "PLN", fxRate: 1,
     supplier: { name: "S" }, items: [{ qty: 100, unitPrice: 10 }] }];
+  // v6.79.0 (W-3, owner ruling): a bare commitment is NOT a payable any more — nothing until the invoice exists.
   const without = ledger.buildLedger({ pos, invoices: [], todayISO: "2026-08-20" });
-  eq(without.items.length, 1); eq(without.items[0].kind, "PO purchase");
+  eq(without.items.length, 0, "un-invoiced PO commitments retired from the ledger");
   const withInv = ledger.buildLedger({ pos, invoices: [{ id: 9, kind: "COST", category: "PURCHASE", number: "FA1",
     grossPLN: 1000, paymentStatus: "Issued", links: [{ type: "PO", number: "PO-1" }] }], todayISO: "2026-08-20" });
   eq(withInv.items.length, 1, "counted exactly once");
@@ -842,5 +843,67 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(body.invoice.kind, "proforma");
   });
   console.log("v6.68.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.79.0 — PRE-DDL FIXES (W-1, W-2, W-3, W-7, F-5, F-6, integrity coverage) ══
+(function v679(){
+  console.log("\n══ 25. v6.79.0: one SO status truth, one claim engine, one paid mechanism, users, budgets ══");
+  const st = B("statusOwnership.domain.js");
+  const perm = B("permissions.domain.js");
+  const bud = B("budgets.domain.js");
+  const led = B("ledger.js");
+  const so = { number: "SO-1", status: "Confirmed", items: [{ product: "P", qty: 1000 }] };
+  const shipDelivered = { number: "SHP-1", status: "Delivered", goods: [{ soRef: "SO-1", product: "P", qtyKg: 1000 }] };
+  t("W-1: 'Reserved' is no longer a physical status; stored Reserved normalises to Confirmed", () => {
+    ok(!st.PHYSICAL_SO_STATUSES.includes("Reserved"));
+    eq(st.normaliseStoredSoStatus({ ...so, status: "Reserved" }, []).status, "Confirmed");
+  });
+  t("W-1: the gate reads the SHIPMENTS — a Confirmed order with a delivered shipment IS shipped-or-later", () => {
+    eq(st.effectiveSoStatus(so, [shipDelivered]), "Delivered");
+    ok(st.isShippedOrLater(so, [shipDelivered]), "Issue-invoice button appears without anyone typing Delivered");
+    ok(!st.isShippedOrLater(so, []), "…and not before the goods moved");
+  });
+  t("W-1: a typed 'Shipped' with no shipment becomes a VISIBLE override, never a silent fact", () => {
+    const n = st.normaliseStoredSoStatus({ ...so, status: "Shipped" }, []);
+    eq(n.status, "Confirmed"); eq(n.statusOverride, "Shipped"); ok(String(n.statusOverrideReason).includes("Migrated"));
+    const ok2 = st.normaliseStoredSoStatus({ ...so, status: "Shipped" }, [{ ...shipDelivered, status: "Loaded" }]);
+    eq(ok2.status, "Confirmed"); ok(!ok2.statusOverride, "supported by shipments → plain Confirmed, derivation shows Shipped");
+  });
+  t("W-3: un-invoiced PO commitments are no longer ledger rows; the purchase invoice is", () => {
+    const po = { number: "PO-1", status: "Confirmed", pricingMode: "firm", supplier: { name: "S" }, items: [{ qty: 1000, unitPrice: 4 }], fxRate: 1 };
+    const none = led.buildLedger({ pos: [po], invoices: [], financeNotes: [], orders: [], lots: [], warehouseInvoices: [], operationalCosts: [], todayISO: "2026-09-02" });
+    eq(none.items.filter(i => i.kind === "PO purchase").length, 0, "commitment alone is not a payable");
+    const withInv = led.buildLedger({ pos: [po], invoices: [{ id: 1, kind: "COST", category: "PURCHASE", number: "FA/1", paymentStatus: "Issued", grossPLN: 4000, netPLN: 4000, grossAmount: 4000, counterparty: { name: "S" }, links: [{ type: "PO", number: "PO-1" }] }], financeNotes: [], orders: [], lots: [], warehouseInvoices: [], operationalCosts: [], todayISO: "2026-09-02" });
+    approx(withInv.totals.payableOpenPLN, 4000, "the invoice carries the payable, exactly once");
+  });
+  t("F-5: no users → everyone sees everything; owner sees all; a ticked-off module hides; unknown user gets only the dashboard", () => {
+    ok(perm.canOpenModule([], "anyone", "finance"));
+    const owner = perm.blankUser(1, "Hazem", true); const ops = perm.blankUser(2, "Ola", false); ops.modules.finance = false;
+    ok(perm.canOpenModule([owner, ops], "Hazem", "finance")); ok(!perm.canOpenModule([owner, ops], "Ola", "finance"));
+    ok(perm.canOpenModule([owner, ops], "Ola", "lots"));
+    ok(!perm.canOpenModule([owner, ops], "Stranger", "lots")); ok(perm.canOpenModule([owner, ops], "Stranger", "dashboard"));
+    ok(perm.canOpenFinance([owner, ops], "Hazem", "pl")); ok(!perm.canOpenFinance([owner, ops], "Ola", "pl"), "P/L is owner-only by default");
+    ok(perm.canOpenFinance([owner, ops], "Ola", "ledger"), "…but the ledger is open to operations");
+    eq(perm.usersGaps([ops]).length, 1, "no owner → gap reported");
+  });
+  t("F-6: budgets upsert by (period, measure) and report variance against actuals", () => {
+    let b = bud.upsertBudget([], { id: "x", period: "2026-09", measure: "revenue", amountPLN: 100000 });
+    b = bud.upsertBudget(b, { id: "y", period: "2026-09", measure: "revenue", amountPLN: 120000 });
+    eq(b.length, 1); approx(b[0].amountPLN, 120000, "replaced, not duplicated");
+    const v = bud.budgetVariance(b, "2026-09", { revenue: 95000 });
+    approx(v[0].variancePLN, -25000); approx(v[0].variancePct, -20.83);
+  });
+  t("integrity: over-allocated advance, orphan mirror, unknown catalog item, claim money≠paper are all reported", () => {
+    const r = integ.checkIntegrity({ contacts: [], pos: [{ number: "PO-9", status: "Confirmed", items: [{ product: "Dragonfruit" }] }], lots: [], orders: [], shipments: [],
+      invoices: [{ id: 1, kind: "COST", number: "F/1", paymentStatus: "Cancelled", grossPLN: 10 }], financeNotes: [], claims: [{ number: "CLM-1", status: "Accepted", acceptedEUR: 500, financeNoteId: null, subjects: [] }], loadPlans: [],
+      advancePayments: [{ counterpartyName: "X", amount: 100, currency: "PLN", allocations: [{ invoiceId: 77, amount: 150 }] }],
+      bankAccounts: [{ accountDigits: "1", label: "A" }, { accountDigits: "1", label: "B" }],
+      operationalCosts: [{ source: "invoice:1", invoiceNo: "F/1", amountPLN: 10 }, { source: "invoice:404", invoiceNo: "F/404", amountPLN: 5 }],
+      productCatalog: [{ item: "Apples", varieties: [] }] });
+    const codes = new Set(r.issues.map(i => i.code));
+    ["ADVANCE_OVERALLOCATED", "ADVANCE_ALLOC_ORPHAN", "BANKACCOUNT_DUP", "OPCOST_MIRROR_ORPHAN", "OPCOST_MIRROR_CANCELLED", "CATALOG_ITEM_UNKNOWN", "CLAIM_NOTE_MISMATCH"].forEach(c => ok(codes.has(c), c + " must fire"));
+  });
+  console.log("v6.79.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
