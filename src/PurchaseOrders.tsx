@@ -2001,7 +2001,7 @@ ${blockNote}`.trim(),
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
               >
                 <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
                   <div style={{ marginTop: 3 }}><VarianceBadge variance={o.variance} /></div>
                 </div>
                 <div>

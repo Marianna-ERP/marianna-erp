@@ -505,7 +505,7 @@ function LocationPill({ locationId, lot = null }: any) {
 // v6.34.7 (Step 1 of flow retirement): the lot's movement is DERIVED from its actual
 // shipment (which now owns the trade direction), not from the obsolete PO flow key.
 // An EXW-purchase + CIF-sale lot no longer mislabels itself "IMP · EXWs → our WH".
-function LotDirectionBadge({ lot, shipments = [], orders = [], compact = false }: any) {
+function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], compact = false }: any) {
   const shs = shipmentsForLot(lot, shipments);
   // Prefer an explicit shipment direction; else derive from the lot's PO + governing SO.
   let dir = "";
@@ -525,10 +525,16 @@ function LotDirectionBadge({ lot, shipments = [], orders = [], compact = false }
     const d = sh?.tradeDirection;
     if (d && MOVEMENT_LABELS[d]) { dir = d; break; }
   }
-  if (!dir && shs.length) {
-    // last resort: derive from the shipment context (may still fall back to Import
-    // for genuinely inbound flows with no other signal).
-    dir = shipmentTradeDirection(shs[0], null);
+  if (!dir) {
+    // v6.84.0 (Round 7): derive from the REAL ends — the PO's producer country × the
+    // governing SO's destination. An EXW purchase in Poland sold CIF abroad is an EXPORT,
+    // whatever the inbound-looking shipment header says. Falls back to the shipment only
+    // when no sale governs the lot.
+    const po = (pos || []).find((p: any) => String(p.number) === String(lot.poRef)) || null;
+    const so = (orders || []).find((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) =>
+      (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef)))) || null;
+    if (so) dir = shipmentTradeDirection(shs[0] || {}, po, so);
+    else if (shs.length) dir = shipmentTradeDirection(shs[0], po);
   }
   if (!dir) return null;
   const lbl = MOVEMENT_LABELS[dir];
@@ -1249,7 +1255,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
                 // information than the product — amber, smaller caps, not near-black.
                 return sup ? <div style={{ fontSize: 11.5, fontWeight: 700, color: "#0369A1", letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 2 }}>{sup}</div> : null; })()}
               <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
-              <div style={{ marginTop: 10 }}><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} /></div>
+              <div style={{ marginTop: 10 }}><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} pos={pos} /></div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Value of physical stock</div>
@@ -2154,7 +2160,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
                 <div><StatusBadge status={l.status} /></div>
                 <div>
                   <LocationPill locationId={l.locationId} lot={l} />
-                  <div style={{ marginTop: 3 }}><LotDirectionBadge lot={l} shipments={shipments} orders={liveSOs} compact /></div>
+                  <div style={{ marginTop: 3 }}><LotDirectionBadge lot={l} shipments={shipments} orders={liveSOs} pos={extPOs} compact /></div>
                 </div>
                 <div>
                   {/* v6.58.0: lead with the LOT'S OWN QUANTITY, whatever its

@@ -2843,12 +2843,12 @@ export default function SalesOrders({
             const rowAvail = computeLineAvailability(o.items, orders, o.id);
             const rowOverageCount = rowAvail.filter(a => a.hasOverage).length;
             return (
-              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: o.status === "Cancelled" ? "#FEF2F2" : "#fff", color: o.status === "Cancelled" ? "#B91C1C" : undefined, cursor: "pointer" }}
+              <div key={o.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
                 onClick={() => openDetail(o)}
                 onMouseEnter={e => e.currentTarget.style.background = o.status === "Cancelled" ? "#FEE2E2" : "#FAFAFA"}
                 onMouseLeave={e => e.currentTarget.style.background = o.status === "Cancelled" ? "#FEF2F2" : "#fff"}>
                 <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
                   {rowOverageCount > 0 && (
                     <div title={`${rowOverageCount} line(s) exceed available supply`} style={{ display: "inline-block", marginTop: 3, padding: "1px 6px", background: "#FFFBEB", color: "#92400E", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 9.5, fontWeight: 700 }}>
                       ⚠ {rowOverageCount} short

@@ -1019,7 +1019,7 @@ function ShipmentListRow({ sh, active, onClick, contacts, planNumber = "" }: any
   return <div onClick={onClick}
     style={{ padding: "8px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: dead ? "#FEF2F2" : active ? "#F9FAFB" : "#fff", borderLeft: dead ? "4px solid #DC2626" : active ? "4px solid #111" : "4px solid transparent", minWidth: 0 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-      <div style={{ fontSize: 12.5, fontWeight: 800, color: dead ? "#B91C1C" : "#111", whiteSpace: "nowrap", ...(dead ? { textDecoration: "line-through" } : {}) }}>{sh.number}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: dead ? "#B91C1C" : "#2563EB", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap", ...(dead ? { textDecoration: "line-through", textDecorationColor: "#DC2626" } : {}) }}>{sh.number}</div>
       <ModeBadge mode={sh.mode} />
       <StatusBadge status={sh.status} />
       {planNumber && <span title={`Part of load plan ${planNumber}`} style={{ fontSize: 9.5, fontWeight: 700, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}>{planNumber}</span>}
@@ -2707,7 +2707,9 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           if (sum.badLinks.length) bits.push(`bad link: ${sum.badLinks.join(", ")}`);
           return <ChecklistLine ok={false} label="Signed scans on file" warnText={bits.join(" · ")} />;
         })()}
-        <ChecklistLine ok={shipment.billingStatus === "Cost allocated" || shipment.billingStatus === "Closed"} label="Costs allocated to lots" />
+        {String(shipment.purpose || "").toUpperCase() === "OUTBOUND"
+          ? <ChecklistLine ok={true} label="Costs allocated to lots — n/a (direct cost of sale)" />
+          : <ChecklistLine ok={["Cost allocated", "Allocated to lots", "Closed"].includes(String(shipment.billingStatus || ""))} label="Costs allocated to lots" />}
         {(() => {
           const recs = (shipment.legs || []).flatMap((l: any) => transportUnitsForLeg(l)).map((u: any) => u.tempRecorderNo).filter(Boolean);
           return <ChecklistLine ok={recs.length > 0} label={`Temp recorder registered${recs.length ? ` (${recs.join(", ")})` : ""}`} warnText={!recs.length ? "reported on invoice" : ""} />;
