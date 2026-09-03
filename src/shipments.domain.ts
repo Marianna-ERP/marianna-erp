@@ -490,3 +490,31 @@ export function derivedBillingStatus(sh: any, lots: any[] = []): BillingState {
   const allocated = (lots || []).some((l: any) => (l?.costs || []).some((c: any) => String(c?.source || "").startsWith(prefix)));
   return allocated ? "Allocated to lots" : "Invoices received";
 }
+
+
+// ── v6.83.0 (owner ruling): GOODS KG ↔ UNIT KG — one number, checked ─────────────
+// The goods table says what the shipment carries; each leg's trucks/containers say
+// how it is split. The two must agree — a discrepancy the system cannot catch is
+// exactly how a protocol prints a load nobody put on that truck.
+export interface LegKgCheck { leg: number; mode: string; goodsKg: number; unitsKg: number; deltaKg: number; units: number; }
+export function legKgChecks(sh: any): LegKgCheck[] {
+  const goodsKg = (sh?.goods || []).reduce((s: number, g: any) => s + (Number(g?.qtyKg) || 0), 0);
+  return (sh?.legs || []).map((leg: any, i: number) => {
+    const units = leg?.vehicles || leg?.transportUnits || [];
+    const unitsKg = units.reduce((s: number, u: any) => s + (Number(u?.qtyKg) || 0), 0);
+    return { leg: i + 1, mode: String(leg?.mode || ""), goodsKg: Math.round(goodsKg), unitsKg: Math.round(unitsKg), deltaKg: Math.round(unitsKg - goodsKg), units: units.length };
+  }).filter((c: LegKgCheck) => c.units > 0 && Math.abs(c.deltaKg) > 1);
+}
+/** A leg with exactly ONE unit and no kilos typed takes the goods total — the common case. */
+export function autoFillSingleUnitKg(sh: any): any {
+  const goodsKg = (sh?.goods || []).reduce((s: number, g: any) => s + (Number(g?.qtyKg) || 0), 0);
+  if (!(goodsKg > 0)) return sh;
+  let changed = false;
+  const legs = (sh?.legs || []).map((leg: any) => {
+    const units = leg?.vehicles || [];
+    if (units.length !== 1 || (Number(units[0]?.qtyKg) || 0) > 0) return leg;
+    changed = true;
+    return { ...leg, vehicles: [{ ...units[0], qtyKg: Math.round(goodsKg) }] };
+  });
+  return changed ? { ...sh, legs } : sh;
+}

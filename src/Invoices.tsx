@@ -45,7 +45,7 @@ const STATUS_META: Record<PaymentStatus, { bg: string; color: string }> = {
   Draft: { bg: "#F3F4F6", color: "#6B7280" }, Issued: { bg: "#DBEAFE", color: "#2563EB" },
   Sent: { bg: "#E0F2FE", color: "#0284C7" }, "Partially paid": { bg: "#FEF3C7", color: "#D97706" },
   Paid: { bg: "#DCFCE7", color: "#16A34A" }, Overdue: { bg: "#FEE2E2", color: "#DC2626" },
-  Cancelled: { bg: "#F3F4F6", color: "#9CA3AF" },
+  Cancelled: { bg: "#FEE2E2", color: "#DC2626" }, // v6.83.0 (owner ruling): cancelled = red everywhere
 };
 function money(n: number, cur?: string) { if (n == null || isNaN(n)) return "—"; return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur ? " " + cur : ""}`; }
 function daysUntil(d: string) { if (!d) return null; const t = new Date(localTodayISO()); const x = new Date(d); return Math.floor((x.getTime() - t.getTime()) / 86400000); }

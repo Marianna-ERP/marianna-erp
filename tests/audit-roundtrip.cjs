@@ -993,3 +993,22 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.82.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.83.0 — shipment editor restructure ══
+(function v683(){
+  console.log("\n══ 29. v6.83.0: goods kg ↔ unit kg linkage ══");
+  t("legKgChecks names a leg whose units disagree with the goods; agreeing legs are silent", () => {
+    const sh = { goods: [{ qtyKg: 19422 }], legs: [
+      { mode: "Road", vehicles: [{ qtyKg: 19422 }] },
+      { mode: "Sea", vehicles: [{ qtyKg: 18000 }] } ] };
+    const c = ship.legKgChecks(sh);
+    eq(c.length, 1); eq(c[0].leg, 2); eq(c[0].deltaKg, -1422);
+  });
+  t("autoFillSingleUnitKg gives a lone unit with no kilos the goods total — and leaves typed kilos alone", () => {
+    const sh = { goods: [{ qtyKg: 19422 }], legs: [{ mode: "Road", vehicles: [{ qtyKg: 0 }] }, { mode: "Sea", vehicles: [{ qtyKg: 5 }] }] };
+    const out = ship.autoFillSingleUnitKg(sh);
+    eq(out.legs[0].vehicles[0].qtyKg, 19422); eq(out.legs[1].vehicles[0].qtyKg, 5);
+  });
+  console.log("v6.83.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

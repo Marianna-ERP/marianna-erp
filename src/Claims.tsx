@@ -42,6 +42,7 @@ const BASIS_LABEL: any = {
 const STATUS_STYLE: any = {
   Draft: "#94A3B8", Notified: "#2563EB", Submitted: "#2563EB", "Under review": "#D97706",
   Accepted: "#16A34A", "Partially accepted": "#16A34A", Rejected: "#DC2626", Settled: "#059669", Closed: "#64748B",
+  Withdrawn: "#DC2626", Cancelled: "#DC2626", // v6.83.0 (owner ruling): cancelled/withdrawn = red everywhere
 };
 
 function Pill({ bg, fg, children, title }: any) {

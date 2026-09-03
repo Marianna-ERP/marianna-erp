@@ -11,7 +11,7 @@ import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } f
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { lotStockCheck } from "./receipts.domain";
 import { shipmentPostBlockReason, shipmentWarnings, newestFirst } from "./moduleGuards.domain";
-import { carriedRefs, overShipReport, derivedBillingStatus } from "./shipments.domain";
+import { carriedRefs, overShipReport, derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -1849,7 +1849,50 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             );
           })()}
         </Card>
+        {/* v6.83.0 (owner ruling): GOODS first — what will be loaded — then the legs that carry it. */}
         <Card>
+          <SectionTitle>Goods on this shipment</SectionTitle>
+          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>Adjust quantities and pallets here — e.g. if you entered pallets on the SO after creating this shipment, update them here so the transport order shows the right figure.</div>
+          {(draft.goods || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No goods lines on this shipment.</div>}
+          {(draft.legs || []).length > 1 && (
+            <div style={{ fontSize: 11, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7, padding: "7px 10px", marginBottom: 10 }}>
+              This shipment has {(draft.legs || []).length} legs / carriers. Assign each goods line to the leg that carries it — each carrier's transport order then lists <strong>only its own goods</strong>.
+            </div>
+          )}
+          {(draft.goods || []).map((g, i) => <div key={g.id || i} style={{ display: "grid", gridTemplateColumns: (draft.legs || []).length > 1 ? "1.8fr 0.9fr 0.9fr 0.7fr 1.1fr" : "2fr 1fr 1fr 0.8fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
+            <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
+            <div><Lbl>Net (kg)</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => updateGood(i, "qtyKg", parseNum(e.target.value))} /></div>
+            {/* v6.50.0: the field itself sits in line with its siblings; the derivation
+                is explained on its own line beneath the whole row (see below). */}
+            <div><Lbl>Gross (kg)</Lbl><Inp type="number" value={g.grossKg || ""} onChange={e => updateGood(i, "grossKg", parseNum(e.target.value))} placeholder="0" title="Gross weight incl. packaging and pallets — printed on the transport order" /></div>
+            <div><Lbl>Pallets</Lbl><Inp type="number" value={g.pallets || ""} onChange={e => updateGood(i, "pallets", parseNum(e.target.value))} placeholder="0" /></div>
+            {(draft.legs || []).length > 1
+              ? <div><Lbl>On leg / carrier</Lbl><Sel value={g.legNo || ""} onChange={e => updateGood(i, "legNo", e.target.value ? parseNum(e.target.value) : null)}>
+                  <option value="">All legs</option>
+                  {(draft.legs || []).map((lg: any, li: number) => { const prov = providerById(lg.carrierId || lg.forwarderId, contacts); return <option key={li} value={li + 1}>Leg {li + 1}{prov ? ` · ${prov.name}` : ` · ${lg.mode}`}</option>; })}
+                </Sel></div>
+              : <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>}
+            {/* v6.50.0: the gross-weight derivation, on its own line beneath the row so
+                it explains the calculation without knocking the fields out of line. */}
+            {(() => {
+              const gr = grossForGoodsLine({ qtyKg: g.qtyKg, product: g.product, packaging: g.packaging, pallets: g.pallets }, packagingTypes.length ? packagingTypes : PACKAGING_SEED);
+              if (!(gr.grossKg > 0)) return null;
+              const detail = gr.boxes
+                ? `${fmtNum(parseNum(g.qtyKg))} net + ${gr.boxes} × ${gr.tareKg} kg packaging${gr.pallets ? ` + ${gr.pallets} × ${gr.palletTareKg} kg pallets` : ""} = ${fmtNum(gr.grossKg)} kg gross`
+                : `≈ ${fmtNum(gr.grossKg)} kg gross (estimated — packaging unknown)`;
+              return <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#64748B", marginTop: -2 }}>
+                {detail}{" · "}
+                <span onClick={() => autoGross(i)} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use this</span>
+              </div>;
+            })()}
+          </div>)}
+        </Card>
+        <Card>
+          {legKgChecks(draft).map((c: any) => (
+            <div key={c.leg} style={{ marginBottom: 8, padding: "7px 10px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#B91C1C", fontWeight: 600 }}>
+              Leg {c.leg} ({c.mode}): the {c.units} unit(s) carry {c.unitsKg.toLocaleString("pl-PL")} kg but the goods table says {c.goodsKg.toLocaleString("pl-PL")} kg — {c.deltaKg > 0 ? "over" : "under"} by {Math.abs(c.deltaKg).toLocaleString("pl-PL")} kg. The loading protocols and the transport order print what the units say.
+            </div>
+          ))}
           <SectionTitle right={<SmallButton onClick={addLeg}>+ Activate extra leg</SmallButton>}>Legs - route, truck / driver / container / BL</SectionTitle>
           {(() => {
             // v6.4.1: the printed transport order takes dates from the LEGS, while the
@@ -1936,19 +1979,6 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: uMode === "Road" ? "110px 1fr 1fr 1fr" : "110px 160px 1fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Mode</Lbl><div style={{ fontSize: 12.5, padding: "7px 0", fontWeight: 700, color: "#334155" }}>{uMode} <span style={{ fontWeight: 400, color: "#94A3B8" }}>(from leg)</span></div></div>
-                  <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
-                  {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
-                  {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
-                </div>
-                {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
-                  <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
-                  <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
-                  <div><Lbl>CMR no.</Lbl><Inp value={u.cmrNumber || ""} onChange={e => updateVehicle(i, ui, "cmrNumber", e.target.value)} placeholder="one per truck" title="Each truck has its own CMR number" /></div>
-                  <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this truck's load" /></div>
-                </div>}
-                {uMode !== "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr", gap: 9 }}>
-                  <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
-                  <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" /></div>
                   {i > 0 && (transportUnitsForLeg(draft.legs[i - 1]) || []).length > 0 && (
                     <div><Lbl>Loaded from truck</Lbl>
                       {/* v6.80.0 (D-50, owner ruling): the container is what the truck carried — link it, and
@@ -1963,6 +1993,19 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                       </Sel>
                     </div>
                   )}
+                  <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
+                  {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
+                  {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
+                </div>
+                {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
+                  <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
+                  <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
+                  <div><Lbl>CMR no.</Lbl><Inp value={u.cmrNumber || ""} onChange={e => updateVehicle(i, ui, "cmrNumber", e.target.value)} placeholder="one per truck" title="Each truck has its own CMR number" /></div>
+                  <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this truck's load" /></div>
+                </div>}
+                {uMode !== "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr", gap: 9 }}>
+                  <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
+                  <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" /></div>
                 </div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} max={localTodayISO()} /></div>
@@ -2017,43 +2060,6 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             </div>
           </div>)}
         </Card>
-        <Card>
-          <SectionTitle>Goods on this shipment</SectionTitle>
-          <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>Adjust quantities and pallets here — e.g. if you entered pallets on the SO after creating this shipment, update them here so the transport order shows the right figure.</div>
-          {(draft.goods || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No goods lines on this shipment.</div>}
-          {(draft.legs || []).length > 1 && (
-            <div style={{ fontSize: 11, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7, padding: "7px 10px", marginBottom: 10 }}>
-              This shipment has {(draft.legs || []).length} legs / carriers. Assign each goods line to the leg that carries it — each carrier's transport order then lists <strong>only its own goods</strong>.
-            </div>
-          )}
-          {(draft.goods || []).map((g, i) => <div key={g.id || i} style={{ display: "grid", gridTemplateColumns: (draft.legs || []).length > 1 ? "1.8fr 0.9fr 0.9fr 0.7fr 1.1fr" : "2fr 1fr 1fr 0.8fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
-            <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
-            <div><Lbl>Net (kg)</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => updateGood(i, "qtyKg", parseNum(e.target.value))} /></div>
-            {/* v6.50.0: the field itself sits in line with its siblings; the derivation
-                is explained on its own line beneath the whole row (see below). */}
-            <div><Lbl>Gross (kg)</Lbl><Inp type="number" value={g.grossKg || ""} onChange={e => updateGood(i, "grossKg", parseNum(e.target.value))} placeholder="0" title="Gross weight incl. packaging and pallets — printed on the transport order" /></div>
-            <div><Lbl>Pallets</Lbl><Inp type="number" value={g.pallets || ""} onChange={e => updateGood(i, "pallets", parseNum(e.target.value))} placeholder="0" /></div>
-            {(draft.legs || []).length > 1
-              ? <div><Lbl>On leg / carrier</Lbl><Sel value={g.legNo || ""} onChange={e => updateGood(i, "legNo", e.target.value ? parseNum(e.target.value) : null)}>
-                  <option value="">All legs</option>
-                  {(draft.legs || []).map((lg: any, li: number) => { const prov = providerById(lg.carrierId || lg.forwarderId, contacts); return <option key={li} value={li + 1}>Leg {li + 1}{prov ? ` · ${prov.name}` : ` · ${lg.mode}`}</option>; })}
-                </Sel></div>
-              : <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>}
-            {/* v6.50.0: the gross-weight derivation, on its own line beneath the row so
-                it explains the calculation without knocking the fields out of line. */}
-            {(() => {
-              const gr = grossForGoodsLine({ qtyKg: g.qtyKg, product: g.product, packaging: g.packaging, pallets: g.pallets }, packagingTypes.length ? packagingTypes : PACKAGING_SEED);
-              if (!(gr.grossKg > 0)) return null;
-              const detail = gr.boxes
-                ? `${fmtNum(parseNum(g.qtyKg))} net + ${gr.boxes} × ${gr.tareKg} kg packaging${gr.pallets ? ` + ${gr.pallets} × ${gr.palletTareKg} kg pallets` : ""} = ${fmtNum(gr.grossKg)} kg gross`
-                : `≈ ${fmtNum(gr.grossKg)} kg gross (estimated — packaging unknown)`;
-              return <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#64748B", marginTop: -2 }}>
-                {detail}{" · "}
-                <span onClick={() => autoGross(i)} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use this</span>
-              </div>;
-            })()}
-          </div>)}
-        </Card>
         </Stage>
 
         <Stage title="Closing" subtitle="costs, billing and the document file"
@@ -2064,7 +2070,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           total={3}>
         <Card>
           <SectionTitle right={<SmallButton kind="green" onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 10, alignItems: "end", marginBottom: 12, paddingBottom: 12, borderBottom: "1px dashed #E5E7EB" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 8, alignItems: "end", marginBottom: 8, paddingBottom: 8, borderBottom: "1px dashed #E5E7EB" }}>
             <div><Lbl>Billing status</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB", fontWeight: 600 }} title="v6.80.0 (D-48): derived from the cost lines' invoice status and the allocation — nothing to set by hand">{derivedBillingStatus(syncLegFreightCostLines(syncCustomsCostLine(draft)), lots || [])}</div></div>
             <div style={{ fontSize: 10.5, color: "#888", lineHeight: 1.45, paddingBottom: 7 }}>Tracks where this shipment is in the cost cycle — from waiting for the supplier's freight invoice to costs allocated into lots.</div>
           </div>
@@ -2192,7 +2198,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="dark" onClick={() => onSave(syncLegFreightCostLines(syncCustomsCostLine(draft)))}>Save changes</SmallButton>
+        <SmallButton kind="dark" onClick={() => onSave(syncLegFreightCostLines(syncCustomsCostLine(autoFillSingleUnitKg(draft))))}>Save changes</SmallButton>
       </div>
     </div>
   </div>;
@@ -2547,7 +2553,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
         <div>
           {/* v6.4.0 header: number · mode · status · billing + document pills only.
               Route, provider and dates live in the cards below — not repeated here. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ fontSize: 22, fontWeight: 850, letterSpacing: "-0.4px" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ fontSize: 24, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{shipment.number}</div><ModeBadge mode={shipment.mode} /><StatusBadge status={shipment.status} /><BillingBadge status={shipment.billingStatus} /></div>
           {/* v6.58.0: related documents come from the goods ON BOARD, not the
               creation seeds — a shipment carrying one lot must not display its
               source's other POs and lots as if it moved them. */}
@@ -2743,14 +2749,14 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
         {(() => {
           const sum = summariseDocs(shipment.documents || []);
           if (!sum.total) return null;
-          return <div style={{ fontSize: 11, color: "#64748B", marginBottom: 8 }}>
+          return <div style={{ fontSize: 11, color: "#64748B", marginBottom: 5 }}>
             {sum.settled} of {sum.total} settled · <strong style={{ color: sum.withFile ? "#059669" : "#94A3B8" }}>{sum.withFile} scan{sum.withFile === 1 ? "" : "s"} linked</strong>
             {sum.outstanding ? ` · ${sum.outstanding} outstanding` : ""}
           </div>;
         })()}
         {(shipment.documents || []).map(d => {
           const info = inspectLink(d.link);
-          return <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 10, borderBottom: "1px solid #F1F5F9", padding: "8px 0", alignItems: "center" }}>
+          return <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 6, borderBottom: "1px solid #F1F5F9", padding: "8px 0", alignItems: "center" }}>
             <div>
               <div style={{ fontSize: 12, fontWeight: 700 }}>{d.type} {d.ref ? `- ${d.ref}` : ""}</div>
               <div style={{ fontSize: 11, color: "#888" }}>{[d.date ? `received ${d.date}` : "", d.notes].filter(Boolean).join(" · ")}</div>
@@ -2766,7 +2772,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           </div>;
         })}
         {(shipment.docsCourierTrackingNo || shipment.docsCourierDate) && (
-          <div style={{ marginTop: 10, padding: "8px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7, fontSize: 11.5, color: "#0C4A6E" }}>
+          <div style={{ marginTop: 10, padding: "5px 8px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7, fontSize: 11.5, color: "#0C4A6E" }}>
             📦 Original documents sent to client — courier tracking <strong style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{shipment.docsCourierTrackingNo || "—"}</strong>{shipment.docsCourierDate ? ` · sent ${shipment.docsCourierDate}` : ""}
           </div>
         )}
@@ -3249,7 +3255,8 @@ export default function Shipments({
     <div style={{ padding: "22px 28px 12px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>
       <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
-          <div><div style={{ fontSize: 23, fontWeight: 850, letterSpacing: "-0.4px" }}>Shipments / Logistics</div><div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>Road, sea and multimodal transport tracking, carrier confirmation, BL/container data, freight costs and costing allocation.</div></div>
+          {/* v6.83.0 (owner ruling): the same header as PO / SO / Inventory — title, no paragraph. */}
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Shipments</div>
           <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
