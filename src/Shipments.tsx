@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from "react";
+import { PAGE_MAX } from "./ui";
+import DateInput from "./DateInput";
 import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
 import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms, syncLegFreightCostLines, legFreightSource, findLotForSOLine } from "./shipments.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
@@ -963,6 +965,7 @@ function buildManualShipment__raw(opts, shipments) {
 }
 
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
@@ -2987,7 +2990,7 @@ export default function Shipments({
       const kind = sh.forwarderId && !sh.carrierId ? "Forwarder" : "Carrier";
       const tInv = (extInvoices || []).find((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => lk.type === "Shipment" && String(lk.number) === String(sh.number)));
       onStartClaim({
-        respondentKind: kind, direction: "RECOVERY",
+        respondentKind: kind, direction: "RECOVERY", currency: (sh.costs || [])[0]?.currency || sh.currency || "PLN", fxToPLN: (sh.costs || [])[0]?.fxRate || 1, // v6.81.0 (D-62)
         respondentName: carrier?.name || "", contactId: carrier?.id ?? null,
         cause: "Transport damage",
         subjects: [
@@ -3246,7 +3249,7 @@ export default function Shipments({
   return <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#FAFAFA" }}>
     {shDialogNode}
     <div style={{ padding: "22px 28px 12px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>
-      <div style={{ maxWidth: 1460, margin: "0 auto" }}>
+      <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
           <div><div style={{ fontSize: 23, fontWeight: 850, letterSpacing: "-0.4px" }}>Shipments / Logistics</div><div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>Road, sea and multimodal transport tracking, carrier confirmation, BL/container data, freight costs and costing allocation.</div></div>
           <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
@@ -3273,7 +3276,7 @@ export default function Shipments({
       </div>
     </div>
 
-    {toast && <div style={{ maxWidth: 1460, margin: "12px auto 0", width: "calc(100% - 56px)", background: "#F0FDF4", border: "1px solid #BBF7D0", color: "#166534", borderRadius: 9, padding: "9px 12px", fontSize: 12, display: "flex", justifyContent: "space-between" }}><span>{toast}</span><button onClick={() => setToast("")} style={{ border: "none", background: "transparent", cursor: "pointer", color: "#166534", fontWeight: 800 }}>x</button></div>}
+    {toast && <div style={{ maxWidth: PAGE_MAX, margin: "12px auto 0", width: "calc(100% - 56px)", background: "#F0FDF4", border: "1px solid #BBF7D0", color: "#166534", borderRadius: 9, padding: "9px 12px", fontSize: 12, display: "flex", justifyContent: "space-between" }}><span>{toast}</span><button onClick={() => setToast("")} style={{ border: "none", background: "transparent", cursor: "pointer", color: "#166534", fontWeight: 800 }}>x</button></div>}
 
     {tab === "plans" && setLoadPlans && (
       <LoadPlans loadPlans={loadPlans} setLoadPlans={setLoadPlans} shipments={shipments} contacts={contacts}
@@ -3282,7 +3285,7 @@ export default function Shipments({
     )}
 
     <div style={{ flex: 1, overflow: "hidden", padding: "16px 28px 24px", display: tab === "shipments" ? "block" : "none" }}>
-      <div style={{ maxWidth: 1460, margin: "0 auto", height: "100%", display: "grid", gridTemplateColumns: "390px 1fr", gap: 16 }}>
+      <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", height: "100%", display: "grid", gridTemplateColumns: "390px 1fr", gap: 16 }}>
         <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "grid", gap: 10 }}>
             <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />

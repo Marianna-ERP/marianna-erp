@@ -1,4 +1,6 @@
 import { newestFirst } from "./moduleGuards.domain";
+import { PAGE_MAX } from "./ui";
+import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { clientExposurePLN } from "./payments.domain";
 import { computedSOLinks } from "./documents.domain";
@@ -394,6 +396,7 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
@@ -478,11 +481,12 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
 
   const productMatch = (p) => !filter || (p || "").toLowerCase().includes(filter.toLowerCase());
 
-  const matchingLots = LOTS.filter(l => productMatch(l.product));
+  const byNumDesc = (a: any, b: any) => String(b?.number || "").localeCompare(String(a?.number || ""), undefined, { numeric: true });
+  const matchingLots = LOTS.filter(l => productMatch(l.product)).sort(byNumDesc); // v6.81.0 (D-58): newest first
   // PO lines: flatten POs to their items, filter on product
-  const matchingPOLines = PO_REFS.flatMap(po =>
+  const matchingPOLines = [...PO_REFS].sort(byNumDesc).flatMap(po =>
     po.items.map(it => ({ ...it, _po: po }))
-  ).filter(x => productMatch(x.product));
+  ).filter(x => productMatch(x.product)); // v6.81.0 (D-58): newest PO first
 
   function pickLot(lot) {
     onPick({
@@ -1360,7 +1364,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px", background: "#FAFAFA" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
           <div style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 20, fontWeight: 700, color: "#111" }}>{order.id ? `Edit ${order.number}` : "New Sales Order"}</div>
             <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>Sell to a client — goods come from stock or pre-sold from a PO</div>
@@ -1994,7 +1998,7 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px", background: "#FAFAFA" }}>
-        <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
             <div>
@@ -2217,7 +2221,7 @@ function CollectionModal({ so, onClose, onSave }: any) {
         <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>Record client collection — {so.number}</div>
         <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>EXW: the client collects the goods. This creates a minimal collection shipment (no transport order, no freight on our side) and, on Delivered, ships the sourced lots out of inventory.</div>
         <Lbl>Collection date</Lbl>
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <DateInput value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
         <Lbl>Client truck plate (optional)</Lbl>
         <input value={truckPlate} onChange={e => setTruckPlate(e.target.value)} placeholder="e.g. WZ 12345" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
         <Lbl>Driver (optional)</Lbl>
@@ -2760,7 +2764,7 @@ export default function SalesOrders({
               const sinv = (extInvoices || []).find((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => lk.type === "SO" && String(lk.number) === String(selected.number)));
               const clientContact = (extContacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(selected.client?.name || "").trim().toLowerCase());
               onStartClaim({
-                respondentKind: "Client", direction: "CONCESSION",
+                respondentKind: "Client", direction: "CONCESSION", currency: selected.currency || "PLN", fxToPLN: selected.fxRate || 1, // v6.81.0 (D-62)
                 respondentName: selected.client?.name || "", contactId: clientContact ? clientContact.id : null,
                 subjects: [
                   { kind: "SO", ref: selected.number },

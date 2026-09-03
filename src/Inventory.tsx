@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from "react";
+import { PAGE_MAX } from "./ui";
+import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
 import { claimsForLot } from "./claims.domain";
 import { buildTraceTree } from "./trace.domain";
@@ -13,7 +15,7 @@ import { customsSummary } from "./customs.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
-import { computeLotSettlement, currentCommissionPct, settlementCostComponents } from "./consignment";
+import { computeLotSettlement, currentCommissionPct, currentCommissionRate, commissionPctForSales, settlementCostComponents } from "./consignment";
 import { recordAudit } from "./audit";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
@@ -453,6 +455,7 @@ function uniqStrings(arr) {
 
 // ─── SHARED UI ATOMS ────────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={false} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} max={max} style={{ ...base, ...style }} />;
 }
@@ -945,6 +948,12 @@ function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, 
   const [prodInvNo, setProdInvNo] = useState(st.producerInvoiceNo || "");
   const [prodInvPLN, setProdInvPLN] = useState<any>(st.producerInvoiceAmountPLN ?? "");
   const [commInvNo, setCommInvNo] = useState(st.commissionInvoiceNo || "");
+  // v6.81.0 (D-57, owner ruling): tiers per TRUCK — the band follows this settlement's own gross.
+  const rateRec = producer ? currentCommissionRate(producer, localTodayISO()) : null;
+  const grossForBand = computeLotSettlement(lot, orders, 0, extra).grossPLN;
+  const bandPct = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, grossForBand) : null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => { if (bandPct != null && st.status !== "Closed" && (pct === "" || pct === seasonPct)) setPct(bandPct); }, [bandPct]);
   const calc = computeLotSettlement(lot, orders, parseFloat(pct) || 0, extra);
   const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
   const status = st.status || "None";
@@ -1123,7 +1132,7 @@ function SortingModal({ lot, onCancel, onConfirm }: any) {
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Date</label>
-              <input type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+              <DateInput value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
             </div>
           </div>
           <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Note (optional)</label>
@@ -1166,7 +1175,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div><label style={lblStyle}>Returned kg</label><input type="number" value={kg} onChange={e => setKg(e.target.value)} style={inpStyle} placeholder="e.g. 5" /></div>
-          <div><label style={lblStyle}>Return date</label><input type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={inpStyle} /></div>
+          <div><label style={lblStyle}>Return date</label><DateInput value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={inpStyle} /></div>
           <div><label style={lblStyle}>From (client)</label><select value={fromId} onChange={e => setFromId(e.target.value)} style={inpStyle}><option value="">—</option>{locs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
           <div><label style={lblStyle}>To (warehouse)</label><select value={toId} onChange={e => setToId(e.target.value)} style={inpStyle}><option value="">—</option>{ownWarehouses.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
           <div><label style={lblStyle}>Return transport cost</label><input type="number" value={cost} onChange={e => setCost(e.target.value)} style={inpStyle} placeholder="0" /></div>
@@ -1220,7 +1229,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
-        <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22 }}>
             <div>
@@ -2027,7 +2036,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
               const producer = po ? (extContacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(po.supplier?.name || "").trim().toLowerCase()) : null;
               const pinv = (extInvoices || []).find((i: any) => i.kind === "COST" && i.category === "PURCHASE" && i.paymentStatus !== "Cancelled" && (i.links || []).some((lk: any) => lk.type === "PO" && String(lk.number) === String(l.poRef)));
               onStartClaim({
-                respondentKind: "Supplier", direction: "RECOVERY",
+                respondentKind: "Supplier", direction: "RECOVERY", currency: po?.currency || "PLN", fxToPLN: po?.fxRate || 1, // v6.81.0 (D-62)
                 respondentName: po?.supplier?.name || "", contactId: producer ? producer.id : null,
                 subjects: [
                   { kind: "LOT", ref: l.number },

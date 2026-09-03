@@ -12,7 +12,21 @@ import { productsMatch } from "./salesOrders.domain";
 // invoice, −commission credit) so the existing margin engine lands each
 // consignment SO's P/L at exactly the commission.
 
-export interface CommissionRate { id?: number; season: string; validFrom: string; pct: number }
+export interface CommissionBand { fromPLN: any; toPLN?: any; pct: any }
+/** v6.81.0 (D-57, owner ruling): tiers are decided PER TRUCK — the settlement's own
+ *  gross sales pick the band. A rate without bands is flat (today's behaviour). */
+export interface CommissionRate { id?: number; season: string; validFrom: string; pct: number; bands?: CommissionBand[] }
+
+export function commissionPctForSales(rate: CommissionRate | null | undefined, grossPLN: number): number | null {
+  if (!rate) return null;
+  const bands = (rate.bands || []).filter(b => b && isFinite(parseFloat(String(b.pct))));
+  if (!bands.length) return n(rate.pct);
+  const hit = bands
+    .slice().sort((a, b) => n(a.fromPLN) - n(b.fromPLN))
+    .filter(b => grossPLN >= n(b.fromPLN) && (b.toPLN === undefined || b.toPLN === null || String(b.toPLN) === "" || grossPLN < n(b.toPLN)))
+    .pop();
+  return hit ? n(hit.pct) : n(rate.pct);
+}
 
 export interface SettlementSalesLine {
   soNumber: string; client: string; product: string;
@@ -45,6 +59,13 @@ export function currentCommissionPct(producer: any, dateISO: string): number | n
     .sort((a, b) => String(a.validFrom || "").localeCompare(String(b.validFrom || "")));
   const pick = applicable[applicable.length - 1] || rates[0];
   return n(pick.pct);
+}
+/** The season rate RECORD (with bands) valid on a date — for per-truck banding. */
+export function currentCommissionRate(producer: any, dateISO: string): CommissionRate | null {
+  const rates: CommissionRate[] = (producer?.commissionRates || []).filter((r: any) => r && isFinite(parseFloat(r.pct as any)));
+  if (!rates.length) return null;
+  const applicable = rates.filter(r => !r.validFrom || String(r.validFrom) <= String(dateISO)).sort((a, b) => String(a.validFrom || "").localeCompare(String(b.validFrom || "")));
+  return applicable[applicable.length - 1] || rates[0];
 }
 
 // Does an SO line source from this lot (directly, or via the lot's PO)?
@@ -88,8 +109,24 @@ export function computeLotSettlement(
       });
     });
   });
+  // v6.81.0 (D-56, owner ruling): the settlement is the POST-CLAIM result. A client
+  // CONCESSION posted on a sourcing SO reduces gross (this lot's kg share of the SO);
+  // a producer RECOVERY posted on the lot is a deduction from the payout (below).
+  (orders || []).forEach((o: any) => {
+    if (!o || o.status === "Draft" || o.status === "Cancelled") return;
+    const adj = (o.claimAdjustments || o.adjustments || []).filter((a: any) => String(a?.source || "").startsWith("claim:"));
+    if (!adj.length) return;
+    const lotKg = (o.items || []).filter((it: any) => lineSourcesLot(it, lot)).reduce((s: number, it: any) => s + n(it.qty), 0);
+    const soKg = (o.items || []).reduce((s: number, it: any) => s + n(it.qty), 0);
+    if (!(lotKg > 0) || !(soKg > 0)) return;
+    const share = Math.min(1, lotKg / soKg);
+    adj.forEach((a: any) => {
+      const pln = r2(Math.abs(n(a.pln ?? a.amountPLN)) * share);
+      if (pln > 0) salesLines.push({ soNumber: o.number, client: o.client?.name || "—", product: `Client claim ${String(a.source).slice(6)}`, kg: 0, unitPrice: 0, currency: "PLN", fxRate: 1, pln: -pln });
+    });
+  });
   const grossPLN = r2(salesLines.reduce((s, l) => s + l.pln, 0));
-  const soldKg = r2(salesLines.reduce((s, l) => s + l.kg, 0));
+  const soldKg = r2(salesLines.filter(l => l.kg > 0).reduce((s, l) => s + l.kg, 0));
   if (soldKg === 0) warnings.push("No sales sourced from this lot yet — gross sales value is zero.");
   const expectedKg = n(lot?.expectedKg) || n(lot?.receivedKg);
   if (expectedKg > 0 && soldKg < expectedKg) {
@@ -108,6 +145,13 @@ export function computeLotSettlement(
     if (c.type === "purchase") return;                         // consignment lots have no purchase cost
     const pln = n(c.pln);
     if (pln === 0) return;
+    if (String(c.source || "").startsWith("claim:")) {
+      // v6.81.0 (D-56): a producer RECOVERY sits on the lot as a NEGATIVE cost. In a
+      // settlement it is money the producer owes us — a deduction from his payout,
+      // never a reduction of expenses (which would have RAISED the payout).
+      expenseLines.push({ label: `Producer claim deduction ${String(c.source).slice(6)}`, pln: r2(Math.abs(pln)), source: c.source });
+      return;
+    }
     expenseLines.push({ label: c.label || c.type || "Cost", pln: r2(pln), source: c.source });
   });
   (extraExpenses || []).forEach(e => {

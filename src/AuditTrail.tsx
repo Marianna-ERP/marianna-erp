@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { PAGE_MAX } from "./ui";
 import { filterAudit } from "./auditTrail.domain";
 
 // v6.40.0 — the AUDIT view: a read-only logbook of business events. Passive by
@@ -21,7 +22,7 @@ export default function AuditTrail({ auditLog = [] }: any) {
     : a === "imported" || a === "allocated" ? "#7C3AED" : a === "claim" ? "#B45309" : "#64748B";
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, background: "#fff" };
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, maxWidth: PAGE_MAX, margin: "0 auto" }}>
       <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 2 }}>Audit trail</div>
       <div style={{ fontSize: 12, color: "#64748B", marginBottom: 14 }}>
         Who did what, when — a passive logbook of business events (created / status / cancelled / allocated / imported / movements / claims).

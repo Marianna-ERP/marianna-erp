@@ -1,4 +1,5 @@
 import { chooseDepartment, departmentBlockReason } from "./fakturowniaDepartments.domain";
+import DateInput from "./DateInput";
 import { useConfirm } from "./ui";
 import React, { useMemo, useState } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
@@ -22,6 +23,7 @@ function Card({ children, style }: any) { return <div style={{ background: "#fff
 function SectionTitle({ children, right }: any) { return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{children}</div>{right}</div>; }
 function Lbl({ children }: any) { return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>; }
 function Inp({ value, onChange, type, placeholder, disabled, style }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
   // v6.63.0 (D-09, M4): a controlled numeric input seeded with 0 rendered a zero
   // that could never be deleted (each keystroke re-parsed to a number). A stored
   // 0 now renders as an empty box; the parser already treats "" as 0 on save.
@@ -69,7 +71,7 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
         <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>Record payment — {inv.number}</div>
         <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>Outstanding: <b>{remaining.toFixed(2)} {inv.currency}</b>. Each payment is a dated event — partial payments simply add more events.</div>
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Payment date</div>
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inp} />
+        <DateInput value={date} onChange={e => setDate(e.target.value)} style={inp} />
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Amount ({inv.currency})</div>
         <input type="number" value={amount} onChange={e => setAmount(e.target.value)} style={inp} />
         {String(inv.currency || "PLN").toUpperCase() !== "PLN" && (<>
@@ -464,7 +466,24 @@ export default function Invoices(props: any) {
     // Without this every invoice took the account's main department, so a PLN or
     // USD invoice printed a EUR account number to the client — on a document
     // that had already reached KSeF, where the only remedy is another document.
-    const choice = chooseDepartment(inv, fktDepartments, fktDepartmentDefaults);
+    let choice = chooseDepartment(inv, fktDepartments, fktDepartmentDefaults);
+    // v6.81.0 (D-60, owner ruling): the account is chosen PER INVOICE at send time. When
+    // no explicit choice exists, list the candidates in the invoice's currency (the
+    // currency default, if set, is offered first); the pick is stored on the invoice.
+    const cur = String(inv.currency || "PLN").toUpperCase();
+    const candidates = (fktDepartments || []).filter((d: any) => String(d.currency || "").toUpperCase() === cur);
+    if (!inv.fakturowniaDepartmentId && candidates.length > 0) {
+      const dflt = choice.department && !choice.ambiguous ? choice.department : candidates[0];
+      const menu = candidates.map((d: any, i: number) => `${i + 1}. ${d.name}${d.bankAccount ? " · " + String(d.bankAccount).replace(/\s+/g, "").slice(-8) : ""}${dflt && String(dflt.id) === String(d.id) ? "  (default)" : ""}`).join("\n");
+      const ans = await invPrompt({ title: `Bank account for ${inv.number || "this invoice"} (${cur})`, message: `Which account should this invoice carry?\n${menu}\n\nType the number:`, defaultValue: String(Math.max(1, candidates.findIndex((d: any) => dflt && String(d.id) === String(dflt.id)) + 1)), confirmLabel: "Use this account" });
+      if (ans === null) { setPushState(null); return; }
+      const pick = candidates[Math.max(0, Math.min(candidates.length - 1, (parseInt(String(ans), 10) || 1) - 1))];
+      if (pick) {
+        setInvoices((prev: Invoice[]) => prev.map(p => p.id === inv.id ? ({ ...p, fakturowniaDepartmentId: pick.id } as any) : p));
+        inv = { ...inv, fakturowniaDepartmentId: pick.id } as any;
+        choice = chooseDepartment(inv, fktDepartments, fktDepartmentDefaults);
+      }
+    }
     const blocked = departmentBlockReason(choice);
     if (blocked) {
       await invAlert({ tone: "warn", title: "Which bank account?", message: `${blocked}\n\nThe invoice is not sent. Wrong payment details on a document that has reached KSeF can only be corrected by issuing another one.` });
@@ -790,11 +809,16 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
 
           <Card style={{ marginBottom: 16 }}><SectionTitle>LINKED DOCUMENTS</SectionTitle>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {/* v6.81.0 (D-59): an invoice born from a Sales Order is that order's invoice — its link is fixed. */}
+              {form.kind === "SALES" && (form.links || []).some((l: any) => l.type === "SO") ? (
+                <div style={{ fontSize: 12, color: "#334155" }}>Linked to <b>{(form.links || []).filter((l: any) => l.type === "SO").map((l: any) => l.number).join(", ")}</b> — fixed for an invoice issued from a Sales Order. To invoice something else, cancel this one and issue from the right order.</div>
+              ) : (<>
               <div style={{ width: "100%", marginBottom: 8 }}>
                 <Inp value={linkQuery} onChange={(e: any) => setLinkQuery(e.target.value)} placeholder="Search documents to link (e.g. PO-2026, SHP, client SO number)…" />
               </div>
               {docOptions.map((d: any) => { const on = (form.links || []).find((l: any) => l.number === d.number); return <button key={d.type + d.number} onClick={() => toggleLink(d)} style={{ padding: "6px 12px", border: `1px solid ${on ? "#2563EB" : "#E5E7EB"}`, background: on ? "#EFF6FF" : "#fff", borderRadius: 8, fontSize: 12, color: on ? "#1D4ED8" : "#555", cursor: "pointer", fontWeight: on ? 600 : 400 }}>{on && "✓ "}{d.type} {d.number}</button>; })}
               {docOptions.length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No SOs / POs / shipments to link yet.</div>}
+              </>)}
             </div>
           </Card>
 

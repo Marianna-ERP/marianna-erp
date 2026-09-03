@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import DateInput from "./DateInput";
 import { localTodayISO } from "./dates";
 import { nextId } from "./ids";
 import { PrintLogo } from "./brand";
@@ -311,7 +312,7 @@ export default function LoadingProtocolModal({
                 <option value="euro">Euro 1200×800 — {PALLET_CAPACITY.euro} per truck</option>
               </select>
             </div>
-            <div><Lbl>Departed on</Lbl><input type="date" value={p.departedOn || ""} onChange={e => sf("departedOn", e.target.value)} style={INP} /></div>
+            <div><Lbl>Departed on</Lbl><DateInput value={p.departedOn || ""} onChange={e => sf("departedOn", e.target.value)} style={INP} /></div>
             <div style={{ gridColumn: "span 2", display: "flex", alignItems: "flex-end" }}>
               <div style={{ fontSize: 11.5, padding: "7px 11px", borderRadius: 7, width: "100%",
                 background: load.limit ? "#FEF2F2" : "#F0FDF4", border: `1px solid ${load.limit ? "#FECACA" : "#BBF7D0"}`, color: load.limit ? "#991B1B" : "#166534" }}>
@@ -326,8 +327,8 @@ export default function LoadingProtocolModal({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div><Lbl>Chamber temp. before loading (°C)</Lbl><input value={p.chamberTempBeforeC || ""} onChange={e => sf("chamberTempBeforeC", e.target.value)} placeholder="e.g. 2" style={INP} /></div>
             <div><Lbl>Temperature recorder no(s), comma separated</Lbl><input value={recorderText} onChange={e => sf("recorderNos", e.target.value.split(",").map(s => s.trim()).filter(Boolean))} placeholder="241002PDF2476186, 241002PDF2476099" style={INP} /></div>
-            <div><Lbl>Driver signed (date)</Lbl><input type="date" value={p.driverSignedDate || ""} onChange={e => sf("driverSignedDate", e.target.value)} style={INP} /></div>
-            <div><Lbl>Producer signed (date)</Lbl><input type="date" value={p.issuerSignedDate || ""} onChange={e => sf("issuerSignedDate", e.target.value)} style={INP} /></div>
+            <div><Lbl>Driver signed (date)</Lbl><DateInput value={p.driverSignedDate || ""} onChange={e => sf("driverSignedDate", e.target.value)} style={INP} /></div>
+            <div><Lbl>Producer signed (date)</Lbl><DateInput value={p.issuerSignedDate || ""} onChange={e => sf("issuerSignedDate", e.target.value)} style={INP} /></div>
             <div style={{ gridColumn: "span 2" }}>
               <Lbl>Link to the signed scan {p.scanLink ? (inspectLink(p.scanLink).ok
                 ? <a href={p.scanLink} target="_blank" rel="noreferrer" style={{ color: "#2563EB", fontWeight: 700, textDecoration: "none" }}>· open {inspectLink(p.scanLink).label} ↗</a>

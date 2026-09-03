@@ -937,3 +937,40 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.80.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.81.0 — Round 5 ══
+(function v681(){
+  console.log("\n══ 27. v6.81.0: settlement incl. claims, per-truck commission bands, claim currency ══");
+  const cl = B("claims.domain.js");
+  const mkLotC = () => ({ id: 1, number: "LOT-1", product: "Apples", ownership: "CONSIGNMENT", expectedKg: 1000, receivedKg: 1000, costs: [{ type: "freight", source: "SHP-1/1", pln: 800 }] });
+  const soC = () => ({ number: "SO-1", status: "Confirmed", currency: "PLN", fxRate: 1, client: { name: "C" }, items: [{ product: "Apples", qty: 1000, unitPrice: 5, sourceType: "STOCK", sourceRef: "LOT-1" }] });
+  t("D-56: a client concession reduces the settlement's gross; a producer recovery is a deduction, never a cheaper expense", () => {
+    const base = cons.computeLotSettlement(mkLotC(), [soC()], 8, []);
+    approx(base.grossPLN, 5000); approx(base.payoutPLN, (5000 - 800) * 0.92);
+    const withConcession = cons.computeLotSettlement(mkLotC(), [{ ...soC(), claimAdjustments: [{ source: "claim:CLM-1", pln: -500 }] }], 8, []);
+    approx(withConcession.grossPLN, 4500, "gross net of the concession");
+    const lot = mkLotC(); lot.costs.push({ type: "claim", source: "claim:CLM-2", pln: -300 });
+    const withRecovery = cons.computeLotSettlement(lot, [soC()], 8, []);
+    approx(withRecovery.expensesPLN, 1100, "800 freight + 300 deducted from the producer");
+    ok(withRecovery.payoutPLN < base.payoutPLN, "producer gets LESS after his own defect, not more");
+  });
+  t("D-57: commission tiers decided per truck by its own gross; flat rate unchanged", () => {
+    const flat = { season: "26", validFrom: "", pct: 8 };
+    eq(cons.commissionPctForSales(flat, 999999), 8);
+    const tiered = { season: "26", validFrom: "", pct: 8, bands: [{ fromPLN: 0, toPLN: 100000, pct: 8 }, { fromPLN: 100000, toPLN: null, pct: 6 }] };
+    eq(cons.commissionPctForSales(tiered, 50000), 8); eq(cons.commissionPctForSales(tiered, 150000), 6);
+    eq(cons.commissionPctForSales(tiered, 100000), 6, "boundary belongs to the upper band");
+  });
+  t("D-62: claim money follows the root document's currency — PLN claim posts in PLN, EUR legacy unchanged", () => {
+    const pln = { number: "CLM-9", status: "Accepted", direction: "CONCESSION", currency: "PLN", acceptedAmount: 1200, respondent: { kind: "Client", name: "C" }, subjects: [{ kind: "SO", ref: "SO-1" }] };
+    eq(cl.claimMoney(pln).pln, 1200); eq(cl.claimMoney(pln).currency, "PLN");
+    const p = cl.buildClaimPostings(pln, { todayISO: "2026-09-03" });
+    approx(Math.abs(p.postings[0].pln ?? p.postings[0].amountPLN), 1200);
+    const note = cl.buildClaimFinanceNote(pln, "OUR_CREDIT_TO_CLIENT", { nextId: () => 1, todayISO: () => "2026-09-03", invoices: [] });
+    eq(note.currency, "PLN"); approx(note.amountPLN, 1200);
+    const eur = { number: "CLM-8", status: "Accepted", acceptedEUR: 100, plnPerEur: 4.3, respondent: { kind: "Supplier" }, subjects: [{ kind: "LOT", ref: "L", affectedKg: 10 }] };
+    approx(cl.claimMoney(eur).pln, 430, "legacy EUR claims unchanged");
+  });
+  console.log("v6.81.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

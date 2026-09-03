@@ -1,4 +1,7 @@
 import { referencesToContact } from "./referenceGuards";
+import { currentUser } from "./permissions.domain";
+
+import DateInput from "./DateInput";
 import React, { useState, useMemo, useRef } from "react";
 import { Lbl, useConfirm, ActionButton} from "./ui";
 import { nextId } from "./ids";
@@ -6,6 +9,18 @@ import { contactAddresses, warehouseCpLocId, LOGISTICS_POINT_KINDS, readLogistic
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
+
+// v6.81.0 (D-57): commission tiers PER TRUCK — text ⇄ bands.
+function bandsToText(b: any[]): string { return (b || []).map((x: any) => `${x.fromPLN ?? 0}-${x.toPLN ?? ""}:${x.pct ?? ""}`).join("; "); }
+function textToBands(t: string): any[] {
+  return String(t || "").split(";").map(s => s.trim()).filter(Boolean).map(s => {
+    const m = s.match(/^\s*([\d.,]*)\s*-\s*([\d.,]*)\s*:\s*([\d.,]+)\s*$/);
+    if (!m) return null;
+    const num = (v: string) => { const x = parseFloat(v.replace(",", ".")); return isFinite(x) ? x : null; };
+    return { fromPLN: num(m[1]) ?? 0, toPLN: m[2] ? num(m[2]) : null, pct: num(m[3]) ?? 0 };
+  }).filter(Boolean);
+}
+
 
 // ─── COMPANY & CONFIG ───────────────────────────────────────────────────────
 const COMPANY = {
@@ -59,6 +74,7 @@ const SERVICE_COLORS: Record<string, { bg: string; color: string; icon: string }
 
 // ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────
 function Inp({ value, onChange, type, placeholder, style, inputMode }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={undefined} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <input value={value || ""} onChange={onChange} type={type || "text"} inputMode={inputMode} placeholder={placeholder} style={{ ...base, ...style }} />;
 }
@@ -143,7 +159,7 @@ export function getLogisticsProvidersByService(counterparties, service) {
 }
 
 // ─── COUNTERPARTY MODAL — company-level details ─────────────────────────────
-function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any) {
+function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSeeCommission = true }: any) {
   const defaultFinance = { bankName: "", accountNumber: "", swift: "" };
   const blank = { type: "Client", additionalTypes: [], name: "", country: "", address: "", nip: "", vatEuId: "", defaultCurrency: "PLN", paymentTerms: "30 days from invoice date", paymentTermsOther: "", services: [], finance: defaultFinance, notes: "" };
   const [form, setForm] = useState(counterparty ? { additionalTypes: [], services: [], paymentTermsOther: "", ...counterparty, finance: { ...defaultFinance, ...(counterparty.finance || {}) } } : { ...blank, id: null });
@@ -352,8 +368,12 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any
               </div>
             </div>
           )}
-          {allTypes.includes("Supplier") && (
+          {allTypes.includes("Supplier") && !canSeeCommission && (
+            <div style={{ fontSize: 11.5, color: "#94A3B8", padding: "6px 0" }}>Commission terms — visible to the owner and finance only (v6.81.0, D-57).</div>
+          )}
+          {allTypes.includes("Supplier") && canSeeCommission && (
             <div>
+              {/* v6.81.0 (D-57, owner ruling): commission terms are financial — visible to the owner and the finance role only. */}
               <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>COMMISSION — CONSIGNMENT SALES <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· season rates; the rate valid on the settlement date is prefilled</span></div>
               {(form.commissionRates || []).map((r: any, i: number) => (
                 <div key={r.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr 34px", gap: 8, marginBottom: 6, alignItems: "end" }}>
@@ -361,6 +381,9 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose }: any
                   <div><Lbl>Valid from</Lbl><Inp type="date" value={r.validFrom || ""} onChange={e => setCommissionRate(i, "validFrom", e.target.value)} /></div>
                   <div><Lbl>Commission %</Lbl><Inp type="text" inputMode="decimal" value={r.pct ?? ""} onChange={e => setCommissionRate(i, "pct", e.target.value)} placeholder="e.g. 10" /></div>
                   <button type="button" onClick={() => removeCommissionRate(i)} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                
+                  <div style={{ gridColumn: "1 / -1" }}><Lbl>Tiers per truck (optional) — e.g. "0-100000:8; 100000-:6" = 8 % up to 100 000 PLN of the truck's sales, 6 % above</Lbl>
+                    <Inp value={bandsToText(r.bands)} onChange={e => setCommissionRate(i, "bands", textToBands(e.target.value))} placeholder="from-to:pct; from-:pct" /></div>
                 </div>
               ))}
               <button type="button" onClick={addCommissionRate} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add season rate</button>
@@ -1348,7 +1371,10 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
   );
 }
 
-export default function Contacts({ contacts: extContacts, setContacts: extSetContacts, logisticsPoints: extLogisticsPoints, setLogisticsPoints: extSetLogisticsPoints, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [] }: any = {}) {
+export default function Contacts({ contacts: extContacts, setContacts: extSetContacts, logisticsPoints: extLogisticsPoints, setLogisticsPoints: extSetLogisticsPoints, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [], users = [], userName = "" }: any = {}) {
+  // v6.81.0 (D-57): commission terms visible to the owner and the finance role (finance.pl) only; with no users defined, everyone.
+  const _cu = currentUser(users, userName);
+  const canSeeCommission = _cu === null ? true : !!(_cu && (_cu.isOwner || _cu.finance?.pl === true));
   const { alert: guardAlert, dialogNode: guardNode } = useConfirm(); // v6.63.0 (D-01): delete-guard dialog
   // Integration mode: if parent passes state in, use it (shell owns state).
   // Standalone mode: use local state with the baked-in seed.
@@ -1582,7 +1608,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           contacts={counterparties}
           onSave={saveCounterparty}
           onClose={() => setModal(null)}
-        />
+         canSeeCommission={canSeeCommission} />
       )}
       {dupReview && !mergeTarget && (
         <DuplicateReviewModal

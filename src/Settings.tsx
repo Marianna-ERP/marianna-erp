@@ -1,4 +1,5 @@
 import { useConfirm, SmallButton } from "./ui";
+import { PAGE_MAX } from "./ui";
 import React, { useRef, useState } from "react";
 import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
@@ -165,7 +166,7 @@ function LocationsPanel({ refStores = {} }: any) {
 function FullScreenModal({ title, onClose, children }: any) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 70, display: "flex", alignItems: "stretch", justifyContent: "center", padding: "3vh 3vw" }} onClick={onClose}>
-      <div style={{ background: "#F8FAFC", borderRadius: 14, width: "100%", maxWidth: 1100, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,0.35)" }} onClick={(e: any) => e.stopPropagation()}>
+      <div style={{ background: "#F8FAFC", borderRadius: 14, width: "100%", maxWidth: PAGE_MAX, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,0.35)" }} onClick={(e: any) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "#fff", borderBottom: "1px solid #E5E7EB" }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: "#111" }}>{title}</div>
           <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Close</button>

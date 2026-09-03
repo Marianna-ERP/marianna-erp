@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { PAGE_MAX } from "./ui";
 import { Card, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import {
   blankLoadPlan, planShipments, planTotals, mapGaps, containerContents,
@@ -73,7 +74,7 @@ export default function LoadPlans({ loadPlans = [], setLoadPlans, shipments = []
 
   return <div style={{ flex: 1, overflow: "hidden", padding: "16px 28px 24px" }}>
     {dialogNode}
-    <div style={{ maxWidth: 1460, margin: "0 auto", height: "100%", display: "grid", gridTemplateColumns: "330px 1fr", gap: 16 }}>
+    <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", height: "100%", display: "grid", gridTemplateColumns: "330px 1fr", gap: 16 }}>
 
       {/* ── register ── */}
       <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>

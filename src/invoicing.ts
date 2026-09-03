@@ -31,6 +31,8 @@ export interface Invoice {
    *  excluded from receivable/payable totals; pushes to Fakturownia as kind
    *  "proforma"; the FINAL invoice is what advances get applied to. */
   isProforma?: boolean;
+  /** v6.81.0 (D-60): the Fakturownia department (bank account) chosen for this invoice at send. */
+  fakturowniaDepartmentId?: any;
   id: number;
   kind: InvoiceKind;
   category: InvoiceCategory;

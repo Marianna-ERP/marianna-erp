@@ -13,6 +13,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useRef, useCallback } from "react";
 
+// v6.81.0 (D-53, owner ruling): ONE page-width standard — use the screen, cap at 1720 px
+// so 27" monitors do not stretch tables into unreadable lines. Every module root reads this.
+export const PAGE_MAX = 1720;
+
 export function Card({ children, style = {} }: any) {
   return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
 }

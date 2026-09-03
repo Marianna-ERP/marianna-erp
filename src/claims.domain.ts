@@ -104,6 +104,12 @@ export interface Claim {
   recoveredEGP: any;
   egpPerEur: any;
   plnPerEur: any;
+  /** v6.81.0 (D-62, owner ruling): the claim's currency follows the ROOT document —
+   *  a PLN sale is claimed in PLN, a EUR purchase in EUR. acceptedAmount + fxToPLN
+   *  carry the money in that currency; the EUR fields stay as the legacy mirror. */
+  currency?: string;
+  acceptedAmount?: any;
+  fxToPLN?: any;
   totalCostEUR: any;
   defectValueEUR: any;
   recoveredEUR: any;
@@ -143,6 +149,7 @@ export function blankClaim(overrides: Partial<Claim> = {}): Claim {
     costLines: [], basis: "DEFECT", lostKg: "", lostValueEUR: "", causedCosts: [], clientCosts: [],
     defectType: "", defectPct: "", soldInMarket: null,
     recoveredEGP: "", egpPerEur: "", plnPerEur: "",
+    currency: (overrides as any)?.currency || "EUR", acceptedAmount: null, fxToPLN: (overrides as any)?.fxToPLN ?? "",
     totalCostEUR: 0, defectValueEUR: 0, recoveredEUR: 0,
     requestedEUR: 0, acceptedEUR: null,
     status: "Draft", resolvedAt: "", evidence: [],
@@ -354,7 +361,7 @@ export interface ClaimPosting {
 
 const POSTABLE = new Set<string>(["Accepted", "Partially accepted", "Settled"]);
 export function isPostable(c: any): boolean {
-  return POSTABLE.has(str(c?.status)) && num(c?.acceptedEUR) > 0;
+  return POSTABLE.has(str(c?.status)) && claimMoney(c).amount > 0;
 }
 
 /**
@@ -366,10 +373,11 @@ export function buildClaimPostings(claim: any, opts: { plnPerEur?: any; todayISO
   const warnings: string[] = [];
   if (!isPostable(claim)) return { postings: [], warnings: ["Claim is not accepted, or the agreed amount is zero"] };
 
-  const rate = num(opts.plnPerEur) || num(claim?.plnPerEur);
-  if (!(rate > 0)) return { postings: [], warnings: ["No EUR→PLN rate on the claim — set one before posting"] };
+  const money = claimMoney(claim);
+  const rate = money.currency === "PLN" ? 1 : (num(opts.plnPerEur) || num(claim?.fxToPLN) || num(claim?.plnPerEur));
+  if (!(rate > 0)) return { postings: [], warnings: [`No ${money.currency}→PLN rate on the claim — set one before posting`] };
 
-  const acceptedPLN = Math.round(num(claim.acceptedEUR) * rate * 100) / 100;
+  const acceptedPLN = money.currency === "PLN" ? Math.round(money.amount * 100) / 100 : Math.round(money.amount * rate * 100) / 100;
   const source = `claim:${str(claim.number)}`;
   const date = str(opts.todayISO) || str(claim.resolvedAt) || str(claim.date);
   const who = str(claim?.respondent?.name) || str(claim?.respondent?.kind);
@@ -471,9 +479,10 @@ export function buildClaimFinanceNote(
   mode: ClaimNoteMode,
   deps: { nextId: () => any; todayISO: () => string; invoices?: any[] }
 ): any {
-  const acceptedEUR = Number(claim?.acceptedEUR) || 0;
-  const fx = Number(claim?.plnPerEur) || 0;
-  const amountPLN = Math.round(acceptedEUR * (fx || 0) * 100) / 100;
+  const money = claimMoney(claim);                 // v6.81.0 (D-62): in the claim's own currency
+  const acceptedEUR = money.amount;
+  const fx = money.currency === "PLN" ? 1 : (money.amount > 0 ? money.pln / money.amount : 0);
+  const amountPLN = money.pln;
   const invSubj = (claim?.subjects || []).find((s: any) => s.kind === "INVOICE");
   const invoice = invSubj ? (deps.invoices || []).find((i: any) => String(i.number) === String(invSubj.ref)) : null;
   const firstDoc = (claim?.subjects || []).find((s: any) => s.kind !== "INVOICE");
@@ -484,7 +493,7 @@ export function buildClaimFinanceNote(
     partyName: String(claim?.respondent?.name || ""),
     category: "Claim settlement",
     amount: acceptedEUR,
-    currency: "EUR",
+    currency: money.currency,
     fxRate: fx || 1,
     amountPLN,
     status: "Issued",
@@ -497,4 +506,17 @@ export function buildClaimFinanceNote(
   if (mode === "THEIR_CREDIT")
     return { ...base, noteType: "CREDIT", direction: "incoming", issuedBy: "COUNTERPARTY" };
   return { ...base, noteType: "DEBIT", direction: "incoming", issuedBy: "US" };
+}
+
+
+// ── v6.81.0 (D-62): ONE place that says how much a claim is worth, in what, and in PLN ──
+export function claimMoney(c: any): { currency: string; amount: number; pln: number } {
+  const cur = String(c?.currency || "EUR").toUpperCase();
+  if (cur !== "EUR" || (c?.acceptedAmount != null && c?.acceptedAmount !== "")) {
+    const amount = num(c?.acceptedAmount);
+    const fx = cur === "PLN" ? 1 : (num(c?.fxToPLN) || (cur === "EUR" ? num(c?.plnPerEur) : 0));
+    return { currency: cur, amount, pln: Math.round(amount * fx * 100) / 100 };
+  }
+  const amount = c?.acceptedEUR != null && c?.acceptedEUR !== "" ? num(c.acceptedEUR) : 0;
+  return { currency: "EUR", amount, pln: Math.round(amount * num(c?.plnPerEur) * 100) / 100 };
 }

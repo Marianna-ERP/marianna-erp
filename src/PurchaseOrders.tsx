@@ -1,4 +1,6 @@
 import { newestFirst } from "./moduleGuards.domain";
+import { PAGE_MAX } from "./ui";
+import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
@@ -145,6 +147,7 @@ function suppliersFromContacts(contacts) {
 
 // ─── SHARED ATOMS ───────────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
@@ -758,7 +761,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
   // change at all (including revert-to-Draft and Cancel). It can only be removed by
   // unlinking every downstream document first, then deleting.
   const poNum = order.number;
-  const hasLinkedSO = (allSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+  // v6.81.0 (D-54): a DRAFT sale is an intention, not a dependency — it must not lock the PO it draws from (Draft↔Draft deadlock, PO-2026-0031).
+  const hasLinkedSO = (allSOs || []).some((so: any) => so.status !== "Cancelled" && so.status !== "Draft" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
   const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
   // v6.35.0: a lot whose linked shipments are ALL cancelled must not keep the PO locked —
   // otherwise cancelling everything to fix the PO leaves it permanently trapped. We treat a
@@ -838,7 +842,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, gap: 20 }}>
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
@@ -956,9 +960,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                       // v6.29.0: merge live warehouse addresses from Contacts (v6.18.3
                       // behaviour inherited from the removed legacy Destination field).
                       const liveWh = warehouseAddressLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+                      // v6.81.0 (D-55): for supplier-delivered terms the named place is often the CLIENT's
+                      // warehouse — client addresses are not locations, so they never appeared. Add them as
+                      // CLIENT sites; sort everything alphabetically (Polish collation).
+                      const supplierDelivers = ["DAP", "DDP", "DPU", "DAT"].includes(String(order.buyIncoterm || "").toUpperCase());
+                      const clientSites = supplierDelivers ? (contacts || []).filter((c: any) => (c.type === "Client" || (c.roles || []).includes("Client")) && String(c.address || c.city || "").trim())
+                        .map((c: any) => ({ id: `client:${c.id}`, name: `${c.name} — ${c.address || c.city}`, type: "CLIENT", legacyType: "CLIENT", country: c.country || "" })) : [];
                       const byId = new Map<any, any>();
-                      [...LOCATIONS, ...liveWh].forEach((l: any) => byId.set(String(l.id), l));
-                      const all = Array.from(byId.values());
+                      [...LOCATIONS, ...liveWh, ...clientSites].forEach((l: any) => byId.set(String(l.id), l));
+                      const all = Array.from(byId.values()).sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl", { sensitivity: "base" }));
                       const opts = all.filter((l: any) => pool.types.includes(l.type));
                       const rest = all.filter((l: any) => !pool.types.includes(l.type));
                       return (<>
@@ -1172,7 +1182,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
-        <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, gap: 20 }}>
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>

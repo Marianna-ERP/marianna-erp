@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import DateInput from "./DateInput";
 import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { claimBlockReason, staleClaimWarnings } from "./cancellation.domain";
 import { inspectLink } from "./docLinks.domain";
@@ -8,7 +9,7 @@ import { applyDeadlineDefault, suggestNoticeDeadline, deadlineStatus, claimsNeed
 import {
   CLAIM_STATUSES, CLAIM_CAUSES, RESPONDENT_KINDS, CLAIM_DIRECTIONS, CLAIM_BASES,
   isClaimOpen, claimsSummary, incidentNet, nextClaimNumber, blankClaim,
-  buildClaimFinanceNote, claimNoteMode,
+  buildClaimFinanceNote, claimNoteMode, claimMoney,
   requestedFromBasis, buildClaimPostings, applyPostingsToLots, applyPostingsToOrders,
   reverseClaimPostings,
 } from "./claims.domain";
@@ -98,6 +99,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
       direction: claimSeed.direction || (String(claimSeed.respondentKind) === "Client" ? "CONCESSION" : "RECOVERY"),
       respondent: { kind: claimSeed.respondentKind || "Supplier", contactId: claimSeed.contactId ?? null, name: claimSeed.respondentName || "" },
       cause: claimSeed.cause || "Quality defect",
+      currency: claimSeed.currency || "EUR", fxToPLN: claimSeed.fxToPLN ?? "",
       subjects: claimSeed.subjects || [],
       notes: claimSeed.notes || "",
     });
@@ -116,7 +118,8 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
       await uiConfirm({ tone: "warn", title: "Already documented", message: `${c.number} already has its credit/debit note. Corrections go through a new note in Invoices.`, confirmLabel: "OK", cancelLabel: "Close" });
       return;
     }
-    if (!(Number(c.acceptedEUR) > 0) || !(Number(c.plnPerEur) > 0)) {
+    const money = claimMoney(c); // v6.81.0 (D-62)
+    if (!(money.amount > 0) || !(money.pln > 0)) {
       await uiConfirm({ tone: "warn", title: "No agreed amount", message: "Enter the accepted EUR amount and the PLN/EUR rate first — the note documents the money that was actually agreed.", confirmLabel: "OK", cancelLabel: "Close" });
       return;
     }
@@ -392,9 +395,15 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                     <select value={selected.cause} onChange={e => patch(selected.id, { cause: e.target.value })} style={INP}>
                       {CLAIM_CAUSES.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
+                    {/^quality|defect/i.test(String(selected.cause || "")) && (<div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "1.2fr 0.6fr", gap: 6 }}>
+                      {/* v6.81.0 (D-61): the defect itself — type, share, description */}
+                      <input value={selected.defectType || ""} onChange={e => patch(selected.id, { defectType: e.target.value })} placeholder="Defect type (e.g. skin spots, soft fruit, rot)" style={INP} />
+                      <input type="number" value={selected.defectPct ?? ""} onChange={e => patch(selected.id, { defectPct: e.target.value })} placeholder="% affected" style={INP} />
+                      <textarea value={selected.defectNotes || ""} onChange={e => patch(selected.id, { defectNotes: e.target.value })} placeholder="What was found, where, by whom (survey ref)…" rows={2} style={{ ...INP, gridColumn: "1 / -1", resize: "vertical" }} />
+                    </div>)}
                   </div>
-                  <div><Lbl>Claim date</Lbl><input type="date" value={selected.date || ""} onChange={e => patch(selected.id, { date: e.target.value })} style={INP} /></div>
-                  <div><Lbl>Notified on</Lbl><input type="date" value={selected.notifiedAt || ""} onChange={e => patch(selected.id, { notifiedAt: e.target.value })} style={INP} /></div>
+                  <div><Lbl>Claim date</Lbl><DateInput value={selected.date || ""} onChange={e => patch(selected.id, { date: e.target.value })} style={INP} /></div>
+                  <div><Lbl>Notified on</Lbl><DateInput value={selected.notifiedAt || ""} onChange={e => patch(selected.id, { notifiedAt: e.target.value })} style={INP} /></div>
                   <div>
                     {/* v6.71.0: the deadline now SUGGESTS itself from the
                         respondent — a notice period missed loses the claim
@@ -405,7 +414,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                       return <Lbl>Notice deadline{ds.state === "passed" ? <span style={{ color: "#DC2626", fontWeight: 700 }}> · passed</span>
                         : ds.state === "due-soon" ? <span style={{ color: "#B45309", fontWeight: 700 }}> · due in {ds.daysLeft}d</span>
                         : ds.state === "notified" ? <span style={{ color: "#16A34A", fontWeight: 700 }}> · notified</span> : null}</Lbl>; })()}
-                    <input type="date" value={selected.noticeDeadline || ""} onChange={e => patch(selected.id, { noticeDeadline: e.target.value })} style={INP} />
+                    <DateInput value={selected.noticeDeadline || ""} onChange={e => patch(selected.id, { noticeDeadline: e.target.value })} style={INP} />
                     {(() => {
                       const sug = suggestNoticeDeadline(selected);
                       if (!sug) return null;
@@ -420,7 +429,13 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
                   <div><Lbl>Requested (EUR)</Lbl><input type="number" value={selected.requestedEUR ?? ""} onChange={e => patch(selected.id, { requestedEUR: e.target.value })} style={INP} /></div>
                   <div>
                     <Lbl>Agreed after negotiation (EUR)</Lbl>
-                    <input type="number" value={selected.acceptedEUR ?? ""} onChange={e => patch(selected.id, { acceptedEUR: e.target.value === "" ? null : e.target.value })} placeholder="blank until agreed" style={INP} />
+                    {String(selected.currency || "EUR").toUpperCase() !== "EUR" && (<>
+                      {/* v6.81.0 (D-62): the claim is in the ROOT document's currency */}
+                      <div style={{ fontSize: 10.5, color: "#7C3AED", fontWeight: 700, marginBottom: 3 }}>Claim currency: {selected.currency} (from the root document)</div>
+                      <input type="number" value={selected.acceptedAmount ?? ""} onChange={e => patch(selected.id, { acceptedAmount: e.target.value === "" ? null : e.target.value })} placeholder={`accepted, in ${selected.currency}`} style={INP} />
+                      {String(selected.currency).toUpperCase() !== "PLN" && <input type="number" step="0.0001" value={selected.fxToPLN ?? ""} onChange={e => patch(selected.id, { fxToPLN: e.target.value })} placeholder={`${selected.currency}→PLN rate`} style={{ ...INP, marginTop: 4 }} />}
+                    </>)}
+                    {String(selected.currency || "EUR").toUpperCase() === "EUR" && <input type="number" value={selected.acceptedEUR ?? ""} onChange={e => patch(selected.id, { acceptedEUR: e.target.value === "" ? null : e.target.value })} placeholder="blank until agreed" style={INP} />}
                   </div>
                 </div>
 
