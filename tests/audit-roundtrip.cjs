@@ -974,3 +974,22 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.81.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.82.0 — Round 6 (shipment editor) ══
+(function v682(){
+  console.log("\n══ 28. v6.82.0: unit prices feed the saved cost lines; pallet split without catalog bpp ══");
+  const lp = B("loadingProtocol.domain.js");
+  t("R6-1: the leg's saved cost line = SUM of unit 'Price for this unit' (the path the save runs)", () => {
+    const sh = { id: 1, number: "SHP-1", costs: [], legs: [{ mode: "Road", costAmount: 0, costCurrency: "EUR", costFxRate: 4.3, vehicles: [{ costAmount: 1900 }, { costAmount: 1900 }] }] };
+    const out = ship.syncLegFreightCostLines(sh);
+    const line = out.costs.find(c => c.source === ship.legFreightSource(1));
+    ok(line, "line created"); approx(line.amount, 3800); eq(line.currency, "EUR"); approx(line.amountPLN, 16340);
+  });
+  t("R6-2: stored packaging WITHOUT boxesPerPallet still splits 19 422 kg into 20×72 + 54", () => {
+    const legacyTypes = [{ id: "wooden-box-13", label: "Wooden box (13 kg)", capacityKg: 13, tareKg: 1.4, appliesTo: ["Apples"] }]; // pre-v6.46 shape
+    const rows = lp.deriveRows([{ id: 1, product: "Apples", variety: "Gala", packaging: "13kg wooden box", qtyKg: 19422, pallets: 21 }], legacyTypes).filter(r => r.boxes > 0);
+    eq(rows.length, 21); eq(rows[0].boxes, 72); eq(rows[20].boxes, 54); ok(rows.every(r => r.variety === "Gala"));
+  });
+  console.log("v6.82.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

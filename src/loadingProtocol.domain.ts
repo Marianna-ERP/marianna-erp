@@ -25,7 +25,7 @@
 //  - Rows are editable: a load may be 22 full pallets, or a producer may split
 //    differently. Derivation is a starting point, never a constraint.
 
-import { grossForGoodsLine, palletManifest, findPackaging, defaultPackagingForProduct, PackagingType } from "./packaging.domain";
+import { grossForGoodsLine, palletManifest, findPackaging, defaultPackagingForProduct, PackagingType, PACKAGING_SEED } from "./packaging.domain";
 
 const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 
@@ -152,7 +152,13 @@ export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPallet
     // without a box weight, so it is reported instead of vanishing.
     if (!capacity) { unresolved.push(String(g.product || "line")); return; }
     const gross = grossForGoodsLine({ qtyKg: net, product: g.product, packaging: g.packaging, packagingId: g.packagingId, pallets: g.pallets }, types);
-    const bpp = pk && num(pk.boxesPerPallet) > 0 ? num(pk.boxesPerPallet) : 0;
+    // v6.82.0 (Round 6): the owner's stored packaging types predate v6.46 and carry NO
+    // boxesPerPallet, so every sheet collapsed to ONE row with all the boxes (1 494).
+    // Fall back to the seed's figure for the same packaging, then to the goods line's
+    // own pallet count (21 pallets → 72,72,…,54). Never a single-row sheet when a split is knowable.
+    const seedPk = pk ? (PACKAGING_SEED.find(s => s.id === pk.id || s.label === pk.label) || null) : null;
+    let bpp = pk && num(pk.boxesPerPallet) > 0 ? num(pk.boxesPerPallet) : (seedPk && num(seedPk.boxesPerPallet) > 0 ? num(seedPk.boxesPerPallet) : 0);
+    if (!bpp && num(g.pallets) > 0 && gross.boxes > 0) bpp = Math.ceil(gross.boxes / num(g.pallets));
     palletManifest(gross.boxes, bpp).forEach(m => {
       rows.push({
         no: no++, product: String(g.product || ""), boxes: m.boxes, kgPerBox: capacity,

@@ -143,9 +143,9 @@ function legUnitPriceSum(leg) {
   // v6.80.0 (D-49, owner ruling): the expected invoice is the SUM of the prices
   // entered per truck/container — never retyped. Falls back to the leg amount.
   const units = transportUnitsForLeg(leg) || [];
-  const priced = units.filter((u) => (parseFloat(String(u?.price ?? "").replace(",", ".")) || 0) > 0);
+  const priced = units.filter((u) => parseNum(u?.costAmount ?? u?.unitPrice, 0) > 0);   // v6.82.0: ONE field — "Price for this unit"
   if (!priced.length) return null;
-  return priced.reduce((s, u) => s + (parseFloat(String(u.price).replace(",", ".")) || 0), 0);
+  return priced.reduce((s, u) => s + parseNum(u.costAmount ?? u.unitPrice, 0), 0);
 }
 function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier, contactsList = []) {
   const nameOf = (id) => { const c = (contactsList || []).find((x) => String(x.id) === String(id)); return c ? c.name : ""; };
@@ -460,7 +460,6 @@ function blankTransportUnit(mode = "Road") {
     driverPhone: "",
     cmrNumber: "",
     tempRecorderNo: "",
-    price: "",          // v6.80.0 (D-49): price for THIS unit — the leg cost is the sum
     fromUnitId: null,   // v6.80.0 (D-50): container ← loaded from truck (previous leg unit)
     containerNumber: "",
     sealNumber: "",
@@ -871,6 +870,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
     purpose: "OUTBOUND", // Batch 3a canonical
     status: "Booked",
     poRefs,
+    governingSoRef: so.number, // v6.82.0 (Round 6): the SO chosen in the first window governs — never blank in the header
     soRefs: [so.number],
     tradeDirection,
     lotRefs,
@@ -1189,7 +1189,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
       const soRefs = governing ? [governing.number] : [];
       sh = buildShipmentFromPO(selectedPO, { ...form, soRefs, governingSoRef: governing?.number || "", selectedItemIds, lineQtys }, shipments, lots, governing, contacts);
     }
-    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys }, shipments, lots, contacts);
+    else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys, governingSoRef: selectedSO.number }, shipments, lots, contacts); // v6.82.0 (Round 6): the chosen SO IS the governing sale
     else sh = buildManualShipment(form, shipments);
     // v6.10 (#11/#14): for a DDP purchase we don't order the carrier and carry no
     // freight cost on the supplier→warehouse leg. Seed the first road leg's unit
@@ -1228,7 +1228,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           <SectionTitle>Source</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "160px 1fr 160px 160px", gap: 12 }}>
             <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(""); }}><option value="PO">From PO</option><option value="SO">From SO</option><option value="Manual">Manual</option></Sel></div>
-            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{(pos || []).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{(orders || []).filter((o: any) => o.status !== "Draft" && o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
+            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{[...(pos || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{[...(orders || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((o: any) => o.status !== "Draft" && o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
             <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => setForm(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={e => sf("currency", e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
           </div>
@@ -1945,12 +1945,10 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
                   <div><Lbl>CMR no.</Lbl><Inp value={u.cmrNumber || ""} onChange={e => updateVehicle(i, ui, "cmrNumber", e.target.value)} placeholder="one per truck" title="Each truck has its own CMR number" /></div>
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this truck's load" /></div>
-                  <div><Lbl>Price ({leg.costCurrency || draft.currency || "PLN"})</Lbl><Inp value={u.price ?? ""} onChange={e => updateVehicle(i, ui, "price", e.target.value)} type="number" placeholder="per truck" title="v6.80.0: the leg's expected invoice = the sum of these" /></div>
                 </div>}
                 {uMode !== "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr", gap: 9 }}>
                   <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" /></div>
-                  <div><Lbl>Price ({leg.costCurrency || draft.currency || "PLN"})</Lbl><Inp value={u.price ?? ""} onChange={e => updateVehicle(i, ui, "price", e.target.value)} type="number" placeholder="per container" /></div>
                   {i > 0 && (transportUnitsForLeg(draft.legs[i - 1]) || []).length > 0 && (
                     <div><Lbl>Loaded from truck</Lbl>
                       {/* v6.80.0 (D-50, owner ruling): the container is what the truck carried — link it, and
@@ -2067,7 +2065,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
         <Card>
           <SectionTitle right={<SmallButton kind="green" onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 10, alignItems: "end", marginBottom: 12, paddingBottom: 12, borderBottom: "1px dashed #E5E7EB" }}>
-            <div><Lbl>Billing status</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB", fontWeight: 600 }} title="v6.80.0 (D-48): derived from the cost lines' invoice status and the allocation — nothing to set by hand">{derivedBillingStatus(draft, lots || [])}</div></div>
+            <div><Lbl>Billing status</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB", fontWeight: 600 }} title="v6.80.0 (D-48): derived from the cost lines' invoice status and the allocation — nothing to set by hand">{derivedBillingStatus(syncLegFreightCostLines(syncCustomsCostLine(draft)), lots || [])}</div></div>
             <div style={{ fontSize: 10.5, color: "#888", lineHeight: 1.45, paddingBottom: 7 }}>Tracks where this shipment is in the cost cycle — from waiting for the supplier's freight invoice to costs allocated into lots.</div>
           </div>
           {/* v6.11 (#10): DAP/DDP purchases — the supplier arranges and pays the

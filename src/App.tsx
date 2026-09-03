@@ -325,6 +325,23 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, warehouseInvoices, operationalCosts, pos]);
 
+  // v6.82.0 (Round 6): packaging types saved before v6.46 lack boxesPerPallet/palletTareKg —
+  // backfill from the seed by id/label so pallet tables split correctly.
+  useEffect(() => {
+    setPackagingTypes((prev: any[]) => {
+      const next = (prev || []).map((p: any) => {
+        const s = PACKAGING_SEED.find(x => x.id === p.id || x.label === p.label);
+        if (!s) return p;
+        const patch: any = {};
+        if (!(Number(p.boxesPerPallet) > 0) && s.boxesPerPallet) patch.boxesPerPallet = s.boxesPerPallet;
+        if (!(Number(p.palletTareKg) > 0) && s.palletTareKg) patch.palletTareKg = s.palletTareKg;
+        return Object.keys(patch).length ? { ...p, ...patch } : p;
+      });
+      return JSON.stringify(next) !== JSON.stringify(prev || []) ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // v6.79.0 (W-1): stored SO status is COMMERCIAL only. Typed physical statuses
   // from before derivation existed are normalised once: supported by shipments →
   // Confirmed (the derivation shows Shipped/Delivered); unsupported → a visible

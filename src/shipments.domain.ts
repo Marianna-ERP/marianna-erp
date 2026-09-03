@@ -367,7 +367,11 @@ export function syncLegFreightCostLines(sh: any): any {
     const n = i + 1;
     const src = legFreightSource(n);
     const type = FREIGHT_TYPE_BY_MODE[leg?.mode] || "sea_freight";
-    const amt = numv(leg?.costAmount);
+    // v6.82.0 (Round 6): the leg amount is the SUM of the unit prices when any unit
+    // carries one — this is the path the save actually runs (D-49 patched the other).
+    const units = (leg?.vehicles || leg?.transportUnits || []);
+    const unitSum = units.reduce((s: number, u: any) => s + numv(u?.costAmount ?? u?.unitPrice), 0);
+    const amt = unitSum > 0 ? unitSum : numv(leg?.costAmount);
     const fx = numv(leg?.costFxRate) || 1;
     const pln = numv(leg?.costPLN) || Math.round(amt * fx * 100) / 100;
     let idx = costs.findIndex((c: any) => c && String(c.source || "") === src);
