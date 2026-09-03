@@ -1754,7 +1754,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
       }
       return true;
     });
-    if (sortBy === "default") return base;
+    if (sortBy === "default") return [...base].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })); // v6.80.0 (D-45): registers newest first
     const key = (l: any) => lotArrivalDate(l) || "9999-12-31"; // no arrival sorts last on oldest-first
     return [...base].sort((a, b) => sortBy === "oldest" ? key(a).localeCompare(key(b)) : key(b).localeCompare(key(a)));
   // eslint-disable-next-line react-hooks/exhaustive-deps

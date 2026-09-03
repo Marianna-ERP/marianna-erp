@@ -600,7 +600,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // allocation never ran or was reverted; the flag misleads the tester.
   shipments.forEach((sh: any) => {
     if (!sh || sh.status === "Cancelled") return; // v6.66.0 (D-28): a cancelled shipment's flags are history, not alerts
-    if (sh.billingStatus !== "Cost allocated") return;
+    if (sh.billingStatus !== "Cost allocated" && sh.billingStatus !== "Allocated to lots") return; // v6.80.0 (D-48)
     if (!arr(sh.costs).length) return;
     // v6.62.0: an OUTBOUND delivery never builds landed cost (v6.51.0), so
     // "no lot carries the allocation" is the correct outcome, not a stale flag.

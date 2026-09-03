@@ -2165,10 +2165,10 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                     <div key={idx} style={{ background: "#fff", border: "1px solid #BBF7D0", borderRadius: 8, padding: "10px 12px", marginBottom: 6 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: "#16A34A", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.number}</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: inv.paymentStatus === "Cancelled" ? "#B91C1C" : "#16A34A", textDecoration: inv.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.number}</div>
                           <div style={{ fontSize: 10, color: "#888", marginTop: 1 }}>SINV · Issue {formatDMY(inv.issueDate)} · Due {formatDMY(inv.dueDate)}</div>
                         </div>
-                        <div style={{ padding: "2px 8px", background: "#DCFCE7", color: "#16A34A", borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em" }}>READY</div>
+                        <div style={{ padding: "2px 8px", background: inv.paymentStatus === "Cancelled" ? "#FEF2F2" : "#DCFCE7", color: inv.paymentStatus === "Cancelled" ? "#B91C1C" : "#16A34A", borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em" }} title="v6.80.0 (D-44): the register's own status — not a fixed 'READY'">{String(inv.paymentStatus || "Draft").toUpperCase()}</div>
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 11, color: "#444" }}>
                         <div>Net: <strong>{fmtMoney(inv.netAmount, inv.currency)}</strong></div>
@@ -2177,9 +2177,9 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                       </div>
                     </div>
                   ))}
-                  {soInvoices.some(inv => inv.fakturownia?.exported) ? (
+                  {soInvoices.some(inv => inv.paymentStatus !== "Cancelled" && (inv.fakturownia?.exported || inv.fakturownia?.fktId)) ? (
                     <div style={{ fontSize: 10.5, color: "#0C4A6E", marginTop: 8, lineHeight: 1.5, padding: "7px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6 }}>
-                      {soInvoices.filter(inv => inv.fakturownia?.exported).map((inv, i) => (
+                      {soInvoices.filter(inv => inv.paymentStatus !== "Cancelled" && (inv.fakturownia?.exported || inv.fakturownia?.fktId)).map((inv, i) => (
                         <div key={i}>✓ Matched in Fakturownia{inv.fakturownia?.ksef ? <> · KSeF <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.fakturownia.ksef}</span></> : null} · <strong>{inv.fakturownia?.paid ? "PAID" : "unpaid"}</strong></div>
                       ))}
                     </div>
@@ -2546,7 +2546,7 @@ export default function SalesOrders({
     const becameShipped = o.status === "Shipped" && (!previous || previous.status !== "Shipped");
     const becameCancelled = o.status === "Cancelled" && (!previous || previous.status !== "Cancelled");
     const alreadyInvoiced = (o.linkedInvoices && o.linkedInvoices.length > 0)
-      || invoicesForSO(o.number).length > 0; // v6.33.0 (A3-6)
+      || invoicesForSO(o.number).some((iv: any) => iv.paymentStatus !== "Cancelled"); // v6.80.0 (D-44): a cancelled invoice frees the order
 
     const savedOrder = { ...o, id: o.id ?? nextId() };
     recordAudit({ module: "Sales orders", docType: "SO", docNumber: savedOrder.number, action: o.id == null ? "created" : "saved", summary: `SO ${o.id == null ? "created" : "saved"} (${savedOrder.status || "Draft"}${savedOrder.sellIncoterm ? " · " + savedOrder.sellIncoterm : ""})` });
@@ -2664,14 +2664,12 @@ export default function SalesOrders({
     // #4: issuing the invoice advances the SO to "Invoiced" (from Shipped/Delivered).
     // Closed stays Closed; earlier stages aren't forced forward.
     const advance = (st: string) => (["Shipped", "Delivered"].includes(st) ? "Invoiced" : st);
-    const patch = (p: any) => ({
-      ...p,
-      status: advance(p.status),
-      linkedInvoices: [...(p.linkedInvoices || []), canonical.number],
-    });
+    // v6.80.0 (D-44/W-8): no stored link array — the register is the truth; a clear result message.
+    const patch = (p: any) => ({ ...p, status: advance(p.status) });
     setOrders(prev => prev.map(p => p.id === targetId ? patch(p) : p));
     if (selected && selected.id === targetId) setSelected(prev => patch(prev));
     setInvoiceOrder(null);
+    uiAlert({ tone: "info", title: "Sales invoice created", message: `${canonical.number || "Draft invoice"} is now in the Invoices module (status Draft). Next steps there: Mark issued → Send to Fakturownia. The SO shows it under INVOICES.` });
   }
 
   // Routes

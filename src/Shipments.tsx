@@ -9,7 +9,7 @@ import { protocolsForShipment, upsertProtocol, poGateReason, assignmentCheck } f
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { lotStockCheck } from "./receipts.domain";
 import { shipmentPostBlockReason, shipmentWarnings, newestFirst } from "./moduleGuards.domain";
-import { carriedRefs, overShipReport } from "./shipments.domain";
+import { carriedRefs, overShipReport, derivedBillingStatus } from "./shipments.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -95,6 +95,8 @@ const MODE_CONFIG = {
 // row's tooltip, replaced by BP-60's two-line row where route, dates, weight
 // and carrier are visible outright rather than hidden behind a hover.
 
+// v6.80.0 (D-48): kept as the LEGACY vocabulary (stored values in old data); the live value is derivedBillingStatus().
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const BILLING_STATUSES = [
   "Not ready",
   "Ready for supplier invoice",
@@ -135,10 +137,18 @@ function isFreightCostType(type) {
 function freightTypeForMode(mode) {
   return mode === "Air" ? "air_freight" : mode === "Rail" ? "rail_freight" : mode === "Road" ? "road_freight" : "sea_freight";
 }
+function legUnitPriceSum(leg) {
+  // v6.80.0 (D-49, owner ruling): the expected invoice is the SUM of the prices
+  // entered per truck/container — never retyped. Falls back to the leg amount.
+  const units = transportUnitsForLeg(leg) || [];
+  const priced = units.filter((u) => (parseFloat(String(u?.price ?? "").replace(",", ".")) || 0) > 0);
+  if (!priced.length) return null;
+  return priced.reduce((s, u) => s + (parseFloat(String(u.price).replace(",", ".")) || 0), 0);
+}
 function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier, contactsList = []) {
   const nameOf = (id) => { const c = (contactsList || []).find((x) => String(x.id) === String(id)); return c ? c.name : ""; };
   return (legs || []).map((leg, idx) => {
-    const amt = parseNum(leg.costAmount, 0);
+    const amt = legUnitPriceSum(leg) ?? parseNum(leg.costAmount, 0); // v6.80.0 (D-49)
     const cur = leg.costCurrency || fallbackCurrency || "PLN";
     const fx = resolveFxRate(leg.costFxRate, cur);
     return {
@@ -448,6 +458,8 @@ function blankTransportUnit(mode = "Road") {
     driverPhone: "",
     cmrNumber: "",
     tempRecorderNo: "",
+    price: "",          // v6.80.0 (D-49): price for THIS unit — the leg cost is the sum
+    fromUnitId: null,   // v6.80.0 (D-50): container ← loaded from truck (previous leg unit)
     containerNumber: "",
     sealNumber: "",
     bookingNumber: "",
@@ -1930,10 +1942,26 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
                   <div><Lbl>CMR no.</Lbl><Inp value={u.cmrNumber || ""} onChange={e => updateVehicle(i, ui, "cmrNumber", e.target.value)} placeholder="one per truck" title="Each truck has its own CMR number" /></div>
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this truck's load" /></div>
+                  <div><Lbl>Price ({leg.costCurrency || draft.currency || "PLN"})</Lbl><Inp value={u.price ?? ""} onChange={e => updateVehicle(i, ui, "price", e.target.value)} type="number" placeholder="per truck" title="v6.80.0: the leg's expected invoice = the sum of these" /></div>
                 </div>}
                 {uMode !== "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr", gap: 9 }}>
                   <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" /></div>
+                  <div><Lbl>Price ({leg.costCurrency || draft.currency || "PLN"})</Lbl><Inp value={u.price ?? ""} onChange={e => updateVehicle(i, ui, "price", e.target.value)} type="number" placeholder="per container" /></div>
+                  {i > 0 && (transportUnitsForLeg(draft.legs[i - 1]) || []).length > 0 && (
+                    <div><Lbl>Loaded from truck</Lbl>
+                      {/* v6.80.0 (D-50, owner ruling): the container is what the truck carried — link it, and
+                          the kilos, pallets, load and temp-recorder numbers follow the goods. */}
+                      <Sel value={u.fromUnitId ?? ""} onChange={e => {
+                        const src = (transportUnitsForLeg(draft.legs[i - 1]) || []).find((x: any) => String(x.id) === e.target.value);
+                        updateVehicle(i, ui, "fromUnitId", src ? src.id : null);
+                        if (src) { updateVehicle(i, ui, "qtyKg", src.qtyKg || 0); updateVehicle(i, ui, "pallets", src.pallets || 0); updateVehicle(i, ui, "tempRecorderNo", src.tempRecorderNo || ""); updateVehicle(i, ui, "load", src.load || []); }
+                      }}>
+                        <option value="">— pick the truck —</option>
+                        {(transportUnitsForLeg(draft.legs[i - 1]) || []).map((x: any) => <option key={String(x.id)} value={x.id}>{x.truckPlate || x.containerNumber || `unit ${x.id}`} · {Math.round(x.qtyKg || 0).toLocaleString("pl-PL")} kg{x.tempRecorderNo ? " · rec " + x.tempRecorderNo : ""}</option>)}
+                      </Sel>
+                    </div>
+                  )}
                 </div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} max={localTodayISO()} /></div>
@@ -2036,7 +2064,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
         <Card>
           <SectionTitle right={<SmallButton kind="green" onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 10, alignItems: "end", marginBottom: 12, paddingBottom: 12, borderBottom: "1px dashed #E5E7EB" }}>
-            <div><Lbl>Billing status</Lbl><Sel value={draft.billingStatus} onChange={e => sf("billingStatus", e.target.value)}>{BILLING_STATUSES.map(s => <option key={s}>{s}</option>)}</Sel></div>
+            <div><Lbl>Billing status</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB", fontWeight: 600 }} title="v6.80.0 (D-48): derived from the cost lines' invoice status and the allocation — nothing to set by hand">{derivedBillingStatus(draft, lots || [])}</div></div>
             <div style={{ fontSize: 10.5, color: "#888", lineHeight: 1.45, paddingBottom: 7 }}>Tracks where this shipment is in the cost cycle — from waiting for the supplier's freight invoice to costs allocated into lots.</div>
           </div>
           {/* v6.11 (#10): DAP/DDP purchases — the supplier arranges and pays the
@@ -2558,8 +2586,10 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           {/* v6.58.0: billing/costing actions live with the other header
               buttons (user ruling) — buried at the bottom of costs & billing,
               "Apply inventory movement" was the button nobody found. */}
-          <SmallButton onClick={onSendBilling} kind="amber">Send to billing queue</SmallButton>
-          <SmallButton onClick={onAllocateCosts} kind="green">Allocate costs to lots</SmallButton>
+          {/* v6.80.0 (D-48): "Send to billing queue" retired — billing status derives from the cost lines. */}
+          {String(shipment.purpose || "").toUpperCase() !== "OUTBOUND"
+            ? <SmallButton onClick={onAllocateCosts} kind="green">Allocate costs to lots</SmallButton>
+            : <span title="v6.80.0 (D-41): an outbound delivery's freight is a DIRECT cost of the sale — it lands in the SO margin, never in lot landed cost." style={{ fontSize: 11, color: "#94A3B8", alignSelf: "center" }}>Direct cost of sale — not allocated to lots</span>}
           <SmallButton onClick={onApplyInventory} title="Normally automatic on Loaded/Arrived — use only to re-post after editing goods.">Re-post inventory</SmallButton>
           {!["Closed", "Cancelled"].includes(canonicalStatus(shipment.status)) &&
             <SmallButton kind="red" onClick={() => onQuickStatus("Cancelled")} title="Cancel this shipment — it stays on record (read-only) but no longer counts toward the PO/SO.">Cancel shipment</SmallButton>}
@@ -3162,13 +3192,13 @@ export default function Shipments({
     // the user pressed the button, the lots gained their lines, and the warning
     // stayed. Computed up front from the same inputs the engine uses: no timing
     // dependency at all.
-    const prefixNow = shipmentAllocationSourcePrefix(sh);
+    const prefixNow = shipmentAllocationSourcePrefix(sh.number); // v6.80.0 (D-40): was passed the object → "[object Object]/" → never counted
     const landed = (allocateShipmentCostsToLots(sh, lots, { inventoryType: costInventoryType, label: costTypeLabel }) || [])
       .reduce((n: number, lot: any) => n + ((lot.costs || []).filter((c: any) => String(c.source || "").startsWith(prefixNow)).length), 0);
     setLots(prev => allocateShipmentCostsToLots(sh, prev, { inventoryType: costInventoryType, label: costTypeLabel }));
     (() => {
       if (landed > 0) {
-        updateShipment(sh.id, s => ({ ...s, billingStatus: "Cost allocated" }));
+        updateShipment(sh.id, s => ({ ...s, billingStatus: derivedBillingStatus({ ...s }, lots) }));
         recordAudit({ module: "Shipments", docType: "Shipment", docNumber: sh.number, action: "allocated", summary: `Logistics costs allocated into lot landed cost (${landed} line(s))` });
         setToast(`${sh.number} logistics costs allocated to inventory lot costing.`);
       } else if (String(sh.purpose || "").toUpperCase() === "OUTBOUND") {

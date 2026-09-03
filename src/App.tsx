@@ -392,7 +392,7 @@ export default function App() {
   function renderActive() {
     switch (activeModule) {
       case "dashboard":
-        return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} onNavigate={setActiveModule} />;
+        return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={setActiveModule} />;
       case "claims":
         return <Claims claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)} />;
       case "audit":

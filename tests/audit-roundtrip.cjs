@@ -907,3 +907,33 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.79.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.80.0 — Round 4 fixes ══
+(function v680(){
+  console.log("\n══ 26. v6.80.0: derived billing status, no blank protocol sheets ══");
+  const lp = B("loadingProtocol.domain.js");
+  const shd = B("shipments.domain.js");
+  t("D-48: billing status derives from the cost lines — outbound is a direct cost of sale, inbound allocates", () => {
+    const out = { number: "SHP-1", purpose: "OUTBOUND", status: "Loaded", costs: [{ amountPLN: 100, invoiceStatus: "Received" }] };
+    eq(shd.derivedBillingStatus(out, []), "Direct cost of sale");
+    const inb = { number: "SHP-2", purpose: "INBOUND", status: "Delivered", costs: [{ amountPLN: 100, invoiceStatus: "Expected" }] };
+    eq(shd.derivedBillingStatus(inb, []), "Awaiting invoices");
+    inb.costs[0].invoiceStatus = "Received";
+    eq(shd.derivedBillingStatus(inb, []), "Invoices received");
+    eq(shd.derivedBillingStatus(inb, [{ costs: [{ source: "SHP-2/1", pln: 100 }] }]), "Allocated to lots");
+    eq(shd.derivedBillingStatus({ ...inb, status: "Cancelled" }, []), "—");
+    eq(shd.derivedBillingStatus({ number: "SHP-3", costs: [] }, []), "No costs");
+  });
+  t("D-43: a truck whose load ids match nothing gets its share by kilos — never an empty sheet", () => {
+    const goods = [{ id: 1, product: "Apples", variety: "Naidared", size: "70-80", packaging: "13kg wooden boxes", qtyKg: 38844 }];
+    const unit = { qtyKg: 19422, load: [{ goodsLineId: 999, qtyKg: 19422 }] };   // stale id
+    const lines = lp.unitGoodsLines(goods, unit);
+    eq(lines.length, 1); eq(lines[0].qtyKg, 19422); eq(lines[0].variety, "Naidared", "variety travels with the line");
+    const rows = lp.deriveRows(lines, B("packaging.domain.js").PACKAGING_SEED);
+    const filled = rows.filter(r => r.boxes > 0);
+    eq(filled.length, 21, "20 × 72 + 54 (owner's rule)"); eq(filled[20].boxes, 54);
+    ok(filled.every(r => r.variety === "Naidared"), "variety on EVERY row");
+  });
+  console.log("v6.80.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

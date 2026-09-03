@@ -469,3 +469,20 @@ export function overShipReport(draft: any, allShipments: any[], orders: any[]): 
   });
   return out;
 }
+
+
+// ── v6.80.0 (D-48, owner ruling): BILLING STATUS IS DERIVED ───────────────────
+// Six hand-set states confused because the facts already sit on the cost lines.
+export type BillingState = "—" | "No costs" | "Awaiting invoices" | "Invoices received" | "Allocated to lots" | "Direct cost of sale";
+export function derivedBillingStatus(sh: any, lots: any[] = []): BillingState {
+  const st = String(sh?.status || "");
+  if (st === "Cancelled") return "—";
+  const costs = (sh?.costs || []).filter((c: any) => (Number(c?.amountPLN) || Number(c?.amount) || 0) > 0);
+  if (!costs.length) return "No costs";
+  const allIn = costs.every((c: any) => ["Received", "Checked", "Paid"].includes(String(c?.invoiceStatus || "")));
+  if (!allIn) return "Awaiting invoices";
+  if (String(sh?.purpose || "").toUpperCase() === "OUTBOUND") return "Direct cost of sale";
+  const prefix = `${sh?.number}/`;
+  const allocated = (lots || []).some((l: any) => (l?.costs || []).some((c: any) => String(c?.source || "").startsWith(prefix)));
+  return allocated ? "Allocated to lots" : "Invoices received";
+}

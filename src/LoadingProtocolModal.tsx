@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { localTodayISO } from "./dates";
+import { nextId } from "./ids";
 import { PrintLogo } from "./brand";
 import { SmallButton, Lbl, useConfirm } from "./ui";
 import { printHtmlNode } from "./documentService";
@@ -132,7 +133,7 @@ export default function LoadingProtocolModal({
     return buildLoadingProtocol(
       { shipment, leg: t.leg, unit: t.unit, goods: shipment?.goods, supplier, receiverName: companyName,
         carrierName: carrier?.name || "", types: packagingTypes, existingProtocols: others },
-      { todayISO: () => localTodayISO(), nextId: () => Date.now() },
+      { todayISO: () => localTodayISO(), nextId }, // v6.80.0 (W-7): central counter
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shipment, pos, contacts, allShipments, companyName, packagingTypes]);

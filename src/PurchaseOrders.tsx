@@ -1871,7 +1871,9 @@ ${blockNote}`.trim(),
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         <OrderDetail
           order={selected}
-          expectedLots={(extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))}
+          expectedLots={["DDP", "DAP", "DPU"].includes(String(selected.buyIncoterm || "").toUpperCase())
+            ? (extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))
+            : [] /* v6.80.0 (D-42): EXW/FCA/FOB/CIF goods arrive on OUR shipment — the receipt is posted there */}
           onReceiveLot={async (l: any) => {
             const kg = parseFloat(String(l.expectedKg)) || 0;
             if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No expected quantity", message: "This lot has no expected kilos — set the PO line quantity first." }); return; }

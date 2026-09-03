@@ -232,6 +232,16 @@ export function unitGoodsLines(goods: any[], unit?: any): any[] {
   const load = (unit?.load || []).filter((a: any) => num(a?.qtyKg) > 0);
   if (!load.length) return goods || [];
   const out: any[] = [];
+  // v6.80.0 (D-43): a truck whose load entries match NO goods-row id (ids changed after
+  // the split was recorded) used to get an EMPTY sheet, which someone then typed by
+  // hand as "1 pallet, 1 494 boxes". Fall back to the truck's share by its kilos.
+  const anyMatch = (goods || []).some(g => load.some((x: any) => String(x.goodsLineId) === String(g.id)));
+  if (!anyMatch) {
+    const unitKg = num(unit?.qtyKg);
+    const totalKg = (goods || []).reduce((s: number, g: any) => s + num(g.qtyKg), 0);
+    if (unitKg > 0 && totalKg > 0) return (goods || []).map(g => { const share = num(g.qtyKg) / totalKg; return { ...g, qtyKg: Math.round(unitKg * share), qty: Math.round(unitKg * share), pallets: undefined }; });
+    return goods || [];
+  }
   (goods || []).forEach(g => {
     const a = load.find((x: any) => String(x.goodsLineId) === String(g.id));
     if (!a) return;

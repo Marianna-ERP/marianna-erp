@@ -3,7 +3,9 @@ import { fmtNum } from "./format";
 import { Card } from "./ui";
 import { SO_PRE_DISPATCH_STATUSES as PRE_DISPATCH_STATUSES } from "./types";
 import { aggregateNetMargins } from "./operationalCosts";
-import { localMonthISO } from "./dates";
+import { localMonthISO, localTodayISO } from "./dates";
+import { buildLedger } from "./ledger";
+import { claimsNeedingNotice, addDays } from "./claimReadiness.domain";
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────────────
 // Phase 1 dashboard: reads live state from PO / SO / Inventory / Contacts and
@@ -59,7 +61,23 @@ function KpiCard({ label, value, valueColor, tag, sub, items, onClick }: any) {
   );
 }
 
-export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], operationalCosts = [], onNavigate = () => {} }: any) {
+export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], operationalCosts = [], invoices = [], claims = [], financeNotes = [], onNavigate = () => {} }: any) {
+  // v6.80.0 (D-51, owner review): the Dashboard answers "what needs my attention TODAY";
+  // Finance answers "how are we doing". These tiles are EXCEPTIONS that open their module —
+  // no totals, no breakdowns, nothing the Finance P/L already shows.
+  const attention = useMemo(() => {
+    const today = localTodayISO();
+    const led = buildLedger({ invoices, financeNotes, orders, lots, pos, warehouseInvoices: [], operationalCosts: [], todayISO: today });
+    const overdue = led.items.filter(i => i.direction === "receivable" && i.status === "Overdue");
+    const in7 = (d: string) => d && d >= today && d <= addDays(today, 7);
+    const payDue = led.items.filter(i => i.direction === "payable" && i.status !== "Paid" && in7(i.dueDate));
+    const stockLots = (lots || []).filter((l: any) => (Number(l.physicalKg) || 0) > 0);
+    const stockKg = stockLots.reduce((s: number, l: any) => s + (Number(l.physicalKg) || 0), 0);
+    const stockValue = stockLots.reduce((s: number, l: any) => { const kg = Number(l.receivedKg) || Number(l.physicalKg) || 0; const cost = (l.costs || []).reduce((a: number, c: any) => a + (Number(c.pln) || 0), 0); return s + (kg > 0 ? cost / kg * (Number(l.physicalKg) || 0) : 0); }, 0);
+    const ageing = stockLots.filter((l: any) => { const lastIn = (l.movements || []).filter((m: any) => m.type === "IN" && !m.voided).map((m: any) => String(m.date || "")).sort().pop(); return lastIn && lastIn < addDays(today, -30); }).length;
+    const notices = claimsNeedingNotice(claims, today);
+    return { overdueCount: overdue.length, overduePLN: overdue.reduce((s, i) => s + i.amountPLN, 0), payDueCount: payDue.length, payDuePLN: payDue.reduce((s, i) => s + i.amountPLN, 0), stockKg, stockValue, ageing, notices: notices.length };
+  }, [invoices, financeNotes, orders, lots, pos, claims]);
   // ── PO summary ─────────────────────────────────────────────────────────
   // v6.40.1 (audit A2): DERIVED truth, not statuses — PO statuses beyond
   // Confirmed are manual-only (nothing auto-advances them; same finding as the
@@ -179,8 +197,25 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
             <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Live snapshot — Phase 1 · pulls from PO · SO · Inventory · Contacts</div>
           </div>
           <div style={{ fontSize: 11, color: "#AAA" }}>
-            {new Date().toLocaleDateString("pl-PL", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+            {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
           </div>
+        </div>
+
+        {/* v6.80.0 (D-51): ATTENTION TODAY — exceptions only */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+          {[
+            ["OVERDUE RECEIVABLES", attention.overdueCount ? `${attention.overdueCount} · ${fmtNum(Math.round(attention.overduePLN))} PLN` : "none", attention.overdueCount ? "#DC2626" : "#16A34A", "finance"],
+            ["PAYABLES DUE ≤ 7 DAYS", attention.payDueCount ? `${attention.payDueCount} · ${fmtNum(Math.round(attention.payDuePLN))} PLN` : "none", attention.payDueCount ? "#D97706" : "#16A34A", "finance"],
+            ["STOCK ON HAND", `${fmtNum(Math.round(attention.stockKg))} kg · ${fmtNum(Math.round(attention.stockValue))} PLN landed${attention.ageing ? ` · ${attention.ageing} lot(s) > 30 days` : ""}`, attention.ageing ? "#D97706" : "#111", "lots"],
+            ["CLAIM NOTICES DUE", attention.notices ? `${attention.notices} passed / due ≤ 2 days` : "none", attention.notices ? "#DC2626" : "#16A34A", "claims"],
+          ].map(([k, v, color, mod]) => (
+            <Card key={String(k)} style={{ cursor: "pointer", borderLeft: `4px solid ${color}` }}>
+              <div onClick={() => onNavigate(String(mod))}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{k}</div>
+                <div style={{ fontSize: 13.5, fontWeight: 800, color: String(color), marginTop: 4 }}>{v}</div>
+              </div>
+            </Card>
+          ))}
         </div>
 
         {/* Primary KPI row */}
