@@ -236,15 +236,15 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
     setDone(d => ({ ...d, [s.line.id]: String(invoiceId) }));
   }
 
-  const credits = suggestions.filter((s: any) => s.rank !== "IGNORED");
+  const credits = suggestions.filter((s: any) => s.rank !== "IGNORED");   // v6.87.0: credits AND debits (both directions)
   const ignored = suggestions.length - credits.length;
   const fmtA = (n: number, c: string) => `${n.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${c}`;
 
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 13, fontWeight: 800 }}>🏦 Bank import — receivables</div>
-        <div style={{ fontSize: 11, color: "#888" }}>PKO & Santander CSV exports · every match takes your click — nothing posts itself</div>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>🏦 Bank import — receivables &amp; payables</div>
+        <div style={{ fontSize: 11, color: "#888" }}>PKO & Santander CSV, one file per account (any currency) · credits settle sales invoices, debits settle cost invoices · every match takes your click</div>
         <div style={{ marginLeft: "auto" }}>
           <button onClick={() => fileRef.current?.click()} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Upload statement CSV</button>
           <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(e: any) => onFile(e.target.files?.[0])} />
@@ -253,7 +253,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
       {parsed && (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 11.5, color: "#555", marginBottom: 8 }}>
-            {parsed.format} · account …{String(parsed.account).slice(-6)} · {parsed.lines.length} lines ({ignored} debit/fee/own-transfer lines set aside — payables phase comes later){parsed.skipped ? ` · ${parsed.skipped} unparseable` : ""}
+            {parsed.format} · account …{String(parsed.account).slice(-6)} · {parsed.lines.length} lines ({ignored} own-transfer / zero lines set aside){parsed.skipped ? ` · ${parsed.skipped} unparseable` : ""}
           </div>
           {credits.length === 0 && <div style={{ fontSize: 12, color: "#94A3B8", padding: 8 }}>No credit lines to match in this file.</div>}
           {credits.map((s: any) => {
@@ -271,7 +271,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
                   <div style={{ fontSize: 12, fontWeight: 700 }}>{String(s.line.counterparty).slice(0, 46) || "—"}</div>
                   <div style={{ fontSize: 10.5, color: "#94A3B8" }} title={s.line.title}>{String(s.line.title).slice(0, 70)}</div>
                 </div>
-                <div style={{ minWidth: 110, textAlign: "right", fontSize: 13, fontWeight: 800, color: "#16A34A", fontVariantNumeric: "tabular-nums" }}>{fmtA(s.line.amount, s.line.currency)}</div>
+                <div style={{ minWidth: 110, textAlign: "right", fontSize: 13, fontWeight: 800, color: s.line.amount > 0 ? "#16A34A" : "#DC2626", fontVariantNumeric: "tabular-nums" }}>{s.line.amount > 0 ? "+" : "−"}{fmtA(Math.abs(s.line.amount), s.line.currency)}</div>
                 <span style={{ fontSize: 10, fontWeight: 800, color: badge[1], background: badge[2], borderRadius: 5, padding: "2px 8px" }} title={s.reason}>{badge[0]}</span>
                 {doneInv ? (
                   <span style={{ fontSize: 11.5, fontWeight: 800, color: "#065F46" }}>✓ recorded on {(invoices.find((i: any) => String(i.id) === String(doneInv)) || {}).number}</span>
@@ -283,7 +283,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
                         <option key={String(c.id)} value={c.id}>{c.number}{c.outstanding != null ? ` · open ${c.outstanding.toLocaleString("pl-PL")}` : ""}{c.counterparty ? ` · ${c.counterparty}` : ""}</option>
                       ))}
                     </select>
-                    <button disabled={chosen == null || chosen === ""} onClick={() => confirmLine(s, chosen)} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: chosen != null && chosen !== "" ? "#16A34A" : "#CBD5E1", color: "#fff", fontSize: 12, fontWeight: 800, cursor: chosen != null && chosen !== "" ? "pointer" : "not-allowed" }}>Confirm receipt</button>
+                    <button disabled={chosen == null || chosen === ""} onClick={() => confirmLine(s, chosen)} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: chosen != null && chosen !== "" ? "#16A34A" : "#CBD5E1", color: "#fff", fontSize: 12, fontWeight: 800, cursor: chosen != null && chosen !== "" ? "pointer" : "not-allowed" }}>{s.line.amount > 0 ? "Confirm receipt" : "Confirm payment"}</button>
                     {typeof setAdvancePayments === "function" && (advanceSources(advancePayments).has(`bank:${s.line.id}`)
                       ? <span style={{ fontSize: 11, fontWeight: 800, color: "#7C3AED" }}>✓ advance</span>
                       : <button onClick={() => setAdvancePayments((prev: any[]) => [advanceFromBankLine(s.line, { nextId }), ...(prev || [])])} title="v6.68.0 (F-1): money received BEFORE any invoice exists — record it on account; apply it to invoices later from the Advances panel." style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>→ Advance</button>)}

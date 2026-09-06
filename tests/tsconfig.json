@@ -58,6 +58,9 @@
     "../src/locations.ts",
     "../src/dates.ts",
     "../src/permissions.domain.ts",
-    "../src/budgets.domain.ts"
+    "../src/budgets.domain.ts",
+    "../src/shipmentModel.domain.ts",
+    "../src/seasonOps.domain.ts",
+    "../src/poSettlement.domain.ts"
   ]
 }

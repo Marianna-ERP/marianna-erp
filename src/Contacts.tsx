@@ -1651,7 +1651,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           {[
             { key: "companies", label: "Companies", icon: "🏢" },
             { key: "people", label: "People", icon: "👤" },
-            { key: "logistics", label: "Logistics points", icon: "⚓" },
+            // v6.86.0 (owner ruling): "Logistics points" tab retired — one location source (Settings → Locations + counterparty sites)
           ].map(o => (
             <button key={o.key} onClick={() => setViewMode(o.key)}
               style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: viewMode === o.key ? "#fff" : "transparent", color: viewMode === o.key ? "#111" : "#888", fontSize: 12, fontWeight: 600, cursor: "pointer", boxShadow: viewMode === o.key ? "0 1px 2px rgba(0,0,0,0.06)" : "none", display: "flex", alignItems: "center", gap: 5 }}>

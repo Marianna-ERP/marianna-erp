@@ -335,6 +335,15 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     used.forEach((docs, name) => add("info", "CATALOG_ITEM_UNKNOWN", "Settings", name, `"${name}" is used on ${docs.size} live document(s) but is not in the product catalog (renamed or removed).`));
   }
 
+  // v6.89.0 (R1, owner ruling): no cargo arrives at a client without an issued invoice.
+  orders.forEach((o: any) => {
+    if (!o || ["Cancelled", "Draft", "Invoiced", "Closed"].includes(String(o.status))) return;
+    const delivered = (shipments || []).some((s: any) => String(s?.status) === "Delivered" && String(s?.purpose || "").toUpperCase() === "OUTBOUND" && ((s.soRefs || []).includes(o.number) || (s.goods || []).some((g: any) => g.soRef === o.number)));
+    if (!delivered) return;
+    const invoiced = invoices.some((i: any) => i?.kind === "SALES" && !i?.isProforma && !["Cancelled", "Draft"].includes(String(i.paymentStatus)) && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
+    if (!invoiced) add("error", "SO_DELIVERED_NO_INVOICE", "Sales Orders", o.number, "Delivered to the client with NO issued sales invoice — owner ruling: no cargo arrives without an invoice. Issue it from the SO.");
+  });
+
   // v6.79.0: claim money vs paper — an agreed amount moves the P/L; the note is the legal document.
   claimNoteMismatches(claims, (id: any) => financeNotes.find((nt: any) => String(nt.id) === String(id)))
     .forEach(x => add("warning", "CLAIM_NOTE_MISMATCH", "Claims", x.number, x.recon.message));

@@ -19,7 +19,7 @@ import { defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
-import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
+import { unifiedLocations, locationById } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { recordAudit } from "./audit";
@@ -153,13 +153,13 @@ function _adaptPOsFromModule(pos) {
 }
 
 // ─── DESTINATIONS ─────────────────────────────────────────────────────────
-const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
+// v6.86.0: module-level LOCATIONS alias removed — pickers read unifiedLocations()
 const LOCATION_TYPES: Record<string, any> = {
   CLIENT: { icon: "🎯", label: "Client site" },
   OWN:    { icon: "🏢", label: "Our warehouse" },
   PORT:   { icon: "⚓", label: "Port / terminal" },
 };
-function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
+function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
 function destinationDisplay(order) {
   const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
   if (custom) return custom;
@@ -1155,10 +1155,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
   // this session shows in the destination picker without a browser refresh.
   const liveLocations = (() => {
-    const live = counterpartyLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
-    const byId = new Map<string, any>();
-    [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
-    return [...byId.values()];
+    // v6.86.0 (owner ruling): ONE source — unifiedLocations().
+    return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
   })();
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   // v6.79.0 (W-1): locks read the EFFECTIVE status — a typed label cannot unlock what the shipments locked, or lock what never moved.
@@ -1514,6 +1512,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     }
                   }
                   if (willLock && !wasLocked) {
+                    // v6.89.0 (R2, owner ruling): every sale rests on a purchase — a line without a PO line or a lot cannot be confirmed.
+                    const unsourced = (order.items || []).filter((it: any) => String(it.product || "").trim() && !(["PO", "STOCK"].includes(String(it.sourceType || "")) && String(it.sourceRef || "").trim()));
+                    if (unsourced.length) { await ofAlert({ tone: "warn", title: "Every sale rests on a purchase", message: `${unsourced.length} line(s) have no source. Pick the PO line or the stock lot each line sells from — a free-typed line cannot be confirmed (owner ruling R2).` }); return; }
                     // v6.68.0 (F-3): credit control at the moment of commitment.
                     const clientRec = (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(order.client?.name || "").trim().toLowerCase());
                     const limit = parseFloat(String(clientRec?.creditLimitPLN ?? "")) || 0;
@@ -1885,7 +1886,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
                     <div>
                       <Lbl>Packaging</Lbl>
-                      <Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" disabled={fullyLocked} />
+                      <Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PACKAGING_TYPES_REF || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="so-packaging-types" title="v6.88.0: pick from Settings → Packaging types so gross weight, pallet table and kg/box derive exactly" />
+                      <datalist id="so-packaging-types">{(PACKAGING_TYPES_REF || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist>
                     </div>
                     <div>
                       <Lbl>Pallets (for this sale)</Lbl>

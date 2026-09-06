@@ -179,6 +179,10 @@ export const DATA_KEYS = [
   "advancePayments", "bankAccounts",
   // v6.79.0 (F-5/F-6): users & permissions; monthly budgets.
   "users", "budgets",
+  // v6.89.0: inspections, stock counts, defect catalogue.
+  "inspections", "stockCounts", "defectCatalogue",
+  // v6.90.0: settlements per PO.
+  "poSettlements",
   "auditLog"];
 
 export function exportAllData(): string {

@@ -1,5 +1,5 @@
 import { newestFirst } from "./moduleGuards.domain";
-import { PAGE_MAX } from "./ui";
+import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
@@ -10,12 +10,18 @@ import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
-import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations } from "./locations";
+import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations, unifiedLocations, locationById } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
+import { receiptMovement, supplierDeliveryFromPO, inspectionTotals } from "./seasonOps.domain";
+import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
+import { currentCommissionRate, commissionPctForSales } from "./consignment";
+import { printHtmlNode } from "./documentService";
+import { PACKAGING_SEED } from "./packaging.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { cnCodeForItem } from "./productCatalog";
 import { recordAudit } from "./audit";
+let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -211,7 +217,7 @@ function fmtMoney(n, cur = "PLN") {
 }
 function fmtDate(d) { return d || "—"; }
 
-function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
+function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
 function destinationDisplay(order) {
   const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
   if (custom) return custom;
@@ -967,7 +973,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                       const clientSites = supplierDelivers ? (contacts || []).filter((c: any) => (c.type === "Client" || (c.roles || []).includes("Client")) && String(c.address || c.city || "").trim())
                         .map((c: any) => ({ id: `client:${c.id}`, name: `${c.name} — ${c.address || c.city}`, type: "CLIENT", legacyType: "CLIENT", country: c.country || "" })) : [];
                       const byId = new Map<any, any>();
-                      [...LOCATIONS, ...liveWh, ...clientSites].forEach((l: any) => byId.set(String(l.id), l));
+                      // v6.86.0 (owner ruling): ONE source — unifiedLocations() already carries warehouse, supplier and client sites.
+                      unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType })).forEach((l: any) => byId.set(String(l.id), l));
+                      void liveWh; void clientSites;
                       const all = Array.from(byId.values()).sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl", { sensitivity: "base" }));
                       const opts = all.filter((l: any) => pool.types.includes(l.type));
                       const rest = all.filter((l: any) => !pool.types.includes(l.type));
@@ -1123,7 +1131,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr 0.7fr 0.9fr", gap: 8, marginTop: 8 }}>
                     <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
-                    <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => si(i, "packaging", e.target.value)} placeholder="13 kg wooden box / 5 kg carton / 10 kg mesh bag" /></div>
+                    <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PO_PACKAGING_TYPES || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="po-packaging-types" />
+                      <datalist id="po-packaging-types">{(PO_PACKAGING_TYPES || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist></div>
                     <div><Lbl>Boxes</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
                     <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode ?? ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 0808 10" title="Customs tariff code for this item — carried to the SO and shipment" /></div>
@@ -1147,7 +1156,71 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 }
 
 // ─── ORDER DETAIL ───────────────────────────────────────────────────────────
-function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null }: any) {
+
+// ── v6.90.0: THE TRUCK'S FINAL RESULT — settlement per PO (owner rulings V1…V6) ──
+function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null }: any) {
+  const rec: any = (settlements || []).find((s: any) => String(s.poNumber) === String(order.number)) || null;
+  const producer = (contacts || []).find((c: any) => String(c.id) === String(order.supplier?.id)) || null;
+  const rateRec = producer ? currentCommissionRate(producer, localTodayISO()) : null;
+  const defRate = defaultTruckRate(order, lots, orders, invoices);
+  const rate = rec?.ratePLNperEUR ?? defRate;
+  const pctDefault = rateRec ? (commissionPctForSales(rateRec, 0) ?? rateRec.pct) : 0;
+  const pct = rec?.commissionPct ?? pctDefault;
+  const calc = computePOSettlement({ po: order, lots, orders, invoices, shipments, claims, ratePLNperEUR: rate, provisionalEUR: rec?.provisionalEUR, commissionPct: pct });
+  const bandPct = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, calc.grossPLN) : null;
+  const upd = (patch: any) => setSettlements && setSettlements((prev: any[]) => { const all = prev || []; const cur = all.find((s: any) => String(s.poNumber) === String(order.number)); if (cur) return all.map((s: any) => s === cur ? { ...s, ...patch } : s); return [...all, { id: nextId(), poNumber: order.number, status: "Open", ratePLNperEUR: rate, commissionPct: pct, ...patch }]; });
+  const fmt = (n: number, c = "PLN") => `${(n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${c}`;
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
+  const closed = rec?.status === "Closed";
+  const rows = salesReportRows(calc);
+  const myIns = (inspections || []).filter((x: any) => calc.lines.some(l => String(l.lotNumber) === String(x.lotNumber)));
+  return (
+    <Card style={{ marginBottom: 16, borderLeft: "4px solid #7C3AED" }}>
+      <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: closed ? "#16A34A" : "#B45309" }}>{closed ? `CLOSED ${rec.closedAt}` : (calc.fullySold ? "FULLY SOLD — ready to close" : "INTERIM")}</span>}>Truck settlement — {order.number}{rec?.number ? ` · ${rec.number}` : ""}</SectionTitle>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
+        <div><Lbl>Rate PLN→EUR (last sales invoice + bank cost)</Lbl><input type="number" step="0.0001" disabled={closed} value={rate || ""} onChange={e => upd({ ratePLNperEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
+        <div><Lbl>Commission % {bandPct != null ? `(band → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pct ?? ""} onChange={e => upd({ commissionPct: parseFloat(e.target.value) || 0 })} style={inp} /></div>
+        <div><Lbl>Producer's provisional invoice no.</Lbl><input disabled={closed} value={rec?.provisionalInvoiceNo || ""} onChange={e => upd({ provisionalInvoiceNo: e.target.value })} style={inp} /></div>
+        <div><Lbl>Provisional value (EUR)</Lbl><input type="number" disabled={closed} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
+      </div>
+      <div id={`sales-report-${order.id}`} style={{ fontSize: 11.5 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr", gap: 6, fontWeight: 700, color: "#94A3B8", fontSize: 10 }}><div>VARIETY</div><div>RECEIVED</div><div>CLASS I</div><div>CLASS II</div><div>WASTE</div><div>SOLD I / II</div><div>PLN</div><div>ON STOCK</div></div>
+        {calc.lines.map(l => <div key={l.lotNumber} style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr", gap: 6, padding: "3px 0", borderTop: "1px solid #F8FAFC" }}><div><b>{l.variety || l.product}</b> <span style={{ color: "#94A3B8" }}>{l.lotNumber}</span></div><div>{l.receivedKg.toLocaleString("pl-PL")}</div><div>{l.classIKg.toLocaleString("pl-PL")}</div><div>{l.classIIKg.toLocaleString("pl-PL")}</div><div>{l.wasteKg.toLocaleString("pl-PL")}</div><div>{l.soldKg.toLocaleString("pl-PL")} / {l.soldKgII.toLocaleString("pl-PL")}</div><div>{fmt(l.salesPLN + l.salesPLNII)}</div><div style={{ color: l.onStockKg > 1 ? "#B45309" : "#16A34A" }}>{l.onStockKg.toLocaleString("pl-PL")}</div></div>)}
+        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "3px 14px" }}>
+          <div>Gross sales <b>{fmt(calc.grossPLN)}</b></div><div>Client credit notes <b>−{fmt(calc.creditNotesPLN)}</b></div><div>Warehouse service <b>−{fmt(calc.warehousePLN)}</b></div>
+          <div>Additional costs (transport…) <b>−{fmt(calc.additionalPLN)}</b></div><div>Third-party recoveries <b>+{fmt(calc.thirdPartyRecoveriesPLN)}</b></div><div>Producer recoveries <b>−{fmt(calc.producerRecoveriesPLN)}</b></div>
+          <div>Net sales <b>{fmt(calc.netPLN)}</b></div><div>Rate <b>{calc.ratePLNperEUR || "—"}</b></div><div>Net sales <b>{fmt(calc.netSalesEUR, "EUR")}</b></div>
+          <div>Commission {calc.commissionPct}% <b>{fmt(calc.commissionEUR, "EUR")}</b></div><div>Net after commission <b>{fmt(calc.netAfterCommissionEUR, "EUR")}</b></div><div>Provisional <b>{fmt(calc.provisionalEUR, "EUR")}</b></div>
+          <div style={{ color: "#7C3AED" }}>Expected credit note from producer <b>{fmt(calc.expectedCreditNoteEUR, "EUR")}</b></div><div style={{ color: "#B45309" }}>Extra invoice expected <b>{fmt(calc.extraInvoiceEUR, "EUR")}</b></div><div style={{ color: "#16A34A" }}>Transfer after compensation <b>{fmt(calc.transferEUR, "EUR")}</b></div>
+        </div>
+        {calc.warnings.map((w, i) => <div key={i} style={{ marginTop: 6, fontSize: 11, color: "#B45309" }}>⚠ {w}</div>)}
+        <div style={{ marginTop: 8, fontSize: 10, color: "#94A3B8" }}>SALES REPORT rows (template): {rows.map(r => `${r.item} ${r.soldKg} kg${r.amountEUR ? " · " + r.amountEUR.toLocaleString("pl-PL") + " EUR" : ""}`).join(" · ")}</div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+        <SmallButton onClick={() => printHtmlNode(`sales-report-${order.id}`, `${order.number} — Sales report`)}>⎙ Sales report</SmallButton>
+        {myIns.length > 0 && <SmallButton onClick={() => { const el = document.getElementById(`qc-report-${order.id}`); if (el) printHtmlNode(`qc-report-${order.id}`, `${order.number} — Quality report`); }}>⎙ Quality report ({myIns.length})</SmallButton>}
+        {!closed && setSettlements && <SmallButton kind="dark" onClick={() => {
+          const number = nextSettlementNumberPO(settlements, new Date().getFullYear());
+          upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, commissionPct: pct });
+          const cn = expectedProducerCreditNote(order, calc, { nextId, todayISO: localTodayISO });
+          if (cn && typeof setFinanceNotes === "function") { setFinanceNotes((prev: any[]) => [...(prev || []), cn]); upd({ expectedCreditNoteId: cn.id }); }
+          recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: "status", summary: `Truck settlement ${number} closed — net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} EUR, commission ${calc.commissionEUR.toLocaleString("pl-PL")} EUR${cn ? ", expected credit note " + cn.amount.toLocaleString("pl-PL") + " EUR" : ""}` });
+        }}>Close settlement{calc.fullySold ? "" : " (interim)"}</SmallButton>}
+      </div>
+      <div id={`qc-report-${order.id}`} style={{ display: "none" }}>
+        <h2 style={{ fontFamily: "Arial" }}>MARIANNA — Quality report · {order.number}{order.supplier?.name ? ` · ${order.supplier.name}` : ""}</h2>
+        {myIns.map((x: any) => { const tt = inspectionTotals(x); return <div key={String(x.id)} style={{ marginBottom: 12, fontFamily: "Arial", fontSize: 12 }}>
+          <div><b>{x.lotNumber}</b> · {x.variety || x.product} · {x.stage} · QC date {x.date} · inspector {x.inspector || "—"} · ordered {x.orderedQty} / checked {x.checkedQty} {x.unit} ({tt.samplePct}% sample) · temp {x.temperature || "—"}</div>
+          <table style={{ borderCollapse: "collapse", marginTop: 4 }}><tbody>{(x.defects || []).map((d: any, i: number) => <tr key={i}><td style={{ border: "1px solid #ccc", padding: "2px 6px" }}>{d.category}</td><td style={{ border: "1px solid #ccc", padding: "2px 6px" }}>{d.name}</td><td style={{ border: "1px solid #ccc", padding: "2px 6px", textAlign: "right" }}>{d.pct}%</td></tr>)}
+          <tr><td colSpan={2} style={{ border: "1px solid #ccc", padding: "2px 6px", fontWeight: 700 }}>Total defects</td><td style={{ border: "1px solid #ccc", padding: "2px 6px", textAlign: "right", fontWeight: 700 }}>{tt.totalPct}%</td></tr></tbody></table>
+          <div>Verdict: <b>{x.verdict}</b>{x.observations ? ` · ${x.observations}` : ""}{x.links?.[0] ? ` · ${x.links[0]}` : ""}</div>
+        </div>; })}
+      </div>
+    </Card>
+  );
+}
+
+function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -1254,6 +1327,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
               </Card>
 
               {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
+              {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
@@ -1261,6 +1335,11 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
                 <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" />
                 {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
                     note — so receiving lives HERE too, not only on the lot in Inventory. */}
+                {typeof onRegisterTruck === "function" && ["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status === "Confirmed" && (
+                  <div style={{ marginTop: 8 }}>
+                    <button onClick={onRegisterTruck} title="v6.89.0 (owner ruling): the supplier's truck is TRACKED in Shipments (plates, ETA, arrival, supplier's reference) but not paid — no transport order, no cost of ours" style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>🚚 Register supplier's truck (tracked, not paid)</button>
+                  </div>
+                )}
                 {typeof onReceiveLot === "function" && (expectedLots || []).length > 0 && (
                   <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
@@ -1542,8 +1621,9 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog }: any = {}) {
-  const { confirm: uiConfirm, alert: uiAlert, dialogNode: poDialogNode } = useConfirm(); // P2-6
+export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null}: any = {}) {
+  PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
+  const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
   const cancelledRefs = cancelledDocSet(extShipments, extSOs, extPOs);
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
@@ -1884,16 +1964,33 @@ ${blockNote}`.trim(),
           expectedLots={["DDP", "DAP", "DPU"].includes(String(selected.buyIncoterm || "").toUpperCase())
             ? (extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))
             : [] /* v6.80.0 (D-42): EXW/FCA/FOB/CIF goods arrive on OUR shipment — the receipt is posted there */}
+          settlement={{ lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, setInvoices: extSetInvoices }}
+          onRegisterTruck={typeof extSetShipments === "function" ? async () => {
+            const plate = await uiPrompt({ title: "Supplier's truck", message: "Plates announced by the supplier (leave blank if not yet known):", defaultValue: "", confirmLabel: "Next" }); if (plate === null) return;
+            const ref = await uiPrompt({ title: "Supplier's reference", message: "The supplier's own shipment reference / acronym (e.g. GM-004):", defaultValue: "", confirmLabel: "Next" }); if (ref === null) return;
+            const eta = await uiPrompt({ title: "Expected arrival", message: "ETA (dd/mm/yyyy), blank if unknown:", defaultValue: "", confirmLabel: "Register" }); if (eta === null) return;
+            const m = String(eta || "").trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/); const etaISO = m ? `${m[3]}-${String(m[2]).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}` : "";
+            let created: any = null;
+            extSetShipments((prev: any[]) => { const all = prev || []; const yr = new Date().getFullYear(); const seq = all.map((s: any) => String(s.number || "")).filter((n: string) => n.startsWith(`SHP-${yr}-`)).map((n: string) => parseInt(n.slice(-4), 10) || 0).reduce((a: number, b: number) => Math.max(a, b), 0) + 1;
+              created = supplierDeliveryFromPO({ ...selected, items: (selected.items || []).map((it: any, i: number) => ({ ...it, lotRef: ((extLots || []).find((l: any) => String(l.poRef) === String(selected.number) && String(l.poLineId ?? "") === String(it.id ?? i + 1)) || {}).number || null })) }, { nextId, nextNumber: () => `SHP-${yr}-${String(seq).padStart(4, "0")}`, todayISO: localTodayISO }, { plate: String(plate), supplierRef: String(ref), eta: etaISO });
+              return [...all, created]; });
+            recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "created", summary: `Supplier's truck registered as ${created?.number} (tracked, not paid)` });
+            await uiAlert({ tone: "info", title: "Truck registered", message: `${created?.number} created in Shipments — purpose Inbound, arranged by the supplier. Plates, ETA and the supplier's reference sit on the truck; arrival and unloading post the receipt.` });
+          } : null}
           onReceiveLot={async (l: any) => {
-            const kg = parseFloat(String(l.expectedKg)) || 0;
-            if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No expected quantity", message: "This lot has no expected kilos — set the PO line quantity first." }); return; }
+            const expectedKg = parseFloat(String(l.expectedKg)) || 0;
+            // v6.89.0 (G1): ask the ACTUAL kilos; the variance is recorded on the receipt.
+            const typed = await uiPrompt({ title: `Receive ${l.number} — actual quantity`, message: `Expected ${Math.round(expectedKg).toLocaleString("pl-PL")} kg. Kilos actually received:`, defaultValue: String(Math.round(expectedKg)), confirmLabel: "Continue" });
+            if (typed === null) return;
+            const kg = parseFloat(String(typed).replace(",", ".")) || 0;
+            if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No quantity", message: "Enter the kilos actually received." }); return; }
             const ok = await uiConfirm({ tone: "warn", title: `Receive ${kg.toLocaleString("pl-PL")} kg of ${l.number} into stock?`, message: `Direct receipt (DDP / delivered by the supplier — no shipment of ours). The stock becomes available at the lot's location; the movement appears in its history and can be voided.`, confirmLabel: "Receive into stock" });
             if (!ok || typeof extSetLots !== "function") return;
             const today = localTodayISO();
-            const locById = (id: any) => (SHARED_LOCATIONS as any[]).find((x: any) => String(x.id) === String(id)) || null;
+            const locById = (id: any) => locationById(id, extContacts || []) as any; // v6.86.0
             extSetLots((prev: any[]) => (prev || []).map((x: any) => {
               if (x.id !== l.id) return x;
-              const mv = { id: nextId(), date: today, type: "IN", qtyKg: kg, toId: x.locationId ?? null, soRef: null, shipmentRef: null, note: `Direct receipt (DDP) — ${x.poRef || "no PO"}` };
+              const mv = { ...receiptMovement(x, { kg, date: today, note: `Direct receipt (DDP) — ${x.poRef || "no PO"}` }, { nextId }).movement, toId: x.locationId ?? null, soRef: null, shipmentRef: null };
               return recomputeLotFromMovements({ ...x, directFlow: false, status: x.status === "Direct Expected" ? "Expected" : x.status }, [...(x.movements || []), mv], locById);
             }));
           }}
@@ -1932,6 +2029,17 @@ ${blockNote}`.trim(),
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Purchase Orders</div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          {typeof extSetInvoices === "function" && typeof extSetSettlements === "function" && (extSettlements || []).some((s: any) => s.status === "Closed" && !s.commissionInvoiceId) && (
+            <SmallButton kind="amber" title="v6.90.0 (owner ruling V4): one commission invoice per closed truck not yet invoiced — run on Mondays, or whenever" onClick={async () => {
+              const calcFor = (po: any, s: any) => computePOSettlement({ po, lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, ratePLNperEUR: s.ratePLNperEUR, provisionalEUR: s.provisionalEUR, commissionPct: s.commissionPct });
+              const r = commissionRun(extSettlements, extPOs, calcFor, { nextId, todayISO: localTodayISO });
+              if (!r.invoices.length) { await uiAlert({ tone: "info", title: "Nothing to invoice", message: "Every closed truck already has its commission invoice." }); return; }
+              const ok = await uiConfirm({ tone: "warn", title: `Commission run — ${r.invoices.length} invoice(s)`, message: r.invoices.map((i: any) => `${(i.links || [])[0]?.number}: ${i.grossAmount.toLocaleString("pl-PL")} EUR to ${i.counterparty?.name}`).join("\n") + "\n\nDrafts are created in Invoices (Mark issued → Send). Compensation against the producer's invoice is proposed in each draft's notes.", confirmLabel: "Create drafts" });
+              if (!ok) return;
+              extSetInvoices((prev: any[]) => [...(prev || []), ...r.invoices]); extSetSettlements(r.settlements);
+              recordAudit({ module: "Purchase orders", docType: "Commission run", docNumber: String(r.runId), action: "created", summary: `${r.invoices.length} commission invoice draft(s): ${r.invoices.map((i: any) => (i.links || [])[0]?.number).join(", ")}` });
+            }}>⚙ Commission run ({(extSettlements || []).filter((s: any) => s.status === "Closed" && !s.commissionInvoiceId).length})</SmallButton>
+          )}
           <ActionButton action="create" label="Add new PO" onClick={newOrder} />
         </div>
       </div>

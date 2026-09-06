@@ -139,6 +139,7 @@ export function parseBankCSV(text: string): ParsedStatement {
 
 export interface MatchSuggestion {
   line: BankLine;
+  direction?: "receivable" | "payable";
   rank: "NUMBER" | "AMOUNT+PARTY" | "AMOUNT" | "NONE" | "ALREADY" | "IGNORED";
   invoiceId: any | null;
   invoiceNumber?: string;
@@ -170,15 +171,21 @@ export function matchBankLines(lines: BankLine[], invoices: any[], opts?: { tole
   const ownNames = (opts?.ownNames || ["MARIANNA", "HAZEM OSMAN"]).map(squash);
   const applied = appliedBankSources(invoices);
   const outstandingOf = (i: any) => Math.round(((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)) * 100) / 100;
-  const open = (invoices || []).filter(i =>
-    i.kind === "SALES" && i.paymentStatus !== "Cancelled" && i.paymentStatus !== "Draft" && outstandingOf(i) > 0.005);
+  // v6.87.0 (owner ruling, 5 Sept): BOTH directions. A credit line settles a
+  // RECEIVABLE (our sales invoice); a debit line settles a PAYABLE (a supplier's,
+  // carrier's or forwarder's cost invoice). Pro-formas never match. Same ranking.
+  const openAll = (invoices || []).filter(i =>
+    (i.kind === "SALES" || i.kind === "COST") && !i.isProforma && i.paymentStatus !== "Cancelled" && i.paymentStatus !== "Draft" && outstandingOf(i) > 0.005);
 
   return (lines || []).map(line => {
-    const base = { line, candidates: [] as any[] };
+    const base: any = { line, candidates: [] as any[], direction: line.amount > 0 ? "receivable" : "payable" };
     if (applied.has(`bank:${line.id}`)) return { ...base, rank: "ALREADY" as const, invoiceId: null, reason: "Already recorded from a previous import of this statement." };
-    if (!(line.amount > 0)) return { ...base, rank: "IGNORED" as const, invoiceId: null, reason: "Debit/fee line — payables come in a later phase (owner ruling: receivables first)." };
+    if (!(Math.abs(line.amount) > 0)) return { ...base, rank: "IGNORED" as const, invoiceId: null, reason: "Zero-amount line." };
     const cptySq = squash(line.counterparty);
     if (ownNames.some(n => n && cptySq.includes(n))) return { ...base, rank: "IGNORED" as const, invoiceId: null, reason: "Own-account / intra-company transfer." };
+    const direction: "receivable" | "payable" = line.amount > 0 ? "receivable" : "payable";
+    const open = openAll.filter(i => direction === "receivable" ? i.kind === "SALES" : i.kind === "COST");
+    const amt = Math.abs(line.amount);
 
     const sameCur = open.filter(i => String(i.currency || "PLN").toUpperCase() === line.currency);
     const titleSq = squash(line.title);
@@ -195,20 +202,20 @@ export function matchBankLines(lines: BankLine[], invoices: any[], opts?: { tole
     }
 
     // ② exact outstanding (±tolerance) + counterparty name overlap
-    const byAmountParty = sameCur.filter(i => Math.abs(outstandingOf(i) - line.amount) <= tol && partyOverlap(line.counterparty, i.counterparty?.name));
+    const byAmountParty = sameCur.filter(i => Math.abs(outstandingOf(i) - amt) <= tol && partyOverlap(line.counterparty, i.counterparty?.name));
     if (byAmountParty.length === 1) {
       const i = byAmountParty[0];
       return { ...base, rank: "AMOUNT+PARTY" as const, invoiceId: i.id, invoiceNumber: i.number, reason: `Amount equals the outstanding of ${i.number} and the payer matches ${i.counterparty?.name}.` };
     }
 
     // ③ unique amount match without a name
-    const byAmount = sameCur.filter(i => Math.abs(outstandingOf(i) - line.amount) <= tol);
+    const byAmount = sameCur.filter(i => Math.abs(outstandingOf(i) - amt) <= tol);
     if (byAmount.length === 1) {
       const i = byAmount[0];
       return { ...base, rank: "AMOUNT" as const, invoiceId: i.id, invoiceNumber: i.number, reason: `Amount equals the outstanding of ${i.number} (payer name not matched — check before confirming).` };
     }
 
-    return { ...base, rank: "NONE" as const, invoiceId: null, reason: "No confident match — pick the invoice manually.",
+    return { ...base, rank: "NONE" as const, invoiceId: null, reason: direction === "payable" && !sameCur.length ? "Debit with no open payable in this currency — a bank charge, tax or a cost not yet invoiced." : "No confident match — pick the invoice manually.",
       candidates: sameCur.map(i => ({ id: i.id, number: i.number, outstanding: outstandingOf(i), counterparty: i.counterparty?.name || "" }))
         .sort((a, b) => Math.abs(a.outstanding - line.amount) - Math.abs(b.outstanding - line.amount)).slice(0, 8) };
   });
@@ -218,7 +225,7 @@ export function matchBankLines(lines: BankLine[], invoices: any[], opts?: { tole
 export function bankPaymentEvent(line: BankLine): { date: string; amount: number; method: string; note: string; source: string } {
   return {
     date: line.date,
-    amount: Math.round(line.amount * 100) / 100,
+    amount: Math.round(Math.abs(line.amount) * 100) / 100,   // v6.87.0: debit lines settle payables
     method: "Bank transfer",
     note: `Bank ${line.account.slice(-4)}: ${String(line.counterparty).slice(0, 60)}${line.title ? " — " + String(line.title).slice(0, 80) : ""}`,
     source: `bank:${line.id}`,

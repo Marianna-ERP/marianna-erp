@@ -27,6 +27,14 @@ export interface AppUser {
   finance: Record<string, boolean>;   // FINANCE_KEYS → may open (within Finance)
 }
 
+/** v6.89.0: the WAREHOUSE preset — sees Inventory only (receipts, inspections, sorting, counts). */
+export function warehouseUser(id: any, name: string): AppUser {
+  const u = blankUser(id, name, false);
+  MODULE_KEYS.forEach(k => { u.modules[k] = k === "lots" || k === "dashboard"; });
+  FINANCE_KEYS.forEach(k => { u.finance[k] = false; });
+  u.role = "Warehouse";
+  return u;
+}
 export function blankUser(id: any, name: string, isOwner = false): AppUser {
   const modules: Record<string, boolean> = {};
   MODULE_KEYS.forEach(k => { modules[k] = true; });

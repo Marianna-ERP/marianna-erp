@@ -728,10 +728,11 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const hit = m.find(s => s.rank === "AMOUNT+PARTY");
     ok(hit, "±0.05 tolerance honoured regardless of currency"); eq(hit.invoiceNumber, "FV2026/08/13");
   });
-  t("debit, fee and own-company lines are set aside (receivables first)", () => {
+  t("v6.87.0: only own-company transfers are set aside; a debit (fee) line is now offered against payables", () => {
     const p = bank.parseBankCSV(PKO);
     const m = bank.matchBankLines(p.lines, invs);
-    eq(m.filter(s => s.rank === "IGNORED").length, 2, "fee + intra-company EUR transfer");
+    eq(m.filter(s => s.rank === "IGNORED").length, 1, "intra-company EUR transfer only");
+    ok(m.some(s => s.direction === "payable"), "the fee line is a payable candidate (bank charge when nothing matches)");
   });
   t("idempotency: a confirmed line is ALREADY on re-import; partials accumulate to Paid", () => {
     const p = bank.parseBankCSV(SAN);
@@ -1010,5 +1011,220 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(out.legs[0].vehicles[0].qtyKg, 19422); eq(out.legs[1].vehicles[0].qtyKg, 5);
   });
   console.log("v6.83.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.85.0 — THE REDESIGNED SHIPMENT MODEL (twelve owner rulings) ══
+(function v685(){
+  console.log("\n══ 30. v6.85.0: shipment model — kilos derived, feeders, stuffing & de-vanning reports, cut-off, events, incoterm legs ══");
+  const M = B("shipmentModel.domain.js");
+  const mk = () => ({ number: "SHP-1", purpose: "OUTBOUND", goods: [{ id: 1, product: "Apples", qtyKg: 97110 }],
+    bookings: [{ id: 9, number: "BKG-1", cutOff: "2026-09-05", etd: "2026-09-08", eta: "2026-09-20" }],
+    legs: [{ mode: "Road", vehicles: [1,2,3,4,5].map(i => ({ id: i, kind: "truck", truckPlate: "PL" + i, tempRecorderNo: "R" + i, transitDays: 1, loadedAt: i <= 3 ? "2026-09-02" : "2026-09-04" })) }, { mode: "Sea", vehicles: [] }] });
+  t("D8: goods allocate across five trucks; kilos derive and sum EXACTLY to the goods", () => {
+    const sh = M.allocateGoodsToTrucks(mk(), 0);
+    const kgs = sh.legs[0].vehicles.map(u => M.unitKg(u, sh));
+    eq(kgs.reduce((a, b) => a + b, 0), 97110); ok(kgs.every(k => Math.abs(k - 19422) <= 1));
+  });
+  t("D6 (POL): the forwarder's stuffing report CREATES the containers with many-to-many feeders; recorders follow; D12 map derives", () => {
+    let sh = M.allocateGoodsToTrucks(mk(), 0);
+    sh = M.applyStuffingReport(sh, [
+      { containerNumber: "MSKU111", feeders: [{ truckId: 1 }, { truckId: 2, kg: 4856 }] },
+      { containerNumber: "MSKU222", feeders: [{ truckId: 2, kg: 14566 }, { truckId: 3, kg: 9712 }] },
+    ], deps);
+    const conts = sh.legs[1].vehicles; eq(conts.length, 2);
+    eq(M.unitKg(conts[0], sh), 19422 + 4856); ok(conts[0].tempRecorderNo.includes("R1") && conts[0].tempRecorderNo.includes("R2"));
+    const map = M.containerMap(sh); eq(map.length, 4); eq(map.filter(m => m.containerRef === "MSKU222").length, 2);
+    eq(conts[0].fromUnitId, 1, "legacy single-link mirror kept for old readers");
+  });
+  t("stuffing before the feeder truck unloaded is a violation; cut-off warns the late trucks", () => {
+    let sh = M.applyStuffingReport(mk(), [{ containerNumber: "C1", feeders: [{ truckId: 5 }], stuffedAt: "2026-09-03" }], deps);
+    sh = M.stampEvent(sh, 5, "unloaded", "2026-09-05");
+    eq(M.stuffingViolations(sh).length, 1);
+    const w = M.cutOffWarnings(mk()); eq(w.length, 0, "all five load on/before 4 Sept for a 5 Sept cut-off with 1 transit day");
+    const late = mk(); late.legs[0].vehicles[4].loadedAt = "2026-09-06";
+    eq(M.cutOffWarnings(late).length, 1);
+  });
+  t("D2/D9: transport orders group units by the CARRIER ON THE UNIT", () => {
+    const sh = mk(); sh.legs[0].vehicles.forEach((u, i) => { u.carrierId = i < 3 ? 10 : 11; });
+    const tos = M.transportOrdersByCarrier(sh); eq(tos.length, 2); eq(tos.find(t => t.carrierId === 10).units.length, 3);
+  });
+  t("D10: one date entered at the event travels to the header mirrors", () => {
+    let sh = mk(); sh = M.stampEvent(sh, 1, "loaded", "2026-09-02"); sh = M.stampEvent(sh, 4, "loaded", "2026-09-04");
+    eq(sh.actualLoadingDate, "2026-09-02"); eq(M.derivedHeaderDates(sh).firstLoaded, "2026-09-02");
+    sh = M.applyStuffingReport(sh, [{ containerNumber: "C1", feeders: [{ truckId: 1 }] }], deps);
+    const cid = sh.legs[1].vehicles[0].id;
+    sh = M.stampEvent(sh, cid, "discharged", "2026-09-23"); eq(sh.actualDeliveryDate, "2026-09-23", "vessel delay: actual arrival entered once, travels");
+  });
+  t("D6 (POD): de-vanning report spawns ONE transfer + ONE outbound per SO, goods and recorders attached", () => {
+    let sh = { ...mk(), purpose: "INBOUND", poRefs: ["PO-1"], legs: [{ mode: "Sea", vehicles: [{ id: 21, kind: "container", containerNumber: "MSKU777", tempRecorderNo: "RX" }, { id: 22, kind: "container", containerNumber: "MSKU888" }] }] };
+    const onward = M.spawnFromDevanning(sh, [
+      { containerId: 21, trucks: [{ truckPlate: "T1", kg: 19000, destination: { kind: "WAREHOUSE" } }, { truckPlate: "T4", kg: 5000, destination: { kind: "SO", soNumber: "SO-X" } }] },
+      { containerId: 22, trucks: [{ truckPlate: "T2", kg: 19000, destination: { kind: "WAREHOUSE" } }, { truckPlate: "T5", kg: 6000, destination: { kind: "SO", soNumber: "SO-Y" } }] },
+    ], { ...deps, nextNumber: i => "SHP-N" + i });
+    eq(onward.length, 3);
+    const tr = onward.find(s => s.purpose === "TRANSFER"); eq(tr.legs[0].vehicles.length, 2); eq(tr.goods[0].qtyKg, 38000);
+    const outX = onward.find(s => (s.soRefs || [])[0] === "SO-X"); eq(outX.purpose, "OUTBOUND"); eq(outX.legs[0].vehicles[0].tempRecorderNo, "RX");
+  });
+  t("D3: legs & responsibility from incoterms — EXW buy + CFR sell by sea = road ours + sea ours; CIF buy = sea supplier's", () => {
+    const exp = M.legsFromIncoterms("EXW", "CFR", { isSea: true, direction: "EXPORT" });
+    eq(exp.map(l => l.mode + ":" + l.responsibility), ["Road:Marianna", "Sea:Marianna"]); eq(exp[0].customs, "export");
+    const imp = M.legsFromIncoterms("CIF", "", { isSea: true, direction: "IMPORT" });
+    eq(imp[0].mode, "Sea"); eq(imp[0].responsibility, "Supplier"); eq(imp[0].customs, "import");
+    const ddp = M.legsFromIncoterms("DDP", "DAP", { isSea: false });
+    eq(ddp.map(l => l.responsibility), ["Supplier", "Marianna"]);
+  });
+  t("D11: one document register merges transport order, protocols and documents with one vocabulary", () => {
+    const rows = M.documentRegister({ number: "SHP-1", confirmationStatus: "Sent", documents: [{ type: "CMR", status: "Have it", link: "https://x" }, { type: "Phyto", status: "Expected" }] }, [{ number: "LP-1", status: "Returned", truckPlate: "PL1" }]);
+    eq(rows.length, 4); eq(rows[0].status, "Sent"); eq(rows[1].status, "Returned"); eq(M.documentsOutstanding(rows).length, 1);
+  });
+  console.log("v6.85.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.86.0 — ONE LOCATION SOURCE ══
+(function v686(){
+  console.log("\n══ 31. v6.86.0: one location source, demo seeds gone, referenced seeds migrate ══");
+  const loc = B("locations.js");
+  t("the reference list holds PORTS only; demo warehouses/suppliers/clients are not in any picker", () => {
+    ok(loc.LOCATIONS.every(l => l.legacyType === "PORT" || l.aliasOf), "ports only");
+    ok(loc.DEMO_SEEDS.some(l => String(l.name).startsWith("WH-01")), "WH-01 is a demo seed, not reference data");
+  });
+  t("unifiedLocations = ports + counterparty sites, deduped and sorted; a client's address is a CLIENT site", () => {
+    const contacts = [{ id: 70, name: "Al Baraka", type: "Client", address: "Damietta Free Zone", country: "Egypt" }];
+    const all = loc.unifiedLocations(contacts);
+    ok(all.some(l => l.legacyType === "PORT"), "ports present");
+    ok(all.some(l => String(l.name).includes("Al Baraka")), "client site derived from the counterparty");
+    ok(!all.some(l => String(l.name).startsWith("WH-0")), "no demo warehouse");
+  });
+  t("locationById resolves a demo seed still referenced by old data (read-forward)", () => {
+    const seed = loc.DEMO_SEEDS[0];
+    ok(loc.locationById(seed.id, []) !== null);
+  });
+  console.log("v6.86.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.87.0 — bank import BOTH directions ══
+(function v687(){
+  console.log("\n══ 32. v6.87.0: debit lines settle payables; per-currency files are fine ══");
+  const bank = B("bankReconciliation.domain.js");
+  const invs = [
+    { id: 1, kind: "SALES", number: "FV/1", paymentStatus: "Sent", currency: "PLN", grossAmount: 1000, paidAmount: 0, counterparty: { name: "Client A" }, payments: [] },
+    { id: 2, kind: "COST", number: "TL/77", paymentStatus: "Issued", currency: "EUR", grossAmount: 1900, paidAmount: 0, counterparty: { name: "Trans-Log" }, payments: [] },
+    { id: 3, kind: "COST", number: "PF/9", isProforma: true, paymentStatus: "Issued", currency: "EUR", grossAmount: 500, paidAmount: 0, counterparty: { name: "X" }, payments: [] },
+  ];
+  t("a DEBIT line quoting the cost invoice number settles the PAYABLE; a credit line still settles the receivable", () => {
+    const lines = [
+      { id: "l1", date: "2026-09-01", amount: -1900, currency: "EUR", counterparty: "TRANS-LOG PL", title: "FAKTURA TL/77", account: "1" },
+      { id: "l2", date: "2026-09-01", amount: 1000, currency: "PLN", counterparty: "CLIENT A", title: "FV/1", account: "2" },
+    ];
+    const m = bank.matchBankLines(lines, invs);
+    eq(m[0].direction, "payable"); eq(m[0].rank, "NUMBER"); eq(m[0].invoiceNumber, "TL/77");
+    eq(m[1].direction, "receivable"); eq(m[1].invoiceNumber, "FV/1");
+    const evt = bank.bankPaymentEvent(lines[0]); approx(evt.amount, 1900, "payment events carry the absolute amount");
+    let paid = pay.applyPaymentEvent(invs[1], evt, deps.nextId); approx(pay.outstandingAmount(paid), 0);
+  });
+  t("pro-formas never match; a debit with no open payable in its currency is named a bank charge", () => {
+    const m = bank.matchBankLines([{ id: "l3", date: "2026-09-02", amount: -25, currency: "PLN", counterparty: "", title: "Oplata za prowadzenie rachunku", account: "1" }], invs);
+    eq(m[0].rank, "NONE"); ok(String(m[0].reason).includes("bank charge"));
+    ok(!m.some(s => s.invoiceNumber === "PF/9"));
+  });
+  t("one file per currency is fine: matching is per line currency, so an EUR file only sees EUR invoices", () => {
+    const m = bank.matchBankLines([{ id: "l4", date: "2026-09-02", amount: -1900, currency: "EUR", counterparty: "Someone", title: "no number", account: "9" }], invs);
+    eq(m[0].rank, "AMOUNT"); eq(m[0].invoiceNumber, "TL/77", "the only EUR payable at that amount");
+  });
+  console.log("v6.87.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.89.0 — CONSIGNMENT SEASON: records and gates ══
+(function v689(){
+  console.log("\n══ 33. v6.89.0: supplier-delivery truck, receipt variance, inspection, sorting job, stock count ══");
+  const Z = B("seasonOps.domain.js");
+  const po = { number: "PO-2026-0040", buyIncoterm: "DDP", currency: "EUR", supplier: { id: 5, name: "Vega Pro Kft." }, destinationText: "Agrohurt", items: [{ id: 1, product: "Capsicum", variety: "Red bell pepper", qty: 7200, boxes: 1440, packaging: "Carton (5 kg)", lotRef: "LOT-1" }, { id: 2, product: "Capsicum", variety: "Yellow bell pepper", qty: 7200, boxes: 1440, lotRef: "LOT-2" }] };
+  t("decision 1: a DDP PO becomes a supplier-delivery shipment — tracked, not paid, one truck, all lines on it", () => {
+    const sh = Z.supplierDeliveryFromPO(po, { ...deps, nextNumber: () => "SHP-2026-0100" }, { plate: "WGM 4421K", eta: "2026-09-10", supplierRef: "GM-004" });
+    eq(sh.arrangedBy, "SUPPLIER"); eq(sh.purpose, "INBOUND"); ok(Z.isSupplierDelivery(sh));
+    eq(sh.goods.length, 2); eq(sh.legs[0].vehicles[0].qtyKg, 14400); eq(sh.legs[0].vehicles[0].supplierRef, "GM-004"); eq(sh.costs.length, 0, "no cost of ours");
+    ok(!Z.plateMismatch(sh.legs[0].vehicles[0])); ok(Z.plateMismatch({ announcedPlate: "WGM 4421K", truckPlate: "WGM 9999X" }), "wrong truck for this PO is flagged");
+  });
+  t("G1: the receipt carries the ACTUAL kilos and the variance vs expected", () => {
+    const r = Z.receiptMovement({ number: "LOT-1", expectedKg: 7200, locationId: 9 }, { kg: 7050, boxes: 1410, date: "2026-09-10" }, deps);
+    eq(r.movement.type, "IN"); eq(r.movement.qtyKg, 7050); eq(r.varianceKg, -150); approx(r.variancePct, -2.08); ok(/expected 7[  ]?200 kg/.test(String(r.movement.note)), "note names the expected quantity");
+  });
+  t("G2: inspection in the Daifressh structure — totals per category and overall %", () => {
+    const ins = Z.blankInspection({ number: "LOT-1", product: "Capsicum", variety: "Red bell pepper", expectedKg: 7200 }, deps, "pre-unloading");
+    ins.orderedQty = 1440; ins.checkedQty = 72; ins.unit = "boxes";
+    ins.defects = [{ category: "Progressive", name: "Rots / moulds", pct: 4 }, { category: "Major", name: "Sunburn", pct: 0.67 }, { category: "Minor", name: "Blemish / skin marks", pct: 1.44 }];
+    const tt = Z.inspectionTotals(ins);
+    approx(tt.totalPct, 6.11); approx(tt.byCategory.Progressive, 4); approx(tt.samplePct, 5);
+    eq(Z.defectsFor(Z.PEPPER_DEFECTS, "Capsicum Kalifornia").length, Z.PEPPER_DEFECTS.length, "catalogue matches the product family");
+  });
+  t("G3: one sorting job posts the waste as DAMAGE, keeps class II in the SAME lot as a grade, and refuses a split that does not add up", () => {
+    const lot = { number: "LOT-1", receivedKg: 7050, physicalKg: 7050, locationId: 9, movements: [] };
+    const r = Z.sortingJob(lot, { date: "2026-09-11", kgIn: 7050, classIKg: 6100, classIIKg: 600, wasteKg: 350, by: "Agrohurt", hours: 6 }, deps);
+    ok(!r.error); eq(r.lot.movements.length, 1); eq(r.lot.movements[0].type, "DAMAGE"); eq(r.lot.movements[0].qtyKg, 350);
+    const g = Z.gradeSplit(r.lot); eq(g.I, 6100); eq(g.II, 600); eq(g.waste, 350); eq(g.unsorted, 0);
+    ok(Z.sortingJob(lot, { date: "2026-09-11", kgIn: 7050, classIKg: 6000, classIIKg: 600, wasteKg: 350 }, deps).error, "6950 ≠ 7050 refused");
+  });
+  t("stock count: differences beyond 1 kg become reasoned adjustments; exact counts change nothing", () => {
+    const lots = [{ number: "LOT-1", physicalKg: 6700, locationId: 9, movements: [] }, { number: "LOT-2", physicalKg: 7200, locationId: 9, movements: [] }];
+    const c = Z.buildStockCount(lots, 9, [{ lotNumber: "LOT-1", countedKg: 6650 }, { lotNumber: "LOT-2", countedKg: 7200 }], deps, "Agrohurt");
+    eq(c.lines[0].diffKg, -50); eq(c.lines[1].diffKg, 0);
+    const a = Z.applyStockCount(lots, c, "shrinkage", deps); eq(a.adjusted, 1); eq(a.lots[0].movements[0].type, "DAMAGE"); eq(a.lots[1].movements.length, 0);
+  });
+  console.log("v6.89.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.90.0 — MONEY TRUTH: the truck's settlement ══
+(function v690(){
+  console.log("\n══ 34. v6.90.0: settlement per PO — sale costs, respondent-aware recoveries, rate, expected credit note, commission run ══");
+  const P = B("poSettlement.domain.js");
+  const po = { number: "PO-40", currency: "EUR", fxRate: 4.3, supplier: { id: 5, name: "Vega Pro Kft." } };
+  const lots = [
+    { number: "L1", poRef: "PO-40", poLineId: 1, product: "Capsicum", variety: "Red bell pepper", receivedKg: 7050, grades: { I: 6100, II: 600, waste: 350 }, costs: [{ type: "warehouse", label: "Storage", pln: 400, source: "WHINV-1" }, { type: "claim", pln: -300, source: "claim:CLM-A" }, { type: "claim", pln: -500, source: "claim:CLM-P" }] },
+    { number: "L2", poRef: "PO-40", poLineId: 2, product: "Capsicum", variety: "Yellow bell pepper", receivedKg: 7200, grades: { I: 7200, II: 0, waste: 0 }, costs: [] },
+  ];
+  const orders = [
+    { number: "SO-1", status: "Confirmed", fxRate: 1, items: [{ sourceType: "STOCK", sourceRef: "L1", qty: 6100, unitPrice: 9, quality: "I" }, { sourceType: "STOCK", sourceRef: "L1", qty: 600, unitPrice: 5, quality: "II" }], claimAdjustments: [{ source: "claim:CLM-C", pln: -1000 }] },
+    { number: "SO-2", status: "Confirmed", fxRate: 1, items: [{ sourceType: "STOCK", sourceRef: "L2", qty: 7200, unitPrice: 8 }] },
+  ];
+  const shipments = [{ number: "SHP-9", purpose: "OUTBOUND", status: "Delivered", goods: [{ lotRef: "L1", qtyKg: 6700 }, { lotRef: "L2", qtyKg: 7200 }], costs: [{ amountPLN: 2000 }] }];
+  const claims = [{ number: "CLM-A", respondent: { kind: "Warehouse" } }, { number: "CLM-P", respondent: { kind: "Supplier" } }];
+  const calc = P.computePOSettlement({ po, lots, orders, shipments, claims, ratePLNperEUR: 4.30, provisionalEUR: 25000, commissionPct: 6.5 });
+  t("lines per variety with class I / II sales and waste kg; fully sold", () => {
+    eq(calc.lines.length, 2); eq(calc.lines[0].soldKg, 6100); eq(calc.lines[0].soldKgII, 600); eq(calc.lines[0].wasteKg, 350); eq(calc.lines[0].onStockKg, 0); ok(calc.fullySold);
+    approx(calc.grossPLN, 6100 * 9 + 600 * 5 + 7200 * 8);
+  });
+  t("G5/G6: delivery freight is an expense; the warehouse's recovery REDUCES expenses; the producer's recovery is a payout deduction", () => {
+    approx(calc.additionalPLN, 2000, "the outbound freight — 100% of that truck's goods");
+    approx(calc.warehousePLN, 400); approx(calc.thirdPartyRecoveriesPLN, 300); approx(calc.expensesPLN, 400 + 2000 - 300);
+    approx(calc.producerRecoveriesPLN, 500); approx(calc.creditNotesPLN, 1000, "client concession on SO-1 (all its kg are this truck's)");
+    approx(calc.netPLN, calc.grossPLN - 1000 - 2100 - 500);
+  });
+  t("rate per truck → EUR; commission on the net; V5 expected credit note and V6 transfer", () => {
+    approx(calc.netSalesEUR, calc.netPLN / 4.3); approx(calc.commissionEUR, calc.netSalesEUR * 0.065);
+    // here net sales exceed the provisional price → an EXTRA invoice from the producer is expected, no credit note
+    eq(calc.expectedCreditNoteEUR, 0); approx(calc.extraInvoiceEUR, calc.netSalesEUR - 25000);
+    approx(calc.transferEUR, calc.netSalesEUR - calc.commissionEUR);
+    ok(P.expectedProducerCreditNote(po, calc, deps) === null);
+    const high = P.computePOSettlement({ po, lots, orders, shipments, claims, ratePLNperEUR: 4.30, provisionalEUR: 30000, commissionPct: 6.5 });
+    approx(high.expectedCreditNoteEUR, 30000 - high.netSalesEUR); eq(high.extraInvoiceEUR, 0);
+    const cn = P.expectedProducerCreditNote(po, high, deps); eq(cn.status, "Expected"); eq(cn.currency, "EUR"); eq(cn.direction, "incoming"); approx(cn.amount, high.expectedCreditNoteEUR);
+  });
+  t("sales report rows in the template: variety I. / II. / waste (kg only)", () => {
+    const rows = P.salesReportRows(calc);
+    eq(rows.map(r => r.item), ["Red bell pepper I.", "Red bell pepper II.", "Red bell pepper waste", "Yellow bell pepper I."]);
+    eq(rows[2].amountEUR, 0); approx(rows[0].unitEUR, 9 / 4.3);
+  });
+  t("V4: the Monday run drafts ONE commission invoice per closed truck and never twice", () => {
+    const sets = [{ id: 1, poNumber: "PO-40", status: "Closed", number: "SET-2026-0001", ratePLNperEUR: 4.3, provisionalEUR: 25000, commissionPct: 6.5 }, { id: 2, poNumber: "PO-41", status: "Open" }];
+    const r1 = P.commissionRun(sets, [po], (p, s) => P.computePOSettlement({ po: p, lots, orders, shipments, claims, ratePLNperEUR: s.ratePLNperEUR, provisionalEUR: s.provisionalEUR, commissionPct: s.commissionPct }), deps);
+    eq(r1.invoices.length, 1); eq(r1.invoices[0].currency, "EUR"); approx(r1.invoices[0].grossAmount, calc.commissionEUR);
+    const r2_ = P.commissionRun(r1.settlements, [po], () => calc, deps); eq(r2_.invoices.length, 0, "already invoiced");
+  });
+  console.log("v6.90.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();

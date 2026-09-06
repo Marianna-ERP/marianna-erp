@@ -12,6 +12,7 @@ import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain
 import { lotStockCheck } from "./receipts.domain";
 import { shipmentPostBlockReason, shipmentWarnings, newestFirst } from "./moduleGuards.domain";
 import { carriedRefs, overShipReport, derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
+import { unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking } from "./shipmentModel.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -21,7 +22,7 @@ import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate } from "./fx";
-import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
+import { unifiedLocations, locationById } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 
@@ -166,14 +167,12 @@ function freightCostsFromLegs(legs, fallbackCurrency, fallbackSupplier, contacts
   });
 }
 
-const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
+// v6.86.0: module-level LOCATIONS alias removed — pickers read unifiedLocations()
 // v6.18.4 (P0-4): static snapshot + live counterparty addresses, deduped, so a
 // counterparty added this session appears in pickers without a browser refresh.
 function mergedLocations(contacts: any[]) {
-  const live = counterpartyLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
-  const byId = new Map<string, any>();
-  [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
-  return [...byId.values()];
+  // v6.86.0 (owner ruling): ONE source — unifiedLocations() — no module-level merge, no demo seeds.
+  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
 }
 
 const FALLBACK_PROVIDERS = [
@@ -234,7 +233,7 @@ function uniq(arr) {
 }
 
 function locById(id) {
-  return LOCATIONS.find(l => String(l.id) === String(id));
+  return locationById(id) as any; // v6.86.0: one resolver
 }
 // v6.34.0: a location id → its country, for the direction matrix.
 function countryOfLocation(id) {
@@ -1849,6 +1848,32 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             );
           })()}
         </Card>
+        {(String(draft.mode || "").toLowerCase() === "sea" || String(draft.mode || "").toLowerCase() === "multimodal") && (() => {
+          // v6.85.0 (D5, owner ruling): the BOOKING exists before any container number does —
+          // booking no., cut-off, ETD, ETA, POL/POD, containers planned. Vessel/voyage optional.
+          const b = (draft.bookings || [])[0] || null;
+          const sb = (k: string, v: any) => setDraft((d: any) => { const cur = (d.bookings || [])[0] || blankBooking(nextId()); return { ...d, bookings: [{ ...cur, [k]: v }, ...((d.bookings || []).slice(1))] }; });
+          return (
+            <Card>
+              <SectionTitle>Booking (sea / air)</SectionTitle>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                <div><Lbl>Booking no.</Lbl><Inp value={b?.number || ""} onChange={e => sb("number", e.target.value)} placeholder="from the forwarder" /></div>
+                <div><Lbl>Cut-off</Lbl><Inp type="date" value={b?.cutOff || ""} onChange={e => sb("cutOff", e.target.value)} /></div>
+                <div><Lbl>ETD</Lbl><Inp type="date" value={b?.etd || ""} onChange={e => sb("etd", e.target.value)} /></div>
+                <div><Lbl>ETA</Lbl><Inp type="date" value={b?.eta || ""} onChange={e => sb("eta", e.target.value)} /></div>
+                <div><Lbl>POL</Lbl><Inp value={b?.pol || ""} onChange={e => sb("pol", e.target.value)} placeholder="Koper" /></div>
+                <div><Lbl>POD</Lbl><Inp value={b?.pod || ""} onChange={e => sb("pod", e.target.value)} placeholder="Damietta" /></div>
+                <div><Lbl>Containers planned</Lbl><Inp type="number" value={b?.containersPlanned ?? ""} onChange={e => sb("containersPlanned", parseNum(e.target.value, 0))} /></div>
+                <div><Lbl>BL no. (when issued)</Lbl><Inp value={b?.blNumber || ""} onChange={e => sb("blNumber", e.target.value)} /></div>
+              </div>
+              <details style={{ marginTop: 8 }}><summary style={{ fontSize: 11, color: "#94A3B8", cursor: "pointer" }}>Vessel / voyage (optional)</summary>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
+                  <div><Lbl>Vessel</Lbl><Inp value={b?.vessel || ""} onChange={e => sb("vessel", e.target.value)} /></div>
+                  <div><Lbl>Voyage</Lbl><Inp value={b?.voyage || ""} onChange={e => sb("voyage", e.target.value)} /></div>
+                </div></details>
+            </Card>
+          );
+        })()}
         {/* v6.83.0 (owner ruling): GOODS first — what will be loaded — then the legs that carry it. */}
         <Card>
           <SectionTitle>Goods on this shipment</SectionTitle>
@@ -1888,12 +1913,20 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           </div>)}
         </Card>
         <Card>
+          {cutOffWarnings(draft).map((w: any, k: number) => (
+            <div key={"co" + k} style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E", fontWeight: 600 }}>
+              ⏱ {w.unit}: loading {w.loadingDate} cannot make booking {w.booking}'s cut-off — latest loading {w.latest}.
+            </div>
+          ))}
+          {stuffingViolations(draft).map((v: string, k: number) => (
+            <div key={"sv" + k} style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#B91C1C", fontWeight: 600 }}>⛔ {v}</div>
+          ))}
           {legKgChecks(draft).map((c: any) => (
             <div key={c.leg} style={{ marginBottom: 8, padding: "7px 10px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#B91C1C", fontWeight: 600 }}>
               Leg {c.leg} ({c.mode}): the {c.units} unit(s) carry {c.unitsKg.toLocaleString("pl-PL")} kg but the goods table says {c.goodsKg.toLocaleString("pl-PL")} kg — {c.deltaKg > 0 ? "over" : "under"} by {Math.abs(c.deltaKg).toLocaleString("pl-PL")} kg. The loading protocols and the transport order print what the units say.
             </div>
           ))}
-          <SectionTitle right={<SmallButton onClick={addLeg}>+ Activate extra leg</SmallButton>}>Legs - route, truck / driver / container / BL</SectionTitle>
+          <SectionTitle right={<span style={{ display: "flex", gap: 6 }}><SmallButton onClick={() => setDraft((d: any) => allocateGoodsToTrucks(d, 0))} title="v6.85.0 (D8): allocate the goods evenly across the trucks of leg 1 — kilos derive from the allocation">⚖ Split goods across trucks</SmallButton><SmallButton onClick={addLeg}>+ Activate extra leg</SmallButton></span>}>Legs - route, truck / driver / container / BL</SectionTitle>
           {(() => {
             // v6.4.1: the printed transport order takes dates from the LEGS, while the
             // list/header show the shipment-level dates — warn when they disagree.
@@ -1980,20 +2013,24 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                 <div style={{ display: "grid", gridTemplateColumns: uMode === "Road" ? "110px 1fr 1fr 1fr" : "110px 160px 1fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Mode</Lbl><div style={{ fontSize: 12.5, padding: "7px 0", fontWeight: 700, color: "#334155" }}>{uMode} <span style={{ fontWeight: 400, color: "#94A3B8" }}>(from leg)</span></div></div>
                   {i > 0 && (transportUnitsForLeg(draft.legs[i - 1]) || []).length > 0 && (
-                    <div><Lbl>Loaded from truck</Lbl>
-                      {/* v6.80.0 (D-50, owner ruling): the container is what the truck carried — link it, and
-                          the kilos, pallets, load and temp-recorder numbers follow the goods. */}
-                      <Sel value={u.fromUnitId ?? ""} onChange={e => {
-                        const src = (transportUnitsForLeg(draft.legs[i - 1]) || []).find((x: any) => String(x.id) === e.target.value);
-                        updateVehicle(i, ui, "fromUnitId", src ? src.id : null);
-                        if (src) { updateVehicle(i, ui, "qtyKg", src.qtyKg || 0); updateVehicle(i, ui, "pallets", src.pallets || 0); updateVehicle(i, ui, "tempRecorderNo", src.tempRecorderNo || ""); updateVehicle(i, ui, "load", src.load || []); }
-                      }}>
-                        <option value="">— pick the truck —</option>
-                        {(transportUnitsForLeg(draft.legs[i - 1]) || []).map((x: any) => <option key={String(x.id)} value={x.id}>{x.truckPlate || x.containerNumber || `unit ${x.id}`} · {Math.round(x.qtyKg || 0).toLocaleString("pl-PL")} kg{x.tempRecorderNo ? " · rec " + x.tempRecorderNo : ""}</option>)}
-                      </Sel>
+                    <div style={{ gridColumn: "span 2" }}><Lbl>Fed by trucks (v6.85.0 — many-to-many; kg only when a truck is split)</Lbl>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {(transportUnitsForLeg(draft.legs[i - 1]) || []).map((x: any) => {
+                          const cur = feedersOf(u); const f = cur.find((z: any) => String(z.fromUnitId) === String(x.id));
+                          return <label key={String(x.id)} style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11.5, border: "1px solid " + (f ? "#7C3AED" : "#E5E7EB"), borderRadius: 6, padding: "3px 7px", background: f ? "#F5F3FF" : "#fff" }}>
+                            <input type="checkbox" checked={!!f} onChange={() => { const next = f ? cur.filter((z: any) => String(z.fromUnitId) !== String(x.id)) : [...cur, { fromUnitId: x.id }]; setDraft((d: any) => setFeeders(d, u.id, next)); }} />
+                            {x.truckPlate || `unit ${x.id}`} · {Math.round(unitKg(x, draft)).toLocaleString("pl-PL")} kg
+                            {f && <input type="number" placeholder="split kg" value={f.kg ?? ""} onChange={e => { const v = parseNum(e.target.value, 0); setDraft((d: any) => setFeeders(d, u.id, cur.map((z: any) => String(z.fromUnitId) === String(x.id) ? { ...z, kg: v || undefined } : z))); }} style={{ width: 70, border: "1px solid #DDD6FE", borderRadius: 4, padding: "1px 4px", fontSize: 11 }} />}
+                          </label>;
+                        })}
+                      </div>
                     </div>
                   )}
-                  <div><Lbl>Kg</Lbl><Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} /></div>
+                  <div><Lbl>Kg{((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length) ? " (derived)" : ""}</Lbl>
+                    {((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length)
+                      ? <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F9FAFB", fontWeight: 600 }} title="v6.85.0 (D8): derived from the goods allocation / feeder trucks — never typed">{Math.round(unitKg(u, draft)).toLocaleString("pl-PL")}</div>
+                      : <Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} />}
+                  </div>
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
                   {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
                 </div>
@@ -2002,10 +2039,22 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
                   <div><Lbl>CMR no.</Lbl><Inp value={u.cmrNumber || ""} onChange={e => updateVehicle(i, ui, "cmrNumber", e.target.value)} placeholder="one per truck" title="Each truck has its own CMR number" /></div>
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this truck's load" /></div>
+                  <div><Lbl>Carrier (this unit)</Lbl>
+                    <Sel value={u.carrierId ?? ""} onChange={e => updateVehicle(i, ui, "carrierId", e.target.value || null)} title="v6.85.0 (D9): the carrier lives on the unit — one shipment may use several; transport orders go out per carrier">
+                      <option value="">— leg default —</option>
+                      {(contacts || []).filter((c: any) => ["Carrier", "Forwarder"].includes(c.type) || (c.roles || []).some((r: string) => ["Carrier", "Forwarder"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}
+                    </Sel>
+                  </div>
                 </div>}
                 {uMode !== "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr", gap: 9 }}>
                   <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" /></div>
+                  <div><Lbl>Carrier (this unit)</Lbl>
+                    <Sel value={u.carrierId ?? ""} onChange={e => updateVehicle(i, ui, "carrierId", e.target.value || null)} title="v6.85.0 (D9): the carrier lives on the unit — one shipment may use several; transport orders go out per carrier">
+                      <option value="">— leg default —</option>
+                      {(contacts || []).filter((c: any) => ["Carrier", "Forwarder"].includes(c.type) || (c.roles || []).some((r: string) => ["Carrier", "Forwarder"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}
+                    </Sel>
+                  </div>
                 </div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} max={localTodayISO()} /></div>
@@ -2542,7 +2591,85 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
   </div>;
 }
 
-function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim }: any) {
+
+// ── v6.85.0 (D6): FORWARDER'S REPORTS — the two messages that create containers or onward shipments ──
+function ForwarderReports({ shipment, orders = [], onStuffing, onDevanning }: any) {
+  const [mode, setMode] = React.useState<"" | "stuff" | "devan">("");
+  const [rows, setRows] = React.useState<any[]>([]);
+  const trucks: any[] = []; const containers: any[] = [];
+  (shipment.legs || []).forEach((l: any) => (l.vehicles || []).forEach((u: any) => {
+    const isC = String(u.kind || "").toLowerCase() === "container" || String(l.mode || "").toLowerCase() === "sea" || !!u.containerNumber;
+    (isC ? containers : trucks).push(u);
+  }));
+  const isSeaish = ["sea", "multimodal"].includes(String(shipment.mode || "").toLowerCase());
+  if (!isSeaish) return null;
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 };
+  return (
+    <Card>
+      <SectionTitle right={<span style={{ display: "flex", gap: 6 }}>
+        {trucks.length > 0 && <SmallButton kind={mode === "stuff" ? "dark" : "default"} onClick={() => { setMode(mode === "stuff" ? "" : "stuff"); setRows([{ containerNumber: "", seal: "", feeders: [] }]); }}>Forwarder's loading report (POL)</SmallButton>}
+        {containers.length > 0 && shipment.purpose === "INBOUND" && <SmallButton kind={mode === "devan" ? "dark" : "default"} onClick={() => { setMode(mode === "devan" ? "" : "devan"); setRows([{ containerId: containers[0]?.id, truckPlate: "", kg: "", destKind: "WAREHOUSE", soNumber: "" }]); }}>De-vanning report (POD) → onward shipments</SmallButton>}
+      </span>}>Forwarder's reports</SectionTitle>
+      <div style={{ fontSize: 11, color: "#64748B", marginBottom: 8 }}>
+        We never record stuffing or de-vanning ourselves — the forwarder reports it. Enter the report once: containers (with the trucks that fed them) are created at the POL; at the POD the onward transfer and delivery shipments are created from where each truck goes.
+      </div>
+      {mode === "stuff" && (<>
+        {rows.map((r: any, i: number) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "150px 110px 1fr 30px", gap: 8, marginBottom: 6, alignItems: "start" }}>
+            <input placeholder="Container no." value={r.containerNumber} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, containerNumber: e.target.value } : x))} style={inp} />
+            <input placeholder="Seal" value={r.seal} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, seal: e.target.value } : x))} style={inp} />
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {trucks.map((t: any) => { const f = r.feeders.find((z: any) => String(z.truckId) === String(t.id));
+                return <label key={String(t.id)} style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11.5, border: "1px solid " + (f ? "#7C3AED" : "#E5E7EB"), borderRadius: 6, padding: "2px 6px" }}>
+                  <input type="checkbox" checked={!!f} onChange={() => setRows(rs => rs.map((x, k) => k === i ? { ...x, feeders: f ? x.feeders.filter((z: any) => String(z.truckId) !== String(t.id)) : [...x.feeders, { truckId: t.id }] } : x))} />
+                  {t.truckPlate || `truck ${t.id}`}{f && <input type="number" placeholder="split kg" value={f.kg ?? ""} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, feeders: x.feeders.map((z: any) => String(z.truckId) === String(t.id) ? { ...z, kg: parseNum(e.target.value, 0) || undefined } : z) } : x))} style={{ ...inp, width: 68, padding: "1px 4px" }} />}
+                </label>; })}
+            </div>
+            <button onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer" }}>✕</button>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8 }}>
+          <SmallButton onClick={() => setRows(rs => [...rs, { containerNumber: "", seal: "", feeders: [] }])}>+ Container</SmallButton>
+          <SmallButton kind="green" onClick={() => { onStuffing(rows.filter((r: any) => r.containerNumber.trim() && r.feeders.length)); setMode(""); }}>Create containers from report</SmallButton>
+        </div>
+      </>)}
+      {mode === "devan" && (<>
+        {rows.map((r: any, i: number) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "150px 120px 90px 130px 1fr 30px", gap: 8, marginBottom: 6 }}>
+            <select value={r.containerId ?? ""} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, containerId: e.target.value } : x))} style={inp}>{containers.map((c: any) => <option key={String(c.id)} value={c.id}>{c.containerNumber || `container ${c.id}`}</option>)}</select>
+            <input placeholder="Truck plate" value={r.truckPlate} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, truckPlate: e.target.value } : x))} style={inp} />
+            <input type="number" placeholder="kg" value={r.kg} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, kg: e.target.value } : x))} style={inp} />
+            <select value={r.destKind} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, destKind: e.target.value } : x))} style={inp}><option value="WAREHOUSE">→ our warehouse (transfer)</option><option value="SO">→ client (SO)</option></select>
+            {r.destKind === "SO" ? <select value={r.soNumber} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, soNumber: e.target.value } : x))} style={inp}><option value="">— sales order —</option>{(orders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft").map((o: any) => <option key={o.number} value={o.number}>{o.number} · {o.client?.name}</option>)}</select> : <span />}
+            <button onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer" }}>✕</button>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8 }}>
+          <SmallButton onClick={() => setRows(rs => [...rs, { containerId: containers[0]?.id, truckPlate: "", kg: "", destKind: "WAREHOUSE", soNumber: "" }])}>+ Truck</SmallButton>
+          <SmallButton kind="green" onClick={() => { onDevanning(rows.filter((r: any) => r.truckPlate.trim() && parseNum(r.kg, 0) > 0 && (r.destKind === "WAREHOUSE" || r.soNumber))); setMode(""); }}>Create onward shipments</SmallButton>
+        </div>
+      </>)}
+    </Card>
+  );
+}
+
+// ── v6.85.0 (D11): ONE document register — a derived view over the three sources ──
+function DocumentRegisterCard({ shipment, protocols = [] }: any) {
+  const rows = documentRegister(shipment, protocols);
+  const color = (s: string) => s === "Returned" || s === "Have it" || s === "N/A" ? "#16A34A" : s === "Sent" ? "#0284C7" : "#B45309";
+  return (
+    <Card>
+      <SectionTitle>Document register</SectionTitle>
+      {rows.map((r: any, i: number) => (
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "150px 1fr 90px 90px", gap: 8, fontSize: 11.5, padding: "3px 0", borderTop: i ? "1px solid #F8FAFC" : "none" }}>
+          <span style={{ fontWeight: 700 }}>{r.kind}</span><span style={{ color: "#64748B" }}>{r.ref}{r.unit ? " · " + r.unit : ""}{r.link ? " · 🔗" : ""}</span><span style={{ color: color(r.status), fontWeight: 800 }}>{r.status}</span><span style={{ color: "#94A3B8" }}>{r.date}</span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim, onStuffing = null, onDevanning = null }: any) {
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
   const cancelledRefs = cancelledDocSet(pos, orders); // v6.35.1: strike cancelled PO/SO refs
   const missingDocs = (shipment.documents || []).filter(d => ["Required", "Missing"].includes(d.status));
@@ -2632,6 +2759,8 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           </div>
         </div>; })}
       </Card>
+      {onStuffing && <ForwarderReports shipment={shipment} orders={orders} onStuffing={onStuffing} onDevanning={onDevanning} />}
+      <DocumentRegisterCard shipment={shipment} protocols={protocolsForShipment(shipment)} />
       <Card>
         {/* v6.58.0: the four face boxes (route / dates / on board / carrier)
             are REMOVED on user ruling — route read shipment-level location
@@ -2811,7 +2940,7 @@ export default function Shipments({
   onStartClaim = null,
   invoices: extInvoices = [],
 }: any = {}) {
-  const { confirm: shConfirm, dialogNode: shDialogNode } = useConfirm(); // P2-6
+  const { confirm: shConfirm, prompt: shPrompt, dialogNode: shDialogNode } = useConfirm(); // P2-6 + v6.85.0 (D10 date prompt)
   // v6.45.0 (A): synchronous mirror of the shipments array for chain-safe updates.
   const shipmentsMirror = React.useRef(null);
   React.useEffect(() => { shipmentsMirror.current = shipments; });
@@ -3068,6 +3197,18 @@ export default function Shipments({
   }
 
   async function quickStatus(sh, status) {
+    // v6.85.0 (D10, owner ruling): the actual date is entered ONCE, here, when the event
+    // happens — default today, editable (backdate when the news arrives late) — and it
+    // travels: unit events, header mirrors, SO planned-vs-actual, posting dates.
+    if (["Loaded", "Delivered"].includes(String(status))) {
+      const ans = await shPrompt({ title: `${status} — actual date`, message: `When did it actually happen? (dd/mm/yyyy — default today; backdate if you learnt it later)`, defaultValue: todayISO().split("-").reverse().join("/"), confirmLabel: `Mark ${status}` });
+      if (ans === null) return;
+      const m = String(ans).trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+      const iso = m ? `${m[3]}-${String(m[2]).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}` : todayISO();
+      const kind = status === "Loaded" ? "loaded" : (String(sh.purpose || "").toUpperCase() === "INBOUND" && ["sea", "multimodal"].includes(String(sh.mode || "").toLowerCase()) ? "discharged" : "delivered");
+      updateShipment(sh.id, (s: any) => stampEvent(s, null, kind as any, iso));
+      sh = stampEvent(sh, null, kind as any, iso);
+    }
     // v6.78.0 THE ONE GATE. Since v6.58.0 these statuses POST INVENTORY. A
     // shipment with no goods posts nothing and still reports the movement as
     // done — the same class as the phantom receipts. Booking is never gated:
@@ -3303,7 +3444,16 @@ export default function Shipments({
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
+          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
+            onStuffing={(rows: any[]) => { updateShipment(selected.id, (s: any) => applyStuffingReport(s, rows, { nextId })); setToast(`${selected.number}: ${rows.length} container(s) created from the forwarder's report.`); }}
+            onDevanning={(rows: any[]) => {
+              const byC: Record<string, any> = {};
+              rows.forEach((r: any) => { (byC[String(r.containerId)] = byC[String(r.containerId)] || { containerId: r.containerId, trucks: [] }).trucks.push({ truckPlate: r.truckPlate, kg: parseNum(r.kg, 0), destination: r.destKind === "SO" ? { kind: "SO", soNumber: r.soNumber } : { kind: "WAREHOUSE" } }); });
+              let n = 0; const spawned = spawnFromDevanning(selected, Object.values(byC), { nextId, todayISO, nextNumber: () => { const num = nextShipmentNumber([...shipments, ...Array.from({ length: n }, (_, k) => ({ number: `${nextShipmentNumber(shipments).slice(0, -4)}${String(parseInt(nextShipmentNumber(shipments).slice(-4), 10) + k).padStart(4, "0")}` }))]); n++; return num; } });
+              setShipments((prev: any[]) => [...(prev || []), ...spawned]);
+              recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "created", summary: `De-vanning report → ${spawned.map((s: any) => s.number + " (" + s.purpose + ")").join(", ")}` });
+              setToast(`${spawned.length} onward shipment(s) created from the de-vanning report: ${spawned.map((s: any) => s.number).join(", ")}.`);
+            }} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
         </div>
       </div>
     </div>

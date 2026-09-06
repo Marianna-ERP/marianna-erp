@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, buildStockCount, applyStockCount, plateMismatch } from "./seasonOps.domain";
 import { PAGE_MAX } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
@@ -10,7 +11,7 @@ import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.dom
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
-import { LOCATIONS as SHARED_LOCATIONS, counterpartyLocations } from "./locations";
+import { unifiedLocations, locationById } from "./locations";
 import { customsSummary } from "./customs.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { computeLotWarehouseCharges } from "./warehouseCharges";
@@ -39,14 +40,12 @@ function locType(t: string) {
 // LOCATIONS now comes from the shared ./locations source of truth. We map the
 // rich `type` back onto the legacy single-word `type` field that this module's
 // existing UI code expects (LOCATION_TYPES[loc.type]).
-const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
+// v6.86.0: module-level LOCATIONS alias removed — pickers read unifiedLocations()
 // v6.18.4 (P0-4): snapshot + live counterparty addresses, deduped, so movement
 // pickers see a counterparty added this session without a browser refresh.
 function mergedLocations(contacts: any[]) {
-  const live = counterpartyLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
-  const byId = new Map<string, any>();
-  [...LOCATIONS, ...live].forEach((l: any) => { if (!byId.has(String(l.id))) byId.set(String(l.id), l); });
-  return [...byId.values()];
+  // v6.86.0 (owner ruling): ONE source — unifiedLocations() — no module-level merge, no demo seeds.
+  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
 }
 
 // Lot status lifecycle — PHYSICAL states only.
@@ -346,7 +345,7 @@ const MOVEMENT_TYPES: Record<string, any> = {
 // ─── SEED DATA — lots covering all 7 flows ──────────────────────────────────
 const today = localTodayISO();
 
-function locById(id) { return LOCATIONS.find(l => String(l.id) === String(id)); }
+function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
 
 // ─── SO STUB ────────────────────────────────────────────────────────────────
 // Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically
@@ -1200,7 +1199,124 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
   );
 }
 
-function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [] }: any) {
+
+// ── v6.89.0 (consignment season): QUALITY INSPECTION · SORTING JOB · STOCK COUNT ──
+// One owner per fact: inspections store (lot-referenced), sorting posts DAMAGE + grade split on the lot,
+// stock counts create reasoned adjustments. Compact forms; the Lot Workbench (v6.91) composes them.
+function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, defectCatalogue = [], stockCounts = [], setStockCounts = null, recompute }: any) {
+  const [mode, setMode] = React.useState<"" | "inspect" | "sort" | "count">("");
+  const [ins, setIns] = React.useState<any>(null);
+  const [sortF, setSortF] = React.useState<any>({ kgIn: "", classIKg: "", classIIKg: "", wasteKg: "", by: "", hours: "" });
+  const [countRows, setCountRows] = React.useState<Record<string, string>>({});
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
+  const cat = (defectCatalogue && defectCatalogue.length ? defectCatalogue : PEPPER_DEFECTS);
+  const myIns = (inspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number));
+  const g = gradeSplit(lot);
+  const sameLoc = (lots || []).filter((l: any) => String(l.locationId) === String(lot.locationId) && (Number(l.physicalKg) || 0) > 0);
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginRight: "auto" }}>SEASON ACTIONS · grade I {g.I.toLocaleString("pl-PL")} · II {g.II.toLocaleString("pl-PL")} · waste {g.waste.toLocaleString("pl-PL")} kg</div>
+        {setInspections && <button onClick={() => { setIns(blankInspection(lot, { nextId, todayISO: localTodayISO })); setMode(mode === "inspect" ? "" : "inspect"); }} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>🔬 Quality inspection</button>}
+        {setLots && <button onClick={() => { setSortF({ kgIn: String(Math.round(Number(lot.physicalKg) || 0)), classIKg: "", classIIKg: "", wasteKg: "", by: "", hours: "" }); setMode(mode === "sort" ? "" : "sort"); }} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>⚖ Sorting job</button>}
+        {setLots && setStockCounts && <button onClick={() => { const r: Record<string, string> = {}; sameLoc.forEach((l: any) => { r[l.number] = String(Math.round(Number(l.physicalKg) || 0)); }); setCountRows(r); setMode(mode === "count" ? "" : "count"); }} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #B45309", background: "#fff", color: "#B45309", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>📋 Stock count (this location)</button>}
+      </div>
+      {myIns.length > 0 && <div style={{ fontSize: 11.5, color: "#334155", marginBottom: 6 }}>{myIns.map((x: any) => { const tt = inspectionTotals(x); return <div key={String(x.id)}>🔬 {x.date} · {x.stage} · {x.inspector || "—"} · defects {tt.totalPct}% · <b style={{ color: x.verdict === "Rejected" ? "#DC2626" : x.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{x.verdict}</b>{x.links?.[0] ? " · 🔗" : ""}</div>; })}</div>}
+      {mode === "inspect" && ins && (
+        <div style={{ borderTop: "1px solid #F1F5F9", paddingTop: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, marginBottom: 8 }}>
+            <select value={ins.stage} onChange={e => setIns({ ...ins, stage: e.target.value })} style={inp}><option value="pre-unloading">Pre-unloading</option><option value="warehouse">Warehouse</option><option value="client">At client</option><option value="other">Other</option></select>
+            <input placeholder="Inspector" value={ins.inspector} onChange={e => setIns({ ...ins, inspector: e.target.value })} style={inp} />
+            <input placeholder="Ordered qty" value={ins.orderedQty ?? ""} onChange={e => setIns({ ...ins, orderedQty: e.target.value })} style={inp} />
+            <input placeholder="Checked qty" value={ins.checkedQty ?? ""} onChange={e => setIns({ ...ins, checkedQty: e.target.value })} style={inp} />
+            <select value={ins.unit} onChange={e => setIns({ ...ins, unit: e.target.value })} style={inp}><option value="boxes">boxes</option><option value="kg">kg</option></select>
+            <input placeholder="Temp °C" value={ins.temperature ?? ""} onChange={e => setIns({ ...ins, temperature: e.target.value })} style={inp} />
+          </div>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", marginBottom: 4 }}>DEFECTS (Daifressh structure: category · defect · % of sample)</div>
+          {(ins.defects || []).map((d: any, i: number) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 1fr 90px 30px", gap: 6, marginBottom: 4 }}>
+              <select value={d.category} onChange={e => setIns({ ...ins, defects: ins.defects.map((x: any, k: number) => k === i ? { ...x, category: e.target.value } : x) })} style={inp}>{DEFECT_CATEGORIES.map((c: string) => <option key={c}>{c}</option>)}</select>
+              <input list={`defects-${lot.id}`} placeholder="defect" value={d.name} onChange={e => setIns({ ...ins, defects: ins.defects.map((x: any, k: number) => k === i ? { ...x, name: e.target.value } : x) })} style={inp} />
+              <input type="number" step="0.01" placeholder="%" value={d.pct ?? ""} onChange={e => setIns({ ...ins, defects: ins.defects.map((x: any, k: number) => k === i ? { ...x, pct: e.target.value } : x) })} style={inp} />
+              <button onClick={() => setIns({ ...ins, defects: ins.defects.filter((_: any, k: number) => k !== i) })} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer" }}>✕</button>
+            </div>
+          ))}
+          <datalist id={`defects-${lot.id}`}>{defectsFor(cat, lot.product).map((d: any, i: number) => <option key={i} value={d.name} />)}</datalist>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+            <button onClick={() => setIns({ ...ins, defects: [...(ins.defects || []), { category: "Major", name: "", pct: "" }] })} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>+ Defect</button>
+            <span style={{ fontSize: 11.5, fontWeight: 800 }}>Total {inspectionTotals(ins).totalPct}%</span>
+            <select value={ins.verdict} onChange={e => setIns({ ...ins, verdict: e.target.value })} style={{ ...inp, width: 140 }}><option>Pending</option><option>Accepted</option><option>Sort</option><option>Rejected</option></select>
+            <input placeholder="Report / photos link (Dropbox)" value={ins.links?.[0] || ""} onChange={e => setIns({ ...ins, links: [e.target.value] })} style={{ ...inp, width: 260 }} />
+            <input placeholder="Observations" value={ins.observations || ""} onChange={e => setIns({ ...ins, observations: e.target.value })} style={{ ...inp, flex: 1, minWidth: 160 }} />
+            <button onClick={() => { setInspections((prev: any[]) => [...(prev || []), ins]); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "claim", summary: `Inspection ${ins.stage}: ${inspectionTotals(ins).totalPct}% defects → ${ins.verdict}` }); setMode(""); }} style={{ fontSize: 11.5, padding: "5px 12px", border: "none", background: "#0E7490", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 800 }}>Save inspection</button>
+          </div>
+        </div>
+      )}
+      {mode === "sort" && (
+        <div style={{ borderTop: "1px solid #F1F5F9", paddingTop: 8, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, alignItems: "end" }}>
+          <div><Lbl>Kg sorted</Lbl><input type="number" value={sortF.kgIn} onChange={e => setSortF({ ...sortF, kgIn: e.target.value })} style={inp} /></div>
+          <div><Lbl>Class I kg</Lbl><input type="number" value={sortF.classIKg} onChange={e => setSortF({ ...sortF, classIKg: e.target.value })} style={inp} /></div>
+          <div><Lbl>Class II kg</Lbl><input type="number" value={sortF.classIIKg} onChange={e => setSortF({ ...sortF, classIIKg: e.target.value })} style={inp} /></div>
+          <div><Lbl>Waste kg</Lbl><input type="number" value={sortF.wasteKg} onChange={e => setSortF({ ...sortF, wasteKg: e.target.value })} style={inp} /></div>
+          <div><Lbl>By</Lbl><input value={sortF.by} onChange={e => setSortF({ ...sortF, by: e.target.value })} placeholder="Agrohurt" style={inp} /></div>
+          <div><Lbl>Hours</Lbl><input type="number" value={sortF.hours} onChange={e => setSortF({ ...sortF, hours: e.target.value })} style={inp} /></div>
+          <button onClick={() => { const r = runSortingJob(lot, { date: localTodayISO(), ...sortF }, { nextId }); if (r.error) { window.alert(r.error); return; } setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? recompute(r.lot, r.lot.movements) : l)); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job: I ${sortF.classIKg} · II ${sortF.classIIKg} · waste ${sortF.wasteKg} kg` }); setMode(""); }} style={{ fontSize: 11.5, padding: "7px 12px", border: "none", background: "#7C3AED", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 800 }}>Post sorting</button>
+        </div>
+      )}
+      {mode === "count" && (
+        <div style={{ borderTop: "1px solid #F1F5F9", paddingTop: 8 }}>
+          <div style={{ fontSize: 10.5, color: "#94A3B8", marginBottom: 6 }}>Counted kg per lot at this location (system figure pre-filled). Differences beyond 1 kg become reasoned adjustments.</div>
+          {sameLoc.map((l: any) => <div key={l.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 120px 120px", gap: 8, fontSize: 11.5, alignItems: "center", marginBottom: 4 }}><b>{l.number}</b><span style={{ color: "#64748B" }}>{l.product} {l.variety || ""}</span><span>system {Math.round(Number(l.physicalKg) || 0).toLocaleString("pl-PL")}</span><input type="number" value={countRows[l.number] ?? ""} onChange={e => setCountRows({ ...countRows, [l.number]: e.target.value })} style={inp} /></div>)}
+          <button onClick={() => { const reason = window.prompt("Reason for the differences (shrinkage, mis-count, damage found…):", "stock count") || "stock count"; const c = buildStockCount(lots, lot.locationId, sameLoc.map((l: any) => ({ lotNumber: l.number, countedKg: countRows[l.number] })), { nextId, todayISO: localTodayISO }); const a = applyStockCount(lots, c, reason, { nextId }); setLots((prev: any[]) => (prev || []).map((l: any) => { const nl = a.lots.find((x: any) => x.id === l.id); return nl && nl !== l ? recompute(nl, nl.movements) : l; })); setStockCounts((prev: any[]) => [...(prev || []), c]); recordAudit({ module: "Inventory", docType: "Location", docNumber: String(lot.locationId), action: "movement", summary: `Stock count: ${a.adjusted} lot(s) adjusted — ${reason}` }); setMode(""); }} style={{ marginTop: 6, fontSize: 11.5, padding: "6px 12px", border: "none", background: "#B45309", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 800 }}>Save count & adjust</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── v6.91.0: THE LOT WORKBENCH — one screen per lot, composed from the owning modules, storing nothing ──
+function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orders = [], settlements = [], contacts = [] }: any) {
+  const S = (v: any) => String(v ?? "").trim();
+  const num = (v: any) => { const n = parseFloat(String(v ?? "")); return isFinite(n) ? n : 0; };
+  // Arrival: the supplier-delivery (or any inbound) shipment that carried this lot
+  const arrival = (shipments || []).find((s: any) => String(s.purpose || "").toUpperCase() === "INBOUND" && ((s.lotRefs || []).map(String).includes(String(lot.number)) || (s.goods || []).some((g: any) => String(g.lotRef) === String(lot.number) || (lot.poRef && String(g.poRef) === String(lot.poRef)))));
+  const unit = arrival ? ((arrival.legs || [])[0]?.vehicles || [])[0] : null;
+  const receipt = (lot.movements || []).find((m: any) => m.type === "IN" && !m.voided && m.varianceKg !== undefined);
+  const ins = (inspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number)).sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
+  const lastIns = ins[0];
+  const lotClaims = (claims || []).filter((c: any) => (c.subjects || []).some((s: any) => String(s.ref || s.number) === String(lot.number)) || (c.rootDoc && String(c.rootDoc.number) === String(lot.poRef)));
+  const g = gradeSplit(lot);
+  const sales = (orders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
+  const soldKg = sales.reduce((s: number, o: any) => s + (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))).reduce((a: number, it: any) => a + num(it.qty), 0), 0);
+  const settlement = (settlements || []).find((s: any) => String(s.poNumber) === String(lot.poRef));
+  const supplier = (contacts || []).find((c: any) => (c.type === "Supplier" || (c.roles || []).includes("Supplier")) && S(c.name) && (arrival?.supplierId != null ? String(c.id) === String(arrival.supplierId) : false));
+  const reportDays = num(supplier?.reportDays) || num(supplier?.agreement?.qualityReportDays) || 0;
+  const arrivedAt = S(unit?.arrivedAt || unit?.deliveredAt || receipt?.date || lot.arrivalDate);
+  const dueQC = arrivedAt && reportDays ? new Date(new Date(arrivedAt).getTime() + reportDays * 86400000).toISOString().slice(0, 10) : "";
+  const tile = (title: string, body: any, color = "#111") => (
+    <div style={{ background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{title}</div>
+      <div style={{ fontSize: 11.5, color, marginTop: 3, lineHeight: 1.45 }}>{body}</div>
+    </div>
+  );
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>LOT WORKBENCH · {lot.number} · {lot.product}{lot.variety ? " — " + lot.variety : ""}{lot.poRef ? " · " + lot.poRef : ""}{unit?.supplierRef ? " · supplier ref " + unit.supplierRef : ""}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
+        {tile("ARRIVAL", arrival ? <>{arrival.number} · {arrival.arrangedBy === "SUPPLIER" ? "supplier's truck" : "our shipment"}<br />{unit?.truckPlate || unit?.announcedPlate || "plates —"}{plateMismatch(unit) ? <b style={{ color: "#DC2626" }}> · plates differ from announced!</b> : ""}<br />{arrivedAt ? `arrived ${arrivedAt}` : (unit?.eta ? `ETA ${unit.eta}` : "not arrived")}</> : <span style={{ color: "#94A3B8" }}>no inbound shipment{lot.poRef ? " — register the supplier's truck on the PO" : ""}</span>)}
+        {tile("RECEIPT", receipt ? <>{Math.round(num(receipt.qtyKg)).toLocaleString("pl-PL")} kg received<br />vs expected {Math.round(num(receipt.expectedKg)).toLocaleString("pl-PL")} kg<br /><b style={{ color: Math.abs(num(receipt.varianceKg)) > 1 ? "#B45309" : "#16A34A" }}>{num(receipt.varianceKg) >= 0 ? "+" : ""}{Math.round(num(receipt.varianceKg))} kg</b></> : <span style={{ color: "#94A3B8" }}>{num(lot.receivedKg) > 0 ? `${Math.round(num(lot.receivedKg)).toLocaleString("pl-PL")} kg received` : `expected ${Math.round(num(lot.expectedKg)).toLocaleString("pl-PL")} kg — not received`}</span>)}
+        {tile("QUALITY", lastIns ? <>{lastIns.stage} {lastIns.date}<br />defects <b>{inspectionTotals(lastIns).totalPct}%</b> · <b style={{ color: lastIns.verdict === "Rejected" ? "#DC2626" : lastIns.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{lastIns.verdict}</b><br />{ins.length} inspection(s){lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</> : <span style={{ color: dueQC ? "#B45309" : "#94A3B8" }}>no inspection{dueQC ? ` — QC report due ${dueQC}` : ""}{lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</span>, lastIns ? "#111" : "#94A3B8")}
+        {tile("STOCK", <>physical <b>{Math.round(num(lot.physicalKg)).toLocaleString("pl-PL")}</b> kg<br />I {g.I.toLocaleString("pl-PL")} · II {g.II.toLocaleString("pl-PL")} · waste {g.waste.toLocaleString("pl-PL")}<br />reserved {Math.round(num(lot.reservedKg)).toLocaleString("pl-PL")} · available {Math.round(Math.max(0, num(lot.physicalKg) - num(lot.reservedKg))).toLocaleString("pl-PL")}</>)}
+        {tile("SALES", <>{sales.length} order(s) · {Math.round(soldKg).toLocaleString("pl-PL")} kg sold<br />{sales.slice(0, 3).map((o: any) => o.number).join(", ")}{sales.length > 3 ? " …" : ""}<br /><span style={{ color: num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "#16A34A" : "#B45309" }}>{num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "fully sold" : `${Math.max(0, Math.round(num(lot.receivedKg) - soldKg - g.waste)).toLocaleString("pl-PL")} kg to sell`}</span></>)}
+        {tile("SETTLEMENT", settlement ? <>{settlement.number || "open"} · <b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? <><br />closed {settlement.closedAt}</> : null}{settlement.commissionInvoiceId ? <><br />commission invoiced</> : <><br />commission: next run</>}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `on the PO ${lot.poRef} (consignment)` : "—"}</span>)}
+      </div>
+      <div style={{ marginTop: 8, fontSize: 10.5, color: "#94A3B8" }}>Actions live below in their owning sections: Receive · Inspect · Sort · Count · Move · Return · Claim; the settlement, its reports and the commission run are on the PO. This strip stores nothing — it reads what each module owns.</div>
+    </div>
+  );
+}
+
+function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [], season = null }: any) {
   const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   const cpk = costPerKg(lot);
   const total = totalCost(lot);
@@ -1493,6 +1609,8 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
               })()}
 
               {/* Inspections (v6.2) — recordable at any stage */}
+              {season && <LotWorkbench lot={lot} shipments={shipments} inspections={season.inspections} claims={season.claims || []} orders={liveSOs} settlements={season.settlements || []} contacts={contacts} />}
+              {season && <SeasonActions lot={lot} {...season} />}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ Record inspection</button>}>INSPECTIONS{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
                 {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No inspections recorded. Record one when goods are checked on arrival, in storage, by a client, or at customs.</div>}
@@ -1713,9 +1831,9 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
 // v6.79.0 (W-2): the legacy lot-side Claim Request Form was retired — claims are
 // one document type with one numbering scheme in the Claims module (D-13).
 
-export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null }: any = {}) {
+export default function Inventory({ lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [] }: any = {}) {
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
-  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm(); // Batch 2 (P2-6)
+  const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode } = useConfirm(); // Batch 2 (P2-6) + v6.89.0 prompt
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
   const [localLots, setLocalLots] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const lots = extLots ?? localLots;
@@ -1994,6 +2112,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             if (close) setSettlementLot(null);
           }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
+          season={{ lots, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
           pos={extPOs}
           allLots={lots}
           lotClaims={claimsForLot(extClaims || [], selected?.number).filter((c: any) => c.direction === "RECOVERY")}
@@ -2013,8 +2132,12 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             // the receipt directly: one IN movement for the expected kilos at the
             // lot's destination, then the standard recompute. Fully visible and
             // voidable in the movement history like any other receipt.
-            const kg = parseFloat(String(selected?.expectedKg)) || 0;
-            if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No expected quantity", message: "This lot has no expected kilos to receive — set the PO line quantity first." }); return; }
+            // v6.89.0 (G1, owner ruling): the receipt asks the ACTUAL kilos — every truck arrives with a discrepancy.
+            const expectedKg = parseFloat(String(selected?.expectedKg)) || 0;
+            const typed = await uiPrompt({ title: `Receive ${selected.number} — actual quantity`, message: `Expected ${Math.round(expectedKg).toLocaleString("pl-PL")} kg. Enter the kilos actually received (the variance is recorded on the receipt):`, defaultValue: String(Math.round(expectedKg)), confirmLabel: "Continue" });
+            if (typed === null) return;
+            const kg = parseFloat(String(typed).replace(",", ".")) || 0;
+            if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No quantity", message: "Enter the kilos actually received — set the PO line quantity first." }); return; }
             const directCaveat = selected.status === "Direct Expected"
               ? "\n\n⚠ This lot is marked DIRECT FLOW (supplier → client, never our warehouse). Receiving it here converts it to a normal warehouse lot — do this only if the goods really arrived at OUR location (e.g. a DDP purchase)." : "";
             const ok = await uiConfirm({ tone: "warn", title: `Receive ${kg.toLocaleString("pl-PL")} kg into stock?`,
@@ -2022,7 +2145,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             if (!ok) return;
             setLots((prev: any[]) => prev.map((l: any) => {
               if (l.id !== selected.id) return l;
-              const mv = { id: nextId(), date: today, type: "IN", qtyKg: kg, toId: l.locationId ?? null, soRef: null, shipmentRef: null, note: `Direct receipt (DDP) — ${l.poRef || "no PO"}` };
+              const mv = { ...receiptMovement(l, { kg, date: today, note: "Direct receipt (DDP)" }, { nextId }).movement, toId: l.locationId ?? null, soRef: null, shipmentRef: null, poNote: `${l.poRef || "no PO"}`  };
               const next = recomputeLotFromMovements({ ...l, directFlow: false, status: l.status === "Direct Expected" ? "Expected" : l.status }, [...(l.movements || []), mv]);
               setSelectedId(next.id);
               return next;

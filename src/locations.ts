@@ -46,7 +46,11 @@ function L(id: number, type: LocationType, legacyType: string, name: string, cou
   return { id, type, legacyType, name, country, address, aliasOf };
 }
 
-export const LOCATIONS: Location[] = [
+// v6.86.0 (owner ruling): the built-in list is REFERENCE DATA = PORTS ONLY. The demo
+// warehouses / supplier / client / broker sites that used to sit here appeared in some
+// pickers and not others. Any still referenced by stored documents is migrated into the
+// user's custom locations on load (migrateReferencedSeeds); the rest disappear.
+const BUILTIN_ALL: Location[] = [
   // ── Our storage (rented today; will include OwnWarehouse when Marianna opens one) ──
   L(1, "RentedWarehouse", "OWN", "WH-01 Poznań (Logipark)", "Poland", "Poznań / Logipark"),
   L(2, "RentedWarehouse", "OWN", "WH-02 Warszawa (ColdStore)", "Poland", "Warszawa cold storage"),
@@ -102,6 +106,9 @@ export const LOCATIONS: Location[] = [
   L(201, "Airport", "PORT", "Warsaw Chopin Airport — Cargo", "Poland"),
   L(202, "Airport", "PORT", "Frankfurt Cargo Airport", "Germany"),
 ];
+export const DEMO_SEEDS: Location[] = BUILTIN_ALL.filter(l => l.legacyType !== "PORT" && !l.aliasOf);
+export const LOCATIONS: Location[] = BUILTIN_ALL.filter(l => l.legacyType === "PORT" || !!l.aliasOf);
+
 
 // ─── CUSTOM LOCATIONS (v6.3.0) ──────────────────────────────────────────────
 // User-managed locations (new ports, airports, warehouses, client sites...)
@@ -597,4 +604,37 @@ export function suggestCountry(v: any): string {
     return Math.abs(l.length - s.length) <= 1 && sorted(l) === target;
   });
   return hit || "";
+}
+
+
+// ── v6.86.0: ONE SOURCE FOR EVERY LOCATION PICKER ─────────────────────────────
+// ports (reference) + the user's custom locations (Settings) + every counterparty
+// site derived from its addresses (warehouse / supplier / client / broker). No
+// module builds its own merge any more; no demo seed appears anywhere.
+export function unifiedLocations(contacts: any[] = []): Location[] {
+  const byId = new Map<string, Location>();
+  [...allLocations(), ...counterpartyLocations(contacts || [])].forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
+  return sortLocations(Array.from(byId.values()));
+}
+/** Resolve any location id — built-in, custom or counterparty site. */
+export function locationById(id: any, contacts: any[] = []): Location | null {
+  if (id === null || id === undefined || id === "") return null;
+  return unifiedLocations(contacts).find(l => String(l.id) === String(id)) || DEMO_SEEDS.find(l => String(l.id) === String(id)) || null;
+}
+/** Demo seeds that stored documents still point at become custom locations (once). */
+export function migrateReferencedSeeds(referencedIds: Iterable<any>): Location[] {
+  const wanted = new Set(Array.from(referencedIds).map(String));
+  const existing = new Set(readCustomLocations().map(l => String(l.id)));
+  const added: Location[] = [];
+  DEMO_SEEDS.forEach(seed => {
+    if (!wanted.has(String(seed.id)) || existing.has(String(seed.id))) return;
+    try {
+      const raw = window.localStorage.getItem(CUSTOM_LOCATIONS_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      list.push({ ...seed, source: "Custom", migratedFromSeed: true });
+      window.localStorage.setItem(CUSTOM_LOCATIONS_KEY, JSON.stringify(list));
+      added.push(seed);
+    } catch { /* best effort */ }
+  });
+  return added;
 }

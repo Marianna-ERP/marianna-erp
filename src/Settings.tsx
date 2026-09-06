@@ -8,7 +8,7 @@ import { mapDepartments } from "./fakturowniaDepartments.domain";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
 import { referencesToLocation } from "./referenceGuards";
-import { blankUser, MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
+import { blankUser, warehouseUser, MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
 import { nextId as mintId } from "./ids";
 import { renameCatalogItem } from "./productCatalog";
 import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
@@ -416,6 +416,7 @@ function UsersPanel({ users = [], setUsers = null }: any) {
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="User's name (exactly as they enter it)" style={{ flex: 1, border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13 }} />
         <button onClick={() => { if (!name.trim()) return; setUsers((prev: any[]) => [...(prev || []), blankUser(mintId(), name, !(prev || []).length)]); setName(""); }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add user</button>
+        <button onClick={() => { if (!name.trim()) return; setUsers((prev: any[]) => [...(prev || []), warehouseUser(mintId(), name)]); setName(""); }} title="v6.89.0: the rented warehouse's user — Inventory only" style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#444", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Warehouse user</button>
       </div>
       {(users || []).map((u: any) => (
         <div key={String(u.id)} style={{ borderTop: "1px solid #F1F5F9", padding: "10px 0" }}>
@@ -440,6 +441,21 @@ function UsersPanel({ users = [], setUsers = null }: any) {
   );
 }
 
+
+// ── v6.89.0: DEFECT CATALOGUE (per product · category · defect) — drives the inspection form ──
+function DefectCataloguePanel({ defectCatalogue = [], setDefectCatalogue = null }: any) {
+  const [txt, setTxt] = useState((defectCatalogue || []).map((d: any) => `${d.product} | ${d.category} | ${d.name}`).join("\n"));
+  if (typeof setDefectCatalogue !== "function") return null;
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🔬 Defect catalogue</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>One line per defect: <b>product | category | defect</b> — categories: Unacceptable, Progressive, Major, Minor (the Daifressh structure). Empty = a starter list for peppers is offered in the inspection form.</div>
+      <textarea value={txt} onChange={e => setTxt(e.target.value)} rows={8} placeholder={"Capsicum | Progressive | Rots / moulds\nCapsicum | Major | Sunburn"} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }} />
+      <button onClick={() => setDefectCatalogue(txt.split("\n").map(l => l.split("|").map(x => x.trim())).filter(p => p.length === 3 && p[2]).map(([product, category, name]) => ({ product, category, name })))} style={{ marginTop: 8, padding: "7px 14px", borderRadius: 7, border: "none", background: "#0E7490", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Save catalogue</button>
+    </div>
+  );
+}
+
 export default function Settings({
   reloadFromStorage,
   refStores = {},
@@ -454,6 +470,8 @@ export default function Settings({
   setPackagingTypes,
   users = [],
   setUsers = null,
+  defectCatalogue = [],
+  setDefectCatalogue = null,
 }: {
   reloadFromStorage: () => void;
   refStores?: any;
@@ -468,6 +486,8 @@ export default function Settings({
   setPackagingTypes?: (v: any) => void;
   users?: any[];
   setUsers?: any;
+  defectCatalogue?: any[];
+  setDefectCatalogue?: any;
 }) {
   const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
   const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
@@ -621,19 +641,7 @@ export default function Settings({
     refreshBackups();
   }
 
-  async function runRepair() {
-    try {
-      const res = repairInventory();
-      if (!res || !res.changed) {
-        await stConfirm({ tone: "info", title: "Nothing to repair", message: "Every lot already matches the shipments that served it.", confirmLabel: "OK", cancelLabel: "Close" });
-        return;
-      }
-      await stConfirm({ tone: "info", title: `Repaired ${res.notes.length} record(s)`, message: res.notes.slice(0, 10).join("\n") + (res.notes.length > 10 ? `\n… and ${res.notes.length - 10} more` : ""), confirmLabel: "OK", cancelLabel: "Close" });
-      reloadFromStorage();
-    } catch (e) {
-      await stConfirm({ tone: "warn", title: "Repair failed", message: String(e), confirmLabel: "OK", cancelLabel: "Close" });
-    }
-  }
+
 
   async function handleReset() {
     const confirmed = await stConfirm({
@@ -729,25 +737,26 @@ export default function Settings({
           onManage={() => setManage("products")}
         />
         <ManageCard
-          title="PORTS & LOCATIONS"
+          title="LOCATIONS — one source for every picker (ports · custom · counterparty sites)"
           summary={(() => { const PORT = new Set(["Port", "PortWarehouse"]); const all = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE); const c = all.filter((l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE).length; const b = all.filter((l: any) => Number(l.id) < CUSTOM_LOCATION_ID_BASE && PORT.has(String(l.type))).length; return `${b} port built-ins · ${c} custom · party facilities are managed in Parties`; })()}
           buttonLabel="Manage ports & locations…"
           onManage={() => setManage("locations")}
         />
         <ManageCard
-          title="PACKAGING & GROSS WEIGHT"
+          title="PACKAGING TYPES — capacity, tare, boxes per pallet, pallet tare (feeds gross weight, pallet tables, kg per box)"
           summary={`${(packagingTypes || []).length} type${(packagingTypes || []).length === 1 ? "" : "s"} · box capacity + empty weight drive the gross weight printed on transport orders`}
           buttonLabel="Manage packaging…"
           onManage={() => setManage("packaging")}
         />
         {manage === "packaging" && (
-          <FullScreenModal title="Packaging & gross weight" onClose={() => setManage(null)}>
+          <FullScreenModal title="Packaging types" onClose={() => setManage(null)}>
             <PackagingPanel types={packagingTypes} setTypes={setPackagingTypes} />
           </FullScreenModal>
         )}
         {manage === "products" && (
           <FullScreenModal title="Product catalog" onClose={() => setManage(null)}>
             <UsersPanel users={users} setUsers={setUsers} />
+            <DefectCataloguePanel defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} />
             <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog}  refStores={refStores} />
           </FullScreenModal>
         )}
@@ -896,16 +905,8 @@ export default function Settings({
             automatic trigger firing at the right moment. Safe to press at any time —
             the repair only changes records that are genuinely wrong, and pressing it
             twice changes nothing the second time. */}
-        <Card style={{ marginBottom: 16, borderLeft: "3px solid #2563EB" }}>
-          <SectionTitle>REPAIR INVENTORY RECORDS</SectionTitle>
-          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Re-checks every lot against the shipments that served it and corrects two things older records can get wrong:
-            a second delivery against the same order that was filed as a warehouse move instead of a receipt (which makes a lot
-            look short), and delivery costs that were folded into a lot's landed cost instead of staying with the sale.
-            Nothing else is touched, and running it again changes nothing.
-          </div>
-          <Button onClick={runRepair}>Check and repair inventory records</Button>
-        </Card>
+        {/* v6.86.0 (owner ruling): "Repair inventory records" retired — a one-time August repair, already applied and
+            covered by tests. The routine (healRound651) stays in the migration toolkit for the Supabase import. */}
 
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>
           <SectionTitle>RESET</SectionTitle>

@@ -9,6 +9,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
+import { migrateReferencedSeeds } from "./locations";
 import { healRound645, healRound651 } from "./heal.v645";
 import { migrateClaims } from "./claims.domain";
 import Claims from "./Claims";
@@ -201,6 +202,12 @@ export default function App() {
   // v6.79.0 (F-5/F-6, owner rulings): users & tick-box permissions; monthly budgets.
   const [users, setUsers] = useLocalStoredState("users", []);
   const [budgets, setBudgets] = useLocalStoredState("budgets", []);
+  // v6.89.0 (consignment season): inspections (per lot), stock counts, defect catalogue (Settings).
+  const [inspections, setInspections] = useLocalStoredState("inspections", []);
+  const [stockCounts, setStockCounts] = useLocalStoredState("stockCounts", []);
+  const [defectCatalogue, setDefectCatalogue] = useLocalStoredState("defectCatalogue", []);
+  // v6.90.0: settlements per PO (= per truck) — the producer's final result.
+  const [poSettlements, setPoSettlements] = useLocalStoredState("poSettlements", []);
 
   // ─── v6.45.0 one-time DATA HEAL (test-round root causes B + C) ──────────────
   // Repairs: (C) shipments closed before the v6.44.0 close-posting fix (their
@@ -325,6 +332,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, warehouseInvoices, operationalCosts, pos]);
 
+  // v6.86.0 (owner ruling): demo seed locations left the reference list; any still referenced
+  // by stored documents becomes a user-managed custom location so nothing resolves to blank.
+  useEffect(() => {
+    const ids = new Set<string>();
+    (lots || []).forEach((l: any) => { ids.add(String(l.locationId)); ids.add(String(l.baseLocationId)); (l.movements || []).forEach((m: any) => { ids.add(String(m.toId)); ids.add(String(m.fromId)); }); });
+    (pos || []).forEach((p: any) => ids.add(String(p.destinationLocationId)));
+    (orders || []).forEach((o: any) => ids.add(String(o.destinationLocationId)));
+    (shipments || []).forEach((s: any) => (s.legs || []).forEach((lg: any) => { ids.add(String(lg.fromLocationId)); ids.add(String(lg.toLocationId)); }));
+    const added = migrateReferencedSeeds(ids);
+    if (added.length) recordAudit({ module: "System", docType: "Locations", docNumber: "MIGRATE-6.86", action: "healed", summary: `Referenced demo locations kept as custom: ${added.map(a => a.name).join(", ")}` });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // v6.82.0 (Round 6): packaging types saved before v6.46 lack boxesPerPallet/palletTareKg —
   // backfill from the seed by id/label so pallet tables split correctly.
   useEffect(() => {
@@ -419,9 +439,9 @@ export default function App() {
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName} />;
       case "pos":
-        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog} />;
+        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} setInvoices={setInvoices} />;
       case "lots":
-        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim} />;
+        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} defectCatalogue={defectCatalogue} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements} />;
       case "orders":
         return <SalesOrders orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
@@ -429,7 +449,7 @@ export default function App() {
       case "invoices":
         return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers} />;
+        return <Settings reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}  defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} />;
       default:
         return null;
     }
