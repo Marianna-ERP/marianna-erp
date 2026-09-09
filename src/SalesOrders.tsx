@@ -426,12 +426,13 @@ function SourceBadge({ sourceType, sourceRef, supplierName }: any) {
       <span style={{
         display: "inline-flex", alignItems: "center", gap: 3,
         padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace",
-        background: isStock ? "#E0F2FE" : "#FCE7F3",
-        color: isStock ? "#0369A1" : "#9D174D",
+        // v6.93.0 (A-R8-5, owner colour rule): informational source chip is GREEN — red is for cancelled/warnings only
+        background: isStock ? "#E0F2FE" : "#F0FDF4",
+        color: isStock ? "#0369A1" : "#166534",
       }}>
         <span style={{ fontSize: 10 }}>{isStock ? "📦" : "🚚"}</span>{sourceRef}
       </span>
-      {!isStock && supplierName && <span style={{ fontSize: 9.5, color: "#9D174D", paddingLeft: 2 }}>{supplierName}</span>}
+      {!isStock && supplierName && <span style={{ fontSize: 9.5, color: "#166534", paddingLeft: 2 }}>{supplierName}</span>}
     </span>
   );
 }
@@ -515,6 +516,9 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
       size: poLine.size,
       quality: poLine.quality,
       packaging: poLine.packaging,
+      // v6.92.0 (A-R8-6, owner ruling): pre-fill the AVAILABLE quantity — the PO line minus what other
+      // non-cancelled SOs already reserve from it — never the full line when part of it is sold elsewhere.
+      qty: (() => { const r = poLineReservations(poLine._po, poLine, allOrders, currentOrderId); const base = (poLine.available ?? poLine.qty); const avail = Math.max(0, Math.round((parseFloat(String(base)) || 0) - (r?.totalReserved || 0))); return avail > 0 ? avail : ""; })(),
       _poExpectedDelivery: poLine._po.expectedDelivery, // signal up to the form for the delivery date warning
     });
   }
@@ -532,7 +536,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
 
         <div style={{ padding: "12px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 8, alignItems: "center" }}>
           <button onClick={() => setTab("STOCK")} style={{ padding: "6px 14px", borderRadius: 7, border: tab === "STOCK" ? "1px solid #0369A1" : "1px solid #E5E7EB", background: tab === "STOCK" ? "#E0F2FE" : "#fff", color: tab === "STOCK" ? "#0369A1" : "#555", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📦 From Stock ({matchingLots.length})</button>
-          <button onClick={() => setTab("PO")} style={{ padding: "6px 14px", borderRadius: 7, border: tab === "PO" ? "1px solid #9D174D" : "1px solid #E5E7EB", background: tab === "PO" ? "#FCE7F3" : "#fff", color: tab === "PO" ? "#9D174D" : "#555", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🚚 From PO ({matchingPOLines.length})</button>
+          <button onClick={() => setTab("PO")} style={{ padding: "6px 14px", borderRadius: 7, border: tab === "PO" ? "1px solid #166534" : "1px solid #E5E7EB", background: tab === "PO" ? "#F0FDF4" : "#fff", color: tab === "PO" ? "#166534" : "#555", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🚚 From PO ({matchingPOLines.length})</button>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 11, color: "#888" }}>Filter by product:</span>
             <Inp value={filter} onChange={e => setFilter(e.target.value)} placeholder="e.g. Carrot" style={{ width: 200 }} />
@@ -573,7 +577,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                       {lot.warehouse ? ` · ${lot.warehouse}` : ""}
                     </div>
                     {live.reservations.length > 0 && (
-                      <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
+                      <div style={{ fontSize: 10, color: "#166534", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}
                       </div>
                     )}
@@ -601,10 +605,10 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                 return (
                 <div key={`${line._po.number}-${line.id}`} onClick={() => pickPO(line)}
                   style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 130px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = "#9D174D"}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = "#166534"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
                   <div>
-                    <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#9D174D" }}>{line._po.number}</div>
+                    <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#166534" }}>{line._po.number}</div>
                     <span style={{
                       display: "inline-block", marginTop: 3, padding: "1px 6px", borderRadius: 4,
                       fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em",
@@ -621,7 +625,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                       {` · from ${line._po.number}`}
                     </div>
                     {live.reservations.length > 0 && (
-                      <div style={{ fontSize: 10, color: "#9D174D", marginTop: 3 }}>
+                      <div style={{ fontSize: 10, color: "#166534", marginTop: 3 }}>
                         Reserved: {live.reservations.map(r => `${fmtNum(r.qty)} kg by ${r.soNumber}`).join(" · ")}
                       </div>
                     )}
@@ -1512,6 +1516,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     }
                   }
                   if (willLock && !wasLocked) {
+                    // v6.92.0 (A-R8-1, owner ruling R3): no line may be confirmed without a quantity and a price.
+                    const empty = (order.items || []).filter((it: any) => String(it.product || "").trim() && !((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) > 0 && (parseFloat(String(it.unitPrice)) || 0) > 0));
+                    if (empty.length) { await ofAlert({ tone: "warn", title: "Quantity and price required", message: `${empty.length} line(s) have no quantity or no price. A sales order cannot be confirmed with an empty line — fill them in first (owner ruling R3).` }); return; }
+                    // v6.92.0 (A-R8-2): a foreign-currency order needs a real rate — 1.0 is the PLN default, not a rate.
+                    if (String(order.currency || "PLN").toUpperCase() !== "PLN" && Math.abs((parseFloat(String(order.fxRate)) || 0) - 1) < 1e-9) { await ofAlert({ tone: "warn", title: "FX rate missing", message: `The order is in ${order.currency} but its rate to PLN is 1.0. Set the rate before confirming — every amount in the ERP nets in PLN at the document's own locked rate.` }); return; }
                     // v6.89.0 (R2, owner ruling): every sale rests on a purchase — a line without a PO line or a lot cannot be confirmed.
                     const unsourced = (order.items || []).filter((it: any) => String(it.product || "").trim() && !(["PO", "STOCK"].includes(String(it.sourceType || "")) && String(it.sourceRef || "").trim()));
                     if (unsourced.length) { await ofAlert({ tone: "warn", title: "Every sale rests on a purchase", message: `${unsourced.length} line(s) have no source. Pick the PO line or the stock lot each line sells from — a free-typed line cannot be confirmed (owner ruling R2).` }); return; }
@@ -1688,7 +1697,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             <SectionTitle>CURRENCY{isLocked && <span style={{ marginLeft: 8, fontSize: 10, color: "#D97706", fontWeight: 600 }}>🔒 locked at {order.status}</span>}</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 14 }}>
               <div><Lbl>Currency</Lbl>
-                <Sel value={order.currency} onChange={e => sf("currency", e.target.value)} disabled={isLocked}>
+                <Sel value={order.currency} onChange={e => { const cur = e.target.value; setOrder((o: any) => ({ ...o, currency: cur, fxRate: cur === "PLN" ? 1 : ((parseFloat(String(o.fxRate)) || 1) !== 1 ? o.fxRate : defaultFxRate(cur)) })); }} disabled={isLocked}>
                   {CURRENCIES.map(c => <option key={c}>{c}</option>)}
                 </Sel>
               </div>
@@ -2507,6 +2516,11 @@ export default function SalesOrders({
         const lines = conflicts.map(c =>
           `• ${label(c.field)} "${c.value}" already used on ${c.soNumber}${c.shipments.length ? ` (shipment${c.shipments.length > 1 ? "s" : ""} ${c.shipments.join(", ")})` : ""}`
         ).join("\n");
+        // v6.92.0 (A-R8-3, owner ruling): import permit and ACID numbers are UNIQUE per SO — a hard block, no override.
+        await uiAlert({ tone: "danger", title: "Duplicate import document number", message: `${lines}\n\nImport permits and ACID numbers are single-use: this SO cannot be saved with a number already used on another order. Correct the number.` });
+        return;
+        // (legacy override kept unreachable for reference)
+        // eslint-disable-next-line no-unreachable
         const ok = await uiConfirm({
           tone: "danger",
           title: "Duplicate import document number",

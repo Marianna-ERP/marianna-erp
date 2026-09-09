@@ -1228,3 +1228,37 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.90.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.92.0 — Round 8: ledger discipline on allocations; carrier × leg as the unit of work ══
+(function v692(){
+  console.log("\n══ 35. v6.92.0: allocation ceilings, feeder budgets, auto split, carrier×leg jobs ══");
+  const M = B("shipmentModel.domain.js");
+  const mk = () => ({ number: "SHP-1", goods: [{ id: 1, qtyKg: 20000 }], legs: [{ mode: "Road", vehicles: [{ id: 1, kind: "truck", carrierId: 10, truckPlate: "A" }, { id: 2, kind: "truck", carrierId: 11, truckPlate: "B" }] }, { mode: "Sea", costCurrency: "EUR", costFxRate: 4.3, vehicles: [] }] });
+  t("A-R8-14: a truck cannot be allocated more than the goods row holds; the remainder is stated", () => {
+    let sh = M.autoAllocate(mk(), 0);
+    eq(M.unitKg(sh.legs[0].vehicles[0], sh), 10000);
+    const r = M.setUnitLoad(sh, 1, 1, 15000); ok(r.error, "over the row (10 000 left after truck B's 10 000)"); eq(r.remaining, 10000);
+    const ok2 = M.setUnitLoad(sh, 1, 1, 10000); ok(!ok2.error);
+  });
+  t("A-R8-16: a truck's kilos are a budget across containers — fully placed → refused elsewhere", () => {
+    let sh = M.autoAllocate(mk(), 0);
+    sh = M.applyStuffingReport(sh, [{ containerNumber: "C1", feeders: [] }, { containerNumber: "C2", feeders: [] }], deps);
+    const [c1, c2] = sh.legs[1].vehicles;
+    let r = M.addFeederChecked(sh, c1.id, 1); ok(!r.error); sh = r.sh;
+    eq(M.truckRemainingForFeeding(sh, 1), 0);
+    r = M.addFeederChecked(sh, c2.id, 1); ok(r.error, "truck A already fully in C1");
+    r = M.addFeederChecked(sh, c2.id, 2, 4000); ok(!r.error); sh = r.sh; eq(M.truckRemainingForFeeding(sh, 2), 6000);
+    r = M.addFeederChecked(sh, c1.id, 2, 7000); ok(r.error, "only 6 000 left of truck B");
+  });
+  t("A-R8-18/19: carrier × leg is the job — two carriers on one leg = two transport orders and two expected cost lines", () => {
+    let sh = M.autoAllocate(mk(), 0); sh.legs[0].vehicles[0].costAmount = 1900; sh.legs[0].vehicles[1].costAmount = 2100;
+    const jobs = M.jobsByCarrierLeg(sh); eq(jobs.length, 2); eq(jobs.find(j => j.carrierId === 10).amount, 1900);
+    const costs = M.costLinesByCarrierLeg(sh, id => id === 10 ? "TBX" : "Trans-Log");
+    eq(costs.length, 2); ok(costs.some(c => c.label.includes("TBX") && c.amount === 1900)); ok(costs.every(c => c.invoiceStatus === "Expected"));
+    // same carrier on both legs → two jobs (owner: different dates → two orders)
+    sh.legs[1].vehicles = [{ id: 9, kind: "container", carrierId: 10, costAmount: 500, feeders: [{ fromUnitId: 1 }] }];
+    eq(M.jobsByCarrierLeg(sh).filter(j => j.carrierId === 10).length, 2);
+  });
+  console.log("v6.92.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

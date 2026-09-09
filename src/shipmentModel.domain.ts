@@ -25,6 +25,7 @@
 const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
 const r0 = (v: number) => Math.round(v);
+const r2 = (v: number) => Math.round(v * 100) / 100;
 
 // ── D5 · BOOKING ──────────────────────────────────────────────────────────────
 export interface Booking {
@@ -282,3 +283,75 @@ export function documentRegister(sh: any, protocols: any[] = []): DocRow[] {
   return rows;
 }
 export function documentsOutstanding(rows: DocRow[]): DocRow[] { return rows.filter(r => r.status === "Expected" || (r.status === "Sent" && r.kind === "Loading protocol")); }
+
+// ── v6.92.0 (Round 8): LEDGER DISCIPLINE ON ALLOCATIONS ───────────────────────
+/** A-R8-14: Σ allocations of a goods row across trucks may never exceed the row's kg. */
+export function allocationRemaining(sh: any, goodsLineId: any, exceptUnitId?: any): number {
+  const g = (sh?.goods || []).find((x: any) => String(x.id) === String(goodsLineId));
+  if (!g) return 0;
+  let used = 0;
+  allUnits(sh).forEach(({ unit }) => { if (exceptUnitId != null && String(unit.id) === String(exceptUnitId)) return; (unit.load || []).forEach((a: any) => { if (String(a.goodsLineId) === String(goodsLineId)) used += num(a.qtyKg); }); });
+  return Math.max(0, r0(num(g.qtyKg) - used));
+}
+export function setUnitLoad(sh: any, unitId: any, goodsLineId: any, kg: any): { sh: any; error?: string; remaining: number } {
+  const want = r0(num(kg));
+  const remaining = allocationRemaining(sh, goodsLineId, unitId);
+  if (want > remaining) return { sh, error: `Only ${remaining.toLocaleString("pl-PL")} kg of this line remain unallocated — a truck cannot carry more than the shipment (and the sale) holds.`, remaining };
+  const legs = (sh.legs || []).map((leg: any) => ({ ...leg, vehicles: (leg.vehicles || []).map((u: any) => {
+    if (String(u.id) !== String(unitId)) return u;
+    const rest = (u.load || []).filter((a: any) => String(a.goodsLineId) !== String(goodsLineId));
+    return { ...u, load: want > 0 ? [...rest, { goodsLineId, qtyKg: want }] : rest };
+  }) }));
+  return { sh: { ...sh, legs }, remaining: remaining - want };
+}
+/** A-R8-12: automatic split — one truck takes everything; adding a truck re-splits evenly; explicit shares respected. */
+export function autoAllocate(sh: any, legIndex = 0): any {
+  const leg = (sh?.legs || [])[legIndex]; if (!leg) return sh;
+  const trucks = (leg.vehicles || []).filter((u: any) => isTruck(u, leg));
+  if (!trucks.length || !(sh.goods || []).length) return sh;
+  const manual = trucks.some((u: any) => u.manualLoad);
+  if (manual) return sh;   // the user edited a share — never overwrite
+  return allocateGoodsToTrucks(sh, legIndex);
+}
+/** A-R8-16: a truck's kilos are a BUDGET across the containers it feeds. */
+export function truckRemainingForFeeding(sh: any, truckId: any, exceptContainerId?: any): number {
+  const truck = findUnit(sh, truckId); if (!truck) return 0;
+  const total = unitKg(truck, sh);
+  let used = 0;
+  allUnits(sh).forEach(({ unit, leg }) => {
+    if (!isContainer(unit, leg)) return;
+    if (exceptContainerId != null && String(unit.id) === String(exceptContainerId)) return;
+    feedersOf(unit).forEach(f => { if (String(f.fromUnitId) === String(truckId)) used += num(f.kg) > 0 ? num(f.kg) : total; });
+  });
+  return Math.max(0, r0(total - used));
+}
+export function addFeederChecked(sh: any, containerId: any, truckId: any, kg?: any): { sh: any; error?: string } {
+  const remaining = truckRemainingForFeeding(sh, truckId, containerId);
+  if (remaining <= 0) return { sh, error: "This truck is already fully placed in other containers." };
+  const want = num(kg) > 0 ? r0(num(kg)) : remaining;
+  if (want > remaining) return { sh, error: `Only ${remaining.toLocaleString("pl-PL")} kg of this truck remain to be placed.` };
+  const cont = findUnit(sh, containerId); const cur = feedersOf(cont).filter(f => String(f.fromUnitId) !== String(truckId));
+  return { sh: setFeeders(sh, containerId, [...cur, { fromUnitId: truckId, kg: want }]) };
+}
+// ── A-R8-18 / A-R8-19: CARRIER × LEG is the unit of work (transport order AND expected cost line) ──
+export function jobsByCarrierLeg(sh: any): Array<{ key: string; carrierId: any; legIndex: number; mode: string; units: any[]; kg: number; amount: number; currency: string }> {
+  const jobs: Record<string, any> = {};
+  (sh?.legs || []).forEach((leg: any, li: number) => (leg.vehicles || []).forEach((u: any) => {
+    const cid = u.carrierId ?? leg.carrierId ?? leg.forwarderId ?? sh.carrierId ?? sh.forwarderId ?? "";
+    const key = `${String(cid)}|${li}`;
+    const j = jobs[key] || (jobs[key] = { key, carrierId: cid, legIndex: li, mode: String(leg.mode || ""), units: [], kg: 0, amount: 0, currency: String(u.priceCurrency || leg.costCurrency || "PLN").toUpperCase() });
+    j.units.push(u); j.kg += unitKg(u, sh); j.amount += num(u.costAmount ?? u.unitPrice);
+  }));
+  return Object.values(jobs);
+}
+/** Expected freight cost lines: one per carrier × leg (source LEGCAR:{leg}:{carrier}); replace-by-source. */
+export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string = () => ""): any[] {
+  const keep = (sh?.costs || []).filter((c: any) => !String(c.source || "").startsWith("LEGCAR:") && !String(c.source || "").startsWith("LEG:"));
+  const lines = jobsByCarrierLeg(sh).filter(j => j.amount > 0).map(j => {
+    const fx = num((sh.legs[j.legIndex] || {}).costFxRate) || 1;
+    return { id: `legcar-${j.legIndex}-${j.carrierId}`, type: j.mode.toLowerCase() === "sea" ? "sea_freight" : j.mode.toLowerCase() === "air" ? "air_freight" : "road_freight",
+      label: `${j.mode} freight — leg ${j.legIndex + 1} — ${resolveName(j.carrierId) || "carrier"} (${j.units.length} unit${j.units.length > 1 ? "s" : ""})`,
+      supplierId: j.carrierId || null, amount: r2(j.amount), currency: j.currency, fxRate: fx, amountPLN: r2(j.amount * fx), invoiceStatus: "Expected", responsibility: "Marianna", source: `LEGCAR:${j.legIndex}:${j.carrierId}` };
+  });
+  return [...keep, ...lines];
+}

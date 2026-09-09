@@ -17,6 +17,12 @@ import React, { useState, useRef, useCallback } from "react";
 // so 27" monitors do not stretch tables into unreadable lines. Every module root reads this.
 export const PAGE_MAX = 1720;
 
+// v6.93.0 (owner ruling, A-R8-5): COLOUR RULE — RED is reserved for CANCELLED information and for system
+// warnings / errors / blocks. Informational references (sources, linked documents, derived labels) are GREEN
+// or neutral. Screens must use these two constants instead of choosing a red.
+export const INFO_GREEN = { color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0" } as const;
+export const WARN_RED = { color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA" } as const;
+
 export function Card({ children, style = {} }: any) {
   return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
 }
