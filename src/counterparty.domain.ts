@@ -38,17 +38,18 @@ export function normaliseCounterparty(c: any): { contact: any; changed: boolean 
   ["paymentTerms", "paymentTermsOther", "finance", "services", "linkedDocs"].forEach(k => { if (k in n) { delete n[k]; changed = true; } });   // CP-2 text fields, CP-9 cache
   // CP-6
   const iso = countryIso(c.country); if (iso && n.countryIso !== iso) { n.countryIso = iso; changed = true; }
-  // CP-3: people[] is the one list of persons (legacy `contacts` array folds in)
-  if (Array.isArray(c.contacts) && c.contacts.length && !(Array.isArray(c.people) && c.people.length)) { n.people = c.contacts.map((p: any) => ({ ...p, role: p.role || "Other" })); changed = true; }
-  if ("contacts" in n) { delete n.contacts; changed = true; }
-  if (!Array.isArray(n.people)) { n.people = []; changed = true; }
+  // CP-3: ONE list of persons. The screens still read `contacts`; `people` is the same array (rename at the DDL).
+  // HOTFIX v6.99.5: v6.99.4 deleted `contacts`, which every list/form reads → crash. Restore it from `people` and keep both in step.
+  const people = Array.isArray(c.contacts) && c.contacts.length ? c.contacts : (Array.isArray(c.people) ? c.people : (Array.isArray(c.contacts) ? c.contacts : []));
+  if (!Array.isArray(c.contacts) || c.contacts !== people) { n.contacts = people; changed = true; }
+  if (!Array.isArray(c.people) || c.people !== people) { n.people = people; changed = true; }
   return { contact: n, changed };
 }
 
 // ── CP-3: people by role, for the composers ───────────────────────────────────
 export const PERSON_ROLES = ["Buyer", "Sales", "Accountant", "Dispatcher", "Quality", "Director", "Other"] as const;
 export function personFor(contact: any, role: string): { name: string; email: string; phone: string } | null {
-  const people = contact?.people || [];
+  const people = (contact?.contacts && contact.contacts.length ? contact.contacts : contact?.people) || [];
   const hit = people.find((p: any) => S(p.role).toLowerCase() === S(role).toLowerCase() && S(p.email)) || people.find((p: any) => S(p.email)) || null;
   return hit ? { name: S(hit.name), email: S(hit.email), phone: S(hit.phone) } : (S(contact?.email) ? { name: S(contact?.name), email: S(contact.email), phone: S(contact?.phone) } : null);
 }

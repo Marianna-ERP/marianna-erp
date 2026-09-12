@@ -1,7 +1,6 @@
 import { referencesToContact } from "./referenceGuards";
 import { currentUser } from "./permissions.domain";
 import { WAREHOUSE_SERVICES } from "./financePlus.domain";
-import { PERSON_ROLES } from "./counterparty.domain";
 
 import DateInput from "./DateInput";
 import React, { useState, useMemo, useRef } from "react";
@@ -283,17 +282,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                 <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>
                 <label style={{ gridColumn: "1 / -1", fontSize: 11.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
               </div>
-              <div style={{ gridColumn: "1 / -1" }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", margin: "6px 0 4px" }}>PEOPLE (who receives our documents)</div>
-                {(form.people || []).map((p: any, i: number) => <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 130px 1.4fr 1fr 30px", gap: 6, marginBottom: 4 }}>
-                  <Inp value={p.name || ""} onChange={e => sf("people", (form.people || []).map((x: any, k: number) => k === i ? { ...x, name: e.target.value } : x))} placeholder="Name" />
-                  <Sel value={p.role || "Other"} onChange={e => sf("people", (form.people || []).map((x: any, k: number) => k === i ? { ...x, role: e.target.value } : x))}>{PERSON_ROLES.map((r: string) => <option key={r}>{r}</option>)}</Sel>
-                  <Inp value={p.email || ""} onChange={e => sf("people", (form.people || []).map((x: any, k: number) => k === i ? { ...x, email: e.target.value } : x))} placeholder="e-mail" />
-                  <Inp value={p.phone || ""} onChange={e => sf("people", (form.people || []).map((x: any, k: number) => k === i ? { ...x, phone: e.target.value } : x))} placeholder="phone" />
-                  <button type="button" onClick={() => sf("people", (form.people || []).filter((_: any, k: number) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer" }}>✕</button>
-                </div>)}
-                <button type="button" onClick={() => sf("people", [...(form.people || []), { name: "", role: "Buyer", email: "", phone: "" }])} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>+ Person</button>
-              </div>
+              {/* people are edited in the People tab (one list: `contacts`); v6.99.5 removed the duplicate editor */}
               {/* v6.68.0 (F-3): credit control — confirming an SO that pushes this client's
                   open receivables past the limit takes an explicit confirm. Blank = no limit. */}
               <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
