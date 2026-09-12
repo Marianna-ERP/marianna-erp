@@ -1,5 +1,7 @@
 import { newestFirst } from "./moduleGuards.domain";
-import { PAGE_MAX } from "./ui";
+import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
+import { lineFromPOLine, lockRate, actualDeliveryDate, deliveryDelayDays, deliveryEventFor } from "./so.domain";
+import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { clientExposurePLN } from "./payments.domain";
@@ -516,6 +518,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
       size: poLine.size,
       quality: poLine.quality,
       packaging: poLine.packaging,
+      ...lineFromPOLine(poLine), // v6.95.0 (SO-2): unit, boxes and kg/box follow the PO line
       // v6.92.0 (A-R8-6, owner ruling): pre-fill the AVAILABLE quantity — the PO line minus what other
       // non-cancelled SOs already reserve from it — never the full line when part of it is sold elsewhere.
       qty: (() => { const r = poLineReservations(poLine._po, poLine, allOrders, currentOrderId); const base = (poLine.available ?? poLine.qty); const avail = Math.max(0, Math.round((parseFloat(String(base)) || 0) - (r?.totalReserved || 0))); return avail > 0 ? avail : ""; })(),
@@ -1516,6 +1519,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     }
                   }
                   if (willLock && !wasLocked) {
+                    // v6.95.0 (SO-8): the rate becomes a locked fact at confirm, with its date.
+                    if (!order.fxLockedAt && String(order.currency || "PLN").toUpperCase() !== "PLN") setOrder((o: any) => lockRate(o, localTodayISO()));
                     // v6.92.0 (A-R8-1, owner ruling R3): no line may be confirmed without a quantity and a price.
                     const empty = (order.items || []).filter((it: any) => String(it.product || "").trim() && !((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) > 0 && (parseFloat(String(it.unitPrice)) || 0) > 0));
                     if (empty.length) { await ofAlert({ tone: "warn", title: "Quantity and price required", message: `${empty.length} line(s) have no quantity or no price. A sales order cannot be confirmed with an empty line — fill them in first (owner ruling R3).` }); return; }
@@ -1679,10 +1684,11 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <Inp
                       value={order.destinationText || ""}
                       disabled={fullyLocked}
-                      onChange={e => sf("destinationText", e.target.value)}
+                      onChange={e => { const v = e.target.value; const hit = unifiedLocations(contacts || []).find((x: any) => String(x.name).toLowerCase() === String(v).toLowerCase()); setOrder((o: any) => ({ ...o, destinationText: v, destinationLocationId: hit ? hit.id : o.destinationLocationId })); }} list="so-destinations"
                       placeholder="…or type the exact delivery address (free text)"
                       style={{ marginTop: 6 }}
                     />
+                      <datalist id="so-destinations">{unifiedLocations(contacts || []).map((x: any) => <option key={String(x.id)} value={x.name} />)}</datalist>
                     <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
                       Pick a known place, or type the exact address (relay, port, or client site as the Incoterm requires). Free text takes precedence on the printed SO.
                     </div>
@@ -1869,6 +1875,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" disabled={fullyLocked} /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked} /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
+                    <div><Lbl>Grade (sorting)</Lbl><Sel value={it.grade || "I"} onChange={e => si(i, "grade", e.target.value)} title="v6.95.0 (SO-1, owner decision 4): class II stays in the same lot as a grade — say which grade this line sells; the sales report and the availability read it"><option value="I">I</option><option value="II">II</option></Sel></div>
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
                     {/* v6.61.0: sell by kg or by box. Kilos remain the stored
                         quantity either way — entering boxes simply derives them
@@ -2023,6 +2030,9 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
               <div style={{ fontSize: 11, color: "#888" }}>Net total</div>
               <div style={{ fontSize: 28, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
               {order.currency !== "PLN" && order.fxRate && <div style={{ fontSize: 12, color: "#888" }}>≈ {fmtMoney(total * order.fxRate, "PLN")} · rate {order.fxRate}</div>}
+              {order.currency !== "PLN" && order.fxLockedAt && <div style={{ fontSize: 10.5, color: "#94A3B8" }} title="v6.95.0 (SO-8): the rate is a locked fact">rate {order.fxRate} locked {order.fxLockedAt}</div>}
+              {(() => { const ev = deliveryEventFor(order.sellIncoterm); const act = actualDeliveryDate(order, shipments); const d = deliveryDelayDays(order, shipments);
+                return <div style={{ fontSize: 10.5, color: d != null && d > 0 ? "#B45309" : "#94A3B8", marginTop: 2 }} title={`v6.95.0 (SO-3): for ${order.sellIncoterm || "these terms"} delivery means ${ev.where}`}>delivery ({ev.where}): planned {order.deliveryDate || "—"}{act ? ` · actual ${act}` : " · not yet"}{d != null ? ` · ${d > 0 ? d + " day(s) late" : d < 0 ? Math.abs(d) + " day(s) early" : "on time"}` : ""}</div>; })()}
             </div>
           </div>
 
@@ -2332,7 +2342,7 @@ export default function SalesOrders({
     if (!line) return lot;
     return { ...lot, variety: lot.variety || line.variety || "", cnCode: lot.cnCode || line.cnCode || "" };
   });
-  const clients = useMemo(() => clientsFromContacts(extContacts), [extContacts]);
+  const clients = useMemo(() => clientsFromContacts((extContacts || []).filter((c: any) => !c.archived)), [extContacts]); // v6.99.2 (CP-4): archived parties leave the picker
 
   const [view, setView] = useState("list"); // list | form | detail
   const [selected, setSelected] = useState(null);
@@ -2802,6 +2812,7 @@ export default function SalesOrders({
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", flexShrink: 0 }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Sales Orders</div>
         <div style={{ marginLeft: "auto" }}>
+          <SmallButton onClick={() => exportRowsToXlsx(`sales_orders_${xlsStamp()}`, filtered, [{ key: "number", label: "SO" }, { key: "client", label: "Client", fmt: (v: any) => v?.name || "" }, { key: "sellIncoterm", label: "Terms" }, { key: "destinationText", label: "Destination" }, { key: "orderDate", label: "Ordered" }, { key: "deliveryDate", label: "Delivery planned" }, { key: "status", label: "Status" }, { key: "currency", label: "Currency" }, { key: "fxRate", label: "Rate" }, { key: "items", label: "Lines", fmt: (v: any) => (v || []).map((it: any) => `${it.product}${it.variety ? " " + it.variety : ""} ${it.size || ""} ${it.grade ? "grade " + it.grade : ""} ${it.qty} kg @ ${it.unitPrice}`).join(" | ") }, { key: "acidNo", label: "ACID" }, { key: "importPermitNo", label: "Permit" }], "Sales orders")} title="v6.99.0: exports the rows as filtered, columns as shown">⬇ Excel</SmallButton>
           <ActionButton action="create" label="Add new SO" onClick={newOrder} />
         </div>
       </div>

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
+import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, buildStockCount, applyStockCount, plateMismatch } from "./seasonOps.domain";
-import { PAGE_MAX } from "./ui";
+import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
 import { claimsForLot } from "./claims.domain";
@@ -624,7 +625,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   // receipt automatically, and an EXW client-collection posts the ship-out via its
   // collection shipment. This removes the manual receipt/dispatch that let a lot's state
   // drift from its shipment (T-20). Quality corrections stay in the separate quality mode.
-  const MOVEMENT_MODE_TYPES = ["TRANSFER"];
+  const MOVEMENT_MODE_TYPES = ["TRANSFER", "DAMAGE"]; // v6.96.0 (IN-1, owner money rule): by hand only cost-free transfers and damage/corrections — receipts, ship-outs and reversals are shipment postings
   const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
   const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : "TRANSFER"));
   // v6.13 (#15): where the quality problem was detected along the journey.
@@ -2222,7 +2223,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
         {/* Filters — compact single row of dropdowns */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot, product, PO/SO, location…" style={{ flex: "1 1 220px", minWidth: 190, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)} title="Sort by stock age (arrival date of the first receipt)" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff" }}>
+          <SmallButton onClick={() => exportRowsToXlsx(`stock_on_hand_${xlsStamp()}`, filtered, [{ key: "number", label: "Lot" }, { key: "product", label: "Product" }, { key: "variety", label: "Variety" }, { key: "size", label: "Calibre" }, { key: "quality", label: "Class" }, { key: "status", label: "Status" }, { key: "locationId", label: "Location", fmt: (v: any) => (locById(v) || {}).name || "" }, { key: "expectedKg", label: "Expected kg" }, { key: "receivedKg", label: "Received kg" }, { key: "physicalKg", label: "Physical kg" }, { key: "reservedKg", label: "Reserved kg" }, { key: "grades", label: "Grades I/II/waste", fmt: (v: any) => v ? `${v.I || 0} / ${v.II || 0} / ${v.waste || 0}` : "" }, { key: "poRef", label: "PO" }, { key: "arrivalDate", label: "Arrived" }, { key: "costs", label: "Landed cost PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.pln) || 0), 0) }], "Stock")} title="v6.99.0: exports the rows as filtered, columns as shown">⬇ Excel</SmallButton>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} title="Sort by stock age (arrival date of the first receipt)" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff" }}>
             <option value="default">Sort: default</option>
             <option value="oldest">Oldest stock first</option>
             <option value="newest">Newest stock first</option>

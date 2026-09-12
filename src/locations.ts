@@ -433,15 +433,39 @@ export function isWarehouseContact(c: any): boolean {
 
 // Every address a counterparty has: its primary address (index 0) plus any
 // extraAddresses[] (index 1..n). Always returns at least one entry.
-export function contactAddresses(c: any): { address: string; index: number }[] {
-  const list: { address: string; index: number }[] = [];
-  if (c?.address) list.push({ address: String(c.address), index: 0 });
+export function contactAddresses(c: any): { address: string; index: number; siteId?: any }[] {
+  // v6.96.0 (IN-6): an address carries a PERSISTENT siteId once stamped (stampSiteIds); the
+  // index-based id is only the first-time default, so re-ordering addresses never moves a lot.
+  const list: { address: string; index: number; siteId?: any }[] = [];
+  if (c?.address) list.push({ address: String(c.address), index: 0, siteId: c?.siteId });
   (c?.extraAddresses || []).forEach((a: any, i: number) => {
     const addr = typeof a === "string" ? a : (a?.address || "");
-    if (String(addr).trim()) list.push({ address: String(addr), index: i + 1 });
+    if (String(addr).trim()) list.push({ address: String(addr), index: i + 1, siteId: typeof a === "object" ? a?.siteId : undefined });
   });
-  if (!list.length) list.push({ address: "", index: 0 });
+  if (!list.length) list.push({ address: "", index: 0, siteId: c?.siteId });
   return list;
+}
+/** One-time: give every counterparty address the id it currently derives, so existing lot/PO/SO references stay valid forever. */
+function siteIdOf(c: any, index: number): any {
+  const a = contactAddresses(c).find(x => x.index === index);
+  return a && a.siteId != null ? a.siteId : null;
+}
+export function stampSiteIds(contacts: any[]): { contacts: any[]; changed: boolean } {
+  let changed = false;
+  const next = (contacts || []).map((c: any) => {
+    if (!c) return c;
+    let n = { ...c };
+    if (c.address && c.siteId == null) { n.siteId = warehouseCpLocId(c.id, 0); changed = true; }
+    if (Array.isArray(c.extraAddresses)) {
+      n.extraAddresses = c.extraAddresses.map((a: any, i: number) => {
+        const obj = typeof a === "string" ? { address: a } : { ...a };
+        if (obj.siteId == null && String(obj.address || "").trim()) { obj.siteId = warehouseCpLocId(c.id, i + 1); changed = true; }
+        return obj;
+      });
+    }
+    return n;
+  });
+  return { contacts: next, changed };
 }
 
 export function warehouseCpLocId(contactId: any, addressIndex: number): number {
@@ -523,7 +547,7 @@ export function counterpartyLocations(contacts: any[]): Location[] {
     if (!role || (c.id == null)) return;
     contactAddresses(c).forEach(({ address, index }) => {
       out.push({
-        id: warehouseCpLocId(c.id, index),
+        id: (siteIdOf(c, index) ?? warehouseCpLocId(c.id, index)),
         type: role.type, legacyType: role.legacyType,
         name: index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`,
         country: c.country || "", address: address || undefined,

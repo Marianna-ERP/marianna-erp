@@ -17,8 +17,12 @@ export const FX_RATES: Record<string, number> = {
 };
 
 // Resolve a default rate for a currency (1 for PLN / unknown).
+/** v6.99.0 (FN-7): the owner's season rates (Settings → FX) override the hard-coded seed. */
+let FX_SETTINGS: Record<string, number> = {};
+export function setFxSettings(s: Record<string, any> | null | undefined) { FX_SETTINGS = {}; Object.entries(s || {}).forEach(([k, v]) => { const n = parseFloat(String(v)); if (isFinite(n) && n > 0) FX_SETTINGS[k.toUpperCase()] = n; }); }
 export function defaultFxRate(currency?: string): number {
   if (!currency) return 1;
+  const own = FX_SETTINGS[String(currency).toUpperCase()]; if (own) return own;
   const r = FX_RATES[String(currency).toUpperCase()];
   return r && isFinite(r) ? r : 1;
 }
@@ -29,4 +33,17 @@ export function resolveFxRate(explicit: any, currency?: string): number {
   const e = parseFloat(String(explicit ?? "").replace(",", "."));
   if (isFinite(e) && e > 0) return e;
   return defaultFxRate(currency);
+}
+
+
+// ── v6.99.3 (owner: FX auto): NBP table A — the official daily reference; sets the reference rates when reachable.
+export async function fetchNbpRates(): Promise<Record<string, number> | null> {
+  try {
+    const r = await fetch("https://api.nbp.pl/api/exchangerates/tables/A?format=json");
+    if (!r.ok) return null;
+    const j = await r.json(); const rates = (j?.[0]?.rates || []) as any[];
+    const out: Record<string, number> = {};
+    rates.forEach((x: any) => { const c = String(x.code || "").toUpperCase(); const m = Number(x.mid); if (["EUR", "USD", "GBP", "HUF", "CZK"].includes(c) && isFinite(m) && m > 0) out[c] = Math.round(m * 10000) / 10000; });
+    return Object.keys(out).length ? { ...out, _date: (j?.[0]?.effectiveDate ? Number(String(j[0].effectiveDate).replace(/-/g, "")) : 0) } as any : null;
+  } catch { return null; }
 }

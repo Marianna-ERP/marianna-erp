@@ -1164,7 +1164,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("G3: one sorting job posts the waste as DAMAGE, keeps class II in the SAME lot as a grade, and refuses a split that does not add up", () => {
     const lot = { number: "LOT-1", receivedKg: 7050, physicalKg: 7050, locationId: 9, movements: [] };
     const r = Z.sortingJob(lot, { date: "2026-09-11", kgIn: 7050, classIKg: 6100, classIIKg: 600, wasteKg: 350, by: "Agrohurt", hours: 6 }, deps);
-    ok(!r.error); eq(r.lot.movements.length, 1); eq(r.lot.movements[0].type, "DAMAGE"); eq(r.lot.movements[0].qtyKg, 350);
+    ok(!r.error); eq(r.lot.movements.length, 2, "v6.96.0 (IN-2): RECLASS for class II + DAMAGE for waste"); ok(r.lot.movements.some(m => m.type === "RECLASS" && m.qtyKg === 600)); ok(r.lot.movements.some(m => m.type === "DAMAGE" && m.qtyKg === 350));
     const g = Z.gradeSplit(r.lot); eq(g.I, 6100); eq(g.II, 600); eq(g.waste, 350); eq(g.unsorted, 0);
     ok(Z.sortingJob(lot, { date: "2026-09-11", kgIn: 7050, classIKg: 6000, classIIKg: 600, wasteKg: 350 }, deps).error, "6950 ≠ 7050 refused");
   });
@@ -1260,5 +1260,338 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(M.jobsByCarrierLeg(sh).filter(j => j.carrierId === 10).length, 2);
   });
   console.log("v6.92.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.94.0 — PURCHASE ORDERS (PO-1…PO-6) ══
+(function v694(){
+  console.log("\n══ 36. v6.94.0: box unit on PO lines, payment days → due date, normalisation, price check ══");
+  const P = B("po.domain.js");
+  const types = B("packaging.domain.js").PACKAGING_SEED;
+  t("PO-1: box-priced line — type boxes, kilos derive; type kilos on a kg line, boxes derive", () => {
+    let l = P.derivePOLineQuantities({ product: "Apples", packaging: "Wooden box (13 kg)", pricingUnit: "box", boxes: 1494, unitPrice: 26 }, types, "boxes");
+    eq(l.qty, 19422); eq(P.poLineValue(l), 1494 * 26);
+    let k = P.derivePOLineQuantities({ product: "Apples", packaging: "Wooden box (13 kg)", pricingUnit: "kg", qty: 19422, unitPrice: 2 }, types, "qty");
+    eq(k.boxes, 1494); eq(P.poLineValue(k), 38844);
+  });
+  t("PO-2: payment days from the PO, else the supplier, else legacy text; due = issue + days", () => {
+    eq(P.paymentDaysFor({ paymentDays: 45 }, { paymentTermsDays: 30 }), 45);
+    eq(P.paymentDaysFor({}, { paymentTermsDays: 30 }), 30);
+    eq(P.paymentDaysFor({ paymentTerms: "21 days from invoice" }, {}), 21);
+    eq(P.dueDateFromIssue("2026-09-10", 30), "2026-10-10");
+  });
+  t("PO-3/4/5: normalisation retires the derivation fields, folds the dates, fixes legacy statuses — and is idempotent", () => {
+    const legacy = { number: "PO-1", status: "Shipped", flow: "EXP_CIF", purchaseIncoterm: "EXW", handoverPoint: "supplier", requiresSea: true, variance: {}, expectedDeliveryDate: "2026-09-12", paymentTerms: "30 days", items: [{ id: 1, qty: 100, unitPrice: 4, currency: "PLN" }] };
+    const r = P.normalisePO(legacy, { orders: [], directFromSOs: () => false });
+    ok(r.changed); eq(r.po.status, "Confirmed"); eq(r.po.buyIncoterm, "EXW"); eq(r.po.loadingDate, "2026-09-12"); eq(r.po.paymentDays, 30);
+    ["flow", "purchaseIncoterm", "handoverPoint", "requiresSea", "variance"].forEach(k => ok(!(k in r.po), k + " retired"));
+    ok(!("currency" in r.po.items[0])); eq(r.po.items[0].pricingUnit, "kg");
+    const again = P.normalisePO(r.po, { orders: [], directFromSOs: () => false }); ok(!again.changed, "idempotent");
+  });
+  t("PO-6: supplier invoiced above the agreed price × received kilos → variance; within 1% → silent", () => {
+    const po = { number: "PO-7", fxRate: 1, items: [{ id: 1, qty: 10000, unitPrice: 4.00 }] };
+    const lots = [{ poRef: "PO-7", poLineId: 1, receivedKg: 9800 }];
+    const v = P.purchaseInvoiceVariance({ kind: "COST", number: "FA/9", netPLN: 41160 }, po, lots);   // 4.20 × 9 800
+    ok(v); approx(v.agreedPLN, 39200); approx(v.diffPct, 5);
+    ok(P.purchaseInvoiceVariance({ kind: "COST", number: "FA/10", netPLN: 39300 }, po, lots) === null, "0.26% is within tolerance");
+  });
+  console.log("v6.94.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.95.0 — SALES ORDERS (SO-1…SO-8) + PO-10 estimated quantities ══
+(function v695(){
+  console.log("\n══ 37. v6.95.0: grade availability, unit from PO line, incoterm delivery event, payment days, normalisation, estimated quantities ══");
+  const Q = B("so.domain.js");
+  t("SO-1: availability per grade nets other live orders' grade reservations", () => {
+    const lot = { number: "L1", physicalKg: 6700, grades: { I: 6100, II: 600, waste: 350 } };
+    const a = Q.lotAvailabilityByGrade(lot, [{ id: 9, status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "L1", grade: "II", qty: 200 }, { sourceType: "STOCK", sourceRef: "L1", qty: 1000 }] }]);
+    eq(a.I, 5100); eq(a.II, 400);
+  });
+  t("SO-2: the SO line takes the PO line's unit and boxes", () => {
+    const f = Q.lineFromPOLine({ pricingUnit: "box", boxes: 1494, kgPerBox: 13 }); eq(f.pricingUnit, "box"); eq(f.boxes, 1494);
+  });
+  t("SO-3: CFR delivers at DISCHARGE; DAP at delivery; the delay is planned vs that event", () => {
+    eq(Q.deliveryEventFor("CFR").event, "discharged"); eq(Q.deliveryEventFor("DDP").event, "delivered"); eq(Q.deliveryEventFor("EXW").event, "loaded");
+    const so = { number: "SO-1", sellIncoterm: "CFR", deliveryDate: "2026-09-20" };
+    const sh = [{ status: "Delivered", soRefs: ["SO-1"], legs: [{ vehicles: [{ deliveredAt: "2026-09-08" }] }, { vehicles: [{ dischargedAt: "2026-09-23" }] }] }];
+    eq(Q.actualDeliveryDate(so, sh), "2026-09-23", "the truck's delivery at the port is NOT the sale's delivery"); eq(Q.deliveryDelayDays(so, sh), 3);
+  });
+  t("SO-4: payment days from the client → invoice due date", () => { eq(Q.soPaymentDays({}, { paymentTermsDays: 14 }), 14); eq(Q.soInvoiceDueDate("2026-09-10", {}, { paymentTermsDays: 14 }), "2026-09-24"); });
+  t("SO-6: normalisation drops the mirrors and is idempotent", () => {
+    const r = Q.normaliseSO({ number: "SO-1", linkedInvoices: ["FV/1"], linkedShipments: [], actualDeliveryDate: "x", destinationMode: "text", _poETAByLine: {}, paymentTerms: "14 days", items: [{ qty: 10, unit: "Kg", shippedKg: 5 }] });
+    ok(r.changed); ok(!("linkedInvoices" in r.so)); eq(r.so.paymentDays, 14); eq(r.so.items[0].pricingUnit, "kg"); ok(!("shippedKg" in r.so.items[0]));
+    ok(!Q.normaliseSO(r.so).changed);
+  });
+  t("PO-10: estimated quantities become FINAL from the packing result; over-sold lines are PROPOSED for adjustment, newest order first", () => {
+    const po = { number: "PO-1", items: [{ id: 1, product: "Apples 70-80", qty: 20000, quantityStatus: "ESTIMATED" }, { id: 2, product: "Apples 65-70", qty: 10000, quantityStatus: "ESTIMATED" }] };
+    ok(Q.isEstimatedLine(po.items[0]));
+    const fin = Q.applyPackingResult(po, [{ lineId: 1, qty: 17000 }], "2026-09-15");
+    eq(fin.items[0].qty, 17000); eq(fin.items[0].estimatedQty, 20000); eq(fin.items[0].quantityStatus, "FINAL"); eq(fin.items[1].quantityStatus, "FINAL"); eq(fin.items[1].qty, 10000);
+    const orders = [{ number: "SO-1", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 1, qty: 12000 }] }, { number: "SO-2", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 1, qty: 8000 }] }];
+    const adj = Q.proposeSOAdjustments(fin, orders);
+    eq(adj.length, 1); eq(adj[0].soNumber, "SO-2"); eq(adj[0].overKg, 3000); eq(adj[0].finalKg, 5000);
+  });
+  console.log("v6.95.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.96.0 — INVENTORY (IN-1…IN-8) ══
+(function v696(){
+  console.log("\n══ 38. v6.96.0: grades in the ledger, port stage as inventory, stable site ids, lot normalisation ══");
+  const Z = B("seasonOps.domain.js"); const loc = B("locations.js");
+  t("IN-2: sorting posts RECLASS + DAMAGE; grades derive from the ledger; voiding the job reverses them", () => {
+    const lot = { number: "L1", locationId: 9, receivedKg: 7050, physicalKg: 7050, movements: [{ id: 1, type: "IN", date: "2026-09-10", qtyKg: 7050 }] };
+    const r = Z.sortingJobLedger(lot, { date: "2026-09-11", kgIn: 7050, classIKg: 6100, classIIKg: 600, wasteKg: 350 }, deps);
+    eq(r.lot.movements.filter(m => m.type === "RECLASS").length, 1); eq(r.lot.movements.filter(m => m.type === "DAMAGE").length, 1);
+    const g = Z.gradesFromLedger(r.lot); eq(g.I, 6100); eq(g.II, 600); eq(g.waste, 350);
+    const voided = { ...r.lot, movements: r.lot.movements.map(m => String(m.source || "").startsWith("sorting:") ? { ...m, voided: true } : m) };
+    eq(Z.gradesFromLedger(voided).I, 7050, "a voided job leaves everything class I again");
+    eq(Z.gradeSplit(r.lot).II, 600, "gradeSplit reads the ledger when RECLASS exists");
+  });
+  t("IN-5: unloading at the POL moves the lots to the port location once (idempotent), as a TRANSFER posted by the shipment", () => {
+    const sh = { number: "SHP-1", goods: [{ lotRef: "L1", qtyKg: 5000 }], lotRefs: [] };
+    const lots = [{ number: "L1", locationId: 9, physicalKg: 5000, movements: [] }, { number: "L2", locationId: 9, physicalKg: 100, movements: [] }];
+    const a = Z.portStageTransfers(sh, lots, 126, "2026-09-12", deps); eq(a.posted, 1); eq(a.lots[0].movements[0].type, "TRANSFER"); eq(a.lots[0].movements[0].toId, 126); eq(a.lots[1].movements.length, 0);
+    const b = Z.portStageTransfers(sh, a.lots, 126, "2026-09-12", deps); eq(b.posted, 0, "second stamp posts nothing");
+  });
+  t("IN-6: stamping site ids preserves today's derived ids; re-ordering addresses no longer moves a site", () => {
+    const c = { id: 70, name: "Agrohurt", type: "Warehouse", address: "A", extraAddresses: ["B", "C"] };
+    const before = loc.counterpartyLocations([c]).map(l => l.id);
+    const st = loc.stampSiteIds([c]); ok(st.changed);
+    const after = loc.counterpartyLocations(st.contacts).map(l => l.id); eq(JSON.stringify(after), JSON.stringify(before), "same ids as before stamping");
+    const reordered = { ...st.contacts[0], extraAddresses: [st.contacts[0].extraAddresses[1], st.contacts[0].extraAddresses[0]] };
+    const ids = loc.counterpartyLocations([reordered]).map(l => l.id).sort(); eq(JSON.stringify(ids), JSON.stringify([...before].sort()), "ids follow the address, not the position");
+    ok(!loc.stampSiteIds(st.contacts).changed, "idempotent");
+  });
+  t("IN-4: lot normalisation drops mirrors, syncs consignment/direct from the PO, derives arrival, hands the old settlement over — idempotently", () => {
+    const lot = { number: "L1", poRef: "PO-1", journey: [], destinationText: "x", custodyType: "y", consignment: false, arrivalDate: "", settlement: { status: "Closed", number: "SET-2026-0001" }, movements: [{ type: "IN", date: "2026-09-10", qtyKg: 10 }] };
+    const r = Z.normaliseLot(lot, { po: { pricingMode: "consignment", directFlow: false }, poSettlements: [] });
+    ok(r.changed); ok(!("journey" in r.lot)); eq(r.lot.consignment, true); eq(r.lot.arrivalDate, "2026-09-10"); ok(r.settlementToMigrate && r.settlementToMigrate.poNumber === "PO-1"); ok(!("settlement" in r.lot));
+    ok(!Z.normaliseLot(r.lot, { po: { pricingMode: "consignment", directFlow: false }, poSettlements: [{ poNumber: "PO-1" }] }).changed);
+  });
+  console.log("v6.96.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.97.0 — CLAIMS (CL-1…CL-9) — including the path the real data never took: claim → note → offset ══
+(function v697(){
+  console.log("\n══ 39. v6.97.0: inspection-referenced defect, evidence refs, QC warning (never a block), chain incl. sale costs, OFFSET, legacy fold ══");
+  const CP = B("claimsPlus.domain.js"); const cl = B("claims.domain.js"); const cc = B("claimCostChain.domain.js");
+  t("CL-2/CL-3: the defect reads from the referenced inspection; evidence candidates come from inspections, register docs, protocols and recorders", () => {
+    const ins = [{ id: 5, lotNumber: "L1", date: "2026-09-11", stage: "warehouse", verdict: "Sort", defects: [{ name: "Rots", pct: 4 }, { name: "Sunburn", pct: 2.5 }], observations: "soft on top layer" }];
+    const claim = { direction: "RECOVERY", respondent: { kind: "Supplier", name: "Vega" }, subjects: [{ kind: "LOT", ref: "L1" }], inspectionId: 5 };
+    const d = CP.defectFromInspection(claim, ins); approx(d.defectPct, 6.5); ok(d.defectType.includes("Rots"));
+    const cands = CP.evidenceCandidates(claim, { inspections: ins, shipments: [{ number: "SHP-1", lotRefs: ["L1"], documents: [{ type: "CMR", status: "Have it", link: "https://x" }], loadingProtocols: [{ number: "LP-1", status: "Returned" }], legs: [{ vehicles: [{ id: 1, tempRecorderNo: "R1", truckPlate: "PL1" }] }] }] });
+    eq(cands.map(c => c.kind).sort().join(","), "CMR,Loading protocol,Survey report,Temperature record");
+    const withE = CP.attachEvidence(CP.attachEvidence(claim, cands[0]), cands[0]); eq(withE.evidence.length, 1, "no duplicate reference");
+  });
+  t("CL-4 (as ruled): a late QC report WARNS the producer may refuse — never blocks; an agreed extension silences it", () => {
+    const lot = { number: "L1", arrivalDate: "2026-09-01", movements: [] };
+    const claim = { direction: "RECOVERY", respondent: { kind: "Supplier", name: "Vega Pro" }, subjects: [{ kind: "LOT", ref: "L1" }] };
+    ok(CP.qcReportWarning(claim, lot, [{ lotNumber: "L1", date: "2026-09-10" }], { qualityReportDays: 3 }).includes("may refuse"));
+    eq(CP.qcReportWarning(claim, lot, [{ lotNumber: "L1", date: "2026-09-03" }], { qualityReportDays: 3 }), "", "on time");
+    eq(CP.qcReportWarning({ ...claim, agreedExtension: "extended to 15/09 by email" }, lot, [], { qualityReportDays: 3 }), "", "agreed exception recorded");
+    eq(CP.qcReportWarning({ ...claim, direction: "CONCESSION", respondent: { kind: "Client" } }, lot, [], { qualityReportDays: 3 }), "", "only supplier recoveries");
+  });
+  t("CL-5/CL-9: the chain now proposes the sale's delivery and return freight, each line with a source; merging never duplicates", () => {
+    const lines = CP.saleDirectCostLines(["L1"], [{ number: "SO-1", status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "L1" }] }], [{ number: "SHP-9", purpose: "OUTBOUND", goods: [{ lotRef: "L1", soRef: "SO-1" }], costs: [{ id: 1, type: "road_freight", amountPLN: 1500 }] }, { number: "RET-1", purpose: "RETURN", goods: [{ lotRef: "L1" }], costs: [{ id: 2, type: "road_freight", amountPLN: 900 }] }, { number: "SHP-IN", purpose: "INBOUND", goods: [{ lotRef: "L1" }], costs: [{ id: 3, amountPLN: 5000 }] }]);
+    eq(lines.length, 2); approx(lines.reduce((s, l) => s + l.amountPLN, 0), 2400); ok(lines.every(l => l.source));
+    const merged = cc.mergeChainLines(lines, lines); eq(merged.length, 2);
+    const asClaim = cc.toClaimCostLines(lines, 4.3); ok(asClaim.every(l => l.source), "CL-9 source on kept lines");
+  });
+  t("END TO END: accepted claim → note → OFFSET against the counterparty's open invoice (one action), then the note is Settled", () => {
+    const claim = { number: "CLM-9", status: "Accepted", direction: "CONCESSION", currency: "PLN", acceptedAmount: 1200, respondent: { kind: "Client", name: "Agromax" }, subjects: [{ kind: "SO", ref: "SO-1" }] };
+    const note = cl.buildClaimFinanceNote(claim, "OUR_CREDIT_TO_CLIENT", { nextId: () => 77, todayISO: () => "2026-09-10", invoices: [] });
+    eq(note.currency, "PLN"); approx(note.amount, 1200);
+    const inv = { id: 3, kind: "SALES", number: "FV/3", currency: "PLN", grossAmount: 5000, paidAmount: 0, paymentStatus: "Sent", payments: [], counterparty: { name: "Agromax" } };
+    const r = CP.offsetNoteAgainstInvoice(note, inv, deps);
+    ok(!r.error); approx(r.appliedAmount, 1200); approx(pay.outstandingAmount(r.invoice), 3800); eq(r.invoice.payments[0].method, "Offset / compensation"); eq(r.note.status, "Settled");
+    ok(CP.offsetNoteAgainstInvoice(r.note, r.invoice, deps).error, "applying twice is refused");
+  });
+  t("CL-7/CL-1: legacy form fields fold into cost lines and notes; EUR mirrors into the one money model; idempotent", () => {
+    const r = CP.foldLegacyClaimFields({ number: "CLM-1", basis: "quality", lostKg: 500, causedCosts: 300, clientCosts: 120, soldInMarket: true, recoveredEGP: 1000, egpPerEur: 52, acceptedEUR: 45, requestedEUR: 60, costLines: [] });
+    ok(r.changed); eq(r.claim.costLines.length, 2); ok(!("basis" in r.claim)); ok(String(r.claim.notes).includes("[legacy]")); eq(r.claim.currency, "EUR"); eq(r.claim.acceptedAmount, 45); eq(r.claim.requestedAmount, 60);
+    ok(!CP.foldLegacyClaimFields(r.claim).changed);
+  });
+  t("CL-8: the counterparty's agreed notice period overrides the legal default", () => {
+    eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, {}).days, 7);
+    eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, { name: "TBX", noticeDays: 10 }).days, 10);
+  });
+  console.log("v6.97.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.98.0 — INVOICES (IV-1…IV-7) ══
+(function v698(){
+  console.log("\n══ 40. v6.98.0: required links with proposals, expected-line matching, one category, derived states, consistency ══");
+  const IV = B("invoicePlus.domain.js");
+  t("IV-1: a freight invoice with no link cannot leave Draft; overhead and sales are exempt", () => {
+    ok(IV.requiredLinkMissing({ kind: "COST", category: "FREIGHT", links: [] }));
+    eq(IV.requiredLinkMissing({ kind: "COST", category: "FREIGHT", links: [{ type: "Shipment", number: "SHP-1" }] }), "");
+    eq(IV.requiredLinkMissing({ kind: "COST", category: "OVERHEAD", links: [] }), ""); eq(IV.requiredLinkMissing({ kind: "SALES", links: [] }), "");
+  });
+  t("IV-1: proposals — a number quoted on the invoice, and the carrier's expected line at the same amount", () => {
+    const inv = { kind: "COST", counterparty: { id: 10, name: "TBX" }, grossAmount: 1900, notes: "transport wg zlecenia SHP-2026-0029" };
+    const p = IV.proposeLinks(inv, { shipments: [{ number: "SHP-2026-0029", status: "Loaded", costs: [{ id: 1, supplierId: 10, amount: 1905, invoiceStatus: "Expected", label: "Road freight" }] }, { number: "SHP-2026-0030", status: "Loaded", costs: [{ id: 2, supplierId: 11, amount: 1900, invoiceStatus: "Expected" }] }] });
+    eq(p[0].number, "SHP-2026-0029"); eq(p[0].confidence, "high"); eq(p.length, 1, "the other carrier's line is not proposed");
+  });
+  t("IV-2: matching sets the line Received, stores the invoice reference and the variance (one action)", () => {
+    const r = IV.matchInvoiceToCostLine({ number: "SHP-1", costs: [{ id: 1, amount: 1900, invoiceStatus: "Expected" }] }, 1, { id: 55, number: "TL/77", grossAmount: 1995 });
+    eq(r.sh.costs[0].invoiceStatus, "Received"); eq(r.sh.costs[0].invoiceId, 55); approx(r.variance, 95); approx(r.variancePct, 5);
+  });
+  t("IV-3/IV-5: three classifiers fold into one category; scope derives; creditNoteIds/locked dropped; idempotent", () => {
+    const r = IV.normaliseInvoiceCategory({ kind: "COST", category: "LINV", costScope: "SHIPMENT", creditNoteIds: [], locked: true });
+    eq(r.inv.category, "FREIGHT"); eq(r.inv.costScope, "SHIPMENT"); ok(!("locked" in r.inv)); ok(!IV.normaliseInvoiceCategory(r.inv).changed);
+    eq(IV.normaliseInvoiceCategory({ kind: "SALES", category: "SINV" }).inv.category, "SALES"); eq(IV.normaliseInvoiceCategory({ kind: "COST", costScope: "OVERHEAD" }).inv.category, "OVERHEAD");
+  });
+  t("IV-4: lifecycle and settlement state are two different questions", () => {
+    eq(IV.invoiceLifecycle({ paymentStatus: "Partially paid" }), "Issued"); eq(IV.settlementState({ paymentStatus: "Issued", grossAmount: 100, paidAmount: 40 }, "2026-09-10"), "Partially paid");
+    eq(IV.settlementState({ paymentStatus: "Issued", grossAmount: 100, paidAmount: 0, dueDate: "2026-09-01" }, "2026-09-10"), "Overdue");
+  });
+  t("IV-6/IV-7: positions must add up to the header; an unlinked cost invoice gets its due date from the counterparty's days", () => {
+    ok(IV.positionsMismatch({ grossAmount: 1000, positions: [{ grossTotal: 600 }, { grossTotal: 300 }] })); eq(IV.positionsMismatch({ grossAmount: 900, positions: [{ grossTotal: 600 }, { grossTotal: 300 }] }), "");
+    eq(IV.defaultCostDueDate({ issueDate: "2026-09-10" }, { paymentTermsDays: 21 }), "2026-10-01");
+  });
+  console.log("v6.98.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.98.1 — STATEMENT OF ACCOUNT ══
+(function v6981(){
+  console.log("\n══ 41. v6.98.1: statement of account per client / supplier ══");
+  const ST = B("statement.domain.js");
+  const invs = [
+    { kind: "SALES", number: "FV/1", counterparty: { name: "Agromax" }, currency: "PLN", issueDate: "2026-08-01", dueDate: "2026-08-31", grossAmount: 10000, paidAmount: 4000, paymentStatus: "Issued", payments: [{ date: "2026-08-20", amount: 4000, method: "Bank transfer", source: "bank:x" }] },
+    { kind: "SALES", number: "FV/2", counterparty: { name: "Agromax" }, currency: "PLN", issueDate: "2026-09-05", dueDate: "2026-10-05", grossAmount: 5000, paidAmount: 1200, paymentStatus: "Issued", payments: [{ date: "2026-09-10", amount: 1200, method: "Offset / compensation", source: "note:77" }] },
+    { kind: "SALES", number: "FV/9", counterparty: { name: "Other" }, currency: "PLN", issueDate: "2026-09-05", grossAmount: 999, paidAmount: 0, paymentStatus: "Issued", payments: [] },
+  ];
+  const notes = [{ id: 77, noteType: "CREDIT", direction: "outgoing", issuedBy: "US", status: "Issued", partyName: "Agromax", currency: "PLN", amount: 1200, date: "2026-09-10", number: "KN/1" }];
+  t("client statement: opening from before the period, invoices debit, payments/credit notes credit, running balance, closing, overdue & aging", () => {
+    const s = ST.statementFor("Agromax", "client", "PLN", invs, notes, "2026-09-01", "2026-09-30", "2026-09-11");
+    approx(s.opening, 6000, "FV/1 10 000 − payment 4 000 before September");
+    eq(s.lines.map(l => l.type).join(","), "Invoice,Offset,Credit note");
+    approx(s.closing, 6000 + 5000 - 1200 - 1200);
+    approx(s.overdue, 6000, "FV/1 is past due"); approx(s.aging.d30, 6000); approx(s.aging.current, 3800);
+    ok(!s.lines.some(l => l.ref.includes("FV/9")), "other clients excluded");
+  });
+  t("supplier statement mirrors the sign: their invoice is what we owe; our payment reduces it", () => {
+    const sup = [{ kind: "COST", number: "TL/77", counterparty: { name: "Trans-Log" }, currency: "EUR", issueDate: "2026-09-01", dueDate: "2026-09-30", grossAmount: 1900, paidAmount: 1000, paymentStatus: "Issued", payments: [{ date: "2026-09-08", amount: 1000, method: "Bank transfer" }] }];
+    const s = ST.statementFor("Trans-Log", "supplier", "EUR", sup, [], "2026-09-01", "2026-09-30", "2026-09-11");
+    approx(s.closing, 900, "we owe 900 EUR"); eq(ST.statementCurrencies("Trans-Log", "supplier", sup, []).join(), "EUR");
+  });
+  console.log("v6.98.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.0 — FINANCE (FN-1/2/3/7/8) ══
+(function v699(){
+  console.log("\n══ 42. v6.99.0: period close guard, snapshot, cash projection ══");
+  const PC = B("periodClose.domain.js");
+  t("FN-1: a document dated inside a closed month is refused; the open month is fine", () => {
+    const closed = [{ period: "2026-08", closedAt: "2026-09-05", closedBy: "Hazem", snapshot: {} }];
+    ok(PC.periodGuard("2026-08-20", closed).includes("CLOSED")); eq(PC.periodGuard("2026-09-02", closed), ""); eq(PC.periodGuard("", closed), "");
+  });
+  t("FN-2: the snapshot freezes the package figures", () => {
+    const s = PC.buildSnapshot("2026-08", { totalAgg: { totalRevenuePLN: 100000, totalCOGSPLN: 80000, totalDirectPLN: 5000, totalContributionPLN: 15000, totalOverheadPLN: 3000, totalNetMarginPLN: 12000 }, ledgerTotals: { receivableOpenPLN: 40000, receivableOverduePLN: 9000, payableOpenPLN: 25000, payableOverduePLN: 0 }, stockKg: 19422, stockValuePLN: 80382, openClaims: 2, settlementsClosed: 1, realizedFxPLN: -18, bankBalances: [] });
+    eq(s.netPLN, 12000); eq(s.receivableOverduePLN, 9000); eq(s.stockKg, 19422);
+  });
+  t("FN-3: cash projection buckets receivables in and payables out by due date; overdue separately", () => {
+    const inv = [{ kind: "SALES", grossAmount: 1000, paidAmount: 0, fxRate: 1, dueDate: "2026-09-20", paymentStatus: "Issued" }, { kind: "COST", grossAmount: 400, paidAmount: 0, fxRate: 1, dueDate: "2026-10-25", paymentStatus: "Issued" }, { kind: "SALES", grossAmount: 300, paidAmount: 0, fxRate: 1, dueDate: "2026-09-01", paymentStatus: "Issued" }];
+    const c = PC.cashProjection(inv, "2026-09-11");
+    approx(c.buckets[0].inPLN, 1000); approx(c.buckets[1].outPLN, 400); approx(c.buckets[1].netPLN, -400); approx(c.overdueInPLN, 300);
+  });
+  console.log("v6.99.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.1 — FINANCE part 2 (FN-4/5/6) ══
+(function v6991(){
+  console.log("\n══ 43. v6.99.1: client risk, PO result for every purchase, warehouse agreement ══");
+  const FP = B("financePlus.domain.js");
+  t("FN-4: client risk — exposure, overdue, days late, limit usage incl. confirmed orders, days-to-pay", () => {
+    const inv = [{ kind: "SALES", counterparty: { name: "Agromax" }, currency: "PLN", fxRate: 1, issueDate: "2026-08-01", dueDate: "2026-08-31", grossAmount: 10000, paidAmount: 4000, paymentStatus: "Issued", payments: [{ date: "2026-08-21", amount: 4000 }] }];
+    const r = FP.clientRisk("Agromax", inv, [{ status: "Confirmed", client: { name: "Agromax" }, fxRate: 1, items: [{ qty: 1000, unitPrice: 5 }] }], { creditLimitPLN: 20000 }, "2026-09-11");
+    approx(r.exposurePLN, 6000); approx(r.overduePLN, 6000); eq(r.maxOverdueDays, 11); approx(r.openOrdersPLN, 5000); approx(r.usagePct, 55); eq(r.avgDaysToPay, 20); eq(r.lastPaymentDate, "2026-08-21");
+  });
+  t("FN-5: a firm purchase's result — revenue − purchase − landed − direct − concessions + recoveries, per kg", () => {
+    const po = { number: "PO-1" };
+    const lots = [{ number: "L1", poRef: "PO-1", poLineId: 1, receivedKg: 10000, grades: { waste: 0 }, costs: [{ type: "purchase", pln: 40000 }, { type: "freight", pln: 3000, source: "SHP-IN/1" }, { type: "claim", pln: -500, source: "claim:CLM-1" }] }];
+    const orders = [{ number: "SO-1", status: "Confirmed", fxRate: 1, items: [{ sourceType: "STOCK", sourceRef: "L1", qty: 10000, unitPrice: 6 }], claimAdjustments: [{ source: "claim:CLM-2", pln: -1000 }] }];
+    const sh = [{ number: "SHP-OUT", purpose: "OUTBOUND", status: "Delivered", goods: [{ lotRef: "L1", qtyKg: 10000 }], costs: [{ amountPLN: 2000 }] }];
+    const r = FP.poResult(po, lots, orders, sh);
+    approx(r.revenuePLN, 60000); approx(r.purchasePLN, 40000); approx(r.landedOtherPLN, 3000); approx(r.directPLN, 2000); approx(r.concessionsPLN, 1000); approx(r.recoveriesPLN, 500);
+    approx(r.marginPLN, 60000 - 1000 - 40000 - 3000 - 2000 + 500); approx(r.marginPerKg, 1.45); ok(r.fullySold);
+  });
+  t("FN-6: an all-inclusive annual agreement bills the monthly fee only; extras only when not included", () => {
+    const agr = { type: "fixed_monthly", fixedMonthlyPLN: 12000, includedServices: ["unloading", "sorting"], extras: [{ service: "labelling", ratePLN: 0.5, unit: "box" }, { service: "sorting", ratePLN: 100, unit: "hour" }] };
+    const e = FP.expectedWarehouseMonthly(agr, { kgDays: 500000, palletDays: 0, services: { labelling: 1000, sorting: 6 } });
+    approx(e.expectedPLN, 12500, "12 000 fee + 500 labelling; sorting is included");
+    const kg = FP.expectedWarehouseMonthly({ type: "kg_day", rateKgDayPLN: 0.02 }, { kgDays: 500000, palletDays: 0, services: {} }); approx(kg.expectedPLN, 10000);
+  });
+  console.log("v6.99.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.2 — COUNTERPARTIES (CP-1…CP-7, CP-9) ══
+(function v6992(){
+  console.log("\n══ 44. v6.99.2: roles, terms block, people, archive, Fakturownia id, ISO/EU, agreements ══");
+  const CPY = B("counterparty.domain.js");
+  t("CP-1/2/6/9: normalisation — roles from type+additionalTypes, terms from scattered fields (mirrors kept), ISO code, caches dropped; idempotent", () => {
+    const r = CPY.normaliseCounterparty({ id: 1, name: "Agro-Hurt", type: "Client", additionalTypes: ["Supplier", "Warehouse"], country: "Poland", paymentTerms: "30 days", creditLimitPLN: 50000, defaultCurrency: "pln", finance: { x: 1 }, services: "reefer", linkedDocs: ["PO-1"], contacts: [{ name: "Mateusz", email: "m@agro.pl" }] });
+    ok(r.changed); eq(r.contact.roles.join(","), "Client,Supplier,Warehouse"); eq(r.contact.terms.paymentDays, 30); eq(r.contact.terms.creditLimitPLN, 50000); eq(r.contact.terms.defaultCurrency, "PLN"); eq(r.contact.paymentTermsDays, 30, "mirror for PO-2/SO-4 readers");
+    eq(r.contact.countryIso, "PL"); ok(!("finance" in r.contact)); ok(!("linkedDocs" in r.contact)); ok(!("contacts" in r.contact)); eq(r.contact.people.length, 1);
+    ok(!CPY.normaliseCounterparty(r.contact).changed);
+    eq(CPY.isEU("Poland"), true); eq(CPY.isEU("Egypt"), false); eq(CPY.isEU(""), null);
+  });
+  t("CP-3/4/5/7: person by role for composers; archived parties out of pickers; import matches by Fakturownia id then NIP; current agreement by validity", () => {
+    const c = { name: "Vega Pro", roles: ["Supplier"], people: [{ name: "Anna", role: "Accountant", email: "a@vega.hu" }, { name: "Bela", role: "Sales", email: "b@vega.hu" }], agreements: [{ season: "2025", validFrom: "2025-06-01", validTo: "2025-12-31", commissionPct: 6 }, { season: "2026", validFrom: "2026-06-01", commissionPct: 6.5, qualityReportDays: 3 }] };
+    eq(CPY.personFor(c, "Accountant").email, "a@vega.hu"); eq(CPY.personFor(c, "Dispatcher").email, "a@vega.hu", "falls back to any person with an e-mail");
+    eq(CPY.activeParties([c, { name: "Old", roles: ["Supplier"], archived: true }], "Supplier").length, 1);
+    eq(CPY.matchImported([{ id: 9, fakturowniaId: 555, nip: "5252842787" }], { fakturowniaId: 555 }).id, 9); eq(CPY.matchImported([{ id: 9, nip: "525-284-27-87" }], { nip: "5252842787" }).id, 9);
+    eq(CPY.currentAgreement(c, "2026-09-11").commissionPct, 6.5); eq(CPY.currentAgreement(c, "2025-09-11").commissionPct, 6);
+  });
+  console.log("v6.99.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.3 — SETTINGS batch ══
+(function v6993(){
+  console.log("\n══ 45. v6.99.3: CN suggestions, Vega Pro export shape ══");
+  const CN = B("cnCodes.js");
+  t("CN suggestions match the produce Marianna trades, in English and Polish; the user still confirms", () => {
+    eq(CN.suggestCN("Capsicum Kalifornia")[0].code, "07096010"); eq(CN.suggestCN("Apples", "Gala Schniko Red")[0].code, "08081080"); eq(CN.suggestCN("Papryka")[0].code, "07096010"); eq(CN.suggestCN("Chinese cabbage")[0].code, "07049090"); eq(CN.suggestCN("").length, 0);
+  });
+  console.log("v6.99.3 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.4 — DASHBOARD (DA-1…DA-8) ══
+(function v6994(){
+  console.log("\n══ 46. v6.99.4: dashboard tiles — today's movements, documents, deadlines, owner controls, warehouse morning, roles ══");
+  const DB = B("dashboard.domain.js");
+  const today = "2026-09-11";
+  t("DA-2: loading / arriving / cut-off / deliveries today — exceptions only, 'none' when empty", () => {
+    const sh = [{ number: "SHP-1", status: "Booked", purpose: "OUTBOUND", bookings: [{ cutOff: "2026-09-12" }], legs: [{ vehicles: [{ truckPlate: "PL1", plannedLoadingDate: today }, { truckPlate: "PL2", plannedLoadingDate: "2026-09-15" }] }] }, { number: "SHP-2", status: "Booked", purpose: "INBOUND", arrangedBy: "SUPPLIER", legs: [{ vehicles: [{ eta: today }] }] }];
+    const t2 = DB.movementTiles(sh, today); eq(t2[0].count, 1); ok(t2[0].detail.includes("PL1")); eq(t2[1].count, 1); ok(t2[1].detail.includes("supplier")); eq(t2[2].count, 1); eq(t2[3].detail, "none"); eq(t2[3].tone, "ok");
+  });
+  t("DA-3: transport orders not sent, protocols out, loaded without invoice (R1), POs awaiting packing result", () => {
+    const sh = [{ number: "SHP-1", status: "Loaded", purpose: "OUTBOUND", soRefs: ["SO-1"], legs: [{ vehicles: [{}] }], loadingProtocols: [{ number: "LP-1", status: "Sent" }] }];
+    const t3 = DB.documentTiles(sh, [{ number: "SO-1", status: "Confirmed" }], [], [{ number: "PO-1", status: "Confirmed", items: [{ quantityStatus: "ESTIMATED" }] }]);
+    eq(t3[0].count, 1, "TO not sent"); eq(t3[1].count, 1, "protocol out"); eq(t3[2].count, 1, "loaded, no invoice"); eq(t3[3].count, 1, "awaiting packing");
+  });
+  t("DA-4/DA-5: QC report due from the supplier's agreement days; month to close; commission run pending; expected notes; risk breaches", () => {
+    const lots = [{ number: "L1", poRef: "PO-1", receivedKg: 100, arrivalDate: "2026-09-08", movements: [] }];
+    const d = DB.deadlineTiles(lots, [], [{ id: 5, terms: { qualityReportDays: 3 } }], [{ number: "PO-1", supplier: { id: 5 } }], [], today);
+    eq(d[0].count, 1, "due 11/09, none recorded");
+    const o = DB.ownerTiles([], [{ poNumber: "PO-1", status: "Closed" }], [{ status: "Expected", partyName: "Vega Pro", amount: 1200, currency: "EUR" }], [{ client: "X", usagePct: 130, maxOverdueDays: 5 }], today);
+    eq(o[0].count, 1, "August not closed"); eq(o[1].count, 1); eq(o[2].count, 1); eq(o[3].count, 1);
+    eq(DB.ownerTiles([{ period: "2026-08" }], [], [], [], today)[0].tone, "ok");
+  });
+  t("DB7 / DA-1: the warehouse's morning at its location; tile sets follow the user's roles", () => {
+    const w = DB.warehouseTiles([{ number: "L1", locationId: 9, physicalKg: 100 }], [], [], [], 9, today); eq(w[1].count, 1); eq(w[2].count, 1);
+    eq(DB.tileSetsFor({ isOwner: true }).length, 3); eq(DB.tileSetsFor({ role: "Warehouse", modules: { lots: true, shipments: false }, finance: {} }).join(), "warehouse"); eq(DB.tileSetsFor(null).join(), "owner,operations");
+  });
+  console.log("v6.99.4 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();

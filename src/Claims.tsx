@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from "react";
+import { recordAudit } from "./audit";
+import { inspectionCandidates, evidenceCandidates, attachEvidence, qcReportWarning, defectFromInspection, offsetNoteAgainstInvoice, claimMoneyLabel } from "./claimsPlus.domain";
 import DateInput from "./DateInput";
 import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { claimBlockReason, staleClaimWarnings } from "./cancellation.domain";
@@ -49,7 +51,50 @@ function Pill({ bg, fg, children, title }: any) {
   return <span title={title} style={{ background: bg, color: fg, borderRadius: 999, padding: "2px 9px", fontSize: 10.5, fontWeight: 800, whiteSpace: "nowrap" }}>{children}</span>;
 }
 
-export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], claimSeed = null, onClaimSeedConsumed = null }: any) {
+
+// ── v6.97.0 (CL-2/3/4/6): EVIDENCE & SETTLEMENT — references, not copies; a warning, never a block; offset in one click ──
+function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lots = [], contacts = [], financeNotes = [], invoices = [], setInvoices = null, setFinanceNotes = null }: any) {
+  const insCands = inspectionCandidates(claim, inspections);
+  const cands = evidenceCandidates(claim, { inspections, shipments });
+  const lot = (lots || []).find((l: any) => (claim.subjects || []).some((s: any) => String(s.kind).toUpperCase() === "LOT" && String(s.ref) === String(l.number))) || null;
+  const supplier = (contacts || []).find((c: any) => String(c.id) === String(claim?.respondent?.contactId)) || (contacts || []).find((c: any) => String(c.name) === String(claim?.respondent?.name)) || null;
+  const warn = qcReportWarning(claim, lot, inspections, supplier ? { qualityReportDays: supplier.qualityReportDays } : null);
+  const d = defectFromInspection(claim, inspections);
+  const note = (financeNotes || []).find((n: any) => String(n.id) === String(claim.financeNoteId)) || null;
+  const cpName = String(claim?.respondent?.name || "").toLowerCase();
+  const openInv = note ? (invoices || []).filter((i: any) => i.paymentStatus !== "Cancelled" && !i.isProforma && String(i.currency || "PLN").toUpperCase() === String(note.currency || "PLN").toUpperCase() && String(i.counterparty?.name || "").toLowerCase() === cpName && (Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0) > 0.005 && ((note.direction === "outgoing" && i.kind === "SALES") || (note.direction === "incoming" && i.kind === "COST"))) : [];
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "12px 16px", marginTop: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>EVIDENCE & SETTLEMENT · {claimMoneyLabel(claim)}</div>
+      {warn && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 8 }}>⚠ {warn}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <div><Lbl>Defect from inspection (CL-2)</Lbl>
+          <select value={claim.inspectionId ?? ""} onChange={e => patch({ inspectionId: e.target.value || null })} style={inp}><option value="">— typed on the claim —</option>{insCands.map((x: any) => <option key={String(x.id)} value={x.id}>{x.date} · {x.lotNumber} · {x.stage} · {x.verdict}</option>)}</select>
+          {d.inspection && <div style={{ fontSize: 11, color: "#334155", marginTop: 3 }}>{d.defectType} · total <b>{d.defectPct}%</b>{d.description ? ` · ${d.description}` : ""}</div>}
+        </div>
+        <div><Lbl>Agreed extension / exception (CL-4)</Lbl><input value={claim.agreedExtension || ""} onChange={e => patch({ agreedExtension: e.target.value })} placeholder="e.g. QC deadline extended to 15/09 by email" style={inp} /></div>
+      </div>
+      <div style={{ marginTop: 8 }}><Lbl>Attach evidence by reference (CL-3)</Lbl>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {cands.map((c: any) => { const on = (claim.evidence || []).some((e: any) => String(e.ref) === String(c.ref)); return <button key={c.ref} disabled={on} onClick={() => patch(attachEvidence(claim, c))} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid " + (on ? "#BBF7D0" : "#E5E7EB"), background: on ? "#F0FDF4" : "#fff", color: on ? "#166534" : "#334155", cursor: on ? "default" : "pointer" }}>{on ? "✓ " : "+ "}{c.kind}: {c.label}</button>; })}
+          {!cands.length && <span style={{ fontSize: 11, color: "#94A3B8" }}>nothing on the lots / shipments yet — record an inspection or the shipment's documents first</span>}
+        </div>
+      </div>
+      {note && typeof setInvoices === "function" && typeof setFinanceNotes === "function" && (
+        <div style={{ marginTop: 10, borderTop: "1px solid #F1F5F9", paddingTop: 8 }}>
+          <Lbl>Settle by offset (CL-6) — {note.noteType} note {note.number || note.id} · {Number(note.amount).toLocaleString("pl-PL")} {note.currency}{Number(note.appliedAmount) ? ` · applied ${Number(note.appliedAmount).toLocaleString("pl-PL")}` : ""}</Lbl>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {openInv.map((i: any) => <button key={String(i.id)} onClick={() => { const r = offsetNoteAgainstInvoice(note, i, { nextId, todayISO: localTodayISO }); if (r.error) { window.alert(r.error); return; } setInvoices((prev: any[]) => (prev || []).map((x: any) => x.id === i.id ? r.invoice : x)); setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => n.id === note.id ? r.note : n)); recordAudit({ module: "Claims", docType: "Claim", docNumber: claim.number, action: "claim", summary: `Note ${note.number || note.id} offset ${r.appliedAmount.toLocaleString("pl-PL")} ${note.currency} against ${i.number}` }); }} style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontWeight: 700, cursor: "pointer" }}>⇄ Offset against {i.number} (open {((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)).toLocaleString("pl-PL")} {i.currency})</button>)}
+            {!openInv.length && <span style={{ fontSize: 11, color: "#94A3B8" }}>no open invoice of {claim?.respondent?.name} in {note.currency} — the note settles by bank transfer (matched by the bank import)</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], setInvoices = null, inspections = [], claimSeed = null, onClaimSeedConsumed = null }: any) {
   // v6.54.0: "a cancelled document never happened, so there are no claims on it".
   const cancelledRefs = cancelledDocSet(shipments, orders, pos);
   // Resolve a claim subject ref to the actual document, whichever module owns it.
@@ -336,6 +381,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
           const family = net.members.length > 1 ? net : null;
           return (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <ClaimEvidenceCard claim={selected} patch={(p: any) => patch(selected.id, p)} inspections={inspections} shipments={shipments} lots={lots} contacts={contacts} financeNotes={financeNotes} invoices={invoices} setInvoices={setInvoices} setFinanceNotes={setFinanceNotes} />
               <Card>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
                   <div style={{ fontSize: 15, fontWeight: 800 }}>{selected.number}</div>

@@ -1,4 +1,5 @@
 import { newestFirst } from "./moduleGuards.domain";
+import { exportRowsToXlsx, stamp as xlsStamp, exportVegaProSalesReport } from "./exportXlsx";
 import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
@@ -13,6 +14,9 @@ import { getCounterpartiesByType } from "./Contacts";
 import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations, unifiedLocations, locationById } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO, inspectionTotals } from "./seasonOps.domain";
+import { derivePOLineQuantities, paymentDaysFor } from "./po.domain";
+import { isEstimatedLine, applyPackingResult, proposeSOAdjustments } from "./so.domain";
+import { poResult } from "./financePlus.domain";
 import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
@@ -757,7 +761,10 @@ function LifecycleTimeline({ status }: any) {
 function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
   const { alert: ofAlert, dialogNode: ofPONode } = useConfirm(); // P2-6 completion
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
-  const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v }; return { ...o, items: it }; });
+  const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v };
+    // v6.94.0 (PO-1, owner ruling): base is kg; boxes allowed as the ordered unit — type one, the other derives from the packaging type.
+    if (["qty", "boxes", "pricingUnit", "packaging", "packagingId"].includes(k)) it[idx] = derivePOLineQuantities(it[idx], PO_PACKAGING_TYPES, k === "qty" ? "qty" : k === "boxes" ? "boxes" : k === "pricingUnit" ? "unit" : "packaging");
+    return { ...o, items: it }; });
   // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at origin.
   const SHIP_OR_LATER = ["Shipped", "Arrived", "Closed"];
 
@@ -1061,7 +1068,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <SectionTitle>PAYMENT · CURRENCY · FX</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 14 }}>
               <div>
-                <Lbl>Payment terms</Lbl>
+                <Lbl>Payment days (from invoice issue date)</Lbl>
+                <Inp disabled={isLocked} type="number" value={order.paymentDays ?? paymentDaysFor(order, order.supplier)} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder={`default ${paymentDaysFor(order, order.supplier) || "—"}`} title="v6.94.0 (PO-2, owner ruling): payment terms always count from the invoice issue date; the purchase invoice's due date derives from this" />
+                <Lbl>Payment terms (legacy text)</Lbl>
                 <Sel disabled={isLocked} value={order.paymentTerms} onChange={e => sf("paymentTerms", e.target.value)}>
                   {PAYMENT_TERMS.map(p => <option key={p}>{p}</option>)}
                 </Sel>
@@ -1122,7 +1131,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
-                    <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 19500" /></div>
+                    <div><Lbl>Unit</Lbl><Sel value={it.pricingUnit || "kg"} onChange={e => si(i, "pricingUnit", e.target.value)} title="v6.94.0 (PO-1): order in kg or in boxes — the other figure derives from the packaging type"><option value="kg">kg</option><option value="box">box</option></Sel></div>
+                    <div><Lbl>Qty (kg){String(it.pricingUnit || "kg") === "box" ? " (derived)" : ""}{isEstimatedLine(it) ? " · ESTIMATED" : ""}</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 19500" disabled={isLocked && !isEstimatedLine(it)} title={isEstimatedLine(it) ? "v6.95.0 (PO-10): quantities are ESTIMATED until the producer's packing result — editable even on a confirmed order; prices and terms are locked" : ""} /></div>
+                    <div><Lbl>Quantity</Lbl><Sel value={isEstimatedLine(it) ? "ESTIMATED" : "FINAL"} onChange={e => si(i, "quantityStatus", e.target.value)} disabled={isLocked && !isEstimatedLine(it)} title="v6.95.0 (PO-10): ESTIMATED = agreed price, quantity to be confirmed by the producer's packing result"><option value="FINAL">Final</option><option value="ESTIMATED">Estimated</option></Sel></div>
                     <div><Lbl>Unit price</Lbl>{(order.pricingMode || "firm") === "consignment"
                       ? <div style={{ padding: "8px 10px", border: "1px dashed #D8B4FE", borderRadius: 6, fontSize: 12, color: "#7C3AED", background: "#FAF5FF", fontWeight: 600 }} title="Consignment — the producer's price is settled from your sales">Consignment ⚖</div>
                       : <Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" />}</div>
@@ -1133,7 +1144,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PO_PACKAGING_TYPES || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="po-packaging-types" />
                       <datalist id="po-packaging-types">{(PO_PACKAGING_TYPES || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist></div>
-                    <div><Lbl>Boxes</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
+                    <div><Lbl>Boxes{String(it.pricingUnit || "kg") === "kg" ? " (derived)" : ""}</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
                     <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode ?? ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 0808 10" title="Customs tariff code for this item — carried to the SO and shipment" /></div>
                   </div>
@@ -1156,6 +1167,24 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 }
 
 // ─── ORDER DETAIL ───────────────────────────────────────────────────────────
+
+
+// ── v6.99.1 (FN-5): THE RESULT OF EVERY PURCHASE — the firm-price mirror of the consignment settlement ──
+function PoResultCard({ order, lots = [], orders = [], shipments = [] }: any) {
+  const r = poResult(order, lots, orders, shipments);
+  if (!r.lots) return null;
+  const fmt = (n: number) => (n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
+  const Row = ({ k, v, color }: any) => <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, padding: "2px 0" }}><span style={{ color: "#64748B" }}>{k}</span><b style={{ color: color || "#111", fontVariantNumeric: "tabular-nums" }}>{v}</b></div>;
+  return (
+    <Card style={{ marginBottom: 16, borderLeft: "4px solid " + (r.marginPLN >= 0 ? "#16A34A" : "#DC2626") }}>
+      <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: r.fullySold ? "#16A34A" : "#B45309" }}>{r.fullySold ? "FULLY SOLD" : `${Math.max(0, r.receivedKg - r.soldKg).toLocaleString("pl-PL")} kg still to sell`}</span>}>Purchase result — {order.number}</SectionTitle>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
+        <div><Row k={`Revenue (${r.soldKg.toLocaleString("pl-PL")} kg sold)`} v={fmt(r.revenuePLN)} /><Row k="Client concessions" v={"−" + fmt(r.concessionsPLN)} /><Row k="Purchase" v={"−" + fmt(r.purchasePLN)} /><Row k="Freight, customs, warehouse (landed)" v={"−" + fmt(r.landedOtherPLN)} /></div>
+        <div><Row k="Delivery freight (direct)" v={"−" + fmt(r.directPLN)} /><Row k="Recoveries" v={"+" + fmt(r.recoveriesPLN)} /><Row k="Margin" v={fmt(r.marginPLN)} color={r.marginPLN >= 0 ? "#16A34A" : "#DC2626"} /><Row k="Margin per kg sold" v={r.marginPerKg != null ? r.marginPerKg.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN/kg" : "—"} /></div>
+      </div>
+    </Card>
+  );
+}
 
 // ── v6.90.0: THE TRUCK'S FINAL RESULT — settlement per PO (owner rulings V1…V6) ──
 function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null }: any) {
@@ -1198,6 +1227,7 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
         <SmallButton onClick={() => printHtmlNode(`sales-report-${order.id}`, `${order.number} — Sales report`)}>⎙ Sales report</SmallButton>
+        <SmallButton onClick={() => exportVegaProSalesReport({ completionDate: localTodayISO(), shipmentRef: (order.supplierRef || (shipments || []).find((s: any) => (s.poRefs || []).includes(order.number) && s.supplierRef)?.supplierRef || ""), poNumber: order.number }, rows, { pct: calc.commissionPct, eur: calc.commissionEUR })} title="v6.99.3: the report in the producer's own sheet layout — upload to their platform without retyping">⬇ Producer's template (xlsx)</SmallButton>
         {myIns.length > 0 && <SmallButton onClick={() => { const el = document.getElementById(`qc-report-${order.id}`); if (el) printHtmlNode(`qc-report-${order.id}`, `${order.number} — Quality report`); }}>⎙ Quality report ({myIns.length})</SmallButton>}
         {!closed && setSettlements && <SmallButton kind="dark" onClick={() => {
           const number = nextSettlementNumberPO(settlements, new Date().getFullYear());
@@ -1220,7 +1250,7 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
   );
 }
 
-function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null }: any) {
+function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -1328,13 +1358,22 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
 
               {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
               {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
+              {settlement && (order.pricingMode || "firm") !== "consignment" && order.status !== "Draft" && <PoResultCard order={order} lots={settlement.lots} orders={settlement.orders} shipments={settlement.shipments} />}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
                 <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
+                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && ["EXW", "DAP", "DPU", "DDP", "CIF", "CFR", "FOB", "FCA"].includes(String(o.sellIncoterm || "").toUpperCase())); void sos;
+                  return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
                 <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" />
                 {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
                     note — so receiving lives HERE too, not only on the lot in Inventory. */}
+                {typeof onPackingResult === "function" && order.status === "Confirmed" && (order.items || []).some((it: any) => isEstimatedLine(it)) && (
+                  <div style={{ marginTop: 8, padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8 }}>
+                    <div style={{ fontSize: 11.5, color: "#92400E", fontWeight: 700 }}>Quantities are ESTIMATED — prices agreed, kilos to be confirmed by the producer's packing result. Transport can be booked on these figures (v6.95.0, PO-10).</div>
+                    <button onClick={onPackingResult} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: "#B45309", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📦 Enter packing result → quantities final</button>
+                  </div>
+                )}
                 {typeof onRegisterTruck === "function" && ["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status === "Confirmed" && (
                   <div style={{ marginTop: 8 }}>
                     <button onClick={onRegisterTruck} title="v6.89.0 (owner ruling): the supplier's truck is TRACKED in Shipments (plates, ETA, arrival, supplier's reference) but not paid — no transport order, no cost of ours" style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>🚚 Register supplier's truck (tracked, not paid)</button>
@@ -1538,7 +1577,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
           directFlow: !!order.directFlow,
                     loadingDate: order.loadingDate || null,
           expectedKg: qty,
-          packaging: it.packaging || "",
+          packaging: it.packaging || "", packagingId: it.packagingId ?? null, // v6.96.0 (IN-8) packagingId: it.packagingId ?? null, // v6.96.0 (IN-8)
           status: order.directFlow ? "Direct Expected" : "Expected",
           arrivalDate: order.expectedDeliveryDate || null,
           consignment: isConsignment,
@@ -1573,7 +1612,7 @@ function buildExpectedLotsFromPO(order, existingLots = []) {
       receivedKg: 0,
       physicalKg: 0,
       damagedKg: 0,
-      packaging: it.packaging || "",
+      packaging: it.packaging || "", packagingId: it.packagingId ?? null, // v6.96.0 (IN-8)
       status: order.directFlow ? "Direct Expected" : "Expected",
       arrivalDate: order.expectedDeliveryDate || null,
       productionDate: null,
@@ -1630,7 +1669,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
   const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const orders = extPOs ?? localOrders;
   const setOrders = extSetPOs ?? setLocalOrders;
-  const suppliers = useMemo(() => suppliersFromContacts(extContacts), [extContacts]);
+  const suppliers = useMemo(() => suppliersFromContacts((extContacts || []).filter((c: any) => !c.archived)), [extContacts]); // v6.99.2 (CP-4)
   const lots = extLots || [];
   const [view, setView] = useState("list");
   const [selected, setSelected] = useState(null);
@@ -1964,6 +2003,22 @@ ${blockNote}`.trim(),
           expectedLots={["DDP", "DAP", "DPU"].includes(String(selected.buyIncoterm || "").toUpperCase())
             ? (extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))
             : [] /* v6.80.0 (D-42): EXW/FCA/FOB/CIF goods arrive on OUR shipment — the receipt is posted there */}
+          ctxOrders={extSOs}
+          onPackingResult={async () => {
+            // one prompt per estimated line: the producer's final kilos (blank = keep the estimate)
+            const rows: any[] = [];
+            for (const [i, it] of (selected.items || []).entries()) {
+              if (!isEstimatedLine(it)) continue;
+              const v = await uiPrompt({ title: `Packing result — ${it.product || "line"} ${it.size || ""} ${it.quality || ""}`.trim(), message: `Estimated ${Math.round(parseFloat(String(it.qty)) || 0).toLocaleString("pl-PL")} kg. Final kilos packed by the producer (blank = keep):`, defaultValue: String(Math.round(parseFloat(String(it.qty)) || 0)), confirmLabel: "Next" });
+              if (v === null) return;
+              rows.push({ lineId: it.id ?? i + 1, qty: String(v).trim() === "" ? undefined : parseFloat(String(v).replace(",", ".")) });
+            }
+            const fin = applyPackingResult(selected, rows, localTodayISO());
+            const adj = proposeSOAdjustments(fin, extSOs || []);
+            extSetPOs((prev: any[]) => (prev || []).map((p: any) => p.id === selected.id ? fin : p));
+            recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "status", summary: `Packing result entered — quantities FINAL${adj.length ? `; ${adj.length} sales line(s) exceed the final kilos` : ""}` });
+            await uiAlert({ tone: adj.length ? "warn" : "info", title: adj.length ? "Quantities final — sales to adjust" : "Quantities final", message: adj.length ? adj.map((a: any) => `${a.soNumber} · ${a.product}: sold ${a.soldKg.toLocaleString("pl-PL")} kg, final allows ${a.finalKg.toLocaleString("pl-PL")} kg (−${a.overKg.toLocaleString("pl-PL")})`).join("\n") + "\n\nNothing was changed on the sales orders — adjust the lines above and confirm them." : "Every sale is covered by the final quantities. Expected lots re-sync from the PO lines." });
+          }}
           settlement={{ lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, setInvoices: extSetInvoices }}
           onRegisterTruck={typeof extSetShipments === "function" ? async () => {
             const plate = await uiPrompt({ title: "Supplier's truck", message: "Plates announced by the supplier (leave blank if not yet known):", defaultValue: "", confirmLabel: "Next" }); if (plate === null) return;
@@ -1984,6 +2039,7 @@ ${blockNote}`.trim(),
             if (typed === null) return;
             const kg = parseFloat(String(typed).replace(",", ".")) || 0;
             if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No quantity", message: "Enter the kilos actually received." }); return; }
+            if (l.locationId === null || l.locationId === undefined || l.locationId === "") { await uiAlert({ tone: "warn", title: "No destination", message: "v6.96.0 (IN-7): a receipt needs a place — set the PO's named place (or the lot's location) first." }); return; }
             const ok = await uiConfirm({ tone: "warn", title: `Receive ${kg.toLocaleString("pl-PL")} kg of ${l.number} into stock?`, message: `Direct receipt (DDP / delivered by the supplier — no shipment of ours). The stock becomes available at the lot's location; the movement appears in its history and can be voided.`, confirmLabel: "Receive into stock" });
             if (!ok || typeof extSetLots !== "function") return;
             const today = localTodayISO();
@@ -2040,6 +2096,7 @@ ${blockNote}`.trim(),
               recordAudit({ module: "Purchase orders", docType: "Commission run", docNumber: String(r.runId), action: "created", summary: `${r.invoices.length} commission invoice draft(s): ${r.invoices.map((i: any) => (i.links || [])[0]?.number).join(", ")}` });
             }}>⚙ Commission run ({(extSettlements || []).filter((s: any) => s.status === "Closed" && !s.commissionInvoiceId).length})</SmallButton>
           )}
+          <SmallButton onClick={() => exportRowsToXlsx(`purchase_orders_${xlsStamp()}`, filtered, [{ key: "number", label: "PO" }, { key: "supplier", label: "Supplier", fmt: (v: any) => v?.name || "" }, { key: "buyIncoterm", label: "Terms" }, { key: "orderDate", label: "Ordered" }, { key: "loadingDate", label: "Ready / loading" }, { key: "status", label: "Status" }, { key: "pricingMode", label: "Pricing" }, { key: "currency", label: "Currency" }, { key: "fxRate", label: "Rate" }, { key: "items", label: "Lines", fmt: (v: any) => (v || []).map((it: any) => `${it.product}${it.variety ? " " + it.variety : ""} ${it.size || ""} ${it.qty} kg @ ${it.unitPrice}`).join(" | ") }, { key: "paymentDays", label: "Payment days" }], "Purchase orders")} title="v6.99.0: exports the rows as filtered, columns as shown">⬇ Excel</SmallButton>
           <ActionButton action="create" label="Add new PO" onClick={newOrder} />
         </div>
       </div>

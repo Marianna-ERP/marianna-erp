@@ -102,20 +102,13 @@ export function defectsFor(catalogue: DefectCatalogueEntry[], product: any): Def
 
 // ── SORTING JOB (G3) — one entry: class I / class II (same lot, grade) / waste ──
 export interface SortingInput { date: string; kgIn: any; classIKg: any; classIIKg: any; wasteKg: any; by?: string; hours?: any; notes?: string; }
+/** v6.96.0 (IN-2): the sorting job now lives in the LEDGER — RECLASS for class II, DAMAGE for waste. */
 export function sortingJob(lot: any, inp: SortingInput, deps: { nextId: () => any }): { lot: any; job: any; error?: string } {
-  const kgIn = num(inp.kgIn), i = num(inp.classIKg), ii = num(inp.classIIKg), w = num(inp.wasteKg);
-  if (Math.abs(kgIn - (i + ii + w)) > 1) return { lot, job: null, error: `Sorted ${kgIn} kg but class I + class II + waste = ${i + ii + w} kg — the split must equal what went in.` };
-  const job = { id: deps.nextId(), date: inp.date, kgIn, classIKg: i, classIIKg: ii, wasteKg: w, by: S(inp.by), hours: num(inp.hours) || null, notes: S(inp.notes) };
-  const movements = [...(lot.movements || [])];
-  if (w > 0) movements.push({ id: deps.nextId(), date: inp.date, type: "DAMAGE", qtyKg: w, toId: lot.locationId ?? null, note: `Sorting waste — job ${job.id}${inp.by ? " · " + inp.by : ""}`, source: `sorting:${job.id}` });
-  const grades = { ...(lot.grades || {}) };
-  grades.I = r0(num(grades.I) + i); grades.II = r0(num(grades.II) + ii); grades.waste = r0(num(grades.waste) + w);
-  const serviceEvents = [...(lot.serviceEvents || []), { id: job.id, type: "SORTING", date: inp.date, kg: kgIn, note: `class I ${i} · class II ${ii} · waste ${w}` }];
-  return { lot: { ...lot, movements, grades, serviceEvents, sortingJobs: [...(lot.sortingJobs || []), job] }, job };
+  return sortingJobLedger(lot, inp, deps);
 }
 /** kg by grade for the sales report: I, II and waste; unsorted = physical − (I + II). */
 export function gradeSplit(lot: any): { I: number; II: number; waste: number; unsorted: number } {
-  const g = lot?.grades || {};
+  const g = (lot?.movements || []).some((m: any) => m && !m.voided && (m.type === "RECLASS" || String(m.source || "").startsWith("sorting:"))) ? gradesFromLedger(lot) : (lot?.grades || {});   // v6.96.0 (IN-2): the ledger wins
   const I = num(g.I), II = num(g.II), waste = num(g.waste);
   const received = num(lot?.receivedKg);
   return { I, II, waste, unsorted: Math.max(0, r0(received - I - II - waste)) };
@@ -141,4 +134,63 @@ export function applyStockCount(lots: any[], count: StockCount, reason: string, 
     return { ...lot, movements: [...(lot.movements || []), mv] };
   });
   return { lots: next, adjusted };
+}
+
+// ── v6.96.0 (IN-2): GRADES IN THE LEDGER — sorting posts RECLASS (I→II) + DAMAGE (waste); grades derive ──
+export function gradesFromLedger(lot: any): { I: number; II: number; waste: number } {
+  const live = (lot?.movements || []).filter((m: any) => m && !m.voided);
+  const receivedLedger = live.filter((m: any) => m.type === "IN").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
+  const received = receivedLedger > 0 ? receivedLedger : num(lot?.receivedKg);   // lots received before the ledger carried the IN (read-forward)
+  const toII = live.filter((m: any) => m.type === "RECLASS" && String(m.toGrade || "II") === "II").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
+  const backToI = live.filter((m: any) => m.type === "RECLASS" && String(m.toGrade) === "I").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
+  const waste = live.filter((m: any) => m.type === "DAMAGE" && String(m.source || "").startsWith("sorting:")).reduce((s: number, m: any) => s + num(m.qtyKg), 0);
+  const II = Math.max(0, r0(toII - backToI));
+  return { I: Math.max(0, r0(received - II - waste)), II, waste: r0(waste) };
+}
+/** IN-2 sorting job: one entry → RECLASS for class II, DAMAGE for waste; nothing accumulated outside the ledger. */
+export function sortingJobLedger(lot: any, inp: SortingInput, deps: { nextId: () => any }): { lot: any; job: any; error?: string } {
+  const kgIn = num(inp.kgIn), i = num(inp.classIKg), ii = num(inp.classIIKg), w = num(inp.wasteKg);
+  if (Math.abs(kgIn - (i + ii + w)) > 1) return { lot, job: null, error: `Sorted ${kgIn} kg but class I + class II + waste = ${i + ii + w} kg — the split must equal what went in.` };
+  const job = { id: deps.nextId(), date: inp.date, kgIn, classIKg: i, classIIKg: ii, wasteKg: w, by: S(inp.by), hours: num(inp.hours) || null, notes: S(inp.notes) };
+  const movements = [...(lot.movements || [])];
+  if (ii > 0) movements.push({ id: deps.nextId(), date: inp.date, type: "RECLASS", qtyKg: ii, fromGrade: "I", toGrade: "II", toId: lot.locationId ?? null, note: `Sorting — class II · job ${job.id}${inp.by ? " · " + inp.by : ""}`, source: `sorting:${job.id}` });
+  if (w > 0) movements.push({ id: deps.nextId(), date: inp.date, type: "DAMAGE", qtyKg: w, toId: lot.locationId ?? null, note: `Sorting waste — job ${job.id}${inp.by ? " · " + inp.by : ""}`, source: `sorting:${job.id}` });
+  const next = { ...lot, movements, serviceEvents: [...(lot.serviceEvents || []), { id: job.id, type: "SORTING", date: inp.date, kg: kgIn, note: `class I ${i} · class II ${ii} · waste ${w}` }], sortingJobs: [...(lot.sortingJobs || []), job] };
+  next.grades = gradesFromLedger(next);   // cache for readers; the ledger is the truth
+  return { lot: next, job };
+}
+
+// ── v6.96.0 (IN-4): lot normalisation — mirrors retired, cache re-derived (idempotent) ──
+export function normaliseLot(lot: any, ctx: { po?: any; poSettlements?: any[] } = {}): { lot: any; changed: boolean; settlementToMigrate?: any } {
+  let l: any = { ...lot }; let changed = false; let settlementToMigrate: any = undefined;
+  ["journey", "destinationText", "custodyType"].forEach(k => { if (k in l) { delete l[k]; changed = true; } });
+  if (ctx.po) {
+    const cons = (ctx.po.pricingMode || "firm") === "consignment";
+    if (!!l.consignment !== cons) { l.consignment = cons; changed = true; }
+    if (ctx.po.directFlow !== undefined && !!l.directFlow !== !!ctx.po.directFlow) { l.directFlow = !!ctx.po.directFlow; changed = true; }   // synced derivation, never typed
+  }
+  const firstIn = (l.movements || []).filter((m: any) => m && !m.voided && m.type === "IN").map((m: any) => String(m.date || "")).filter(Boolean).sort()[0];
+  if (firstIn && l.arrivalDate !== firstIn) { l.arrivalDate = firstIn; changed = true; }
+  if (l.settlement && ctx.poSettlements && !ctx.poSettlements.some(s => String(s.poNumber) === String(l.poRef))) { settlementToMigrate = { ...l.settlement, poNumber: l.poRef, fromLot: l.number }; }
+  if (l.settlement && ctx.poSettlements) { delete l.settlement; changed = true; }
+  const g = gradesFromLedger(l);
+  if ((l.movements || []).some((m: any) => m.type === "RECLASS" || String(m.source || "").startsWith("sorting:"))) { if (JSON.stringify(l.grades || {}) !== JSON.stringify(g)) { l.grades = g; changed = true; } }
+  return { lot: l, changed, settlementToMigrate };
+}
+
+// ── v6.96.0 (IN-5): the quay is inventory — unloading at the POL / clearance at the POD posts a TRANSFER to the port location ──
+export function portStageTransfers(sh: any, lots: any[], portLocationId: any, dateISO: string, deps: { nextId: () => any }, kind: "unloaded" | "cleared" = "unloaded"): { lots: any[]; posted: number } {
+  const refs = new Set<string>();
+  (sh?.goods || []).forEach((g: any) => { if (g.lotRef) refs.add(String(g.lotRef)); });
+  (sh?.lotRefs || []).forEach((r: any) => refs.add(String(r)));
+  let posted = 0;
+  const source = `unit_event:${kind}:${sh?.number}`;
+  const next = (lots || []).map(lot => {
+    if (!refs.has(String(lot.number))) return lot;
+    if ((lot.movements || []).some((m: any) => m.source === source)) return lot;   // idempotent
+    if (String(lot.locationId ?? "") === String(portLocationId ?? "")) return lot;
+    posted++;
+    return { ...lot, movements: [...(lot.movements || []), { id: deps.nextId(), date: dateISO, type: "TRANSFER", qtyKg: r0(num(lot.physicalKg)), fromId: lot.locationId ?? null, toId: portLocationId ?? null, shipmentRef: sh.number, note: `${kind === "unloaded" ? "Unloaded at the port of loading" : "Discharged & cleared at the port of discharge"} — ${sh.number}`, source }] };
+  });
+  return { lots: next, posted };
 }

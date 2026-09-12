@@ -1,3 +1,6 @@
+import { missingPeopleInfo } from "./counterparty.domain";
+import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
+import { purchaseInvoiceVariance } from "./po.domain";
 import { claimNoteMismatches } from "./claimReadiness.domain";
 // ─── DATA INTEGRITY CHECKER ─────────────────────────────────────────────────
 //
@@ -334,6 +337,38 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     orders.forEach((o: any) => o.status !== "Cancelled" && (o.items || []).forEach((it: any) => mark(it.product, o.number)));
     used.forEach((docs, name) => add("info", "CATALOG_ITEM_UNKNOWN", "Settings", name, `"${name}" is used on ${docs.size} live document(s) but is not in the product catalog (renamed or removed).`));
   }
+
+  // v6.99.2 (CP-3): a party we actively trade with should have a contact person with an e-mail.
+  {
+    const used = new Set<string>();
+    pos.forEach((p: any) => p.status !== "Cancelled" && used.add(String(p.supplier?.name || "").trim().toLowerCase()));
+    orders.forEach((o: any) => o.status !== "Cancelled" && used.add(String(o.client?.name || "").trim().toLowerCase()));
+    missingPeopleInfo(contacts, used).forEach(n => add("info", "PARTY_NO_CONTACT_PERSON", "Counterparties", n, "No contact person with an e-mail — transport orders, invoices and statements have nobody to be sent to."));
+  }
+
+  // v6.98.0 (IV-1 / IV-6): a cost invoice past Draft with no link; positions that do not add up.
+  invoices.forEach((inv: any) => {
+    if (!inv || inv.paymentStatus === "Cancelled") return;
+    if (inv.paymentStatus !== "Draft") { const miss = requiredLinkMissing(inv); if (miss) add("warning", "COST_INVOICE_UNLINKED", "Invoices", inv.number || String(inv.id), `Issued cost invoice with no link — it reaches no shipment, lot or settlement. Link it (PO / shipment / lot) or classify as overhead.`); }
+    const drift = positionsMismatch(inv); if (drift) add("warning", "INVOICE_POSITIONS_MISMATCH", "Invoices", inv.number || String(inv.id), drift);
+  });
+
+  // v6.96.0 (IN-7): a lot must know where it is — 16 lots had no location in the owner's data.
+  lots.forEach((l: any) => {
+    if (!l || String(l.status) === "Cancelled") return;
+    if ((l.locationId === null || l.locationId === undefined || l.locationId === "") && (Number(l.physicalKg) || 0) > 0)
+      add("warning", "LOT_NO_LOCATION", "Inventory", l.number, "Stock with no location — set the lot's location (or the PO's named place) so counts, charges and transfers can find it.");
+  });
+
+  // v6.94.0 (PO-6, owner ruling): the supplier's invoice is checked against the agreed price × received kilos.
+  invoices.forEach((inv: any) => {
+    if (inv?.kind !== "COST" || inv?.paymentStatus === "Cancelled" || inv?.isProforma) return;
+    (inv.links || []).filter((l: any) => l.type === "PO").forEach((l: any) => {
+      const po = pos.find((p: any) => String(p.number) === String(l.number)); if (!po || (po.pricingMode || "firm") === "consignment") return;
+      const v = purchaseInvoiceVariance(inv, po, lots);
+      if (v) add("warning", "PINV_PRICE_VARIANCE", "Invoices", v.invoiceNumber, `Supplier invoiced ${v.invoicedPLN.toLocaleString("pl-PL")} PLN vs ${v.agreedPLN.toLocaleString("pl-PL")} PLN agreed on ${v.poNumber} (${v.diffPct > 0 ? "+" : ""}${v.diffPct}%) — check the price or the received kilos before paying.`);
+    });
+  });
 
   // v6.89.0 (R1, owner ruling): no cargo arrives at a client without an issued invoice.
   orders.forEach((o: any) => {

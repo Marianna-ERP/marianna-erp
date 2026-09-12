@@ -1,5 +1,7 @@
 import { referencesToContact } from "./referenceGuards";
 import { currentUser } from "./permissions.domain";
+import { WAREHOUSE_SERVICES } from "./financePlus.domain";
+import { PERSON_ROLES } from "./counterparty.domain";
 
 import DateInput from "./DateInput";
 import React, { useState, useMemo, useRef } from "react";
@@ -271,6 +273,27 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               </div>
               <div><Lbl>Country</Lbl><Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" /></div>
               <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
+              {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
+              <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ gridColumn: "1 / -1", fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}>TERMS (inherited by documents)</div>
+                <div><Lbl>Payment days (from invoice)</Lbl><Inp type="number" value={form.terms?.paymentDays ?? form.paymentTermsDays ?? ""} onChange={e => { const v = parseFloat(e.target.value) || 0; sf("terms", { ...(form.terms || {}), paymentDays: v }); sf("paymentTermsDays", v); }} /></div>
+                <div><Lbl>Notice days (claims)</Lbl><Inp type="number" value={form.terms?.noticeDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), noticeDays: parseFloat(e.target.value) || 0 })} placeholder="legal default" /></div>
+                <div><Lbl>QC report days (producer)</Lbl><Inp type="number" value={form.terms?.qualityReportDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), qualityReportDays: parseFloat(e.target.value) || 0 })} /></div>
+                <div><Lbl>Default currency</Lbl><Sel value={form.terms?.defaultCurrency || form.defaultCurrency || "PLN"} onChange={e => sf("terms", { ...(form.terms || {}), defaultCurrency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
+                <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>
+                <label style={{ gridColumn: "1 / -1", fontSize: 11.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", margin: "6px 0 4px" }}>PEOPLE (who receives our documents)</div>
+                {(form.people || []).map((p: any, i: number) => <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 130px 1.4fr 1fr 30px", gap: 6, marginBottom: 4 }}>
+                  <Inp value={p.name || ""} onChange={e => sf("people", (form.people || []).map((x: any, k: number) => k === i ? { ...x, name: e.target.value } : x))} placeholder="Name" />
+                  <Sel value={p.role || "Other"} onChange={e => sf("people", (form.people || []).map((x: any, k: number) => k === i ? { ...x, role: e.target.value } : x))}>{PERSON_ROLES.map((r: string) => <option key={r}>{r}</option>)}</Sel>
+                  <Inp value={p.email || ""} onChange={e => sf("people", (form.people || []).map((x: any, k: number) => k === i ? { ...x, email: e.target.value } : x))} placeholder="e-mail" />
+                  <Inp value={p.phone || ""} onChange={e => sf("people", (form.people || []).map((x: any, k: number) => k === i ? { ...x, phone: e.target.value } : x))} placeholder="phone" />
+                  <button type="button" onClick={() => sf("people", (form.people || []).filter((_: any, k: number) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer" }}>✕</button>
+                </div>)}
+                <button type="button" onClick={() => sf("people", [...(form.people || []), { name: "", role: "Buyer", email: "", phone: "" }])} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>+ Person</button>
+              </div>
               {/* v6.68.0 (F-3): credit control — confirming an SO that pushes this client's
                   open receivables past the limit takes an explicit confirm. Blank = no limit. */}
               <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
@@ -366,6 +389,19 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                 ))}
                 <button type="button" onClick={addExtraAddress} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add another address</button>
               </div>
+            </div>
+          )}
+          {allTypes.includes("Warehouse") && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>WAREHOUSE AGREEMENT (v6.99.1, FN-6 — owner ruling 6 Sept)</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                <div><Lbl>Type</Lbl><Sel value={form.agreement?.type || "per_service"} onChange={e => sf("agreement", { ...(form.agreement || {}), type: e.target.value })}><option value="per_service">Per service (tariff)</option><option value="fixed_monthly">Annual — fixed monthly fee, all-inclusive</option><option value="kg_day">Per kg-day</option><option value="pallet_day">Per pallet-day</option></Sel></div>
+                <div><Lbl>Monthly fee (PLN)</Lbl><Inp type="number" value={form.agreement?.fixedMonthlyPLN ?? ""} onChange={e => sf("agreement", { ...(form.agreement || {}), fixedMonthlyPLN: e.target.value })} /></div>
+                <div><Lbl>Rate per kg-day</Lbl><Inp type="number" step="0.001" value={form.agreement?.rateKgDayPLN ?? ""} onChange={e => sf("agreement", { ...(form.agreement || {}), rateKgDayPLN: e.target.value })} /></div>
+                <div><Lbl>Rate per pallet-day</Lbl><Inp type="number" step="0.01" value={form.agreement?.ratePalletDayPLN ?? ""} onChange={e => sf("agreement", { ...(form.agreement || {}), ratePalletDayPLN: e.target.value })} /></div>
+              </div>
+              <Lbl>Included services (not charged separately)</Lbl>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11.5 }}>{WAREHOUSE_SERVICES.map((s: string) => <label key={s} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={(form.agreement?.includedServices || []).includes(s)} onChange={() => { const cur = form.agreement?.includedServices || []; sf("agreement", { ...(form.agreement || {}), includedServices: cur.includes(s) ? cur.filter((x: string) => x !== s) : [...cur, s] }); }} />{s.replace("_", " ")}</label>)}</div>
             </div>
           )}
           {allTypes.includes("Supplier") && !canSeeCommission && (

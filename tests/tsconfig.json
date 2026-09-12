@@ -61,6 +61,16 @@
     "../src/budgets.domain.ts",
     "../src/shipmentModel.domain.ts",
     "../src/seasonOps.domain.ts",
-    "../src/poSettlement.domain.ts"
+    "../src/poSettlement.domain.ts",
+    "../src/po.domain.ts",
+    "../src/so.domain.ts",
+    "../src/claimsPlus.domain.ts",
+    "../src/invoicePlus.domain.ts",
+    "../src/statement.domain.ts",
+    "../src/periodClose.domain.ts",
+    "../src/financePlus.domain.ts",
+    "../src/counterparty.domain.ts",
+    "../src/cnCodes.ts",
+    "../src/dashboard.domain.ts"
   ]
 }

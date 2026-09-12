@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
+import { checkIntegrity } from "./integrityCheck";
 import Dashboard from "./Dashboard";
 import Contacts from "./Contacts";
 import PurchaseOrders from "./PurchaseOrders";
@@ -9,7 +10,15 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { migrateReferencedSeeds } from "./locations";
+import { migrateReferencedSeeds, stampSiteIds } from "./locations";
+import { normaliseLot } from "./seasonOps.domain";
+import { normalisePO } from "./po.domain";
+import { normaliseSO } from "./so.domain";
+import { foldLegacyClaimFields } from "./claimsPlus.domain";
+import { normaliseInvoiceCategory } from "./invoicePlus.domain";
+import { normaliseCounterparty } from "./counterparty.domain";
+import { setFxSettings as applyFxSettings, fetchNbpRates } from "./fx";
+import { poDirectFromSOs } from "./tradeFlow.domain";
 import { healRound645, healRound651 } from "./heal.v645";
 import { migrateClaims } from "./claims.domain";
 import Claims from "./Claims";
@@ -208,6 +217,16 @@ export default function App() {
   const [defectCatalogue, setDefectCatalogue] = useLocalStoredState("defectCatalogue", []);
   // v6.90.0: settlements per PO (= per truck) — the producer's final result.
   const [poSettlements, setPoSettlements] = useLocalStoredState("poSettlements", []);
+  // v6.99.0 (FN-1): closed months with their frozen snapshot; (FN-7) reference FX rates as a setting.
+  const [closedPeriods, setClosedPeriods] = useLocalStoredState("closedPeriods", []);
+  const [fxSettings, setFxSettings] = useLocalStoredState("fxSettings", {});
+  // v6.99.3 (SE-1/SE-3): company identity and numbering prefixes as settings.
+  const [company, setCompany] = useLocalStoredState("company", {});
+  const [numbering, setNumbering] = useLocalStoredState("numbering", {});
+  // FX auto (owner): NBP table A on load — sets the reference rates when reachable; manual values win when typed.
+  useEffect(() => { fetchNbpRates().then(r => { if (r) setFxSettings((prev: any) => ({ ...(r as any), ...(prev || {}), _nbp: (r as any)._date })); }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => { applyFxSettings(fxSettings || {}); }, [fxSettings]);
 
   // ─── v6.45.0 one-time DATA HEAL (test-round root causes B + C) ──────────────
   // Repairs: (C) shipments closed before the v6.44.0 close-posting fix (their
@@ -362,6 +381,45 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // v6.94.0 (PO-3/4/5, owner decisions): purchase orders normalised once — retired derivation
+  // fields dropped, legacy statuses → Confirmed, payment days from legacy text, directFlow synced.
+  useEffect(() => {
+    setPOs((prev: any[]) => {
+      let changed = false;
+      const next = (prev || []).map((p: any) => { const r = normalisePO(p, { orders: orders || [], directFromSOs: poDirectFromSOs }); if (r.changed) changed = true; return r.po; });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // v6.99.2 (CP-1/2/6/9): counterparties normalised once — roles[], terms{}, ISO country, people[], caches dropped.
+  useEffect(() => { _setContacts((prev: any[]) => { let changed = false; const next = (prev || []).map((c: any) => { const r = normaliseCounterparty(c); if (r.changed) changed = true; return r.contact; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // v6.96.0 (IN-6): counterparty addresses get a persistent siteId (today's derived id) — references never move again.
+  useEffect(() => { _setContacts((prev: any[]) => { const r = stampSiteIds(prev || []); return r.changed ? r.contacts : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // v6.96.0 (IN-4): lots normalised once — mirrors dropped, consignment/direct synced from the PO, arrival derived, old per-lot settlement handed to poSettlements.
+  useEffect(() => {
+    const toMigrate: any[] = [];
+    setLots((prev: any[]) => { let changed = false; const next = (prev || []).map((l: any) => { const po = (pos || []).find((p: any) => String(p.number) === String(l.poRef)); const r = normaliseLot(l, { po, poSettlements: poSettlements || [] }); if (r.changed) changed = true; if (r.settlementToMigrate) toMigrate.push(r.settlementToMigrate); return r.lot; }); return changed ? next : prev; });
+    if (toMigrate.length) setPoSettlements((prev: any[]) => [...(prev || []), ...toMigrate.filter(s => !(prev || []).some((x: any) => String(x.poNumber) === String(s.poNumber))).map(s => ({ id: nextId(), poNumber: s.poNumber, status: s.status === "Closed" ? "Closed" : "Open", number: s.number, ratePLNperEUR: s.ratePLNperEUR, commissionPct: s.commissionPct ?? s.finalCommissionPct, closedAt: s.closedAt, notes: `Migrated from lot ${s.fromLot} (v6.96.0)` }))]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // v6.97.0 (CL-7/CL-1): claims normalised once — legacy form fields folded, EUR mirrored into the one money model.
+  useEffect(() => { setClaims((prev: any[]) => { let changed = false; const next = (prev || []).map((c: any) => { const r = foldLegacyClaimFields(c); if (r.changed) changed = true; return r.claim; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // v6.98.0 (IV-3/IV-5): invoices normalised once — one category, scope derived, creditNoteIds/locked dropped.
+  useEffect(() => { setInvoices((prev: any[]) => { let changed = false; const next = (prev || []).map((i: any) => { const r = normaliseInvoiceCategory(i); if (r.changed) changed = true; return r.inv; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // v6.95.0 (SO-6): sales orders normalised once — mirrors and caches dropped, payment days from legacy text.
+  useEffect(() => {
+    setOrders((prev: any[]) => { let changed = false; const next = (prev || []).map((o: any) => { const r = normaliseSO(o); if (r.changed) changed = true; return r.so; }); return changed ? next : prev; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // v6.79.0 (W-1): stored SO status is COMMERCIAL only. Typed physical statuses
   // from before derivation existed are normalised once: supported by shipments →
   // Confirmed (the derivation shows Shipped/Delivered); unsupported → a visible
@@ -429,13 +487,13 @@ export default function App() {
   function renderActive() {
     switch (activeModule) {
       case "dashboard":
-        return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={setActiveModule} />;
+        return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={setActiveModule}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={userName} integrityIssues={integrityIssuesForDashboard} />;
       case "claims":
-        return <Claims claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)} />;
+        return <Claims claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={userName} />;
+        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={userName}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName} />;
       case "pos":
@@ -447,13 +505,17 @@ export default function App() {
       case "shipments":
         return <Shipments shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices} />;
       case "invoices":
-        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />;
+        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}  defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} />;
+        return <Settings reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}  defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue}  fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering} />;
       default:
         return null;
     }
   }
+
+  // v6.99.4 (DA-7): the Dashboard's integrity tile reads the same check as the badge.
+  const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog } as any).issues, // eslint-disable-next-line react-hooks/exhaustive-deps
+    [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog]);
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>

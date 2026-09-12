@@ -183,6 +183,10 @@ export const DATA_KEYS = [
   "inspections", "stockCounts", "defectCatalogue",
   // v6.90.0: settlements per PO.
   "poSettlements",
+  // v6.99.0: closed periods (FN-1) and FX settings (FN-7). settledRefs is DEPRECATED (FN-8) — kept importable only.
+  "closedPeriods", "fxSettings",
+  // v6.99.3: company settings, numbering prefixes.
+  "company", "numbering",
   "auditLog"];
 
 export function exportAllData(): string {

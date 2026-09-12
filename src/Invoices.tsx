@@ -1,4 +1,9 @@
 import { chooseDepartment, departmentBlockReason } from "./fakturowniaDepartments.domain";
+import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
+import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
+import { soInvoiceDueDate } from "./so.domain";
+import { requiredLinkMissing, proposeLinks, defaultCostDueDate, matchInvoiceToCostLine, positionsMismatch } from "./invoicePlus.domain";
+import { periodGuard } from "./periodClose.domain";
 import DateInput from "./DateInput";
 import { useConfirm } from "./ui";
 import React, { useMemo, useState } from "react";
@@ -308,7 +313,7 @@ export default function Invoices(props: any) {
 
   const { confirm: invConfirm, alert: invAlert, prompt: invPrompt, dialogNode: invNode } = useConfirm(); // P2-6
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
-    setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null, setOrders = null } = props;
+    setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null, setOrders = null, closedPeriods = [] } = props;
   const [showImport, setShowImport] = useState(false); // v6.39.0
   // v6.39.0: everything a posted import touches, in one place.
   async function handleImportPost({ regs, flips, opCosts, whInvs }: any) {
@@ -378,6 +383,16 @@ export default function Invoices(props: any) {
   }
   async function saveForm() {
     const rec = recomputeInvoiceMoney(form) as Invoice;
+    // v6.99.0 (FN-1): the month is closed — refuse a document dated inside it.
+    const pg = periodGuard(rec.issueDate, closedPeriods || []); if (pg) { await invAlert({ tone: "warn", title: "Period closed", message: pg }); return; }
+    // v6.98.0 (IV-6): header must equal the positions when positions exist.
+    const drift = positionsMismatch(rec); if (drift) { const go = await invConfirm({ tone: "warn", title: "Positions ≠ header", message: drift + "\n\nSave anyway?", confirmLabel: "Save anyway" }); if (!go) return; }
+    // v6.98.0 (IV-2): a taken suggestion matches the shipment's expected cost line — Received, referenced, variance shown.
+    if ((form as any).matchCostId != null && typeof setShipments === "function") {
+      const shLink = (rec.links || []).find((l: any) => String(l.type).toLowerCase() === "shipment");
+      const sh = (shipments || []).find((s: any) => shLink && String(s.number) === String(shLink.number));
+      if (sh) { const r = matchInvoiceToCostLine(sh, (form as any).matchCostId, rec); setShipments((prev: any[]) => (prev || []).map((s: any) => s.id === sh.id ? r.sh : s)); recordAudit({ module: "Invoices", docType: "Invoice", docNumber: rec.number || String(rec.id), action: "allocated", summary: `Matched to ${sh.number} expected line — variance ${r.variance >= 0 ? "+" : ""}${r.variance.toLocaleString("pl-PL")}${r.variancePct != null ? ` (${r.variancePct}%)` : ""}` }); }
+    }
     if (!rec.number && rec.kind === "COST") { await invAlert({ tone: "warn", title: "Invoice number required", message: "Enter the supplier's invoice number." }); return; }
     if (!rec.counterparty) { await invAlert({ tone: "warn", title: "Counterparty required", message: "Select the counterparty." }); return; }
     // P1-4: guard against entering the same invoice twice (same kind + number +
@@ -406,6 +421,8 @@ export default function Invoices(props: any) {
   // and cancelling a SALES invoice returns its linked SO from Invoiced to
   // Delivered so a corrected invoice can be issued (M3 dead end).
   async function markStatus(inv: Invoice, status: PaymentStatus) {
+    // v6.98.0 (IV-1, owner ruling): a cost invoice must name what it pays for before it leaves Draft.
+    if (status === "Issued" || status === "Sent") { const missing = requiredLinkMissing(inv); if (missing) { await invAlert({ tone: "warn", title: "Link required", message: missing }); return; } }
     const order = ["Draft", "Issued", "Sent"];
     if (order.includes(status)) {
       const from = order.indexOf(String(inv.paymentStatus));
@@ -563,7 +580,9 @@ export default function Invoices(props: any) {
           {/* v6.65.0 (owner question): "+ Sales invoice" removed — every SINV is issued
               from its Sales Order (Issue invoice on the SO), so the register can never
               hold a sales invoice with no order behind it. Cost invoices remain manual. */}
-          <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Cost invoice</button>
+          <button onClick={() => exportRowsToXlsx(`invoices_${xlsStamp()}`, filtered, [{ key: "kind", label: "Kind" }, { key: "category", label: "Category" }, { key: "number", label: "Number" }, { key: "counterparty", label: "Counterparty", fmt: (v: any) => v?.name || "" }, { key: "issueDate", label: "Issued" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "netAmount", label: "Net" }, { key: "vatAmount", label: "VAT" }, { key: "grossAmount", label: "Gross" }, { key: "fxRate", label: "Rate" }, { key: "grossPLN", label: "Gross PLN" }, { key: "paidAmount", label: "Paid" }, { key: "paymentStatus", label: "Status" }, { key: "links", label: "Linked", fmt: (v: any) => (v || []).map((l: any) => l.number).join(", ") }, { key: "fakturownia", label: "KSeF", fmt: (v: any) => v?.ksefNo || "" }], "Invoices")} title="v6.99.0: exports the rows as filtered, columns as shown" style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⬇ Excel</button>
+          <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+          + Cost invoice</button>
           <button onClick={() => setShowImport(true)} title="Fetch received cost invoices from Fakturownia, tag them (goods / freight / customs / warehouse / overhead) and post them where they belong." style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Import from Fakturownia</button>
           {showImport && <ImportFakturowniaModal invoices={invoices} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
           <button onClick={() => newNote()} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#7C3AED" }}>+ Credit/Debit note</button>
@@ -762,7 +781,11 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
   }, [orders, pos, shipments, form.category, form.links, linkQuery]);
 
   function setParty(id: string) { const c = partyOptions.find((x: any) => String(x.id) === String(id)); sf("counterparty", c ? { id: c.id, name: c.name, nip: c.nip || c.vatEuId } : null); }
-  function toggleLink(d: any) { const ex = (form.links || []).find((l: any) => l.number === d.number); sf("links", ex ? form.links.filter((l: any) => l.number !== d.number) : [...(form.links || []), d]); }
+  function toggleLink(d: any) {
+    // v6.94.0 (PO-2, owner ruling): the purchase invoice's due date derives from the PO's payment days, counted from the issue date.
+    if (d?.type === "SO" && form.kind === "SALES" && !form.dueDate) { const so = (orders || []).find((o: any) => String(o.number) === String(d.number)); const client = (contacts || []).find((c: any) => String(c.id) === String(so?.client?.id)); const due = soInvoiceDueDate(form.issueDate, so, client); if (due) sf("dueDate", due); }   // v6.95.0 (SO-4)
+    if (d?.type === "PO" && form.kind === "COST" && !form.dueDate) { const po = (pos || []).find((p: any) => String(p.number) === String(d.number)); const supplier = (contacts || []).find((c: any) => String(c.id) === String(po?.supplier?.id)); const days = paymentDaysFor(po, supplier); const due = dueDateFromIssue(form.issueDate, days); if (due) sf("dueDate", due); }
+    const ex = (form.links || []).find((l: any) => l.number === d.number); sf("links", ex ? form.links.filter((l: any) => l.number !== d.number) : [...(form.links || []), d]); }
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -809,6 +832,12 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
 
           <Card style={{ marginBottom: 16 }}><SectionTitle>LINKED DOCUMENTS</SectionTitle>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {form.kind === "COST" && !(form.links || []).length && (() => { const props = proposeLinks(form, { pos, shipments, lots }); const miss = requiredLinkMissing(form);
+                return <div style={{ marginBottom: 8 }}>
+                  {miss && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 6 }}>⚠ {miss}</div>}
+                  {props.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}><span style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}>SUGGESTED (v6.98.0):</span>{props.map((p: any) => <button key={p.type + p.number} onClick={() => { sf("links", [...(form.links || []), { type: p.type === "SHIPMENT" ? "Shipment" : p.type, number: p.number }]); if (p.costId != null) sf("matchCostId", p.costId); }} title={p.reason} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid " + (p.confidence === "high" ? "#166534" : "#E5E7EB"), background: p.confidence === "high" ? "#F0FDF4" : "#fff", color: "#166534", cursor: "pointer", fontWeight: 700 }}>+ {p.type} {p.number} <span style={{ fontWeight: 400, color: "#64748B" }}>· {p.reason}</span></button>)}</div>}
+                  {!form.dueDate && form.counterparty && (() => { const cp = (contacts || []).find((c: any) => String(c.id) === String(form.counterparty?.id)); const due = defaultCostDueDate(form, cp); return due ? <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Due date will default to <b>{due}</b> ({cp?.paymentTermsDays} days from issue — the counterparty's terms) <button onClick={() => sf("dueDate", due)} style={{ marginLeft: 6, fontSize: 10.5, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>apply</button></div> : null; })()}
+                </div>; })()}
               {/* v6.81.0 (D-59): an invoice born from a Sales Order is that order's invoice — its link is fixed. */}
               {form.kind === "SALES" && (form.links || []).some((l: any) => l.type === "SO") ? (
                 <div style={{ fontSize: 12, color: "#334155" }}>Linked to <b>{(form.links || []).filter((l: any) => l.type === "SO").map((l: any) => l.number).join(", ")}</b> — fixed for an invoice issued from a Sales Order. To invoice something else, cancel this one and issue from the right order.</div>

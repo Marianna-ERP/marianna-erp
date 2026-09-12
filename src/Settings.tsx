@@ -9,6 +9,7 @@ import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, Fakturow
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
 import { referencesToLocation } from "./referenceGuards";
 import { blankUser, warehouseUser, MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
+import { CN_CODES } from "./cnCodes";
 import { nextId as mintId } from "./ids";
 import { renameCatalogItem } from "./productCatalog";
 import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
@@ -377,7 +378,7 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
           <div key={c.item} style={{ padding: "12px 14px", borderBottom: "1px solid #F5F5F5" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{c.item} <span style={{ fontSize: 11, fontWeight: 400, color: "#AAA" }}>· {c.varieties.length} {c.varieties.length === 1 ? "variety" : "varieties"}</span></div>
-              <input value={c.defaultCnCode || ""} onChange={e => setCatalog((cat: any) => setCatalogCnCode(cat || [], c.item, e.target.value))} placeholder="CN/HS" title="Default CN/HS customs code for this item — auto-fills new PO lines" style={{ ...inp, padding: "3px 8px", fontSize: 12, width: 90, marginRight: 8 }} />
+              <input value={c.defaultCnCode || ""} onChange={e => setCatalog((cat: any) => setCatalogCnCode(cat || [], c.item, e.target.value))} placeholder="CN/HS" title="Default CN/HS customs code for this item — auto-fills new PO lines. v6.99.3: suggestions from the built-in produce table (chapter 07/08); you confirm." list="cn-suggest" style={{ ...inp, padding: "3px 8px", fontSize: 12, width: 90, marginRight: 8 }} />
               <button onClick={() => renameItem(c.item)} title="Rename item (does not cascade into issued documents)" style={{ border: "1px solid #E5E7EB", color: "#374151", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600, marginRight: 6 }}>Rename</button>
               <button onClick={() => rmItem(c.item)} title="Remove item" style={{ border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600 }}>Remove</button>
             </div>
@@ -456,6 +457,56 @@ function DefectCataloguePanel({ defectCatalogue = [], setDefectCatalogue = null 
   );
 }
 
+
+// ── v6.99.0 (FN-7): REFERENCE FX RATES — the season's rates, set by the owner; documents still lock their own rate ──
+function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
+  if (typeof setFxSettings !== "function") return null;
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 110 };
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Reference FX rates (PLN per unit)</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Used only to PRE-FILL a new document's rate. Every document locks its own rate; the truck settlement uses its own. Blank = the built-in seed.</div>
+      <div style={{ display: "flex", gap: 14 }}>{["EUR", "USD", "GBP"].map(c => <label key={c} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{c}<input type="number" step="0.0001" value={fxSettings?.[c] ?? ""} onChange={e => setFxSettings((prev: any) => ({ ...(prev || {}), [c]: e.target.value }))} style={inp} /></label>)}</div>
+    </div>
+  );
+}
+
+
+// ── v6.99.3 (SE-1): COMPANY — identity printed on every document; default bank account per currency ──
+function CompanyPanel({ company = {}, setCompany = null }: any) {
+  if (typeof setCompany !== "function") return null;
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const set = (k: string, v: any) => setCompany((prev: any) => ({ ...(prev || {}), [k]: v }));
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🏢 Company</div>
+      <datalist id="cn-suggest">{CN_CODES.map(c => <option key={c.code} value={c.code}>{c.description}</option>)}</datalist>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Marianna's identity as printed on transport orders, protocols, statements and reports. Blank fields fall back to the built-in details.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 8 }}>
+        <input placeholder="Legal name" value={company.name || ""} onChange={e => set("name", e.target.value)} style={inp} />
+        <input placeholder="NIP" value={company.nip || ""} onChange={e => set("nip", e.target.value)} style={inp} />
+        <input placeholder="Phone" value={company.phone || ""} onChange={e => set("phone", e.target.value)} style={inp} />
+        <input placeholder="Address" value={company.address || ""} onChange={e => set("address", e.target.value)} style={{ ...inp, gridColumn: "1 / 3" }} />
+        <input placeholder="E-mail" value={company.email || ""} onChange={e => set("email", e.target.value)} style={inp} />
+      </div>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", margin: "8px 0 4px" }}>DEFAULT BANK ACCOUNT PER CURRENCY (Fakturownia department id) — used when a client has none of its own (SE-5)</div>
+      <div style={{ display: "flex", gap: 14 }}>{["PLN", "EUR", "USD"].map(c => <label key={c} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{c}<input value={company.defaultDepartment?.[c] || ""} onChange={e => set("defaultDepartment", { ...(company.defaultDepartment || {}), [c]: e.target.value })} placeholder="department id" style={{ ...inp, width: 130 }} /></label>)}</div>
+    </div>
+  );
+}
+// ── v6.99.3 (SE-3): NUMBERING — prefixes per document type; the DDL replaces the year-scan with sequences ──
+function NumberingPanel({ numbering = {}, setNumbering = null }: any) {
+  if (typeof setNumbering !== "function") return null;
+  const kinds = [["PO", "Purchase order"], ["SO", "Sales order"], ["SHP", "Shipment"], ["LOT", "Lot"], ["CLM", "Claim"], ["LP", "Loading protocol"], ["SET", "Settlement"]];
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🔢 Numbering</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Prefix per document type — numbers are PREFIX-YYYY-NNNN, sequence resets each year. Existing documents keep their numbers. On Supabase the sequence is issued by the database (no collisions across browsers).</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>{kinds.map(([k, label]) => <label key={k} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{label}<input value={numbering?.[k] ?? k} onChange={e => setNumbering((prev: any) => ({ ...(prev || {}), [k]: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || k }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 70, fontFamily: "ui-monospace, Menlo, monospace" }} /></label>)}</div>
+    </div>
+  );
+}
+
 export default function Settings({
   reloadFromStorage,
   refStores = {},
@@ -472,6 +523,12 @@ export default function Settings({
   setUsers = null,
   defectCatalogue = [],
   setDefectCatalogue = null,
+  fxSettings = {},
+  setFxSettings = null,
+  company = {},
+  setCompany = null,
+  numbering = {},
+  setNumbering = null,
 }: {
   reloadFromStorage: () => void;
   refStores?: any;
@@ -488,6 +545,12 @@ export default function Settings({
   setUsers?: any;
   defectCatalogue?: any[];
   setDefectCatalogue?: any;
+  fxSettings?: any;
+  setFxSettings?: any;
+  company?: any;
+  setCompany?: any;
+  numbering?: any;
+  setNumbering?: any;
 }) {
   const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
   const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
@@ -755,7 +818,10 @@ export default function Settings({
         )}
         {manage === "products" && (
           <FullScreenModal title="Product catalog" onClose={() => setManage(null)}>
+            <CompanyPanel company={company} setCompany={setCompany} />
+            <NumberingPanel numbering={numbering} setNumbering={setNumbering} />
             <UsersPanel users={users} setUsers={setUsers} />
+            <FxSettingsPanel fxSettings={fxSettings} setFxSettings={setFxSettings} />
             <DefectCataloguePanel defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} />
             <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog}  refStores={refStores} />
           </FullScreenModal>

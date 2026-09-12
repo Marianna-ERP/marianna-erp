@@ -176,6 +176,7 @@ export function toClaimCostLines(lines: ChainCostLine[], plnPerEur: any): any[] 
     amount: l.amountPLN,
     currency: "PLN",
     rate: rate > 0 ? rate : undefined,
+    source: l.key,   // v6.97.0 (CL-9): a kept line remembers where it came from, so re-deriving never duplicates it
   }));
 }
 

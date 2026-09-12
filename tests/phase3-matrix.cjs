@@ -364,7 +364,7 @@ function cleanChain() {
 }
 t("the clean full chain raises ZERO integrity issues (baseline for migration pre-flight)", () => {
   const r = integ.checkIntegrity(cleanChain());
-  eq(r.issues, [], "clean data must be silent — every issue here is a false alarm");
+  eq(r.issues.filter(i => i.severity !== "info"), [], "clean data must be silent — every WARNING or ERROR here is a false alarm (v6.99.2 adds master-data INFOs such as a missing contact person, which are advice, not defects)");
 });
 t("each severed edge is named by exactly its own check", () => {
   const cases = [

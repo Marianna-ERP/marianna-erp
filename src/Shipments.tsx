@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { PAGE_MAX } from "./ui";
 import DateInput from "./DateInput";
 import { TRADE_DIRECTIONS as TRADE_DIRS, MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
@@ -3453,7 +3454,7 @@ export default function Shipments({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
           {/* v6.83.0 (owner ruling): the same header as PO / SO / Inventory — title, no paragraph. */}
           <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Shipments</div>
-          <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
+          <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`shipments_${xlsStamp()}`, filtered, [{ key: "number", label: "Shipment" }, { key: "purpose", label: "Purpose" }, { key: "arrangedBy", label: "Arranged by" }, { key: "mode", label: "Mode" }, { key: "status", label: "Status" }, { key: "poRefs", label: "POs", fmt: (v: any) => (v || []).join(", ") }, { key: "soRefs", label: "SOs", fmt: (v: any) => (v || []).join(", ") }, { key: "legs", label: "Units", fmt: (v: any) => (v || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => `${u.truckPlate || u.containerNumber || "unit"} ${Math.round(Number(u.qtyKg) || 0)} kg${u.loadedAt ? " loaded " + u.loadedAt : ""}`)).join(" | ") }, { key: "actualLoadingDate", label: "Loaded" }, { key: "actualDeliveryDate", label: "Delivered" }, { key: "costs", label: "Costs PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.amountPLN) || 0), 0) }, { key: "billingStatus", label: "Billing" }], "Shipments")} title="v6.99.0: exports the rows as filtered">⬇ Excel</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
           <Kpi label="OPEN SHIPMENTS" value={kpis.open} sub="not closed / not cancelled" />
