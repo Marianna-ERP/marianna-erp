@@ -302,7 +302,7 @@ export function setUnitLoad(sh: any, unitId: any, goodsLineId: any, kg: any): { 
     const rest = (u.load || []).filter((a: any) => String(a.goodsLineId) !== String(goodsLineId));
     return { ...u, load: want > 0 ? [...rest, { goodsLineId, qtyKg: want }] : rest };
   }) }));
-  return { sh: { ...sh, legs }, remaining: remaining - want };
+  return { sh: syncUnitKgMirrors({ ...sh, legs }), remaining: remaining - want };
 }
 /** A-R8-12: automatic split — one truck takes everything; adding a truck re-splits evenly; explicit shares respected. */
 export function autoAllocate(sh: any, legIndex = 0): any {
@@ -321,7 +321,7 @@ export function autoAllocate(sh: any, legIndex = 0): any {
     const load = goods.map((g: any, gi: number) => { const base = Math.floor(remaining[gi] / n); const extra = k === n - 1 ? remaining[gi] - base * n : 0; return { goodsLineId: g.id, qtyKg: base + extra }; }).filter((a: any) => a.qtyKg > 0);
     return { ...u, load, manualLoad: false };
   }) });
-  return { ...sh, legs };
+  return syncUnitKgMirrors({ ...sh, legs });
 }
 /** A-R8-16: a truck's kilos are a BUDGET across the containers it feeds. */
 export function truckRemainingForFeeding(sh: any, truckId: any, exceptContainerId?: any): number {
@@ -361,7 +361,7 @@ export function jobsByCarrierLeg(sh: any): Array<{ key: string; carrierId: any; 
 }
 /** Expected freight cost lines: one per carrier × leg (source LEGCAR:{leg}:{carrier}); replace-by-source. */
 export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string = () => ""): any[] {
-  const keep = (sh?.costs || []).filter((c: any) => !String(c.source || "").startsWith("LEGCAR:") && !String(c.source || "").startsWith("LEG:"));
+  const keep = (sh?.costs || []).filter((c: any) => !String(c.source || "").startsWith("LEGCAR:") && !String(c.source || "").startsWith("LEG:") && !String(c.source || "").startsWith("leg-freight:"));   // v6.99.9: the legacy per-leg lines are replaced too
   const lines = jobsByCarrierLeg(sh).filter(j => j.amount > 0).map(j => {
     const fx = num((sh.legs[j.legIndex] || {}).costFxRate) || 1;
     return { id: `legcar-${j.legIndex}-${j.carrierId}`, type: j.mode.toLowerCase() === "sea" ? "sea_freight" : j.mode.toLowerCase() === "air" ? "air_freight" : "road_freight",
@@ -369,4 +369,25 @@ export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string 
       supplierId: j.carrierId || null, amount: r2(j.amount), currency: j.currency, fxRate: fx, amountPLN: r2(j.amount * fx), invoiceStatus: "Expected", responsibility: "Marianna", source: `LEGCAR:${j.legIndex}:${j.carrierId}` };
   });
   return [...keep, ...lines];
+}
+
+
+/** v6.99.9: legacy readers still use unit.qtyKg — keep it equal to the derived figure (mirror until the DDL). */
+export function syncUnitKgMirrors(sh: any): any {
+  const legs = (sh?.legs || []).map((leg: any) => ({ ...leg, vehicles: (leg.vehicles || []).map((u: any) => {
+    const has = (u.load || []).some((a: any) => num(a?.qtyKg) > 0) || feedersOf(u).length > 0;
+    if (!has) return u;
+    const kg = unitKg(u, sh); return num(u.qtyKg) === kg ? u : { ...u, qtyKg: kg };
+  }) }));
+  return { ...sh, legs };
+}
+/** v6.99.9: one-time heal on load — mirrors in step; stale zero-amount leg-freight lines removed once carrier×leg lines exist. */
+export function healShipmentModel(sh: any): { sh: any; changed: boolean } {
+  let next = syncUnitKgMirrors(sh); let changed = next !== sh && JSON.stringify(next.legs) !== JSON.stringify(sh.legs);
+  const costs = sh?.costs || [];
+  if (costs.some((c: any) => String(c.source || "").startsWith("LEGCAR:"))) {
+    const cleaned = costs.filter((c: any) => { const src = String(c.source || ""); const legacy = src.startsWith("leg-freight:") || src.startsWith("LEG:"); if (!legacy) return true; const legNo = src.split(":")[1]; const covered = costs.some((x: any) => String(x.source || "").startsWith("LEGCAR:") && String(x.source).split(":")[1] === String(Number(legNo) - 1)); return num(c.amount) > 0 && !covered; });
+    if (cleaned.length !== costs.length) { next = { ...next, costs: cleaned }; changed = true; }
+  }
+  return { sh: next, changed };
 }

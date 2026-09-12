@@ -21,6 +21,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { findLotForSOLine } from "./salesOrders.domain";
+import { unitKg as derivedUnitKg } from "./shipmentModel.domain";
 
 function num(v: any): number {
   const x = parseFloat(String(v ?? "").replace(",", "."));
@@ -501,7 +502,7 @@ export function legKgChecks(sh: any): LegKgCheck[] {
   const goodsKg = (sh?.goods || []).reduce((s: number, g: any) => s + (Number(g?.qtyKg) || 0), 0);
   return (sh?.legs || []).map((leg: any, i: number) => {
     const units = leg?.vehicles || leg?.transportUnits || [];
-    const unitsKg = units.reduce((s: number, u: any) => s + (Number(u?.qtyKg) || 0), 0);
+    const unitsKg = units.reduce((s: number, u: any) => s + derivedUnitKg(u, sh), 0);   // v6.99.9: derived from loads/feeders, never the legacy typed figure
     return { leg: i + 1, mode: String(leg?.mode || ""), goodsKg: Math.round(goodsKg), unitsKg: Math.round(unitsKg), deltaKg: Math.round(unitsKg - goodsKg), units: units.length };
   }).filter((c: LegKgCheck) => c.units > 0 && Math.abs(c.deltaKg) > 1);
 }

@@ -17,6 +17,7 @@ import { normaliseSO } from "./so.domain";
 import { foldLegacyClaimFields } from "./claimsPlus.domain";
 import { normaliseInvoiceCategory } from "./invoicePlus.domain";
 import { normaliseCounterparty } from "./counterparty.domain";
+import { healShipmentModel } from "./shipmentModel.domain";
 import { setFxSettings as applyFxSettings, fetchNbpRates } from "./fx";
 import { poDirectFromSOs } from "./tradeFlow.domain";
 import { healRound645, healRound651 } from "./heal.v645";
@@ -392,6 +393,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // v6.99.9: shipments healed once — unit kg mirrors in step with the derived figure; stale zero-amount leg-freight lines removed.
+  useEffect(() => { setShipments((prev: any[]) => { let changed = false; const next = (prev || []).map((s: any) => { const r = healShipmentModel(s); if (r.changed) changed = true; return r.sh; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // v6.99.2 (CP-1/2/6/9): counterparties normalised once — roles[], terms{}, ISO country, people[], caches dropped.
   useEffect(() => { _setContacts((prev: any[]) => { let changed = false; const next = (prev || []).map((c: any) => { const r = normaliseCounterparty(c); if (r.changed) changed = true; return r.contact; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
