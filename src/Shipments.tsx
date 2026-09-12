@@ -28,6 +28,18 @@ import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
 let CONTACTS_REF: any[] = [];
+/** v6.99.7 (A-R9-11): the most a goods row may carry = its source line's kg minus what OTHER live shipments already carry of that line. */
+function goodsRowCap(g: any, draft: any, orders: any[] = [], pos: any[] = []): number | null {
+  const parse = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+  let lineKg: number | null = null;
+  if (g?.soRef) { const so = (orders || []).find((o: any) => String(o.number) === String(g.soRef)); const it = so && (so.items || []).find((x: any, i: number) => String(x.id ?? i + 1) === String(g.soLineId) || (g.soLineId == null && String(x.product).toLowerCase() === String(g.product).toLowerCase())); if (it) lineKg = parse(it.qty); }
+  else if (g?.poRef) { const po = (pos || []).find((p: any) => String(p.number) === String(g.poRef)); const it = po && (po.items || []).find((x: any, i: number) => String(x.id ?? i + 1) === String(g.poLineId)); if (it) lineKg = parse(it.qty); }
+  if (lineKg == null) return null;
+  const carriedElsewhere = OTHER_SHIPMENTS_REF.filter((s: any) => s && s.id !== draft.id && String(s.status) !== "Cancelled").reduce((sum: number, s: any) => sum + (s.goods || []).filter((x: any) => (g.soRef && String(x.soRef) === String(g.soRef) && String(x.soLineId ?? "") === String(g.soLineId ?? "")) || (!g.soRef && g.poRef && String(x.poRef) === String(g.poRef) && String(x.poLineId ?? "") === String(g.poLineId ?? ""))).reduce((a: number, x: any) => a + parse(x.qtyKg), 0), 0);
+  return Math.max(0, lineKg - carriedElsewhere);
+}
+let OTHER_SHIPMENTS_REF: any[] = [];
+
 function allUnitsCarrierNames(sh: any, contacts: any[]): string[] {
   const out: string[] = [];
   (sh?.legs || []).forEach((l: any) => (l.vehicles || []).forEach((u: any) => { const id = u.carrierId ?? l.carrierId ?? l.forwarderId; const c = (contacts || []).find((x: any) => String(x.id) === String(id)); if (c) out.push(c.name); }));
@@ -1508,8 +1520,9 @@ function Stage({ title, subtitle, done, total, open, onToggle, children }: any) 
   </Card>;
 }
 
-function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [], packagingTypes = [], onSave, onCancel }: any) {
+function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [], packagingTypes = [], onSave, onCancel, allShipmentsForCap = [] }: any) {
   CONTACTS_REF = contacts || [];
+  OTHER_SHIPMENTS_REF = allShipmentsForCap || [];
   // v6.57.0 (BP-60 part D): which lifecycle stage is expanded. Booking opens by
   // default because that is where a new shipment starts; the rest stay closed
   // until their information exists.
@@ -1920,7 +1933,14 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           )}
           {(draft.goods || []).map((g, i) => <div key={g.id || i} style={{ display: "grid", gridTemplateColumns: (draft.legs || []).length > 1 ? "1.8fr 0.9fr 0.9fr 0.7fr 1.1fr" : "2fr 1fr 1fr 0.8fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
             <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
-            <div><Lbl>Net (kg)</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => updateGood(i, "qtyKg", parseNum(e.target.value))} /></div>
+            <div><Lbl>Net (kg){(() => { const cap = goodsRowCap(g, draft, orders, pos); return cap != null ? ` (max ${Math.round(cap).toLocaleString("pl-PL")})` : ""; })()}</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => {
+              // v6.99.7 (A-R9-11): a goods row can carry less than its SO/PO line (partial load) but never more than the line's remainder;
+              // trucks re-derive proportionally unless one was set by hand (then the leg banner shows the gap).
+              const v = parseNum(e.target.value); const cap = goodsRowCap(g, draft, orders, pos);
+              if (cap != null && v > cap + 0.5) { window.alert(`This line has only ${Math.round(cap).toLocaleString("pl-PL")} kg left on its order — a shipment cannot carry more than the sale (or purchase) holds.`); return; }
+              updateGood(i, "qtyKg", v);
+              setDraft((d: any) => (d.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => u.manualLoad)) ? d : autoAllocate(d, 0));
+            }} /></div>
             {/* v6.50.0: the field itself sits in line with its siblings; the derivation
                 is explained on its own line beneath the whole row (see below). */}
             <div><Lbl>Gross (kg)</Lbl><Inp type="number" value={g.grossKg || ""} onChange={e => updateGood(i, "grossKg", parseNum(e.target.value))} placeholder="0" title="Gross weight incl. packaging and pallets — printed on the transport order" /></div>
@@ -2069,10 +2089,11 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
                   <div><Lbl>CMR no.</Lbl><Inp value={u.cmrNumber || ""} onChange={e => updateVehicle(i, ui, "cmrNumber", e.target.value)} placeholder="one per truck" title="Each truck has its own CMR number" /></div>
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this truck's load" /></div>
-                  <div><Lbl>Pickup place</Lbl><Inp value={u.pickupText ?? ""} onChange={e => updateVehicle(i, ui, "pickupText", e.target.value)} placeholder={leg.fromCustom || leg.fromText || "leg default"} title="v6.93.0 (A-R8-13): places and dates live on the UNIT — the leg's are defaults" /></div>
-                  <div><Lbl>Loading date (planned)</Lbl><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingDate", e.target.value)} placeholder="dd/mm/yyyy" /></div>
-                  <div><Lbl>Delivery place</Lbl><Inp value={u.deliveryText ?? ""} onChange={e => updateVehicle(i, ui, "deliveryText", e.target.value)} placeholder={leg.toCustom || leg.toText || "leg default"} /></div>
-                  <div><Lbl>Delivery date (planned)</Lbl><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryDate", e.target.value)} /></div>
+                  <div><Lbl>Pickup place</Lbl><Inp value={u.pickupText ?? ""} onChange={e => updateVehicle(i, ui, "pickupText", e.target.value)} placeholder={leg.fromCustom || leg.fromText || "leg default"} title="v6.99.7 (A-R9-12): pick a registered location — printed on the transport order (replaces the leg's loading place)" list="unit-places" /></div>
+                  <div><Lbl>Loading (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "1fr 64px", gap: 4 }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingDate", e.target.value)} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
+                  <div><Lbl>Delivery place</Lbl><Inp value={u.deliveryText ?? ""} onChange={e => updateVehicle(i, ui, "deliveryText", e.target.value)} placeholder={leg.toCustom || leg.toText || "leg default"} list="unit-places" /></div>
+                  <div><Lbl>Delivery (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "1fr 64px", gap: 4 }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryDate", e.target.value)} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
+                  <datalist id="unit-places">{unifiedLocations(contacts || []).map((l: any) => <option key={String(l.id)} value={l.name} />)}</datalist>
                   <div><Lbl>Carrier (this unit)</Lbl>
                     <Sel value={u.carrierId ?? ""} onChange={e => updateVehicle(i, ui, "carrierId", e.target.value || null)} title="v6.85.0 (D9): the carrier lives on the unit — one shipment may use several; transport orders go out per carrier">
                       <option value="">— leg default —</option>
@@ -2328,8 +2349,14 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
     const d = String(date || "").slice(0, 10) || "TBA"; // tolerate legacy "YYYY-MM-DDTHH:mm" values
     return time ? `${d}, ${time}` : d;
   };
-  const loadingDateTime = withTime(firstLeg.plannedPickupDate, firstLeg.plannedPickupTime);
-  const unloadingDateTime = withTime(lastLeg.plannedDeliveryDate, lastLeg.plannedDeliveryTime);
+  // v6.99.7 (A-R9-12): the UNITS own places, dates and times — the leg's are only the fallback
+  const orderUnits = selectedLegs.flatMap((l: any) => providerUnitsForLeg(l, effectiveProviderId));
+  const firstUnit = orderUnits[0] || {}; const lastUnit = orderUnits[orderUnits.length - 1] || {};
+  const unitLoadingPlace = String(firstUnit.pickupText || "").trim(); const unitUnloadingPlace = String(lastUnit.deliveryText || "").trim();
+  const loadingPlaceFinal = unitLoadingPlace || loadingPlace; const unloadingPlaceFinal = unitUnloadingPlace || unloadingPlace;
+  const loadingDates = Array.from(new Set(orderUnits.map((u: any) => String(u.plannedLoadingDate || "").slice(0, 10)).filter(Boolean)));
+  const loadingDateTime = loadingDates.length ? loadingDates.map(d => { const u = orderUnits.find((x: any) => String(x.plannedLoadingDate || "").slice(0, 10) === d); return withTime(d, u?.plannedLoadingTime); }).join(" / ") : withTime(firstLeg.plannedPickupDate, firstLeg.plannedPickupTime);
+  const unloadingDateTime = lastUnit.plannedDeliveryDate ? withTime(lastUnit.plannedDeliveryDate, lastUnit.plannedDeliveryTime) : withTime(lastLeg.plannedDeliveryDate, lastLeg.plannedDeliveryTime);
   const allRoad = selectedLegs.length > 0 && selectedLegs.every((l: any) => l.mode === "Road");
   const anyRoad = selectedLegs.some((l: any) => l.mode === "Road");
   const anyNonRoad = selectedLegs.some((l: any) => l.mode !== "Road");
@@ -2432,8 +2459,8 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
         {(() => {
           const extraStops = providerScopedLegs.flatMap((l: any) => l.stops || []);
           if (!extraStops.length) return (<>
-            <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={loadingPlace} />
-            <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={unloadingPlace} />
+            <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={loadingPlaceFinal} />
+            <FieldPrint en="Unloading place" pl="Miejsce rozladunku" value={unloadingPlaceFinal} />
           </>);
           // FB-8: stops are ADDITIVE — the base loading/unloading stay and the extra
           // stops are inserted into the tour, so the first load/unload never disappear.
@@ -3529,7 +3556,7 @@ export default function Shipments({
     </div>
 
     {showCreate && <CreateShipmentModal pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
-    {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
+    {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} allShipmentsForCap={shipments} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
     {protocolShipment && <LoadingProtocolModal
       shipment={protocolShipment}
       contacts={contacts}
