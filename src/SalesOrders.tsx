@@ -1869,7 +1869,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       )}
                     </div>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.6fr 0.8fr 1fr 0.9fr 0.9fr 1.5fr 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.7fr 0.55fr 0.7fr 0.9fr 0.8fr 0.8fr minmax(120px, 1.7fr) 34px", gap: 8, alignItems: "end" }}>
                     <div>
                       <Lbl>Item / Variety {it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl>
                       {it.sourceType && it.sourceRef

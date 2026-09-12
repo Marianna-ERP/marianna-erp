@@ -1118,7 +1118,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
               return (
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "2.4fr 0.9fr 0.7fr 0.7fr 1.1fr 1fr 1.4fr 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.6fr 0.6fr 1fr 0.9fr minmax(120px, 1.6fr) 34px", gap: 8, alignItems: "end" }}>
                     <div>
                       <Lbl>Item / Variety</Lbl>
                       <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => {

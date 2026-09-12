@@ -1595,3 +1595,26 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.4 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.8 — regression: allocation never 0 kg; cost lines never name a stray supplier; order carries the carrier's kg only ══
+(function v6998(){
+  console.log("\n══ 47. v6.99.8: allocation remainder, auto units, cost-line suppliers, booking forwarder ══");
+  const M = B("shipmentModel.domain.js");
+  t("two trucks added before the goods, goods entered after → autoAllocate gives each half; a hand-set truck keeps its share and the others take the rest", () => {
+    let sh = { number: "S", goods: [], legs: [{ mode: "Road", vehicles: [{ id: 1, kind: "truck", carrierId: 10, load: [] }, { id: 2, kind: "truck", carrierId: 11, load: [] }] }] };
+    sh.goods = [{ id: 7, qtyKg: 38844 }];
+    sh = M.autoAllocate(sh, 0); eq(M.unitKg(sh.legs[0].vehicles[0], sh), 19422); eq(M.unitKg(sh.legs[0].vehicles[1], sh), 19422);
+    sh.legs[0].vehicles[0] = { ...sh.legs[0].vehicles[0], load: [{ goodsLineId: 7, qtyKg: 15000 }], manualLoad: true };
+    sh = M.autoAllocate(sh, 0); eq(M.unitKg(sh.legs[0].vehicles[1], sh), 23844, "the auto truck takes the remainder");
+  });
+  t("cost lines: supplier = the unit's carrier; containers = the booking's forwarder; an unnamed unit joins no job (never a stray leg id)", () => {
+    const sh = { number: "S", goods: [{ id: 7, qtyKg: 38844 }], bookings: [{ id: 1, number: "BKG", forwarderId: 99 }], legs: [{ mode: "Road", carrierId: 55, vehicles: [{ id: 1, kind: "truck", carrierId: 10, costAmount: 1900, load: [{ goodsLineId: 7, qtyKg: 19422 }] }, { id: 2, kind: "truck", carrierId: 11, costAmount: 2000, load: [{ goodsLineId: 7, qtyKg: 19422 }] }] }, { mode: "Sea", vehicles: [{ id: 3, kind: "container", costAmount: 500, feeders: [{ fromUnitId: 1 }] }, { id: 4, kind: "container", costAmount: 500, feeders: [{ fromUnitId: 2 }] }] }] };
+    const jobs = M.jobsByCarrierLeg(sh);
+    eq(jobs.length, 3); ok(!jobs.some(j => String(j.carrierId) === "55"), "the stale leg carrier (Agro-Hurt) never becomes a supplier");
+    const sea = jobs.find(j => j.legIndex === 1); eq(String(sea.carrierId), "99"); eq(sea.units.length, 2); eq(sea.amount, 1000);
+    const lines = M.costLinesByCarrierLeg(sh, id => ({ 10: "Stenrzycki", 11: "Polton", 99: "Forwarder" })[id] || "?");
+    eq(lines.map(l => l.label.split(" — ")[2].split(" (")[0]).sort().join(","), "Forwarder,Polton,Stenrzycki");
+  });
+  console.log("v6.99.8 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

@@ -309,9 +309,19 @@ export function autoAllocate(sh: any, legIndex = 0): any {
   const leg = (sh?.legs || [])[legIndex]; if (!leg) return sh;
   const trucks = (leg.vehicles || []).filter((u: any) => isTruck(u, leg));
   if (!trucks.length || !(sh.goods || []).length) return sh;
-  const manual = trucks.some((u: any) => u.manualLoad);
-  if (manual) return sh;   // the user edited a share — never overwrite
-  return allocateGoodsToTrucks(sh, legIndex);
+  // v6.99.8: units set BY HAND keep their loads; every other truck shares what remains (per goods row).
+  const manualUnits = trucks.filter((u: any) => u.manualLoad && (u.load || []).some((a: any) => num(a.qtyKg) > 0));
+  const autoUnits = trucks.filter((u: any) => !manualUnits.includes(u));
+  if (!autoUnits.length) return sh;
+  const goods = sh.goods || [];
+  const remaining = goods.map((g: any) => Math.max(0, num(g.qtyKg) - manualUnits.reduce((s: number, u: any) => s + (u.load || []).filter((a: any) => String(a.goodsLineId) === String(g.id)).reduce((x: number, a: any) => x + num(a.qtyKg), 0), 0)));
+  const n = autoUnits.length;
+  const legs = (sh.legs || []).map((l: any, i: number) => i !== legIndex ? l : { ...l, vehicles: (l.vehicles || []).map((u: any) => {
+    const k = autoUnits.indexOf(u); if (k < 0) return u;
+    const load = goods.map((g: any, gi: number) => { const base = Math.floor(remaining[gi] / n); const extra = k === n - 1 ? remaining[gi] - base * n : 0; return { goodsLineId: g.id, qtyKg: base + extra }; }).filter((a: any) => a.qtyKg > 0);
+    return { ...u, load, manualLoad: false };
+  }) });
+  return { ...sh, legs };
 }
 /** A-R8-16: a truck's kilos are a BUDGET across the containers it feeds. */
 export function truckRemainingForFeeding(sh: any, truckId: any, exceptContainerId?: any): number {
@@ -337,7 +347,12 @@ export function addFeederChecked(sh: any, containerId: any, truckId: any, kg?: a
 export function jobsByCarrierLeg(sh: any): Array<{ key: string; carrierId: any; legIndex: number; mode: string; units: any[]; kg: number; amount: number; currency: string }> {
   const jobs: Record<string, any> = {};
   (sh?.legs || []).forEach((leg: any, li: number) => (leg.vehicles || []).forEach((u: any) => {
-    const cid = u.carrierId ?? leg.carrierId ?? leg.forwarderId ?? sh.carrierId ?? sh.forwarderId ?? "";
+    const anyNamed = (leg.vehicles || []).some((x: any) => x.carrierId != null && x.carrierId !== "");
+    const seaLike = ["sea", "air", "rail"].includes(String(leg.mode || "").toLowerCase());
+    const bookingFwd = seaLike ? ((sh.bookings || [])[0]?.forwarderId ?? null) : null;
+    // v6.99.8: the unit names its carrier; a container's carrier is the booking's forwarder; leg/shipment ids only when nothing on the leg is named
+    const cid = (u.carrierId != null && u.carrierId !== "") ? u.carrierId : (bookingFwd ?? (anyNamed ? "" : (leg.carrierId ?? leg.forwarderId ?? "")));
+    if (cid === "" || cid == null) return;   // an unnamed unit joins no job — it shows as a gap in the leg banner instead of a wrong supplier
     const key = `${String(cid)}|${li}`;
     const j = jobs[key] || (jobs[key] = { key, carrierId: cid, legIndex: li, mode: String(leg.mode || ""), units: [], kg: 0, amount: 0, currency: String(u.priceCurrency || leg.costCurrency || "PLN").toUpperCase() });
     j.units.push(u); j.kg += unitKg(u, sh); j.amount += num(u.costAmount ?? u.unitPrice);

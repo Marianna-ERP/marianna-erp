@@ -297,6 +297,7 @@ const LEG_LOC_GROUPS = [
   { label: "Customs / border", type: "BROKER" },
 ];
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function LegLocationSelect({ label, locationId, custom, mode, onChange, contacts = [] }: any) {
   const locsAll = mergedLocations(contacts);
   const [customMode, setCustomMode] = React.useState(!locationId && !!custom);
@@ -1553,6 +1554,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
   }
   // v6.3.0: set a leg's From/To in one update, and auto-chain — when leg N's "To"
   // changes and leg N+1 has an empty "From", the next leg starts where this one ends.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function updateLegLocation(idx, side, locationId, custom) {
     setDraft(prev => {
       const legs = (prev.legs || []).map((l, i) => {
@@ -1683,7 +1685,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
       // v6.99.6 (A-R9-13): the new unit pre-fills with what is still UNALLOCATED on each goods row (only on the road leg; containers take their kg from feeders)
       if (legIdx === 0) {
         const load = (prev.goods || []).map((g: any) => ({ goodsLineId: g.id, qtyKg: allocationRemaining(prev, g.id) })).filter((a: any) => a.qtyKg > 0);
-        if (load.length) { unit.load = load; unit.manualLoad = true; }
+        if (load.length) { unit.load = load; }   // v6.99.8: NOT manual — it takes the remainder now and re-derives with the goods later
       }
       return { ...prev, legs: (prev.legs || []).map((leg, i) => i === legIdx ? { ...leg, vehicles: [...transportUnitsForLeg(leg), unit] } : leg) };
     });
@@ -1844,6 +1846,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                 <div><Lbl>Containers planned</Lbl><Inp type="number" value={b?.containersPlanned ?? ""} onChange={e => sb("containersPlanned", parseNum(e.target.value, 0))} /></div>
                 <div><Lbl>BL / AWB / CIM no. (when issued)</Lbl><Inp value={b?.blNumber || ""} onChange={e => sb("blNumber", e.target.value)} /></div>
                 <div><Lbl>Shipping line / airline / railway</Lbl><Inp value={b?.shippingLine || ""} onChange={e => sb("shippingLine", e.target.value)} /></div>
+                <div><Lbl>Forwarder (all containers of this booking)</Lbl><Sel value={b?.forwarderId ?? ""} onChange={e => sb("forwarderId", e.target.value || null)} title="v6.99.8: one forwarder per booking — every container on it is carried by him; the sea freight line names him"><option value="">— forwarder —</option>{(contacts || []).filter((c: any) => ["Forwarder", "Carrier", "ShippingLine"].includes(c.type) || (c.roles || []).some((r: string) => ["Forwarder", "Carrier", "ShippingLine"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}</Sel></div>
               </div>
               <details style={{ marginTop: 8 }}><summary style={{ fontSize: 11, color: "#94A3B8", cursor: "pointer" }}>Vessel / voyage (optional)</summary>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
@@ -2001,17 +2004,10 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
               </div>
               {(draft.legs || []).length > 1 && <SmallButton onClick={() => removeLeg(i)}>Remove leg</SmallButton>}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "90px 110px 1fr 1fr 1fr 1fr", gap: 9 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "120px 140px 1fr", gap: 9 }}>
               <div><Lbl>Mode</Lbl><Sel value={leg.mode} onChange={e => updateLeg(i, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
               <div><Lbl>Status</Lbl><Sel value={leg.status} onChange={e => updateLeg(i, "status", e.target.value)}>{LEG_STATUSES.map(st => <option key={st}>{st}</option>)}</Sel></div>
-              <LegLocationSelect label="Loading" contacts={contacts} mode={leg.mode} locationId={leg.fromLocationId} custom={leg.fromCustom}
-                onChange={({ locationId, custom }) => updateLegLocation(i, "from", locationId, custom)} />
-              <LegLocationSelect label="Unloading" contacts={contacts} mode={leg.mode} locationId={leg.toLocationId} custom={leg.toCustom}
-                onChange={({ locationId, custom }) => updateLegLocation(i, "to", locationId, custom)} />
-              <div><Lbl>Pickup</Lbl><Inp type="date" min={i > 0 ? String((draft.legs || [])[i - 1]?.plannedDeliveryDate || "").slice(0, 10) : undefined} value={String(leg.plannedPickupDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedPickupDate", e.target.value)} />
-                <Inp value={leg.plannedPickupTime || ""} onChange={e => updateLeg(i, "plannedPickupTime", e.target.value)} placeholder="time, e.g. 08:00–14:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Loading time or time window — printed on the transport order" /></div>
-              <div><Lbl>Delivery</Lbl><Inp type="date" value={String(leg.plannedDeliveryDate || "").slice(0, 10)} onChange={e => updateLeg(i, "plannedDeliveryDate", e.target.value)} />
-                <Inp value={leg.plannedDeliveryTime || ""} onChange={e => updateLeg(i, "plannedDeliveryTime", e.target.value)} placeholder="time, e.g. by 12:00" style={{ marginTop: 4, fontSize: 11.5, padding: "5px 8px" }} title="Unloading time or time window — printed on the transport order" /></div>
+              <div style={{ alignSelf: "end", fontSize: 11, color: "#64748B" }} title="v6.99.8 (owner ruling): the leg keeps mode and status; places, dates and times live on each UNIT below and print on the transport order">places · dates · times → on the units</div>
             </div>
             {/* Batch 3b (BP-54): ordered stops for groupage tours — multiple loading and/or
                 unloading places on one leg. Empty = classic origin→destination (unchanged). */}
@@ -2042,7 +2038,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             {(leg.mode === "Sea" || leg.mode === "Rail") && <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 1fr", gap: 9, marginTop: 9 }}>
               {/* v6.93.0 (A-R8-15): booking / BL / line live in the header Booking section — one place */}
               {/* v6.93.0 (A-R8-15): booking / BL / line live in the header Booking section — one place */}
-              <div><Lbl>{leg.mode === "Rail" ? "Rail operator" : "Shipping line"}</Lbl><Inp value={leg.shippingLine} onChange={e => updateLeg(i, "shippingLine", e.target.value)} title="The shipping company you book with, e.g. MSC, Maersk, CMA CGM" /></div>
+              {/* v6.99.8: shipping line lives on the booking (header) only */}
             </div>}
             {(leg.mode === "Sea" || leg.mode === "Rail") && <div style={{ marginTop: 6, fontSize: 11, color: "#64748B", fontStyle: "italic" }}>Container numbers are entered per unit below (one shipment can carry several containers). Booking, BL and shipping line above cover all units on this leg.</div>}
             {leg.mode === "Air" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.2fr", gap: 9, marginTop: 9 }}>
@@ -2076,30 +2072,26 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                       </div>
                     </div>
                   )}
-                  <div><Lbl>Kg{((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length) ? " (derived)" : ""}</Lbl>
-                    {((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length)
-                      ? <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F9FAFB", fontWeight: 600 }} title="v6.85.0 (D8): derived from the goods allocation / feeder trucks — never typed">{Math.round(unitKg(u, draft)).toLocaleString("pl-PL")}</div>
-                      : <Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} />}
-                  </div>
+                  {uMode !== "Road" ? <div><Lbl>Carrier (from the booking)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB" }}>{(() => { const f = (contacts || []).find((c: any) => String(c.id) === String((draft.bookings || [])[0]?.forwarderId)); return f ? f.name : "— set the forwarder on the booking —"; })()}</div></div> : <div><Lbl>Carrier</Lbl>
+                    <Sel value={u.carrierId ?? ""} onChange={e => updateVehicle(i, ui, "carrierId", e.target.value || null)} title="v6.85.0 (D9): the carrier lives on the unit — one shipment may use several; transport orders go out per carrier">
+                      <option value="">— leg default —</option>
+                      {(contacts || []).filter((c: any) => ["Carrier", "Forwarder"].includes(c.type) || (c.roles || []).some((r: string) => ["Carrier", "Forwarder"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}
+                    </Sel>
+                  </div>}
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
                   {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
+                  <div><Lbl>Pickup place</Lbl><Inp value={u.pickupText ?? ""} onChange={e => updateVehicle(i, ui, "pickupText", e.target.value)} placeholder={leg.fromCustom || leg.fromText || "leg default"} title="v6.99.7 (A-R9-12): pick a registered location — printed on the transport order (replaces the leg's loading place)" list="unit-places" /></div>
+                  <div><Lbl>Loading (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "1fr 64px", gap: 4 }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingDate", e.target.value)} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
+                  <div><Lbl>Delivery place</Lbl><Inp value={u.deliveryText ?? ""} onChange={e => updateVehicle(i, ui, "deliveryText", e.target.value)} placeholder={leg.toCustom || leg.toText || "leg default"} list="unit-places" /></div>
+                  <div><Lbl>Delivery (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "1fr 64px", gap: 4 }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryDate", e.target.value)} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
+                  <datalist id="unit-places">{unifiedLocations(contacts || []).map((l: any) => <option key={String(l.id)} value={l.name} />)}</datalist>
                 </div>
                 {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
                   <div><Lbl>Driver phone</Lbl><Inp value={u.driverPhone || ""} onChange={e => updateVehicle(i, ui, "driverPhone", e.target.value)} placeholder="+48 ..." /></div>
                   <div><Lbl>CMR no.</Lbl><Inp value={u.cmrNumber || ""} onChange={e => updateVehicle(i, ui, "cmrNumber", e.target.value)} placeholder="one per truck" title="Each truck has its own CMR number" /></div>
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this truck's load" /></div>
-                  <div><Lbl>Pickup place</Lbl><Inp value={u.pickupText ?? ""} onChange={e => updateVehicle(i, ui, "pickupText", e.target.value)} placeholder={leg.fromCustom || leg.fromText || "leg default"} title="v6.99.7 (A-R9-12): pick a registered location — printed on the transport order (replaces the leg's loading place)" list="unit-places" /></div>
-                  <div><Lbl>Loading (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "1fr 64px", gap: 4 }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingDate", e.target.value)} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
-                  <div><Lbl>Delivery place</Lbl><Inp value={u.deliveryText ?? ""} onChange={e => updateVehicle(i, ui, "deliveryText", e.target.value)} placeholder={leg.toCustom || leg.toText || "leg default"} list="unit-places" /></div>
-                  <div><Lbl>Delivery (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "1fr 64px", gap: 4 }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryDate", e.target.value)} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
-                  <datalist id="unit-places">{unifiedLocations(contacts || []).map((l: any) => <option key={String(l.id)} value={l.name} />)}</datalist>
-                  <div><Lbl>Carrier (this unit)</Lbl>
-                    <Sel value={u.carrierId ?? ""} onChange={e => updateVehicle(i, ui, "carrierId", e.target.value || null)} title="v6.85.0 (D9): the carrier lives on the unit — one shipment may use several; transport orders go out per carrier">
-                      <option value="">— leg default —</option>
-                      {(contacts || []).filter((c: any) => ["Carrier", "Forwarder"].includes(c.type) || (c.roles || []).some((r: string) => ["Carrier", "Forwarder"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}
-                    </Sel>
-                  </div>
+
                 </div>}
                 {uMode !== "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr", gap: 9 }}>
                   <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
@@ -2111,9 +2103,14 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                     </Sel>
                   </div>
                 </div>}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
-                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} max={localTodayISO()} /></div>
-                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" value={u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "actualUnloadDate", e.target.value)} max={localTodayISO()} /></div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
+                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" max={localTodayISO()} value={u.loadedAt || u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "loadedAt", e.target.value)} /></div>
+                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" max={localTodayISO()} value={u.unloadedAt || u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "unloadedAt", e.target.value)} /></div>
+                  <div><Lbl>Kg{((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length) ? " (derived)" : ""}</Lbl>
+                    {((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length)
+                      ? <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F9FAFB", fontWeight: 600 }} title="v6.85.0 (D8): derived from the goods allocation / feeder trucks — never typed">{Math.round(unitKg(u, draft)).toLocaleString("pl-PL")}</div>
+                      : <Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} />}
+                  </div>
                   <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Actual dates for this unit (truck: loaded / unloaded; container: stuffed / discharged) — never in the future; planned dates live on the unit above.</div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 9, marginTop: 9 }}>
@@ -2394,11 +2391,18 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
     return idx >= 0 ? idx + 1 : null;
   }).filter(Boolean).map(String));
   const anyGoodsAssigned = (shipment.goods || []).some((g: any) => g.legNo != null && g.legNo !== "");
-  const scopedGoods = anyGoodsAssigned
+  // v6.99.8: the order carries what THIS carrier's units load — kg per goods row from the units' allocations (whole rows only when no unit has a load)
+  const providerLoadUnits = selectedLegs.flatMap((l: any) => providerUnitsForLeg(l, effectiveProviderId));
+  const loadByRow: Record<string, number> = {};
+  providerLoadUnits.forEach((u: any) => (u.load || []).forEach((a: any) => { loadByRow[String(a.goodsLineId)] = (loadByRow[String(a.goodsLineId)] || 0) + (parseNum(a.qtyKg, 0)); }));
+  const hasLoads = Object.keys(loadByRow).length > 0;
+  const scopedGoods = hasLoads
+    ? (shipment.goods || []).filter((g: any) => loadByRow[String(g.id)] > 0).map((g: any) => { const kg = loadByRow[String(g.id)]; const ratio = parseNum(g.qtyKg, 0) > 0 ? kg / parseNum(g.qtyKg, 0) : 1; return { ...g, qtyKg: kg, boxes: g.boxes ? Math.round(parseNum(g.boxes, 0) * ratio) : g.boxes, pallets: g.pallets ? Math.round(parseNum(g.pallets, 0) * ratio * 10) / 10 : g.pallets, grossKg: g.grossKg ? Math.round(parseNum(g.grossKg, 0) * ratio) : g.grossKg }; })
+    : (anyGoodsAssigned
     ? (shipment.goods || []).filter((g: any) => g.legNo == null || g.legNo === "" || selectedLegNos.has(String(g.legNo)))
     : (legGoodsRefs.size
         ? (shipment.goods || []).filter((g: any) => legGoodsRefs.has(String(g.lotRef)) || legGoodsRefs.has(String(g.poRef)) || legGoodsRefs.has(String(g.soRef)))
-        : (shipment.goods || []));
+        : (shipment.goods || [])));
   const units = selectedLegs.flatMap((leg, li) => {
     const rows = providerUnitsForLeg(leg, effectiveProviderId);
     const legExtra = { legBL: leg.blNumber || "", legBooking: leg.bookingNumber || "", legShippingLine: leg.shippingLine || "" };
