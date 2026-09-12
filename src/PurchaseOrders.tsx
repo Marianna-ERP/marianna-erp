@@ -1,4 +1,5 @@
 import { newestFirst } from "./moduleGuards.domain";
+import { documentTotals, totalsLine } from "./pricingUnit.domain";
 import { exportRowsToXlsx, stamp as xlsStamp, exportVegaProSalesReport } from "./exportXlsx";
 import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
@@ -158,6 +159,7 @@ function suppliersFromContacts(contacts) {
 // ─── SHARED ATOMS ───────────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
@@ -415,6 +417,7 @@ function PODoc({ order }: any) {
               </tr>
             );
           })}
+          <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10.5 }}>{(() => { const t = documentTotals(order.items, PO_PACKAGING_TYPES, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
           <tr>
             <td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", verticalAlign: "top" }}>
               <div style={{ fontSize: 9, color: "#777" }}>
@@ -1115,7 +1118,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
               return (
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 0.9fr 1fr 1.3fr 1.2fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "2.4fr 0.9fr 0.7fr 0.7fr 1.1fr 1fr 1.4fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
                       <Lbl>Item / Variety</Lbl>
                       <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => {
@@ -1152,7 +1155,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               );
             })}
             </fieldset>
-          </Card>
+          <div style={{ marginTop: 8, padding: "6px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#166534" }} title="v6.99.6 (A-R9-2): totals of the lines — check before Confirm">Σ {totalsLine(documentTotals(order.items, PO_PACKAGING_TYPES, order.fxRate), order.currency)}</div>
+            </Card>
 
           {/* Notes */}
           <Card>

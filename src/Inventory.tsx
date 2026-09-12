@@ -456,6 +456,7 @@ function uniqStrings(arr) {
 // ─── SHARED UI ATOMS ────────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={false} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} max={max} style={{ ...base, ...style }} />;
 }

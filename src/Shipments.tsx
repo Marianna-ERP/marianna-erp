@@ -13,7 +13,7 @@ import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain
 import { lotStockCheck } from "./receipts.domain";
 import { shipmentPostBlockReason, shipmentWarnings, newestFirst } from "./moduleGuards.domain";
 import { carriedRefs, overShipReport, derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
-import { jobsByCarrierLeg, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, costLinesByCarrierLeg } from "./shipmentModel.domain";
+import { jobsByCarrierLeg, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, costLinesByCarrierLeg } from "./shipmentModel.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -404,9 +404,10 @@ function providerRoleForLeg(leg, providerId) {
 
 function providerIdsForShipment(shipment) {
   const ids = [];
+  // v6.99.6 (A-R9-15 / D9): the carrier lives on the UNIT — providers are whoever the units name (leg-level only as legacy fallback)
   (shipment.legs || []).forEach(leg => {
-    if (leg.carrierId) ids.push(leg.carrierId);
-    if (leg.forwarderId) ids.push(leg.forwarderId);
+    (leg.vehicles || []).forEach((u: any) => { if (u.carrierId) ids.push(u.carrierId); });
+    if (!(leg.vehicles || []).some((u: any) => u.carrierId)) { if (leg.carrierId) ids.push(leg.carrierId); if (leg.forwarderId) ids.push(leg.forwarderId); }
   });
   // NOTE: we intentionally do NOT pull from shipment.costs[].supplierId — a cost
   // line can reference a broker or other party not actually performing transport,
@@ -421,7 +422,8 @@ function providerIdsForShipment(shipment) {
 
 function providerLegs(shipment, providerId) {
   const pid = String(providerId || "");
-  const legs = (shipment.legs || []).filter(leg => String(leg.carrierId || "") === pid || String(leg.forwarderId || "") === pid);
+  // v6.99.6 (A-R9-15): a provider's legs are the legs where one of ITS units rides (leg-level ids as legacy fallback)
+  const legs = (shipment.legs || []).filter(leg => (leg.vehicles || []).some((u: any) => String(u.carrierId || "") === pid) || ((!(leg.vehicles || []).some((u: any) => u.carrierId)) && (String(leg.carrierId || "") === pid || String(leg.forwarderId || "") === pid)));
   // v6.18.17 (E12): do NOT fall back to the first leg — a provider's transport order must
   // reflect only its OWN leg(s). Returning leg 1 for a provider not on it is the multimodal
   // bug where the second-leg forwarder's order showed the first leg's loading/unloading.
@@ -507,6 +509,13 @@ function legacyUnitFromLeg(leg) {
   };
 }
 
+/** v6.99.6 (A-R9-15): the units a given provider carries on a leg (all units when none names a carrier — legacy). */
+function providerUnitsForLeg(leg: any, providerId: any): any[] {
+  const all = transportUnitsForLeg(leg); const pid = String(providerId || "");
+  const named = all.filter((u: any) => u.carrierId != null && u.carrierId !== "");
+  if (!named.length) return all;
+  return all.filter((u: any) => String(u.carrierId) === pid);
+}
 function transportUnitsForLeg(leg) {
   if (Array.isArray(leg.vehicles) && leg.vehicles.length) return leg.vehicles;
   const hasLegacy = ["vehiclePlate", "truckPlate", "trailerPlate", "driverName", "driverPhone", "containerNumber", "sealNumber", "bookingNumber", "blNumber", "awbNumber"].some(k => leg && leg[k]);
@@ -734,7 +743,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
   // (user fills them in) rather than every leg inheriting the same guessed amount.
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || (mode === "Sea" || mode === "Multimodal" ? "USD" : "PLN");
-  const fxRate = resolveFxRate(opts.fxRate, currency);
+  const fxRate = resolveFxRate(opts.fxRate, currency) || defaultFxRate(currency) || 1; // v6.99.6 (A-R9-16): one FX source
 
   const roadLeg: any = { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, fromCustom: originCustom, toLocationId: destinationLocationId, toCustom: destinationCustom, carrierId: carrierId || TBD_CARRIER_ID, plannedPickupDate: opts.loadingDate || po.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: amount, costCurrency: currency, costFxRate: fxRate, costPLN: Math.round(amount * fxRate * 100) / 100, notes: `Generated from ${po.number}` };
   // v6.3.0 leg defaults: Multimodal starts with TWO legs (road pre-carriage + sea
@@ -851,7 +860,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
       poRef: it.sourceType === "PO" ? it.sourceRef : lot?.poRef || "",
       soRef: so.number,
       soLineId: it.id ?? idx + 1,   // v6.34.8: stamp the source SO line
-      tradeDirection,               // v6.45.0 (B): rows carry the direction for lot badges
+      tradeDirection,               // rows keep the derived direction for lot badges (read-only)
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product || "Goods",
       variety: it.variety || "",
@@ -868,7 +877,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
   });
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || "PLN";
-  const fxRate = resolveFxRate(opts.fxRate, currency);
+  const fxRate = resolveFxRate(opts.fxRate, currency) || defaultFxRate(currency) || 1; // v6.99.6 (A-R9-16): one FX source
   const soLegs = mode === "Multimodal" ? [
       { id: 1, mode: "Road", status: "Booked", fromLocationId: originLocationId, toLocationId: null, carrierId, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.loadingDate || todayISO(), vehiclePlate: "", trailerPlate: "", driverName: "", driverPhone: "", temperatureMinC: parseNum(opts.temperatureMinC, 2), temperatureMaxC: parseNum(opts.temperatureMaxC, 8), costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Pre-carriage for ${so.number}` },
       { id: 2, mode: "Sea", status: "Booked", fromLocationId: null, toLocationId: destinationLocationId, forwarderId: forwarderId || null, plannedPickupDate: opts.loadingDate || todayISO(), plannedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(), containerNumber: "", sealNumber: "", bookingNumber: "", blNumber: "", shippingLine: "", costAmount: 0, costCurrency: currency, costFxRate: fxRate, costPLN: 0, notes: `Sea leg for ${so.number}` },
@@ -885,7 +894,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
     poRefs,
     governingSoRef: so.number, // v6.82.0 (Round 6): the SO chosen in the first window governs — never blank in the header
     soRefs: [so.number],
-    tradeDirection,
+    tradeDirection: null,         // v6.99.6 (A-R9-8): AUTO — the header derives; only a user choice is stored
     lotRefs,
     carrierId,
     forwarderId,
@@ -924,7 +933,7 @@ function buildManualShipment__raw(opts, shipments) {
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || "PLN";
-  const fxRate = resolveFxRate(opts.fxRate, currency);
+  const fxRate = resolveFxRate(opts.fxRate, currency) || defaultFxRate(currency) || 1; // v6.99.6 (A-R9-16): one FX source
   const qtyKg = parseNum(opts.qtyKg, 0);
   return {
     id,
@@ -979,6 +988,7 @@ function buildManualShipment__raw(opts, shipments) {
 
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
@@ -1655,10 +1665,15 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
     }));
   }
   function addVehicle(legIdx) {
-    setDraft(prev => ({
-      ...prev,
-      legs: (prev.legs || []).map((leg, i) => i === legIdx ? { ...leg, vehicles: [...transportUnitsForLeg(leg), blankTransportUnit(leg.mode)] } : leg)
-    }));
+    setDraft(prev => {
+      const unit: any = blankTransportUnit((prev.legs || [])[legIdx]?.mode);
+      // v6.99.6 (A-R9-13): the new unit pre-fills with what is still UNALLOCATED on each goods row (only on the road leg; containers take their kg from feeders)
+      if (legIdx === 0) {
+        const load = (prev.goods || []).map((g: any) => ({ goodsLineId: g.id, qtyKg: allocationRemaining(prev, g.id) })).filter((a: any) => a.qtyKg > 0);
+        if (load.length) { unit.load = load; unit.manualLoad = true; }
+      }
+      return { ...prev, legs: (prev.legs || []).map((leg, i) => i === legIdx ? { ...leg, vehicles: [...transportUnitsForLeg(leg), unit] } : leg) };
+    });
   }
   function removeVehicle(legIdx, unitIdx) {
     setDraft(prev => ({
@@ -1736,7 +1751,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
         <button onClick={onCancel} style={{ border: "none", background: "transparent", fontSize: 22, color: "#888", cursor: "pointer" }}>x</button>
       </div>
       <div style={{ padding: 22, display: "grid", gap: 12 }}>
-        <Stage title="Booking" subtitle="what you know when the truck is ordered"
+        <Stage title="Header & booking" subtitle="what you know when the movement is ordered"
           open={openStages.booking} onToggle={() => toggleStage("booking")}
           done={[draft.carrierId || draft.forwarderId, draft.loadingDate, draft.originLocationId, draft.destinationLocationId].filter(Boolean).length}
           total={4}>
@@ -1798,6 +1813,33 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             <div><Lbl>Notes</Lbl><Inp value={draft.notes} onChange={e => sf("notes", e.target.value)} /></div>
           </div>
         </Card>
+        {["sea", "multimodal", "air", "rail"].includes(String(draft.mode || "").toLowerCase()) && (() => {
+          // v6.85.0 (D5, owner ruling): the BOOKING exists before any container number does —
+          // booking no., cut-off, ETD, ETA, POL/POD, containers planned. Vessel/voyage optional.
+          const b = (draft.bookings || [])[0] || null;
+          const sb = (k: string, v: any) => setDraft((d: any) => { const cur = (d.bookings || [])[0] || blankBooking(nextId()); return { ...d, bookings: [{ ...cur, [k]: v }, ...((d.bookings || []).slice(1))] }; });
+          return (
+            <Card>
+              <SectionTitle>Booking (sea / air / rail) — one place for the booking</SectionTitle>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                <div><Lbl>Booking no.</Lbl><Inp value={b?.number || ""} onChange={e => sb("number", e.target.value)} placeholder="from the forwarder" /></div>
+                <div><Lbl>Cut-off</Lbl><Inp type="date" value={b?.cutOff || ""} onChange={e => sb("cutOff", e.target.value)} /></div>
+                <div><Lbl>ETD</Lbl><Inp type="date" value={b?.etd || ""} onChange={e => sb("etd", e.target.value)} /></div>
+                <div><Lbl>ETA</Lbl><Inp type="date" value={b?.eta || ""} onChange={e => sb("eta", e.target.value)} /></div>
+                <div><Lbl>POL</Lbl><Sel value={b?.pol || ""} onChange={e => sb("pol", e.target.value)}><option value="">— port —</option>{unifiedLocations(contacts || []).filter((l: any) => l.legacyType === "PORT").map((l: any) => <option key={String(l.id)} value={l.name}>{l.name}</option>)}</Sel></div>
+                <div><Lbl>POD</Lbl><Sel value={b?.pod || (() => { const so = (orders || []).find((o: any) => String(o.number) === String(draft.governingSoRef || (draft.soRefs || [])[0])); const dl = so ? locationById(so.destinationLocationId, contacts || []) : null; return dl && dl.legacyType === "PORT" ? dl.name : ""; })()} onChange={e => sb("pod", e.target.value)} title="v6.99.6 (A-R9-9): defaults from the sales order's destination when it is a port"><option value="">— port —</option>{unifiedLocations(contacts || []).filter((l: any) => l.legacyType === "PORT").map((l: any) => <option key={String(l.id)} value={l.name}>{l.name}</option>)}</Sel></div>
+                <div><Lbl>Containers planned</Lbl><Inp type="number" value={b?.containersPlanned ?? ""} onChange={e => sb("containersPlanned", parseNum(e.target.value, 0))} /></div>
+                <div><Lbl>BL / AWB / CIM no. (when issued)</Lbl><Inp value={b?.blNumber || ""} onChange={e => sb("blNumber", e.target.value)} /></div>
+                <div><Lbl>Shipping line / airline / railway</Lbl><Inp value={b?.shippingLine || ""} onChange={e => sb("shippingLine", e.target.value)} /></div>
+              </div>
+              <details style={{ marginTop: 8 }}><summary style={{ fontSize: 11, color: "#94A3B8", cursor: "pointer" }}>Vessel / voyage (optional)</summary>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
+                  <div><Lbl>Vessel</Lbl><Inp value={b?.vessel || ""} onChange={e => sb("vessel", e.target.value)} /></div>
+                  <div><Lbl>Voyage</Lbl><Inp value={b?.voyage || ""} onChange={e => sb("voyage", e.target.value)} /></div>
+                </div></details>
+            </Card>
+          );
+        })()}
         </Stage>
 
         <Stage title="Execution" subtitle="filled in as the shipment actually moves"
@@ -1866,33 +1908,6 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             );
           })()}
         </Card>
-        {["sea", "multimodal", "air", "rail"].includes(String(draft.mode || "").toLowerCase()) && (() => {
-          // v6.85.0 (D5, owner ruling): the BOOKING exists before any container number does —
-          // booking no., cut-off, ETD, ETA, POL/POD, containers planned. Vessel/voyage optional.
-          const b = (draft.bookings || [])[0] || null;
-          const sb = (k: string, v: any) => setDraft((d: any) => { const cur = (d.bookings || [])[0] || blankBooking(nextId()); return { ...d, bookings: [{ ...cur, [k]: v }, ...((d.bookings || []).slice(1))] }; });
-          return (
-            <Card>
-              <SectionTitle>Booking (sea / air / rail)</SectionTitle>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-                <div><Lbl>Booking no.</Lbl><Inp value={b?.number || ""} onChange={e => sb("number", e.target.value)} placeholder="from the forwarder" /></div>
-                <div><Lbl>Cut-off</Lbl><Inp type="date" value={b?.cutOff || ""} onChange={e => sb("cutOff", e.target.value)} /></div>
-                <div><Lbl>ETD</Lbl><Inp type="date" value={b?.etd || ""} onChange={e => sb("etd", e.target.value)} /></div>
-                <div><Lbl>ETA</Lbl><Inp type="date" value={b?.eta || ""} onChange={e => sb("eta", e.target.value)} /></div>
-                <div><Lbl>POL</Lbl><Inp value={b?.pol || ""} onChange={e => sb("pol", e.target.value)} placeholder="Koper" /></div>
-                <div><Lbl>POD</Lbl><Inp value={b?.pod || ""} onChange={e => sb("pod", e.target.value)} placeholder="Damietta" /></div>
-                <div><Lbl>Containers planned</Lbl><Inp type="number" value={b?.containersPlanned ?? ""} onChange={e => sb("containersPlanned", parseNum(e.target.value, 0))} /></div>
-                <div><Lbl>BL / AWB / CIM no. (when issued)</Lbl><Inp value={b?.blNumber || ""} onChange={e => sb("blNumber", e.target.value)} /></div>
-                <div><Lbl>Shipping line / airline / railway</Lbl><Inp value={b?.shippingLine || ""} onChange={e => sb("shippingLine", e.target.value)} /></div>
-              </div>
-              <details style={{ marginTop: 8 }}><summary style={{ fontSize: 11, color: "#94A3B8", cursor: "pointer" }}>Vessel / voyage (optional)</summary>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
-                  <div><Lbl>Vessel</Lbl><Inp value={b?.vessel || ""} onChange={e => sb("vessel", e.target.value)} /></div>
-                  <div><Lbl>Voyage</Lbl><Inp value={b?.voyage || ""} onChange={e => sb("voyage", e.target.value)} /></div>
-                </div></details>
-            </Card>
-          );
-        })()}
         {/* v6.83.0 (owner ruling): GOODS first — what will be loaded — then the legs that carry it. */}
         <Card>
           <SectionTitle>Goods on this shipment</SectionTitle>
@@ -2078,7 +2093,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Actual loaded on</Lbl><Inp type="date" value={u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "actualLoadDate", e.target.value)} max={localTodayISO()} /></div>
                   <div><Lbl>Actual unloaded on</Lbl><Inp type="date" value={u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "actualUnloadDate", e.target.value)} max={localTodayISO()} /></div>
-                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Real per-truck loading/unloading dates — separate from the leg's planned pickup/delivery on the transport order.</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Actual dates for this unit (truck: loaded / unloaded; container: stuffed / discharged) — never in the future; planned dates live on the unit above.</div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Currency</Lbl><Sel value={u.priceCurrency || leg.costCurrency || "PLN"} onChange={e => updateVehicle(i, ui, "priceCurrency", e.target.value)} title="v6.93.0 (A-R8-17): the price's own currency (default: the carrier's)">{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
@@ -2327,7 +2342,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
   const orderCurrency = selectedCosts[0]?.currency || firstLeg.costCurrency || "PLN";
   const costLinesTotal = selectedCosts.reduce((sum, c) => sum + parseNum(c.amount), 0);
   const legCostTotal = selectedLegs.reduce((sum, l) => sum + parseNum(l.costAmount), 0);
-  const unitPriceTotal = selectedLegs.reduce((sum, l) => sum + transportUnitsForLeg(l).reduce((u, unit) => u + parseNum(unit.costAmount || unit.unitPrice), 0), 0);
+  const unitPriceTotal = selectedLegs.reduce((sum, l) => sum + providerUnitsForLeg(l, effectiveProviderId).reduce((u, unit) => u + parseNum(unit.costAmount || unit.unitPrice), 0), 0);
   const agreedPriceTotal = unitPriceTotal > 0 ? unitPriceTotal : (costLinesTotal > 0 ? costLinesTotal : legCostTotal);
   const agreedPriceText = agreedPriceTotal > 0
     ? fmtMoney(agreedPriceTotal, orderCurrency)
@@ -2341,7 +2356,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
   // appears on it, OR (fallback) all shipment goods if legs don't carry explicit refs.
   const legGoodsRefs = new Set<string>();
   selectedLegs.forEach((leg: any) => {
-    transportUnitsForLeg(leg).forEach((u: any) => { if (u.lotRef) legGoodsRefs.add(String(u.lotRef)); });
+    providerUnitsForLeg(leg, effectiveProviderId).forEach((u: any) => { if (u.lotRef) legGoodsRefs.add(String(u.lotRef)); });
     (leg.goodsRefs || []).forEach((r: any) => legGoodsRefs.add(String(r)));
   });
   // v6.34.5 (Problem A): if goods are assigned to legs (legNo), scope to the selected
@@ -2358,7 +2373,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
         ? (shipment.goods || []).filter((g: any) => legGoodsRefs.has(String(g.lotRef)) || legGoodsRefs.has(String(g.poRef)) || legGoodsRefs.has(String(g.soRef)))
         : (shipment.goods || []));
   const units = selectedLegs.flatMap((leg, li) => {
-    const rows = transportUnitsForLeg(leg);
+    const rows = providerUnitsForLeg(leg, effectiveProviderId);
     const legExtra = { legBL: leg.blNumber || "", legBooking: leg.bookingNumber || "", legShippingLine: leg.shippingLine || "" };
     if (!rows.length) return [{ ...blankTransportUnit(leg.mode), ...legExtra, legNo: li + 1, legMode: leg.mode, legStatus: leg.status }];
     return rows.map((u, ui) => ({ ...u, ...legExtra, legNo: li + 1, unitNo: ui + 1, legMode: leg.mode, legStatus: leg.status }));
@@ -2812,7 +2827,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           </div>
         </div>; })}
       </Card>
-      <TransportOrdersCard shipment={shipment} contacts={contacts} onMarkSent={onMarkTOSent} onCompose={onEmail ? (cid: any) => onEmail(cid) : null} />
+      <TransportOrdersCard shipment={shipment} contacts={contacts} onMarkSent={onMarkTOSent} onCompose={onEmail ? (cid: any, li: number) => onEmail(cid, li) : null} />
       {onStuffing && <ForwarderReports shipment={shipment} orders={orders} onStuffing={onStuffing} onDevanning={onDevanning} />}
       <DocumentRegisterCard shipment={shipment} protocols={protocolsForShipment(shipment)} />
       <Card>

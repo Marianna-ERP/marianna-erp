@@ -29,6 +29,7 @@ function SectionTitle({ children, right }: any) { return <div style={{ display: 
 function Lbl({ children }: any) { return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>; }
 function Inp({ value, onChange, type, placeholder, disabled, style }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: disabled ? "#F9FAFB" : "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   // v6.63.0 (D-09, M4): a controlled numeric input seeded with 0 rendered a zero
   // that could never be deleted (each keystroke re-parsed to a number). A stored
   // 0 now renders as an empty box; the parser already treats "" as 0 on save.

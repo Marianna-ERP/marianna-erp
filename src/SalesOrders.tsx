@@ -11,7 +11,7 @@ import { localTodayISO as domainToday } from "./dates";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { PACKAGING_SEED } from "./packaging.domain";
 import { deriveSoStatus, statusContradiction, isPhysicalStatus, effectiveSoStatus, isShippedOrLater, soRank } from "./statusOwnership.domain";
-import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines } from "./pricingUnit.domain";
+import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines, documentTotals, totalsLine } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
@@ -399,6 +399,7 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
@@ -519,6 +520,7 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
       quality: poLine.quality,
       packaging: poLine.packaging,
       ...lineFromPOLine(poLine), // v6.95.0 (SO-2): unit, boxes and kg/box follow the PO line
+      pallets: poLine.pallets ?? "",  // v6.99.6 (A-R9-4): pallets follow the PO line (user adjusts)
       // v6.92.0 (A-R8-6, owner ruling): pre-fill the AVAILABLE quantity — the PO line minus what other
       // non-cancelled SOs already reserve from it — never the full line when part of it is sold elsewhere.
       qty: (() => { const r = poLineReservations(poLine._po, poLine, allOrders, currentOrderId); const base = (poLine.available ?? poLine.qty); const avail = Math.max(0, Math.round((parseFloat(String(base)) || 0) - (r?.totalReserved || 0))); return avail > 0 ? avail : ""; })(),
@@ -1126,6 +1128,7 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
                     </tr>
                   );
                 })}
+                <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10.5 }}>{(() => { const t = documentTotals(order.items, PACKAGING_TYPES_REF, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
               </tbody>
             </table>
           </Card>
@@ -1746,6 +1749,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle right={<div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => { const idx = order.items.length; addItem(); setTimeout(() => setSourceFor(idx), 0); }} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#0369A1", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }} title="Add a line sourced from a PO or stock — product, variety, packaging, origin, size and quality are copied automatically; you set only price, quantity and pallets.">+ Add from PO / stock</button>
+              <div style={{ marginTop: 8, padding: "6px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#166534" }} title="v6.99.6 (A-R9-2): totals of the lines — check before Confirm">Σ {totalsLine(documentTotals(order.items, PACKAGING_TYPES_REF, order.fxRate), order.currency)}</div>
               <button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }} title="Add an empty line to fill in manually">+ Blank line</button>
             </div>}>LINE ITEMS ({order.items.length}){fullyLocked && <span style={{ marginLeft: 8, fontSize: 10, color: "#DC2626", fontWeight: 700 }}>🔒 locked ({order.status})</span>}</SectionTitle>
             <datalist id="so-product-suggestions">
@@ -1865,7 +1869,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       )}
                     </div>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.9fr 0.8fr 0.9fr 1.1fr 1fr 1fr 1.3fr 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.6fr 0.8fr 1fr 0.9fr 0.9fr 1.5fr 34px", gap: 8, alignItems: "end" }}>
                     <div>
                       <Lbl>Item / Variety {it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl>
                       {it.sourceType && it.sourceRef
@@ -2116,7 +2120,7 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                   </tbody>
                   <tfoot>
                     <tr style={{ borderTop: "2px solid #E5E7EB" }}>
-                      <td colSpan={5} style={{ padding: "10px 6px", textAlign: "right", fontSize: 11, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>NET TOTAL</td>
+                      <td colSpan={5} style={{ padding: "10px 6px", textAlign: "right", fontSize: 11, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>TOTAL · {(() => { const t = documentTotals(order.items, PACKAGING_TYPES_REF, order.fxRate); return `${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} boxes · ${t.pallets.toLocaleString("pl-PL")} pallets`; })()}</td>
                       <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700, fontSize: 15 }}>{fmtMoney(total, order.currency)}</td>
                     </tr>
                   </tfoot>
@@ -2177,7 +2181,7 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
                   <div><div style={{ fontSize: 10, color: "#888" }}>SELL INCOTERM</div><div style={{ fontWeight: 600 }}>{order.sellIncoterm || "—"}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>CURRENCY</div><div style={{ fontWeight: 600 }}>{order.currency} {order.fxLockedAt ? "🔒" : ""}</div></div>
                   <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>PAYMENT TERMS</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}</div></div>
-                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${destination ? LOCATION_TYPES[destination.type]?.icon : "📍"} ${destinationLabel}` : "—"}</div></div>
+                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${(destination && (LOCATION_TYPES[destination.legacyType] || LOCATION_TYPES[destination.type])?.icon) || "📍"} ${destinationLabel}` : "—"}</div></div>
                   {order.importPermitNo && <div><div style={{ fontSize: 10, color: "#888" }}>IMPORT PERMIT NO.</div><div style={{ fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{order.importPermitNo}</div></div>}
                   {order.acidNo && <div><div style={{ fontSize: 10, color: "#888" }}>ACID NO.</div><div style={{ fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{order.acidNo}</div></div>}
                 </div>

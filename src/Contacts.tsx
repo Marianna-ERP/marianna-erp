@@ -37,18 +37,6 @@ const TYPES_WITH_SERVICES = new Set(["Forwarder", "Carrier"]);
 
 const ROLES = ["Buyer", "Seller", "Logistics", "Finance", "Director", "Sales", "Operations", "Quality", "Other"];
 
-const PAYMENT_TERMS = [
-  "Advance payment",
-  "Cash on delivery",
-  "Cash against documents",
-  "7 days from invoice date",
-  "14 days from invoice date",
-  "21 days from invoice date",
-  "30 days from invoice date",
-  "Other",
-];
-
-const CURRENCIES = ["PLN", "EUR", "USD"];
 
 const TYPE_COLORS: Record<string, { bg: string; color: string }> = {
   Client:         { bg: "#DBEAFE", color: "#2563EB" },
@@ -76,6 +64,7 @@ const SERVICE_COLORS: Record<string, { bg: string; color: string; icon: string }
 // ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────
 function Inp({ value, onChange, type, placeholder, style, inputMode }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={undefined} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+  if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <input value={value || ""} onChange={onChange} type={type || "text"} inputMode={inputMode} placeholder={placeholder} style={{ ...base, ...style }} />;
 }
@@ -199,7 +188,6 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
   // Services field is visible if PRIMARY type OR any additional type is logistics-related
   const allTypes = [form.type, ...(form.additionalTypes || [])];
   const showServices = allTypes.some(t => TYPES_WITH_SERVICES.has(t));
-  const showOtherTerms = form.paymentTerms === "Other";
 
   // v6.10 (#6): comma-tolerant numeric coercion applied once, on save. Empty
   // stays empty; "0,30" / "0.30" both become 0.3; garbage becomes empty.
@@ -270,7 +258,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                   })}
                 </div>
               </div>
-              <div><Lbl>Country</Lbl><Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" /></div>
+              <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => sf("country", e.target.value)} title="v6.99.6 (A-R9-10): pick — no free typing; ISO code derives"><option value="">— country —</option><optgroup label="EU">{["Poland", "Germany", "Italy", "Spain", "France", "Hungary", "Croatia", "Slovenia", "Greece", "Czech Republic", "Slovakia", "Austria", "Netherlands", "Belgium", "Romania", "Bulgaria", "Lithuania", "Latvia", "Estonia", "Portugal", "Ireland", "Denmark", "Sweden", "Finland", "Cyprus", "Malta", "Luxembourg"].map(c => <option key={c}>{c}</option>)}</optgroup><optgroup label="Other">{["Ukraine", "Belarus", "Egypt", "Jordan", "Saudi Arabia", "Qatar", "Oman", "United Arab Emirates", "Libya", "Morocco", "Turkey", "United Kingdom", "Norway", "Switzerland", "Serbia", "Chile", "Colombia", "Cambodia"].map(c => <option key={c}>{c}</option>)}</optgroup>{form.country && !["Poland", "Germany", "Italy", "Spain", "France", "Hungary", "Croatia", "Slovenia", "Greece", "Czech Republic", "Slovakia", "Austria", "Netherlands", "Belgium", "Romania", "Bulgaria", "Lithuania", "Latvia", "Estonia", "Portugal", "Ireland", "Denmark", "Sweden", "Finland", "Cyprus", "Malta", "Luxembourg", "Ukraine", "Belarus", "Egypt", "Jordan", "Saudi Arabia", "Qatar", "Oman", "United Arab Emirates", "Libya", "Morocco", "Turkey", "United Kingdom", "Norway", "Switzerland", "Serbia", "Chile", "Colombia", "Cambodia"].includes(form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
               <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
               {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
               <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px" }}>
@@ -288,16 +276,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
               <div><Lbl>Payment terms (days)</Lbl><Inp value={form.paymentTermsDays ?? ""} onChange={e => sf("paymentTermsDays", e.target.value)} type="number" placeholder="e.g. 30" /></div>
               <div style={{ gridColumn: "span 2" }}><Lbl>Address</Lbl><Inp value={form.address} onChange={e => sf("address", e.target.value)} placeholder="Street, City, Postcode" /></div>
-              <div><Lbl>Default currency</Lbl><Sel value={form.defaultCurrency} onChange={e => sf("defaultCurrency", e.target.value)}>{CURRENCIES.map(c => <option key={c}>{c}</option>)}</Sel></div>
-              <div style={{ gridColumn: "span 2" }}>
-                <Lbl>Default payment terms</Lbl>
-                <Sel value={form.paymentTerms} onChange={e => sf("paymentTerms", e.target.value)}>{PAYMENT_TERMS.map(p => <option key={p}>{p}</option>)}</Sel>
-                {showOtherTerms && (
-                  <div style={{ marginTop: 8 }}>
-                    <Inp value={form.paymentTermsOther} onChange={e => sf("paymentTermsOther", e.target.value)} placeholder='Specify the terms — e.g. "50% advance, 50% on delivery", "L/C at sight"' />
-                  </div>
-                )}
-              </div>
+              {/* v6.99.6 (A-R9-10): legacy "Default currency" / "Default payment terms" inputs removed — the Terms box above is the one source */}
             </div>
           </div>
           {showServices && (

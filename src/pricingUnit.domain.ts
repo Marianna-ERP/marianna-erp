@@ -130,3 +130,26 @@ export function unresolvedBoxLines(lines: any[], types: PackagingType[]): string
     .filter(l => pricingUnit(l) === "box" && lineQuantity(l, types).unresolved)
     .map(l => String(l?.product || "line"));
 }
+
+// ── v6.99.6 (A-R9-2/3/6): ONE totals function for PO & SO — editor, detail and print all read it ──
+export function documentTotals(items: any[], packagingTypes: any[] = [], fxRate: any = 1): { kg: number; boxes: number; pallets: number; value: number; valuePLN: number; lines: number } {
+  const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+  let kg = 0, boxes = 0, pallets = 0, value = 0, lines = 0;
+  (items || []).forEach((it: any) => {
+    if (!it || !String(it.product || "").trim()) return;
+    lines++;
+    const unit = String(it.pricingUnit || "kg").toLowerCase();
+    const kpb = num(it.kgPerBox) || kgPerBoxForLine(it, packagingTypes) || 0;
+    const q = num(it.qty); const b = num(it.boxes) || (kpb > 0 && q > 0 ? Math.round(q / kpb) : 0);
+    kg += unit === "box" && kpb > 0 && !(q > 0) ? b * kpb : q;
+    boxes += b;
+    pallets += num(it.pallets);
+    value += (unit === "box" ? b : q) * num(it.unitPrice);
+  });
+  const fx = num(fxRate) || 1;
+  return { kg: Math.round(kg), boxes: Math.round(boxes), pallets: Math.round(pallets), value: Math.round(value * 100) / 100, valuePLN: Math.round(value * fx * 100) / 100, lines };
+}
+export function totalsLine(t: { kg: number; boxes: number; pallets: number; value: number; valuePLN: number; lines: number }, currency = "PLN"): string {
+  const f = (n: number) => n.toLocaleString("pl-PL");
+  return `${t.lines} line(s) · ${f(t.kg)} kg · ${f(t.boxes)} boxes · ${f(t.pallets)} pallets · ${t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${currency}${String(currency).toUpperCase() !== "PLN" ? ` (≈ ${t.valuePLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN)` : ""}`;
+}
