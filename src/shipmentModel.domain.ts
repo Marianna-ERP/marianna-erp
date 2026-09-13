@@ -360,10 +360,13 @@ export function jobsByCarrierLeg(sh: any): Array<{ key: string; carrierId: any; 
   return Object.values(jobs);
 }
 /** Expected freight cost lines: one per carrier × leg (source LEGCAR:{leg}:{carrier}); replace-by-source. */
+let fxFallback: (cur: string) => number = () => 1;
+export function setFxFallback(fn: (cur: string) => number) { fxFallback = fn; }
 export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string = () => ""): any[] {
   const keep = (sh?.costs || []).filter((c: any) => !String(c.source || "").startsWith("LEGCAR:") && !String(c.source || "").startsWith("LEG:") && !String(c.source || "").startsWith("leg-freight:"));   // v6.99.9: the legacy per-leg lines are replaced too
   const lines = jobsByCarrierLeg(sh).filter(j => j.amount > 0).map(j => {
-    const fx = num((sh.legs[j.legIndex] || {}).costFxRate) || 1;
+    const legFx = num((sh.legs[j.legIndex] || {}).costFxRate);
+    const fx = (j.currency !== "PLN" && (!legFx || legFx === 1)) ? (num(fxFallback(j.currency)) || 1) : (legFx || 1);   // v6.99.14: a legacy leg at 1.0 uses the reference
     return { id: `legcar-${j.legIndex}-${j.carrierId}`, type: j.mode.toLowerCase() === "sea" ? "sea_freight" : j.mode.toLowerCase() === "air" ? "air_freight" : "road_freight",
       label: `${j.mode} freight — leg ${j.legIndex + 1} — ${resolveName(j.carrierId) || "carrier"} (${j.units.length} unit${j.units.length > 1 ? "s" : ""})`,
       supplierId: j.carrierId || null, amount: r2(j.amount), currency: j.currency, fxRate: fx, amountPLN: r2(j.amount * fx), invoiceStatus: "Expected", responsibility: "Marianna", source: `LEGCAR:${j.legIndex}:${j.carrierId}` };
@@ -390,4 +393,13 @@ export function healShipmentModel(sh: any): { sh: any; changed: boolean } {
     if (cleaned.length !== costs.length) { next = { ...next, costs: cleaned }; changed = true; }
   }
   return { sh: next, changed };
+}
+
+
+/** v6.99.14 (A-R10-3): a container's recorder is its feeder trucks' recorder(s) — live, not a copy. */
+export function containerRecorder(container: any, sh: any): string {
+  const fs = feedersOf(container);
+  if (!fs.length) return S(container?.tempRecorderNo);
+  const recs = fs.map(f => S(findUnit(sh, f.fromUnitId)?.tempRecorderNo)).filter(Boolean);
+  return Array.from(new Set(recs)).join(", ") || S(container?.tempRecorderNo);
 }

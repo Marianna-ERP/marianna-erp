@@ -47,3 +47,19 @@ export async function fetchNbpRates(): Promise<Record<string, number> | null> {
     return Object.keys(out).length ? { ...out, _date: (j?.[0]?.effectiveDate ? Number(String(j[0].effectiveDate).replace(/-/g, "")) : 0) } as any : null;
   } catch { return null; }
 }
+
+// ── v6.99.14 (A-R10-4, owner rule): ONE FX rule for every document ──
+//   pre-filled from the reference on the day the document is created · editable until confirmed/issued · then locked with its date.
+export function documentFxDefault(currency: any): number {
+  const c = String(currency || "PLN").toUpperCase();
+  if (c === "PLN") return 1;
+  const r = defaultFxRate(c);
+  return r && r !== 1 ? r : 1;
+}
+/** A non-PLN document still at 1.0 is not priced — the reason to refuse confirm / issue. */
+export function fxMissing(currency: any, fxRate: any): string {
+  const c = String(currency || "PLN").toUpperCase();
+  if (c === "PLN") return "";
+  const r = parseFloat(String(fxRate ?? "").replace(",", "."));
+  return !isFinite(r) || Math.abs(r - 1) < 1e-9 || r <= 0 ? `The document is in ${c} but its rate to PLN is 1.0 — set the rate (Settings → Reference FX pre-fills today's NBP rate) before confirming or issuing.` : "";
+}

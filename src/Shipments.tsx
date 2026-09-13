@@ -14,7 +14,7 @@ import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain
 import { lotStockCheck } from "./receipts.domain";
 import { shipmentPostBlockReason, shipmentWarnings, newestFirst } from "./moduleGuards.domain";
 import { carriedRefs, overShipReport, derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
-import { jobsByCarrierLeg, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, costLinesByCarrierLeg } from "./shipmentModel.domain";
+import { containerRecorder, setFxFallback, jobsByCarrierLeg, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, costLinesByCarrierLeg } from "./shipmentModel.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -23,7 +23,7 @@ import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix } from "./costAllocation";
 import { nextId } from "./ids";
-import { resolveFxRate, defaultFxRate } from "./fx";
+import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
 import { unifiedLocations, locationById } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
@@ -46,6 +46,7 @@ function allUnitsCarrierNames(sh: any, contacts: any[]): string[] {
   (sh?.legs || []).forEach((l: any) => (l.vehicles || []).forEach((u: any) => { const id = u.carrierId ?? l.carrierId ?? l.forwarderId; const c = (contacts || []).find((x: any) => String(x.id) === String(id)); if (c) out.push(c.name); }));
   return out;
 }
+setFxFallback((cur: string) => documentFxDefault(cur));
 function costLinesByCarrierLegApply(sh: any): any {
   const anyPriced = (sh.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => parseNum(u?.costAmount, 0) > 0));
   if (!anyPriced) return syncLegFreightCostLines(sh);
@@ -1490,7 +1491,6 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
   // v6.93.0: roadProviders no longer used — carriers live on the units (A-R8-4/9)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const roadProviders = logisticsProviders(contacts, "Road");
-  const seaProviders = logisticsProviders(contacts, "Sea");
   const customsProviders = logisticsProviders(contacts, "Customs");
   function sf(k, v) { setDraft(prev => ({ ...prev, [k]: v })); }
   function updateLeg(idx, k, v) {
@@ -1747,7 +1747,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 110px", gap: 10, marginTop: 10 }}>
             <div><Lbl>Carriers (from the units)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB" }} title="v6.93.0 (A-R8-9): the carrier lives on each truck/container — set it there">{Array.from(new Set(allUnitsCarrierNames(draft, contacts))).join(", ") || "— none on the units yet —"}</div></div>
-            <div><Lbl>Forwarder</Lbl><Sel value={draft.forwarderId || ""} onChange={e => sf("forwarderId", e.target.value ? parseNum(e.target.value) : null)}><option value="">None</option>{seaProviders.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>
+            {/* v6.99.14 (A-R10-1): header Forwarder removed — the BOOKING's forwarder is the one source (old records read forward) */}
             <div><Lbl>Customs / broker</Lbl>
               <Sel value={draft.brokerId || ""} onChange={e => sf("brokerId", e.target.value ? parseNum(e.target.value) : null)}>
                 <option value="">None / not required</option>
@@ -2009,7 +2009,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                       </div>
                     </div>
                   )}
-                  {uMode !== "Road" ? <div><Lbl>Carrier (from the booking)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB" }}>{(() => { const f = (contacts || []).find((c: any) => String(c.id) === String((draft.bookings || [])[0]?.forwarderId)); return f ? f.name : "— set the forwarder on the booking —"; })()}</div></div> : <div><Lbl>Carrier</Lbl>
+                  {uMode !== "Road" ? <div style={{ gridColumn: "span 2" }}><Lbl>Carrier (from the booking)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB" }}>{(() => { const f = (contacts || []).find((c: any) => String(c.id) === String((draft.bookings || [])[0]?.forwarderId)); return f ? f.name : "— set the forwarder on the booking —"; })()}</div></div> : <div><Lbl>Carrier</Lbl>
                     <Sel value={u.carrierId ?? ""} onChange={e => updateVehicle(i, ui, "carrierId", e.target.value || null)} title="v6.85.0 (D9): the carrier lives on the unit — one shipment may use several; transport orders go out per carrier">
                       <option value="">— leg default —</option>
                       {(contacts || []).filter((c: any) => ["Carrier", "Forwarder"].includes(c.type) || (c.roles || []).some((r: string) => ["Carrier", "Forwarder"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}
@@ -2017,9 +2017,9 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   </div>}
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
                   {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
-                  <div style={{ gridColumn: "span 2" }}><Lbl>Pickup place</Lbl><LocationPicker value={u.pickupLocationId ?? u.pickupText ?? ""} contacts={contacts} placeholder={leg.fromCustom || leg.fromText || "— pickup location —"} onChange={(r: any) => { updateVehicle(i, ui, "pickupLocationId", r.id); updateVehicle(i, ui, "pickupText", r.name); }} title="v6.99.10: one location list — printed on the transport order" /></div>
+                  <div style={{ gridColumn: uMode === "Road" ? "span 2" : "span 1" }}><Lbl>Pickup place</Lbl><LocationPicker value={u.pickupLocationId ?? u.pickupText ?? ""} contacts={contacts} placeholder={leg.fromCustom || leg.fromText || "— pickup location —"} onChange={(r: any) => { updateVehicle(i, ui, "pickupLocationId", r.id); updateVehicle(i, ui, "pickupText", r.name); }} title="v6.99.10: one location list — printed on the transport order" /></div>
                   <div><Lbl>Loading (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingDate", e.target.value)} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
-                  <div style={{ gridColumn: "span 2" }}><Lbl>Delivery place</Lbl><LocationPicker value={u.deliveryLocationId ?? u.deliveryText ?? ""} contacts={contacts} placeholder={leg.toCustom || leg.toText || "— delivery location —"} onChange={(r: any) => { updateVehicle(i, ui, "deliveryLocationId", r.id); updateVehicle(i, ui, "deliveryText", r.name); }} /></div>
+                  <div style={{ gridColumn: uMode === "Road" ? "span 2" : "span 1" }}><Lbl>Delivery place</Lbl><LocationPicker value={u.deliveryLocationId ?? u.deliveryText ?? ""} contacts={contacts} placeholder={leg.toCustom || leg.toText || "— delivery location —"} onChange={(r: any) => { updateVehicle(i, ui, "deliveryLocationId", r.id); updateVehicle(i, ui, "deliveryText", r.name); }} /></div>
                   <div><Lbl>Delivery (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryDate", e.target.value)} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
                 </div>
                 {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
@@ -2031,7 +2031,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                 </div>}
                 {uMode !== "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr", gap: 9 }}>
                   <div><Lbl>Container</Lbl><Inp value={u.containerNumber || ""} onChange={e => updateVehicle(i, ui, "containerNumber", e.target.value)} placeholder="MSCU1234567" /></div>
-                  <div><Lbl>Temp recorder no.</Lbl><Inp value={u.tempRecorderNo || ""} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" /></div>
+                  <div><Lbl>Temp recorder no.</Lbl><Inp value={feedersOf(u).length > 0 ? containerRecorder(u, draft) : (u.tempRecorderNo || "")} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" disabled={feedersOf(u).length > 0} /></div>
                 </div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Actual loaded on</Lbl><Inp type="date" max={localTodayISO()} value={u.loadedAt || u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "loadedAt", e.target.value)} /></div>
@@ -2044,7 +2044,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Actual dates for this unit (truck: loaded / unloaded; container: stuffed / discharged) — never in the future; planned dates live on the unit above.</div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "90px 160px 1fr", gap: 9, marginTop: 9 }}>
-                  <div><Lbl>Currency</Lbl><Sel value={u.priceCurrency || leg.costCurrency || "PLN"} onChange={e => updateVehicle(i, ui, "priceCurrency", e.target.value)} title="v6.93.0 (A-R8-17): the price's own currency (default: the carrier's)">{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
+                  <div><Lbl>Currency</Lbl><Sel value={u.priceCurrency || leg.costCurrency || "PLN"} onChange={e => { const cur = e.target.value; updateVehicle(i, ui, "priceCurrency", cur); updateLeg(i, "costCurrency", cur); updateLeg(i, "costFxRate", documentFxDefault(cur)); }} title="v6.93.0 (A-R8-17): the price's own currency (default: the carrier's)">{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
                   <div><Lbl>Price for this unit</Lbl><Inp type="number" value={u.costAmount || ""} onChange={e => updateVehicle(i, ui, "costAmount", parseNum(e.target.value))} placeholder="0" /></div>
                   <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Optional — set this when each truck/container has a different price. The transport order totals all unit prices for the carrier.</div>
                 </div>

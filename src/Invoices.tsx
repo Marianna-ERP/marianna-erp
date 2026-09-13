@@ -4,6 +4,7 @@ import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
 import { soInvoiceDueDate } from "./so.domain";
 import { requiredLinkMissing, proposeLinks, defaultCostDueDate, matchInvoiceToCostLine, positionsMismatch } from "./invoicePlus.domain";
 import { periodGuard } from "./periodClose.domain";
+import { fxMissing } from "./fx";
 import DateInput from "./DateInput";
 import { useConfirm } from "./ui";
 import React, { useMemo, useState } from "react";
@@ -423,7 +424,7 @@ export default function Invoices(props: any) {
   // Delivered so a corrected invoice can be issued (M3 dead end).
   async function markStatus(inv: Invoice, status: PaymentStatus) {
     // v6.98.0 (IV-1, owner ruling): a cost invoice must name what it pays for before it leaves Draft.
-    if (status === "Issued" || status === "Sent") { const missing = requiredLinkMissing(inv); if (missing) { await invAlert({ tone: "warn", title: "Link required", message: missing }); return; } }
+    if (status === "Issued" || status === "Sent") { const missing = requiredLinkMissing(inv); if (missing) { await invAlert({ tone: "warn", title: "Link required", message: missing }); return; } const fxm = fxMissing(inv.currency, inv.fxRate); if (fxm) { await invAlert({ tone: "warn", title: "FX rate missing", message: fxm }); return; } }
     const order = ["Draft", "Issued", "Sent"];
     if (order.includes(status)) {
       const from = order.indexOf(String(inv.paymentStatus));

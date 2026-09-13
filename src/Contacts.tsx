@@ -1,4 +1,5 @@
 import { referencesToContact } from "./referenceGuards";
+import { setUserCountries } from "./counterparty.domain";
 import { recordAudit } from "./audit";
 import { currentUser } from "./permissions.domain";
 import { WAREHOUSE_SERVICES } from "./financePlus.domain";
@@ -259,7 +260,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                   })}
                 </div>
               </div>
-              <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => sf("country", e.target.value)} title="v6.99.6 (A-R9-10): pick — no free typing; ISO code derives"><option value="">— country —</option><optgroup label="EU">{["Poland", "Germany", "Italy", "Spain", "France", "Hungary", "Croatia", "Slovenia", "Greece", "Czech Republic", "Slovakia", "Austria", "Netherlands", "Belgium", "Romania", "Bulgaria", "Lithuania", "Latvia", "Estonia", "Portugal", "Ireland", "Denmark", "Sweden", "Finland", "Cyprus", "Malta", "Luxembourg"].map(c => <option key={c}>{c}</option>)}</optgroup><optgroup label="Other">{["Ukraine", "Belarus", "Egypt", "Jordan", "Saudi Arabia", "Qatar", "Oman", "United Arab Emirates", "Libya", "Morocco", "Turkey", "United Kingdom", "Norway", "Switzerland", "Serbia", "Chile", "Colombia", "Cambodia"].map(c => <option key={c}>{c}</option>)}</optgroup>{form.country && !["Poland", "Germany", "Italy", "Spain", "France", "Hungary", "Croatia", "Slovenia", "Greece", "Czech Republic", "Slovakia", "Austria", "Netherlands", "Belgium", "Romania", "Bulgaria", "Lithuania", "Latvia", "Estonia", "Portugal", "Ireland", "Denmark", "Sweden", "Finland", "Cyprus", "Malta", "Luxembourg", "Ukraine", "Belarus", "Egypt", "Jordan", "Saudi Arabia", "Qatar", "Oman", "United Arab Emirates", "Libya", "Morocco", "Turkey", "United Kingdom", "Norway", "Switzerland", "Serbia", "Chile", "Colombia", "Cambodia"].includes(form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
+              <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => sf("country", e.target.value)} title="v6.99.14: the list is edited in the Countries tab"><option value="">— country —</option><optgroup label="EU">{readCountries().filter(x => x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup><optgroup label="Other">{readCountries().filter(x => !x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup>{form.country && !readCountries().some(x => x.name === form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
               <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
               {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
               <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px" }}>
@@ -1417,6 +1418,38 @@ function PortsView({ contacts = [] }: any) {
   );
 }
 
+
+// ── v6.99.14 (A-R10-5, owner): COUNTRIES tab — the list behind every country dropdown; built-in rows are EDITABLE like any other ──
+const COUNTRY_SEED: Array<{ iso: string; name: string; eu: boolean }> = [
+  ...["AT Austria","BE Belgium","BG Bulgaria","HR Croatia","CY Cyprus","CZ Czech Republic","DK Denmark","EE Estonia","FI Finland","FR France","DE Germany","GR Greece","HU Hungary","IE Ireland","IT Italy","LV Latvia","LT Lithuania","LU Luxembourg","MT Malta","NL Netherlands","PL Poland","PT Portugal","RO Romania","SK Slovakia","SI Slovenia","ES Spain","SE Sweden"].map(s => ({ iso: s.slice(0, 2), name: s.slice(3), eu: true })),
+  ...["BY Belarus","KH Cambodia","CL Chile","CO Colombia","EG Egypt","JO Jordan","LY Libya","MA Morocco","NO Norway","OM Oman","QA Qatar","SA Saudi Arabia","RS Serbia","CH Switzerland","TR Turkey","UA Ukraine","AE United Arab Emirates","GB United Kingdom"].map(s => ({ iso: s.slice(0, 2), name: s.slice(3), eu: false })),
+];
+export function readCountries(): Array<{ iso: string; name: string; eu: boolean }> {
+  try { const raw = window.localStorage.getItem("marianna-erp:v2:countries"); const list = raw ? JSON.parse(raw) : null; if (Array.isArray(list) && list.length) return list; } catch {}
+  return COUNTRY_SEED;
+}
+function writeCountries(list: any[]) { try { window.localStorage.setItem("marianna-erp:v2:countries", JSON.stringify(list)); } catch {} }
+function CountriesView() {
+  setUserCountries(readCountries());
+  const [list, setList] = useState<any[]>(() => readCountries());
+  const [form, setForm] = useState<any>({ iso: "", name: "", eu: false });
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const save = (next: any[]) => { const sorted = [...next].sort((a, b) => Number(b.eu) - Number(a.eu) || String(a.name).localeCompare(String(b.name), "en")); setList(sorted); writeCountries(sorted); };
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🌍 Countries</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>The list behind every country dropdown — EU first, then the others, alphabetical. The EU flag drives customs / VAT treatment. Built-in rows are editable and removable like any other.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 90px auto", gap: 8, alignItems: "end", marginBottom: 12 }}>
+        <div><Lbl>ISO</Lbl><input value={form.iso} onChange={e => setForm({ ...form, iso: e.target.value.toUpperCase().slice(0, 2) })} placeholder="XX" style={inp} /></div>
+        <div><Lbl>Name</Lbl><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={inp} /></div>
+        <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", paddingBottom: 8 }}><input type="checkbox" checked={!!form.eu} onChange={e => setForm({ ...form, eu: e.target.checked })} /> EU</label>
+        <button onClick={() => { if (!form.iso || !form.name) return; save([...list.filter(x => x.iso !== form.iso), { ...form }]); setForm({ iso: "", name: "", eu: false }); }} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add / update</button>
+      </div>
+      {list.map(x => <div key={x.iso} style={{ display: "grid", gridTemplateColumns: "80px 1fr 90px auto", gap: 8, fontSize: 12, padding: "4px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}><b>{x.iso}</b><span>{x.name}</span><span style={{ color: x.eu ? "#166534" : "#64748B" }}>{x.eu ? "EU" : "non-EU"}</span><div style={{ display: "flex", gap: 6 }}><button onClick={() => setForm({ ...x })} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button><button onClick={() => { if (window.confirm(`Remove ${x.name}?`)) save(list.filter(y => y.iso !== x.iso)); }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button></div></div>)}
+    </div>
+  );
+}
+
 export default function Contacts({ contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [], users = [], userName = "" }: any = {}) {
   // v6.81.0 (D-57): commission terms visible to the owner and the finance role (finance.pl) only; with no users defined, everyone.
   const _cu = currentUser(users, userName);
@@ -1694,7 +1727,8 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           {[
             { key: "companies", label: "Companies", icon: "🏢" },
             { key: "people", label: "People", icon: "👤" },
-            { key: "ports", label: "Ports & crossings", icon: "⚓" },   // v6.99.11 (owner): the Directory's places tab is back — ports, border crossings, customs points
+            { key: "ports", label: "Ports & crossings", icon: "⚓" },
+            { key: "countries", label: "Countries", icon: "🌍" },   // v6.99.11 (owner): the Directory's places tab is back — ports, border crossings, customs points
           ].map(o => (
             <button key={o.key} onClick={() => setViewMode(o.key)}
               style={{ padding: "5px 14px", borderRadius: 6, border: "none", background: viewMode === o.key ? "#fff" : "transparent", color: viewMode === o.key ? "#111" : "#888", fontSize: 12, fontWeight: 600, cursor: "pointer", boxShadow: viewMode === o.key ? "0 1px 2px rgba(0,0,0,0.06)" : "none", display: "flex", alignItems: "center", gap: 5 }}>
@@ -1714,7 +1748,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
         {/* Main area */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {/* Filter chips */}
-          {viewMode !== "ports" && (<>
+          {viewMode !== "ports" && viewMode !== "countries" && (<>
           <div style={{ padding: "14px 28px 0", display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
             {[{ label: "All", count: counts.All }, ...COUNTERPARTY_TYPES.map(t => ({ label: t, count: counts[t] || 0 }))].map(({ label, count }) => (
               <button key={label} onClick={() => setFilterType(label)}
@@ -1736,6 +1770,8 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
             {viewMode === "ports" ? (
               <PortsView />
+            ) : viewMode === "countries" ? (
+              <CountriesView />
             ) : (<>
             <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
               {viewMode === "companies" ? (

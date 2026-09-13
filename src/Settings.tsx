@@ -464,7 +464,7 @@ function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 110 };
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
-      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Reference FX rates (PLN per unit)</div>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Reference FX rates (PLN per unit){fxSettings?._nbp ? <span style={{ fontSize: 11, fontWeight: 500, color: "#16A34A", marginLeft: 8 }}>NBP table A of {String(fxSettings._nbp).replace(/(\d{4})(\d{2})(\d{2})/, "$3/$2/$1")} loaded</span> : <span style={{ fontSize: 11, fontWeight: 500, color: "#B45309", marginLeft: 8 }}>NBP not reachable — built-in seed until you type a rate</span>}</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Used only to PRE-FILL a new document's rate. Every document locks its own rate; the truck settlement uses its own. Blank = the built-in seed.</div>
       <div style={{ display: "flex", gap: 14 }}>{["EUR", "USD", "GBP"].map(c => <label key={c} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{c}<input type="number" step="0.0001" value={fxSettings?.[c] ?? ""} onChange={e => setFxSettings((prev: any) => ({ ...(prev || {}), [c]: e.target.value }))} style={inp} /></label>)}</div>
     </div>
@@ -792,6 +792,14 @@ export default function Settings({
           </div>
         </Card>
 
+        {/* v6.99.14 (owner): CONFIGURATION lives on the main page — nothing hidden inside another editor */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", margin: "18px 0 10px" }}>CONFIGURATION</div>
+        <CompanyPanel company={company} setCompany={setCompany} />
+        <FxSettingsPanel fxSettings={fxSettings} setFxSettings={setFxSettings} />
+        <NumberingPanel numbering={numbering} setNumbering={setNumbering} />
+        <UsersPanel users={users} setUsers={setUsers} />
+        <DefectCataloguePanel defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} />
+
         {/* v6.38.0 (R1-C): reference data opens in dedicated editor windows */}
         <ManageCard
           title="PRODUCT CATALOG"
@@ -818,11 +826,6 @@ export default function Settings({
         )}
         {manage === "products" && (
           <FullScreenModal title="Product catalog" onClose={() => setManage(null)}>
-            <CompanyPanel company={company} setCompany={setCompany} />
-            <NumberingPanel numbering={numbering} setNumbering={setNumbering} />
-            <UsersPanel users={users} setUsers={setUsers} />
-            <FxSettingsPanel fxSettings={fxSettings} setFxSettings={setFxSettings} />
-            <DefectCataloguePanel defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} />
             <ProductCatalogPanel catalog={productCatalog} setCatalog={setProductCatalog}  refStores={refStores} />
           </FullScreenModal>
         )}

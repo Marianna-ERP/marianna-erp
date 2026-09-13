@@ -11,8 +11,10 @@ export const ROLES = ["Client", "Supplier", "Carrier", "Forwarder", "Broker", "W
 const COUNTRY_ISO: Record<string, string> = { poland: "PL", polska: "PL", germany: "DE", deutschland: "DE", italy: "IT", italia: "IT", spain: "ES", france: "FR", hungary: "HU", croatia: "HR", slovenia: "SI", greece: "GR", "czech republic": "CZ", czechia: "CZ", slovakia: "SK", austria: "AT", netherlands: "NL", belgium: "BE", romania: "RO", bulgaria: "BG", lithuania: "LT", latvia: "LV", estonia: "EE", portugal: "PT", ireland: "IE", denmark: "DK", sweden: "SE", finland: "FI", cyprus: "CY", malta: "MT", luxembourg: "LU",
   ukraine: "UA", belarus: "BY", egypt: "EG", jordan: "JO", "saudi arabia": "SA", qatar: "QA", oman: "OM", libya: "LY", uae: "AE", "united arab emirates": "AE", morocco: "MA", turkey: "TR", "united kingdom": "GB", uk: "GB", chile: "CL", colombia: "CO", cambodia: "KH", norway: "NO", switzerland: "CH", serbia: "RS" };
 const EU = new Set(["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE"]);
-export function countryIso(country: any): string { const k = S(country).toLowerCase(); if (!k) return ""; if (/^[a-z]{2}$/i.test(S(country))) return S(country).toUpperCase(); return COUNTRY_ISO[k] || ""; }
-export function isEU(country: any): boolean | null { const iso = countryIso(country); return iso ? EU.has(iso) : null; }
+let USER_COUNTRIES: Array<{ iso: string; name: string; eu: boolean }> = [];
+export function setUserCountries(list: any[]) { USER_COUNTRIES = Array.isArray(list) ? list : []; }
+export function countryIso(country: any): string { const k = S(country).toLowerCase(); if (!k) return ""; if (/^[a-z]{2}$/i.test(S(country))) return S(country).toUpperCase(); const u = USER_COUNTRIES.find(x => S(x.name).toLowerCase() === k); if (u) return S(u.iso).toUpperCase(); return COUNTRY_ISO[k] || ""; }
+export function isEU(country: any): boolean | null { const iso = countryIso(country); if (!iso) return null; const u = USER_COUNTRIES.find(x => S(x.iso).toUpperCase() === iso); return u ? !!u.eu : EU.has(iso); }
 
 // ── CP-1 / CP-2 / CP-9: normalisation (idempotent) ────────────────────────────
 export function normaliseCounterparty(c: any): { contact: any; changed: boolean } {
