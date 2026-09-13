@@ -1737,7 +1737,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             <div><Lbl>Governing sales order <span style={{ color: "#BBB", fontWeight: 400 }}>· sets destination</span></Lbl>
               <Sel value={draft.governingSoRef || ""} onChange={e => sf("governingSoRef", e.target.value || "")} title="Which client's truck this is. Sets the destination and, with the producer's country, the trade direction. Change it if this shipment was attributed to the wrong sales order.">
                 <option value="">None — to our warehouse</option>
-                {(orders || []).filter((o: any) => o.status !== "Cancelled" && (draft.poRefs || []).some((pr: string) => (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === pr))).map((o: any) => (
+                {(orders || []).filter((o: any) => o.status !== "Cancelled" && ((draft.soRefs || []).includes(o.number) || String(draft.governingSoRef) === String(o.number) || (draft.goods || []).some((g: any) => String(g.soRef) === String(o.number)) || (draft.poRefs || []).some((pr: string) => (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === pr)) || (draft.lotRefs || []).some((lr: string) => (o.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(lr))))).map((o: any) => (
                   <option key={o.number} value={o.number}>{o.number} · {o.client?.name || "(client)"}</option>
                 ))}
               </Sel>
@@ -3235,6 +3235,9 @@ export default function Shipments({
       if (ans === null) return;
       const m = String(ans).trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
       const iso = m ? `${m[3]}-${String(m[2]).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}` : todayISO();
+      // v6.99.15 (A-R11-10): a date that differs from the plan is confirmed, with the difference shown
+      const planned = (sh.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(status === "Loaded" ? (u.plannedLoadingDate || "") : (u.plannedDeliveryDate || "")).slice(0, 10))).filter(Boolean);
+      if (planned.length && !planned.includes(iso)) { const dd = Math.round((new Date(iso).getTime() - new Date(planned[0]).getTime()) / 86400000); const okDate = await shConfirm({ tone: "warn", title: `${status} on a different date`, message: `Planned ${planned.join(", ")}, actual ${iso} (${dd > 0 ? dd + " day(s) late" : Math.abs(dd) + " day(s) early"}). Record it anyway?`, confirmLabel: "Yes, record" }); if (!okDate) return; }
       const kind = status === "Loaded" ? "loaded" : (String(sh.purpose || "").toUpperCase() === "INBOUND" && ["sea", "multimodal"].includes(String(sh.mode || "").toLowerCase()) ? "discharged" : "delivered");
       updateShipment(sh.id, (s: any) => stampEvent(s, null, kind as any, iso));
       sh = stampEvent(sh, null, kind as any, iso);

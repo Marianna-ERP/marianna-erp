@@ -4,14 +4,16 @@
 import React from "react";
 import { unifiedLocations } from "./locations";
 
-const KIND_LABEL: Record<string, string> = { PORT: "Ports", PORT_WAREHOUSE: "Port warehouses / customs", CUSTOMS: "Port warehouses / customs", OWN: "Our warehouses", WAREHOUSE: "Warehouses (counterparty)", SUPPLIER: "Supplier sites", CLIENT: "Client sites", BROKER: "Brokers / agents", OTHER: "Other" };
-const ORDER = ["PORT", "PORT_WAREHOUSE", "CUSTOMS", "OWN", "WAREHOUSE", "SUPPLIER", "CLIENT", "BROKER", "OTHER"];
+const KIND_LABEL: Record<string, string> = { PORT: "Ports", PORT_WAREHOUSE: "Port warehouses / customs", CUSTOMS: "Port warehouses / customs", BORDER: "Border crossings", OWN: "Our warehouses", WAREHOUSE: "Warehouses", SITE: "Sites (counterparties)", OTHER: "Other" };
+// v6.99.15 (A-R11-7b): a counterparty may be client AND supplier — its site is just a SITE; one alphabetical group, no who-is-what split
+const KIND_MAP: Record<string, string> = { SUPPLIER: "SITE", CLIENT: "SITE", BROKER: "SITE", WAREHOUSE: "WAREHOUSE" };
+const ORDER = ["OWN", "WAREHOUSE", "SITE", "PORT", "PORT_WAREHOUSE", "CUSTOMS", "BORDER", "OTHER"];
 
 export default function LocationPicker({ value, onChange, contacts = [], kinds = null, preferredKinds = null, placeholder = "— location —", disabled = false, style = {}, title = "" }: any) {
-  const all = unifiedLocations(contacts || []).filter((l: any) => !kinds || kinds.includes(String(l.legacyType || l.type || "OTHER").toUpperCase()));
+  const all = unifiedLocations(contacts || []).filter((l: any) => { const raw = String(l.legacyType || l.type || "OTHER").toUpperCase(); return !kinds || kinds.includes(raw) || kinds.includes(KIND_MAP[raw] || raw); });
   const groups: Record<string, any[]> = {};
-  all.forEach((l: any) => { const k = String(l.legacyType || l.type || "OTHER").toUpperCase(); (groups[k] = groups[k] || []).push(l); });
-  const pref = (preferredKinds || []).map((k: string) => String(k).toUpperCase());
+  all.forEach((l: any) => { const raw = String(l.legacyType || l.type || "OTHER").toUpperCase(); const k = KIND_MAP[raw] || raw; (groups[k] = groups[k] || []).push(l); });
+  const pref = (preferredKinds || []).map((k: string) => { const u = String(k).toUpperCase(); return KIND_MAP[u] || u; });
   const rank = (k: string) => (pref.includes(k) ? pref.indexOf(k) - 100 : (ORDER.indexOf(k) < 0 ? 99 : ORDER.indexOf(k)));
   const keys = Object.keys(groups).sort((a, b) => rank(a) - rank(b));
   const current = all.find((l: any) => String(l.id) === String(value)) || all.find((l: any) => String(l.name) === String(value)) || null;

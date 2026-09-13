@@ -22,7 +22,7 @@ import { defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
-import { unifiedLocations, locationById } from "./locations";
+import { locationById } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { recordAudit } from "./audit";
@@ -1163,12 +1163,7 @@ function soTermsMissing(o: any): string | null {
 
 function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail , allInvoices = [] }: any) {
   const { confirm: ofConfirm, alert: ofAlert, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning) + v6.63.0 (D-10 forward-only alert)
-  // v6.18.4 (P0-4): merge live counterparty addresses so a client/warehouse added
-  // this session shows in the destination picker without a browser refresh.
-  const liveLocations = (() => {
-    // v6.86.0 (owner ruling): ONE source — unifiedLocations().
-    return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
-  })();
+  // v6.99.15: the destination is a LocationPicker over unifiedLocations() — no module-level list any more.
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   // v6.79.0 (W-1): locks read the EFFECTIVE status — a typed label cannot unlock what the shipments locked, or lock what never moved.
   const soFullyLocked = (_st: any, o?: any) => isShippedOrLater(o || order, SHIPMENTS_REF);
@@ -1274,7 +1269,14 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   // HARD BLOCK on non-Draft statuses (same as sourcing): can't promise to a client what we can't supply.
   // Batch 1 (G3): memoized — recompute only when the lines or other orders change,
   // not on every keystroke in unrelated fields.
-  const availability = useMemo(() => computeLineAvailability(order.items, allOrders, order.id), [order.items, allOrders, order.id]);
+  const availability = useMemo(() => {
+    // v6.99.15 (A-R11-9): an order already loaded / shipped / delivered is history, not a promise — its kilos left the lot as SHIP_OUT, so
+    // checking them against what remains would always "exceed". The check applies to orders still to be fulfilled.
+    const eff = effectiveSoStatus(order, SHIPMENTS_REF || []);
+    if (["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(eff))) return [];
+    return computeLineAvailability(order.items, allOrders, order.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order.items, allOrders, order.id, order.status, order.statusOverride]);
   const overageCount = availability.filter(a => a.hasOverage).length;
   const availabilityBlock = overageCount > 0 && nonDraftStatuses.includes(order.status);
 
@@ -1669,25 +1671,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   </div>
                 ) : (
                   <>
-                    {(() => {
-                      const ic = String(order.sellIncoterm || "").toUpperCase();
-                      const portGroup = (<optgroup key="port" label="⚓ Port / terminal (FOB/CFR/CIF)">{liveLocations.filter((l: any) => l.type === "PORT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
-                      const clientGroup = (<optgroup key="client" label="🎯 Client Site / DC">{liveLocations.filter((l: any) => l.type === "CLIENT").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
-                      const whGroup = (<optgroup key="wh" label="🏢 Our Warehouse (EXW pickup)">{liveLocations.filter((l: any) => l.type === "OWN").map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup>);
-                      // FB-11: lead with the incoterm-relevant place type.
-                      const order2 = ["CIF","CFR","FOB","FCA"].includes(ic) ? [portGroup, clientGroup, whGroup]
-                        : ic === "EXW" ? [whGroup, clientGroup, portGroup]
-                        : [clientGroup, portGroup, whGroup];
-                      return (
-                        <Sel disabled={fullyLocked} value={order.destinationLocationId || ""} onChange={e => { const id = parseInt(e.target.value) || null; setOrder(o => ({ ...o, destinationLocationId: id, destinationText: (id && (o.destinationText || "") === (o.client?.address || "")) ? "" : o.destinationText })); }} style={{ marginTop: 8 }}>
-                          <option value="">— select a known place —</option>
-                          {order2}
-                        </Sel>
-                      );
-                    })()}
                     <LocationPicker value={order.destinationLocationId ?? order.destinationText ?? ""} contacts={contacts} disabled={fullyLocked} placeholder="— destination (client site, port, warehouse) —" onChange={(r: any) => setOrder((o: any) => ({ ...o, destinationLocationId: r.id, destinationText: r.name }))} title="v6.99.10: one location list for every destination" style={{ marginTop: 6 }} />
                     <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                      Pick a known place, or type the exact address (relay, port, or client site as the Incoterm requires). Free text takes precedence on the printed SO.
+                      Pick the destination from the Directory (relay, port, or client site as the Incoterm requires). Free text takes precedence on the printed SO.
                     </div>
                   </>
                 )}
@@ -1863,7 +1849,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       )}
                     </div>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.7fr 0.55fr 0.7fr 0.9fr 0.8fr 0.8fr minmax(120px, 1.7fr) 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.7fr 0.55fr 0.7fr 0.8fr 0.7fr 0.7fr minmax(150px, 2fr) 34px", gap: 8, alignItems: "end" }}>
                     <div>
                       <Lbl>Item / Variety {it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl>
                       {it.sourceType && it.sourceRef
@@ -1948,7 +1934,7 @@ function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail,
   const total = netTotal(order.items);
   const destination = locById(order.destinationLocationId);
   const destinationLabel = destinationDisplay(order);
-  const availability = computeLineAvailability(order.items, allOrders, order.id);
+  const availability = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(order, SHIPMENTS_REF || []))) ? [] : computeLineAvailability(order.items, allOrders, order.id);   // v6.99.15 (A-R11-9)
   const overageCount = availability.filter(a => a.hasOverage).length;
 
   return (
@@ -2742,6 +2728,8 @@ export default function SalesOrders({
     return (
       <>
         {soDialogNode}
+        {/* v6.99.15 (A-R11-6): the client-collection dialog was mounted only in the list view — pressing the button in the detail did nothing */}
+        {collectionFor && <CollectionModal so={collectionFor} onClose={() => setCollectionFor(null)} onSave={recordCollection} />}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}

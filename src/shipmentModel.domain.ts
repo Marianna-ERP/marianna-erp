@@ -352,9 +352,11 @@ export function jobsByCarrierLeg(sh: any): Array<{ key: string; carrierId: any; 
     const bookingFwd = seaLike ? ((sh.bookings || [])[0]?.forwarderId ?? null) : null;
     // v6.99.8: the unit names its carrier; a container's carrier is the booking's forwarder; leg/shipment ids only when nothing on the leg is named
     const cid = (u.carrierId != null && u.carrierId !== "") ? u.carrierId : (bookingFwd ?? (anyNamed ? "" : (leg.carrierId ?? leg.forwarderId ?? "")));
-    if (cid === "" || cid == null) return;   // an unnamed unit joins no job — it shows as a gap in the leg banner instead of a wrong supplier
-    const key = `${String(cid)}|${li}`;
-    const j = jobs[key] || (jobs[key] = { key, carrierId: cid, legIndex: li, mode: String(leg.mode || ""), units: [], kg: 0, amount: 0, currency: String(u.priceCurrency || leg.costCurrency || "PLN").toUpperCase() });
+    // v6.99.15 (A-R11-8): an unnamed unit with a PRICE still produces its cost line (supplier blank, flagged) — a missing line was worse than a blank supplier
+    const keyId = (cid === "" || cid == null) ? (num(u.costAmount ?? u.unitPrice) > 0 ? "__unassigned__" : null) : cid;
+    if (keyId == null) return;
+    const key = `${String(keyId)}|${li}`;
+    const j = jobs[key] || (jobs[key] = { key, carrierId: keyId === "__unassigned__" ? null : keyId, legIndex: li, mode: String(leg.mode || ""), units: [], kg: 0, amount: 0, currency: String(u.priceCurrency || leg.costCurrency || "PLN").toUpperCase() });
     j.units.push(u); j.kg += unitKg(u, sh); j.amount += num(u.costAmount ?? u.unitPrice);
   }));
   return Object.values(jobs);
@@ -368,8 +370,8 @@ export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string 
     const legFx = num((sh.legs[j.legIndex] || {}).costFxRate);
     const fx = (j.currency !== "PLN" && (!legFx || legFx === 1)) ? (num(fxFallback(j.currency)) || 1) : (legFx || 1);   // v6.99.14: a legacy leg at 1.0 uses the reference
     return { id: `legcar-${j.legIndex}-${j.carrierId}`, type: j.mode.toLowerCase() === "sea" ? "sea_freight" : j.mode.toLowerCase() === "air" ? "air_freight" : "road_freight",
-      label: `${j.mode} freight — leg ${j.legIndex + 1} — ${resolveName(j.carrierId) || "carrier"} (${j.units.length} unit${j.units.length > 1 ? "s" : ""})`,
-      supplierId: j.carrierId || null, amount: r2(j.amount), currency: j.currency, fxRate: fx, amountPLN: r2(j.amount * fx), invoiceStatus: "Expected", responsibility: "Marianna", source: `LEGCAR:${j.legIndex}:${j.carrierId}` };
+      label: `${j.mode} freight — leg ${j.legIndex + 1} — ${j.carrierId ? (resolveName(j.carrierId) || "carrier") : "⚠ carrier not set on the unit"} (${j.units.length} unit${j.units.length > 1 ? "s" : ""})`,
+      supplierId: j.carrierId || null, amount: r2(j.amount), currency: j.currency, fxRate: fx, amountPLN: r2(j.amount * fx), invoiceStatus: "Expected", responsibility: "Marianna", source: `LEGCAR:${j.legIndex}:${j.carrierId ?? "unassigned"}`, needsCarrier: !j.carrierId };
   });
   return [...keep, ...lines];
 }

@@ -82,7 +82,7 @@ function reservedForLine(o: any, it: any, lineIndex: number, fullQty: number, ct
     return Math.max(0, fullQty - shipped);
   }
   // legacy path (no remainder context available at this call site)
-  if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return 0;
+  if (!SO_PRE_DISPATCH_STATUSES.has(effectiveStatusOf(o, ctx))) return 0;   // v6.99.15 (A-R11-9): effective status — loaded goods are not reserved twice
   return fullQty;
 }
 
@@ -91,7 +91,7 @@ export function lotReservationsForPicker(lot: any, allOrders: any[], excludeOrde
   let totalReserved = 0;
   (allOrders || []).forEach(o => {
     if (o.id === excludeOrderId) return;
-    if (!(ctx && ctx.lots) && !SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
+    if (!(ctx && ctx.lots) && !SO_PRE_DISPATCH_STATUSES.has(effectiveStatusOf(o, ctx))) return;
     (o.items || []).forEach((it: any, li: number) => {
       if (it.sourceType !== "STOCK") return;
       if (it.sourceRef !== lot.number) return;
@@ -118,7 +118,7 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[], ctx?: Reserv
   let totalReserved = 0;
   (sourceSOs || []).forEach(o => {
     if (!soReservesStock(o.status) && !(ctx && ctx.lots)) {
-      if (!SO_PRE_DISPATCH_STATUSES.has(o.status)) return;
+      if (!SO_PRE_DISPATCH_STATUSES.has(effectiveStatusOf(o, ctx))) return;
     }
     (o.items || []).forEach((it: any, li: number) => {
       const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
@@ -146,6 +146,17 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[], ctx?: Reserv
 }
 
 /** Reservations on one PO line from other pre-dispatch SOs. */
+
+// v6.99.15 (A-R11-9): reservations read the EFFECTIVE status (shipments decide Loading / Shipped / Delivered — W-1).
+// An order whose kilos already left the lot as SHIP_OUT must not reserve them a second time.
+function effectiveStatusOf(o: any, ctx: any): string {
+  const shipments = ctx?.shipments || [];
+  if (o?.statusOverride) return String(o.statusOverride);
+  const carrying = shipments.filter((s: any) => s && String(s.status) !== "Cancelled" && String(s.purpose || "").toUpperCase() !== "INBOUND" && ((s.soRefs || []).includes(o.number) || (s.goods || []).some((g: any) => g.soRef === o.number)));
+  if (carrying.some((s: any) => ["Loaded", "In transit", "Delivered", "Closed"].includes(String(s.status)))) return "Shipped";
+  return String(o?.status || "");
+}
+
 export function poLineReservations(po: any, poLine: any, allOrders: any[], excludeOrderId: any, ctx?: ReserveCtx): any {
   const reservations: any[] = [];
   let totalReserved = 0;
