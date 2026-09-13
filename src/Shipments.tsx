@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { PAGE_MAX } from "./ui";
 import DateInput from "./DateInput";
@@ -289,53 +290,8 @@ function locationTextFromFields(id, custom) {
 // Replaces the free-text datalist (easy to mistype) with a structured dropdown
 // grouped by location type. Sea/Air/Rail legs list ports & airports first.
 // "✏ Custom…" keeps the free-text escape hatch for one-off places.
-const LEG_LOC_GROUPS = [
-  { label: "Our warehouses", type: "OWN" },
-  { label: "Supplier / producer sites", type: "SUPPLIER" },
-  { label: "Ports & airports", type: "PORT" },
-  { label: "Client sites / DCs", type: "CLIENT" },
-  { label: "Customs / border", type: "BROKER" },
-];
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function LegLocationSelect({ label, locationId, custom, mode, onChange, contacts = [] }: any) {
-  const locsAll = mergedLocations(contacts);
-  const [customMode, setCustomMode] = React.useState(!locationId && !!custom);
-  React.useEffect(() => { if (locationId) setCustomMode(false); }, [locationId]);
-  const portsFirst = mode === "Sea" || mode === "Air" || mode === "Rail";
-  const ordered = portsFirst
-    ? [LEG_LOC_GROUPS[2], LEG_LOC_GROUPS[1], LEG_LOC_GROUPS[0], LEG_LOC_GROUPS[3], LEG_LOC_GROUPS[4]]
-    : LEG_LOC_GROUPS;
-  const selValue = customMode ? "custom" : (locationId ? String(locationId) : (custom ? "custom" : ""));
-  return (
-    <div>
-      <Lbl>{label}</Lbl>
-      <Sel value={selValue} onChange={e => {
-        const v = e.target.value;
-        if (v === "custom") { setCustomMode(true); onChange({ locationId: null, custom: custom || "" }); }
-        else if (v === "") { setCustomMode(false); onChange({ locationId: null, custom: "" }); }
-        else { setCustomMode(false); onChange({ locationId: parseNum(v), custom: "" }); }
-      }}>
-        <option value="">—</option>
-        {ordered.map(g => {
-          const locs = locsAll.filter((l: any) => l.type === g.type && !l.aliasOf);
-          if (!locs.length) return null;
-          return (
-            <optgroup key={g.type} label={g.label}>
-              {locs.map(l => <option key={l.id} value={l.id}>{l.name}{l.country ? ` · ${l.country}` : ""}</option>)}
-            </optgroup>
-          );
-        })}
-        <option value="custom">✏ Custom…</option>
-      </Sel>
-      {/* v6.10 (#12): the free-text box is always available below the dropdown so
-          a place/address can be typed manually (e.g. for DDP legs the supplier
-          arranges). Typing here overrides the dropdown selection for this side. */}
-      <Inp value={custom || ""} onChange={e => { setCustomMode(!!e.target.value); onChange({ locationId: null, custom: e.target.value }); }}
-        placeholder="or type place / address (free text)" style={{ marginTop: 4, fontSize: 11.5, padding: "6px 8px" }} />
-    </div>
-  );
-}
+// v6.99.12: LegLocationSelect removed — places live on the units (LocationPicker)
 
 // ─── v6.3.0: standard shipment document checklist ───────────────────────────
 // Every shipment carries a standard set of export documents. The set is
@@ -1002,7 +958,7 @@ function buildManualShipment__raw(opts, shipments) {
 function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max, list }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
-  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
+  return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} list={list} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
 }
 function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   return <select value={value ?? ""} onChange={onChange} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }}>{children}</select>;
@@ -1074,10 +1030,6 @@ function ShipmentListRow({ sh, active, onClick, contacts, planNumber = "" }: any
 }
 
 function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel, onCreate }: any) {
-  // v6.93.0: roadProviders no longer used — carriers live on the units (A-R8-4/9)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const roadProviders = logisticsProviders(contacts, "Road");
-  const seaProviders = logisticsProviders(contacts, "Sea");
   const [sourceType, setSourceType] = useState("PO");
   const [governingSoPrompt, setGoverningSoPrompt] = useState(null); // v6.34.0: {po, sos} when a multi-SO PO needs a pick
   const [ref, setRef] = useState(""); // v6.18.14 (#4): no PO pre-selected — force a choice
@@ -1207,7 +1159,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref, sourceType]);
-  const providers = form.mode === "Road" || form.mode === "Rail" ? roadProviders : form.mode === "Air" ? logisticsProviders(contacts, "Air") : seaProviders;
+  // v6.99.12: the create window no longer asks for providers — carriers live on the units (D9)
   function create(governingSoRef = "") {
     let sh;
     if (sourceType === "PO" && selectedPO) {
@@ -1364,7 +1316,7 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
               </>
             ) : (
               <>
-                <div><Lbl>{form.mode === "Air" ? "Air forwarder" : form.mode === "Sea" ? "Sea forwarder / line" : "Carrier"}</Lbl><Sel value={(form.mode === "Air" || form.mode === "Sea") ? (form.forwarderId || "") : (form.carrierId || "")} onChange={e => (form.mode === "Air" || form.mode === "Sea") ? sf("forwarderId", e.target.value ? parseNum(e.target.value) : null) : sf("carrierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— select —</option>{providers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}</Sel></div>
+                {/* v6.99.12 (D9): no provider in the create window — carriers live on the units; the booking carries the forwarder */}
                 {/* Batch 3c (BP-26): freight amount + FX removed from the create step —
                     the agreed freight belongs to the shipment's COST LINES, entered in the
                     full editor that opens next (with per-line cost responsibility). */}
@@ -1554,21 +1506,6 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
   }
   // v6.3.0: set a leg's From/To in one update, and auto-chain — when leg N's "To"
   // changes and leg N+1 has an empty "From", the next leg starts where this one ends.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  function updateLegLocation(idx, side, locationId, custom) {
-    setDraft(prev => {
-      const legs = (prev.legs || []).map((l, i) => {
-        if (i !== idx) return l;
-        return side === "from"
-          ? { ...l, fromLocationId: locationId, fromCustom: custom || "" }
-          : { ...l, toLocationId: locationId, toCustom: custom || "" };
-      });
-      if (side === "to" && legs[idx + 1] && !legs[idx + 1].fromLocationId && !legs[idx + 1].fromCustom) {
-        legs[idx + 1] = { ...legs[idx + 1], fromLocationId: locationId, fromCustom: custom || "" };
-      }
-      return { ...prev, legs };
-    });
-  }
   function updateGood(idx, k, v) {
     setDraft(prev => ({ ...prev, goods: (prev.goods || []).map((g, i) => {
       if (i !== idx) return g;
@@ -1841,8 +1778,8 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                 <div><Lbl>Cut-off</Lbl><Inp type="date" value={b?.cutOff || ""} onChange={e => sb("cutOff", e.target.value)} /></div>
                 <div><Lbl>ETD</Lbl><Inp type="date" value={b?.etd || ""} onChange={e => sb("etd", e.target.value)} /></div>
                 <div><Lbl>ETA</Lbl><Inp type="date" value={b?.eta || ""} onChange={e => sb("eta", e.target.value)} /></div>
-                <div><Lbl>POL</Lbl><Sel value={b?.pol || ""} onChange={e => sb("pol", e.target.value)}><option value="">— port —</option>{unifiedLocations(contacts || []).filter((l: any) => l.legacyType === "PORT").map((l: any) => <option key={String(l.id)} value={l.name}>{l.name}</option>)}</Sel></div>
-                <div><Lbl>POD</Lbl><Sel value={b?.pod || (() => { const so = (orders || []).find((o: any) => String(o.number) === String(draft.governingSoRef || (draft.soRefs || [])[0])); const dl = so ? locationById(so.destinationLocationId, contacts || []) : null; return dl && dl.legacyType === "PORT" ? dl.name : ""; })()} onChange={e => sb("pod", e.target.value)} title="v6.99.6 (A-R9-9): defaults from the sales order's destination when it is a port"><option value="">— port —</option>{unifiedLocations(contacts || []).filter((l: any) => l.legacyType === "PORT").map((l: any) => <option key={String(l.id)} value={l.name}>{l.name}</option>)}</Sel></div>
+                <div><Lbl>POL</Lbl><LocationPicker value={b?.polId ?? b?.pol ?? ""} contacts={contacts} kinds={["PORT"]} placeholder="— port of loading —" onChange={(r: any) => { sb("pol", r.name); sb("polId", r.id); }} /></div>
+                <div><Lbl>POD</Lbl><LocationPicker value={b?.podId ?? b?.pod ?? (() => { const so = (orders || []).find((o: any) => String(o.number) === String(draft.governingSoRef || (draft.soRefs || [])[0])); const dl = so ? locationById(so.destinationLocationId, contacts || []) : null; return dl && dl.legacyType === "PORT" ? dl.name : ""; })()} contacts={contacts} kinds={["PORT"]} placeholder="— port of discharge —" title="defaults from the sales order's destination when it is a port" onChange={(r: any) => { sb("pod", r.name); sb("podId", r.id); }} /></div>
                 <div><Lbl>Containers planned</Lbl><Inp type="number" value={b?.containersPlanned ?? ""} onChange={e => sb("containersPlanned", parseNum(e.target.value, 0))} /></div>
                 <div><Lbl>BL / AWB / CIM no. (when issued)</Lbl><Inp value={b?.blNumber || ""} onChange={e => sb("blNumber", e.target.value)} /></div>
                 <div><Lbl>Shipping line / airline / railway</Lbl><Inp value={b?.shippingLine || ""} onChange={e => sb("shippingLine", e.target.value)} /></div>
@@ -2080,11 +2017,10 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   </div>}
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
                   {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
-                  <div style={{ gridColumn: "span 2" }}><Lbl>Pickup place</Lbl><Inp value={u.pickupText ?? ""} onChange={e => updateVehicle(i, ui, "pickupText", e.target.value)} placeholder={leg.fromCustom || leg.fromText || "leg default"} title="v6.99.7 (A-R9-12): pick a registered location — printed on the transport order (replaces the leg's loading place)" list="unit-places" /></div>
+                  <div style={{ gridColumn: "span 2" }}><Lbl>Pickup place</Lbl><LocationPicker value={u.pickupLocationId ?? u.pickupText ?? ""} contacts={contacts} placeholder={leg.fromCustom || leg.fromText || "— pickup location —"} onChange={(r: any) => { updateVehicle(i, ui, "pickupLocationId", r.id); updateVehicle(i, ui, "pickupText", r.name); }} title="v6.99.10: one location list — printed on the transport order" /></div>
                   <div><Lbl>Loading (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingDate", e.target.value)} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
-                  <div style={{ gridColumn: "span 2" }}><Lbl>Delivery place</Lbl><Inp value={u.deliveryText ?? ""} onChange={e => updateVehicle(i, ui, "deliveryText", e.target.value)} placeholder={leg.toCustom || leg.toText || "leg default"} list="unit-places" /></div>
+                  <div style={{ gridColumn: "span 2" }}><Lbl>Delivery place</Lbl><LocationPicker value={u.deliveryLocationId ?? u.deliveryText ?? ""} contacts={contacts} placeholder={leg.toCustom || leg.toText || "— delivery location —"} onChange={(r: any) => { updateVehicle(i, ui, "deliveryLocationId", r.id); updateVehicle(i, ui, "deliveryText", r.name); }} /></div>
                   <div><Lbl>Delivery (planned)</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryDate", e.target.value)} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
-                  <datalist id="unit-places">{unifiedLocations(contacts || []).map((l: any) => <option key={String(l.id)} value={l.name} />)}</datalist>
                 </div>
                 {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>

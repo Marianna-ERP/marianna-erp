@@ -66,6 +66,7 @@ export function warehouseForLocation(contacts: any[], locationId: any): { wareho
   for (const c of contacts || []) {
     const t = c?.warehouseTariff;
     if (!t) continue;
+    if (c?.invoicedViaForwarder) continue;   // v6.99.11 (owner): a port / transshipment warehouse charged through our forwarder issues no invoice to us → no expected invoice
     if ((t.locationIds || []).map(String).includes(String(locationId))) return { warehouse: c, tariff: t };
   }
   return null;

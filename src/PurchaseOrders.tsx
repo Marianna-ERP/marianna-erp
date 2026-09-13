@@ -1,4 +1,5 @@
 import { newestFirst } from "./moduleGuards.domain";
+import LocationPicker from "./LocationPicker";
 import { documentTotals, totalsLine } from "./pricingUnit.domain";
 import { exportRowsToXlsx, stamp as xlsStamp, exportVegaProSalesReport } from "./exportXlsx";
 import { PAGE_MAX, SmallButton } from "./ui";
@@ -12,7 +13,7 @@ import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
-import { LOCATIONS as SHARED_LOCATIONS, warehouseAddressLocations, unifiedLocations, locationById } from "./locations";
+import { warehouseAddressLocations, unifiedLocations, locationById } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO, inspectionTotals } from "./seasonOps.domain";
 import { derivePOLineQuantities, paymentDaysFor } from "./po.domain";
@@ -117,7 +118,7 @@ const LOCATION_TYPES: Record<string, any> = {
 };
 // LOCATIONS now comes from the shared ./locations source of truth.
 // Mapped so the legacy single-word `type` field still works in existing UI code.
-const LOCATIONS = SHARED_LOCATIONS.map(l => ({ ...l, type: l.legacyType }));
+// v6.99.12: module-level LOCATIONS alias removed — everything reads unifiedLocations() / locationById()
 
 // Which location type is the typical destination for each flow (drives optgroup ordering in the dropdown).
 // User can still pick from any type — this just shows the most common option first.
@@ -190,7 +191,7 @@ function FlowBadge({ flow, order = null, compact = false }: any) {
   // an explicit tradeMovement (legacy records that stored one).
   if (order && (order.buyIncoterm || order.tradeMovement)) {
     const dir = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? MOVEMENT_LABELS[order.tradeMovement] : null;
-    const place = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
+    const place = order.destinationText || (locationById(order.destinationLocationId)?.name) || "";
     return (
       <span title={handoverSentence(order.buyIncoterm, place)} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
         {dir ? <b style={{ color: dir.color }}>{dir.label} · </b> : null}{order.buyIncoterm ? <>{order.buyIncoterm}{place ? ` ${place}` : ""}</> : null}
@@ -821,7 +822,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
     }
     sf("status", newStatus);
   };
-  const WAREHOUSE_ADDRESS = (warehouseAddressLocations(contacts || [])[0] || {}).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
+  const WAREHOUSE_ADDRESS = ((unifiedLocations(contacts || []).find((l: any) => ["WAREHOUSE", "OWN"].includes(String(l.legacyType))) || {}) as any).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
   const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
@@ -973,32 +974,10 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   <div>
                     {(() => {
                       const pool = namedPlacePoolForIncoterm(order.buyIncoterm);
-                      // v6.29.0: merge live warehouse addresses from Contacts (v6.18.3
-                      // behaviour inherited from the removed legacy Destination field).
-                      const liveWh = warehouseAddressLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
-                      // v6.81.0 (D-55): for supplier-delivered terms the named place is often the CLIENT's
-                      // warehouse — client addresses are not locations, so they never appeared. Add them as
-                      // CLIENT sites; sort everything alphabetically (Polish collation).
-                      const supplierDelivers = ["DAP", "DDP", "DPU", "DAT"].includes(String(order.buyIncoterm || "").toUpperCase());
-                      const clientSites = supplierDelivers ? (contacts || []).filter((c: any) => (c.type === "Client" || (c.roles || []).includes("Client")) && String(c.address || c.city || "").trim())
-                        .map((c: any) => ({ id: `client:${c.id}`, name: `${c.name} — ${c.address || c.city}`, type: "CLIENT", legacyType: "CLIENT", country: c.country || "" })) : [];
-                      const byId = new Map<any, any>();
-                      // v6.86.0 (owner ruling): ONE source — unifiedLocations() already carries warehouse, supplier and client sites.
-                      unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType })).forEach((l: any) => byId.set(String(l.id), l));
-                      void liveWh; void clientSites;
-                      const all = Array.from(byId.values()).sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl", { sensitivity: "base" }));
-                      const opts = all.filter((l: any) => pool.types.includes(l.type));
-                      const rest = all.filter((l: any) => !pool.types.includes(l.type));
+                      // v6.99.13 (A-LOC-2): the ONE picker, preferred kinds first (from the incoterm), every other place in its own group below; no free text
                       return (<>
                         <Lbl>{pool.label} *</Lbl>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                          <Sel disabled={isLocked} value={order.destinationLocationId ?? ""} onChange={e => sf("destinationLocationId", e.target.value ? Number(e.target.value) : null)}>
-                            <option value="">— select the named place —</option>
-                            {opts.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}
-                            {rest.length > 0 && <optgroup label="Other places">{rest.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.label}</option>)}</optgroup>}
-                          </Sel>
-                          <Inp disabled={isLocked} value={order.destinationText || ""} onChange={e => sf("destinationText", e.target.value)} placeholder="…or type it (e.g. Alexandria)" />
-                        </div>
+                        <LocationPicker disabled={isLocked} value={order.destinationLocationId ?? order.destinationText ?? ""} contacts={contacts} preferredKinds={pool.types} placeholder={`— ${pool.label.toLowerCase()} —`} onChange={(r: any) => setOrder((o: any) => ({ ...o, destinationLocationId: r.id, destinationText: r.name }))} />
                         <div style={{ fontSize: 10.5, color: "#6366F1", marginTop: 5 }}>{(() => {
                           const ic = String(order.buyIncoterm || "").toUpperCase();
                           if (!ic) return "Select the purchase incoterm — it sets what to fill here.";
@@ -1018,7 +997,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   // removed — trade direction is the shipment's truth, and a flow-era
                   // guess here was misleading (showed intra-EU on a CIF export). The
                   // contractual handover sentence stays; it's a fact of the incoterm.
-                  const placeName = order.destinationText || (LOCATIONS.find((l: any) => l.id === order.destinationLocationId)?.name) || "";
+                  const placeName = order.destinationText || (locationById(order.destinationLocationId)?.name) || "";
                   if (!order.buyIncoterm) return null;
                   return (
                     <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF", fontSize: 11.5, color: "#4338CA", lineHeight: 1.45 }}>

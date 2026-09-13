@@ -30,7 +30,7 @@ export interface AppUser {
 /** v6.89.0: the WAREHOUSE preset — sees Inventory only (receipts, inspections, sorting, counts). */
 export function warehouseUser(id: any, name: string): AppUser {
   const u = blankUser(id, name, false);
-  MODULE_KEYS.forEach(k => { u.modules[k] = k === "lots" || k === "dashboard"; });
+  MODULE_KEYS.forEach(k => { u.modules[k] = k === "lots" || k === "dashboard" || k === "contacts"; });   // v6.99.11 (owner): may add places in the Directory
   FINANCE_KEYS.forEach(k => { u.finance[k] = false; });
   u.role = "Warehouse";
   return u;

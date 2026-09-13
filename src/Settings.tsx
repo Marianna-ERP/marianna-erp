@@ -800,7 +800,7 @@ export default function Settings({
           onManage={() => setManage("products")}
         />
         <ManageCard
-          title="LOCATIONS — one source for every picker (ports · custom · counterparty sites)"
+          title="LOCATIONS — managed in the Directory (Counterparties → Ports & crossings; sites on each counterparty)"
           summary={(() => { const PORT = new Set(["Port", "PortWarehouse"]); const all = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE); const c = all.filter((l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE).length; const b = all.filter((l: any) => Number(l.id) < CUSTOM_LOCATION_ID_BASE && PORT.has(String(l.type))).length; return `${b} port built-ins · ${c} custom · party facilities are managed in Parties`; })()}
           buttonLabel="Manage ports & locations…"
           onManage={() => setManage("locations")}

@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, buildStockCount, applyStockCount, plateMismatch } from "./seasonOps.domain";
 import { PAGE_MAX, SmallButton } from "./ui";
@@ -755,9 +756,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
               <div style={{ textAlign: "center", paddingBottom: 9, color: "#94A3B8", fontSize: 16 }}>→</div>
               <div>
                 <Lbl>{type === "SHIP_OUT" ? "Shipped to" : "To"}</Lbl>
-                <Sel value={toId} onChange={e => setToId(parseInt(e.target.value))}>
-                  {moveLocs.map((l: any) => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
-                </Sel>
+                <LocationPicker value={toId ?? ""} contacts={contacts} onChange={(r: any) => setToId(r.id)} placeholder="— destination —" />
               </div>
             </div>
           )}

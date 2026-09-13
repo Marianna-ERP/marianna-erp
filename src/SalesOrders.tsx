@@ -1,4 +1,5 @@
 import { newestFirst } from "./moduleGuards.domain";
+import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lineFromPOLine, lockRate, actualDeliveryDate, deliveryDelayDays, deliveryEventFor } from "./so.domain";
 import { PAGE_MAX, SmallButton } from "./ui";
@@ -1684,14 +1685,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                         </Sel>
                       );
                     })()}
-                    <Inp
-                      value={order.destinationText || ""}
-                      disabled={fullyLocked}
-                      onChange={e => { const v = e.target.value; const hit = unifiedLocations(contacts || []).find((x: any) => String(x.name).toLowerCase() === String(v).toLowerCase()); setOrder((o: any) => ({ ...o, destinationText: v, destinationLocationId: hit ? hit.id : o.destinationLocationId })); }} list="so-destinations"
-                      placeholder="…or type the exact delivery address (free text)"
-                      style={{ marginTop: 6 }}
-                    />
-                      <datalist id="so-destinations">{unifiedLocations(contacts || []).map((x: any) => <option key={String(x.id)} value={x.name} />)}</datalist>
+                    <LocationPicker value={order.destinationLocationId ?? order.destinationText ?? ""} contacts={contacts} disabled={fullyLocked} placeholder="— destination (client site, port, warehouse) —" onChange={(r: any) => setOrder((o: any) => ({ ...o, destinationLocationId: r.id, destinationText: r.name }))} title="v6.99.10: one location list for every destination" style={{ marginTop: 6 }} />
                     <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
                       Pick a known place, or type the exact address (relay, port, or client site as the Incoterm requires). Free text takes precedence on the printed SO.
                     </div>

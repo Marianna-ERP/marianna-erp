@@ -307,6 +307,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
+  // v6.99.12: logisticsPoints store retired from the UI (kept in DATA_KEYS for old backups only)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [logisticsPoints, setLogisticsPoints] = useLocalStoredState("logisticsPoints", []);
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
   const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
@@ -393,6 +395,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // v6.99.11: pickers may ask to open the Directory ("＋ Add it in the Directory…") — never free text.
+  useEffect(() => { const h = (e: any) => { setActiveModule("contacts"); try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); } catch {} }; window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
   // v6.99.9: shipments healed once — unit kg mirrors in step with the derived figure; stale zero-amount leg-freight lines removed.
   useEffect(() => { setShipments((prev: any[]) => { let changed = false; const next = (prev || []).map((s: any) => { const r = healShipmentModel(s); if (r.changed) changed = true; return r.sh; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -499,7 +503,7 @@ export default function App() {
       case "finance":
         return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={userName}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
-        return <Contacts contacts={contacts} setContacts={setContactsCascade} logisticsPoints={logisticsPoints} setLogisticsPoints={setLogisticsPoints} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName} />;
+        return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName} />;
       case "pos":
         return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} setInvoices={setInvoices} />;
       case "lots":
