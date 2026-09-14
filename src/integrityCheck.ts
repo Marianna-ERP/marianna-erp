@@ -1,3 +1,4 @@
+import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 import { missingPeopleInfo } from "./counterparty.domain";
 import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
 import { purchaseInvoiceVariance } from "./po.domain";
@@ -165,6 +166,11 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
         }
       });
     });
+    // v6.99.22 (G-1): the same promise, per grade — a sorted lot cannot serve more class I than it holds
+    const ga = gradeAvailabilityOf(lot, orders);
+    if (ga.stockI + ga.stockII > 0 && ga.promisedI > ga.stockI + 0.01) {
+      add("error", "LOT_GRADE_OVERSOLD", "Inventory", lot.number, `Class I promised ${Math.round(ga.promisedI).toLocaleString("pl-PL")} kg but only ${Math.round(ga.stockI).toLocaleString("pl-PL")} kg of class I are in stock (class II available ${Math.round(ga.II).toLocaleString("pl-PL")} kg). Adjust the sales order: split by grade, source elsewhere, or short-deliver.`);
+    }
     if (reserved > avail + 0.01 && reserved > 0) {
       add("error", "LOT_OVERSOLD", "Inventory", lot.number || "(unnumbered lot)",
         `Committed ${r2(reserved).toLocaleString("pl-PL")} kg exceeds available ${r2(avail).toLocaleString("pl-PL")} kg (claimed by ${[...new Set(claimers)].join(", ")}).`);

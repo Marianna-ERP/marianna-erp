@@ -1742,6 +1742,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               const avail = availability[i] || {};
               const showAvail = it.sourceType && it.sourceRef && avail.lineQty > 0;
               const lineOverageBlocks = avail.hasOverage && nonDraftStatuses.includes(order.status);
+              // v6.99.22 (G-4/G-5, owner approval): sorting turned part of the lot into class II — the line promises a class we no longer have.
+              const gradeShort = avail.grade && avail.gradeShort > 0.5 ? avail.gradeShort : 0;
+              const canAdjust = gradeShort > 0 && !soFullyLocked(order.status, order) && !["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(order, SHIPMENTS_REF || [])));
               return (
                 <div key={i} style={{
                   marginBottom: 12, padding: 12, borderRadius: 8,
@@ -1749,6 +1752,20 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   border: lineIsBlocking || lineOverageBlocks ? "1px solid #FCA5A5" : (avail.hasOverage ? "1px solid #FCD34D" : "1px solid #F3F4F6")
                 }}>
                   {/* Source bar */}
+                  {gradeShort > 0 && (
+                    <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "7px 10px", marginBottom: 8, fontSize: 11.5, color: "#92400E" }}>
+                      <b>Class {avail.grade}: only {Number(avail.primaryAvailable || 0).toLocaleString("pl-PL")} kg available</b> of the {Number(avail.lineQty || 0).toLocaleString("pl-PL")} kg on this line — short {gradeShort.toLocaleString("pl-PL")} kg. Sorting moved part of {it.sourceRef} to another class.
+                      {canAdjust ? (
+                        <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                          <button type="button" onClick={() => { const keep = Math.max(0, Math.round(Number(avail.primaryAvailable) || 0)); const rest = Math.round((Number(avail.lineQty) || 0) - keep); setOrder((o: any) => { const items = [...o.items]; items[i] = { ...items[i], qty: keep }; items.splice(i + 1, 0, { ...items[i], id: nextId(), qty: rest, grade: String(items[i].grade || "I").toUpperCase() === "II" ? "I" : "II", unitPrice: "" }); return { ...o, items }; }); }} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontWeight: 700, cursor: "pointer" }} title="Split: keep what this class has, sell the rest as the other class — same lot, one delivery; the price is negotiated per class, so type it">Split by grade</button>
+                          <button type="button" onClick={() => { const keep = Math.max(0, Math.round(Number(avail.primaryAvailable) || 0)); setOrder((o: any) => { const items = [...o.items]; items[i] = { ...items[i], qty: keep }; items.splice(i + 1, 0, { ...items[i], id: nextId(), qty: Math.round((Number(avail.lineQty) || 0) - keep), sourceType: "", sourceRef: "", sourceLineId: null }); return { ...o, items }; }); }} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #0E7490", background: "#fff", color: "#0E7490", fontWeight: 700, cursor: "pointer" }} title="Keep this class and source the shortfall from another lot or PO — the new line waits for its source">Source the rest elsewhere</button>
+                          <button type="button" onClick={() => { const keep = Math.max(0, Math.round(Number(avail.primaryAvailable) || 0)); setOrder((o: any) => { const items = [...o.items]; items[i] = { ...items[i], qty: keep }; return { ...o, items }; }); }} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #B45309", background: "#fff", color: "#B45309", fontWeight: 700, cursor: "pointer" }} title="Deliver what this class holds; the rest stays in stock for another sale">Short-deliver</button>
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 6, fontWeight: 600 }}>The goods have already been loaded or invoiced — history is not edited. Raise a <b>client claim</b> from this order for the grade difference; the credit note nets into the sale and the producer settlement (owner rule G-5).</div>
+                      )}
+                    </div>
+                  )}
                   <div style={{
                     display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "6px 10px", borderRadius: 6,
                     background: it.sourceType

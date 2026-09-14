@@ -1618,3 +1618,45 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.8 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.22 — GRADE IS PART OF THE PROMISE (G-1…G-5) ══
+(function v69922(){
+  console.log("\n══ 48. v6.99.22: grade stock, grade availability, the sorting warning, the ship-out's grade ══");
+  const Z = B("seasonOps.domain.js"); const SD = B("salesOrders.domain.js");
+  // the owner's real case: 14 300 received · 3 750 reclassified to II · 200 lost · 8 750 shipped as class I · 5 500 still promised as class I
+  const lot = { number: "L1", product: "Capsicum", poRef: "PO-1", locationId: 9, receivedKg: 14300, physicalKg: 5350, availableKg: 5350,
+    movements: [ { id: 1, type: "IN", date: "2026-08-13", qtyKg: 14300 }, { id: 2, type: "DAMAGE", date: "2026-08-13", qtyKg: 50 },
+      { id: 3, type: "RECLASS", date: "2026-08-15", qtyKg: 750, toGrade: "II" }, { id: 4, type: "SHIP_OUT", date: "2026-08-15", qtyKg: 8750, grade: "I", soRef: "SO-24" },
+      { id: 5, type: "RECLASS", date: "2026-09-14", qtyKg: 3000, toGrade: "II", source: "sorting:9" }, { id: 6, type: "DAMAGE", date: "2026-09-14", qtyKg: 50, source: "sorting:9" }, { id: 7, type: "DAMAGE", date: "2026-09-14", qtyKg: 100, source: "count:9" } ] };
+  const orders = [ { id: 24, number: "SO-24", status: "Confirmed", items: [{ product: "Capsicum", sourceType: "STOCK", sourceRef: "L1", qty: 8750 }] },
+                   { id: 23, number: "SO-23", status: "Confirmed", items: [{ product: "Capsicum", sourceType: "STOCK", sourceRef: "L1", qty: 5500 }] } ];
+  t("G-1: stock by grade reads the ledger — class II is what sorting made and has not shipped; class I is the rest of the physical stock", () => {
+    const g = Z.gradeStockNow(lot); eq(g.I, 1600); eq(g.II, 3750); eq(g.waste, 50);
+  });
+  t("G-1: availability by grade nets the promises; the shipped order is history and promises nothing", () => {
+    const a = Z.gradeAvailability(lot, orders);
+    eq(a.promisedI, 5500, "only SO-23 still promises class I — SO-24's kilos already left"); eq(a.stockI, 1600); eq(a.I, -3900); eq(a.II, 3750);
+  });
+  t("G-3: the sorting job names the order it undercut and never blocks", () => {
+    const w = Z.gradeCommitmentWarning(lot, orders);
+    ok(w.includes("SO-23")); ok(!w.includes("SO-24"), "a shipped order is not 'affected'"); ok(w.includes("3900") || w.includes("3 900"));
+  });
+  t("G-1: the sales line check reports the class, its stock and the shortfall", () => {
+    const so = orders[1];
+    const av = SD.computeLineAvailability(so.items, orders, so.id, [lot], [], []);
+    eq(av[0].grade, "I"); eq(av[0].gradeStockKg, 1600); eq(av[0].primaryAvailable, 1600); eq(av[0].gradeShort, 3900); ok(av[0].hasOverage);
+  });
+  t("G-1: a class II line on the same lot is fine — 3 750 kg are there", () => {
+    const soII = { id: 25, number: "SO-25", status: "Draft", items: [{ product: "Capsicum", sourceType: "STOCK", sourceRef: "L1", qty: 3750, grade: "II" }] };
+    const av = SD.computeLineAvailability(soII.items, [...orders, soII], soII.id, [lot], [], []);
+    eq(av[0].grade, "II"); eq(av[0].primaryAvailable, 3750); eq(av[0].gradeShort, 0); ok(!av[0].hasOverage);
+  });
+  t("G-2 heal: ship-outs posted before grades existed are class I — remaining-by-grade is read, not guessed; idempotent", () => {
+    const raw = { ...lot, movements: lot.movements.map(m => m.type === "SHIP_OUT" ? { ...m, grade: undefined } : m) };
+    const r = Z.normaliseLot(raw, {}); ok(r.changed); eq(r.lot.movements.find(m => m.type === "SHIP_OUT").grade, "I");
+    eq(Z.gradeStockNow(r.lot).I, 1600);
+    ok(!Z.normaliseLot(r.lot, {}).changed);
+  });
+  console.log("v6.99.22 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

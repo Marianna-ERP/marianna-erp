@@ -1,3 +1,4 @@
+import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 // ─────────────────────────────────────────────────────────────────────────────
 // salesOrders.domain.ts — pure availability & reservation engine (Batch 1)
 //
@@ -291,10 +292,22 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
 
     let primaryAvailable = 0;
     let primaryProductMismatch = false;
+    let gradeOfLine: "I" | "II" | null = null; let gradeStockKg: number | null = null;
     if (it.sourceType === "STOCK" && it.sourceRef) {
       const lot = LOTS.find(l => l.number === it.sourceRef);
       if (lot) {
-        if (productsMatch(it.product, lot.product)) primaryAvailable = lotRemaining(it.sourceRef);
+        if (productsMatch(it.product, lot.product)) {
+          primaryAvailable = lotRemaining(it.sourceRef);
+          // v6.99.22 (G-1, owner approval): grade is part of the promise. A sorted lot is not one pool —
+          // selling class I that sorting turned into class II is selling what we do not have.
+          const sorted = (lot.movements || []).some((m: any) => m && !m.voided && m.type === "RECLASS");
+          if (sorted) {
+            gradeOfLine = String(it.grade || "I").toUpperCase() === "II" ? "II" : "I";
+            const ga = gradeAvailabilityOf(lot, allOrders, currentOrderId);
+            gradeStockKg = gradeOfLine === "II" ? ga.stockII : ga.stockI;
+            primaryAvailable = Math.max(0, gradeOfLine === "II" ? ga.II : ga.I);
+          }
+        }
         else primaryProductMismatch = true;
       }
     } else if (it.sourceType === "PO" && it.sourceRef) {
@@ -338,6 +351,9 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
       combinedAvailable: Math.round(combinedAvailable * 100) / 100,
       overage: Math.round(primaryShortfallAmount * 100) / 100,
       hasOverage: primaryShortfallAmount > 0.01,
+      grade: gradeOfLine,                     // v6.99.22 (G-1): which class this line promises
+      gradeStockKg: gradeStockKg,             // and how much of that class is in stock at all
+      gradeShort: gradeOfLine ? Math.round(Math.max(0, lineQty - primaryAvailable) * 100) / 100 : 0,
       primaryShortfall: primaryShortfallAmount > 0.01,
       primaryProductMismatch,
     };

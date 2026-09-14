@@ -2,7 +2,7 @@ import React, { useState, useMemo } from "react";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
-import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, buildStockCount, applyStockCount, plateMismatch } from "./seasonOps.domain";
+import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, buildStockCount, applyStockCount, plateMismatch, gradeCommitmentWarning } from "./seasonOps.domain";
 import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
@@ -925,12 +925,15 @@ function printHtmlNodeInv(nodeId, title, notify = null) {
   document.body.appendChild(iframe);
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>
-  @page { size: A4; margin: 12mm; }
+  /* v6.99.21 (A-R15-1): the report was cut on the right — fixed width + non-wrapping tables. Fit the page instead. */
+  @page { size: A4; margin: 10mm; }
   html, body { margin: 0; padding: 0; background: #fff; }
   body { font-family: Arial, Calibri, sans-serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  table { border-collapse: collapse; width: 100%; page-break-inside: avoid; }
+  * { box-sizing: border-box; max-width: 100%; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; page-break-inside: avoid; }
+  td, th { word-wrap: break-word; overflow-wrap: anywhere; white-space: pre-line; vertical-align: top; }
   tr { page-break-inside: avoid; }
-</style></head><body>${(() => { const c = node.cloneNode(true) as HTMLElement; c.style.position = "static"; c.style.left = "auto"; c.style.top = "auto"; c.style.width = "100%"; return c.outerHTML; })()}</body></html>`;   // v6.99.17 (A-R13-4): the hidden report was printed off-page
+</style></head><body>${(() => { const c = node.cloneNode(true) as HTMLElement; c.style.position = "static"; c.style.left = "auto"; c.style.top = "auto"; c.style.width = "100%"; c.style.maxWidth = "100%"; return c.outerHTML; })()}</body></html>`;   // v6.99.17 (A-R13-4): the hidden report was printed off-page
   const doc = iframe.contentDocument || iframe.contentWindow?.document;
   if (!doc) { iframe.remove(); return; }
   doc.open(); doc.write(html); doc.close();
@@ -1209,7 +1212,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
 // ── v6.89.0 (consignment season): QUALITY INSPECTION · SORTING JOB · STOCK COUNT ──
 // One owner per fact: inspections store (lot-referenced), sorting posts DAMAGE + grade split on the lot,
 // stock counts create reasoned adjustments. Compact forms; the Lot Workbench (v6.91) composes them.
-function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, defectCatalogue = [], stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [] }: any) {
+function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, defectCatalogue = [], stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [] }: any) {
   // v6.99.19 (A-R14-8): once a claim on this lot is finalised or its truck settlement is closed, the facts behind them are frozen.
   const frozenBy = (() => {
     const cl = (claims || []).find((c: any) => ["Settled", "Accepted", "Closed"].includes(String(c.status)) && ((c.subjects || []).some((s: any) => String(s.ref) === String(lot.number)) || String(c.rootDoc?.number) === String(lot.poRef)));
@@ -1282,7 +1285,10 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
           <div><Lbl>Waste kg</Lbl><input type="number" value={sortF.wasteKg} onChange={e => setSortF({ ...sortF, wasteKg: e.target.value })} style={inp} /></div>
           <div><Lbl>By</Lbl><input value={sortF.by} onChange={e => setSortF({ ...sortF, by: e.target.value })} placeholder="Agrohurt" style={inp} /></div>
           <div><Lbl>Hours</Lbl><input type="number" value={sortF.hours} onChange={e => setSortF({ ...sortF, hours: e.target.value })} style={inp} /></div>
-          <button onClick={() => { const r = runSortingJob(lot, { ...sortF, date: sortF.date || localTodayISO() }, { nextId }); if (r.error) { window.alert(r.error); return; } setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? recompute(r.lot, r.lot.movements) : l)); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job: I ${sortF.classIKg} · II ${sortF.classIIKg} · waste ${sortF.wasteKg} kg` }); setMode(""); }} style={{ fontSize: 11.5, padding: "7px 12px", border: "none", background: "#7C3AED", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 800 }}>Post sorting</button>
+          <button onClick={() => { const r = runSortingJob(lot, { ...sortF, date: sortF.date || localTodayISO() }, { nextId }); if (r.error) { window.alert(r.error); return; } const healed = recompute(r.lot, r.lot.movements); setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? healed : l)); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job: I ${sortF.classIKg} · II ${sortF.classIIKg} · waste ${sortF.wasteKg} kg` });
+            // v6.99.22 (G-3, owner approval): sorting never blocks — but it says at once which sales it just undercut.
+            const warn = gradeCommitmentWarning(healed, orders || []); if (warn) window.alert("⚠ " + warn);
+            setMode(""); }} style={{ fontSize: 11.5, padding: "7px 12px", border: "none", background: "#7C3AED", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 800 }}>Post sorting</button>
         </div>
       )}
       {mode === "count" && (
@@ -2149,7 +2155,7 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
             if (close) setSettlementLot(null);
           }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
-          season={{ lots, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
+          season={{ lots, orders: liveSOs, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
           pos={extPOs}
           allLots={lots}
           lotClaims={claimsForLot(extClaims || [], selected?.number).filter((c: any) => c.direction === "RECOVERY")}

@@ -50,7 +50,8 @@ export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; o
     // rows existed): fall back to the PO link rather than dropping it silently.
     return !!(lot.poRef && (refs(s.poRefs).includes(lot.poRef) || goods.some((g: any) => g.poRef === lot.poRef)));
   };
-  const ship = shipments.filter(carriesLot).map(s => ({
+  // v6.99.21 (A-R15-2): a CANCELLED shipment never carried the goods — it has no place in a recall report
+  const ship = shipments.filter((s: any) => String(s?.status) !== "Cancelled").filter(carriesLot).map(s => ({
     number: s.number, status: s.status, direction: s.tradeDirection || undefined,
     // v6.99.19 (A-R14-4): places, dates and carrier come from the UNITS (the leg values are legacy defaults)
     carrier: (() => { const ids = (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => u.carrierId ?? l.carrierId ?? l.forwarderId)).filter(Boolean); const names = Array.from(new Set(ids.map((id: any) => (inp.contacts || []).find((c: any) => String(c.id) === String(id))?.name).filter(Boolean))); return names.join(", ") || s.carrierName || undefined; })(),

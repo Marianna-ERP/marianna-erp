@@ -169,6 +169,11 @@ export function normaliseLot(lot: any, ctx: { po?: any; poSettlements?: any[] } 
     if (!!l.consignment !== cons) { l.consignment = cons; changed = true; }
     if (ctx.po.directFlow !== undefined && !!l.directFlow !== !!ctx.po.directFlow) { l.directFlow = !!ctx.po.directFlow; changed = true; }   // synced derivation, never typed
   }
+  // v6.99.22 (G-2 heal): movements posted before grades existed took class I — state it, so remaining-by-grade is read, not guessed.
+  if (Array.isArray(l.movements) && l.movements.some((m: any) => m && m.type === "SHIP_OUT" && !m.grade)) {
+    l.movements = l.movements.map((m: any) => (m && m.type === "SHIP_OUT" && !m.grade) ? { ...m, grade: "I" } : m);
+    changed = true;
+  }
   const firstIn = (l.movements || []).filter((m: any) => m && !m.voided && m.type === "IN").map((m: any) => String(m.date || "")).filter(Boolean).sort()[0];
   if (firstIn && l.arrivalDate !== firstIn) { l.arrivalDate = firstIn; changed = true; }
   if (l.settlement && ctx.poSettlements && !ctx.poSettlements.some(s => String(s.poNumber) === String(l.poRef))) { settlementToMigrate = { ...l.settlement, poNumber: l.poRef, fromLot: l.number }; }
@@ -193,4 +198,49 @@ export function portStageTransfers(sh: any, lots: any[], portLocationId: any, da
     return { ...lot, movements: [...(lot.movements || []), { id: deps.nextId(), date: dateISO, type: "TRANSFER", qtyKg: r0(num(lot.physicalKg)), fromId: lot.locationId ?? null, toId: portLocationId ?? null, shipmentRef: sh.number, note: `${kind === "unloaded" ? "Unloaded at the port of loading" : "Discharged & cleared at the port of discharge"} — ${sh.number}`, source }] };
   });
   return { lots: next, posted };
+}
+
+// ── v6.99.22 (G-1…G-4, owner approval 14 Sept): GRADE IS PART OF THE PROMISE ──
+// Sorting turns sound fruit into class II. What is in stock is therefore not one number but
+// two: class I and class II. These read the LEDGER (RECLASS in, ship-outs out) — no new store.
+
+/** What is in stock NOW, by grade. class II = reclassified in − shipped out as II; class I = the rest of the physical stock. */
+export function gradeStockNow(lot: any): { I: number; II: number; waste: number } {
+  const live = (lot?.movements || []).filter((m: any) => m && !m.voided);
+  const toII = live.filter((m: any) => m.type === "RECLASS" && String(m.toGrade || "II").toUpperCase() === "II").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
+  const backToI = live.filter((m: any) => m.type === "RECLASS" && String(m.toGrade).toUpperCase() === "I").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
+  const outII = live.filter((m: any) => ["SHIP_OUT", "DAMAGE"].includes(m.type) && String(m.grade || "").toUpperCase() === "II").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
+  const backII = live.filter((m: any) => m.type === "REVERSAL" && String(m.grade || "").toUpperCase() === "II").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
+  const physical = num(lot?.physicalKg);
+  const II = Math.max(0, Math.min(physical, r0(toII - backToI - outII + backII)));
+  return { I: Math.max(0, r0(physical - II)), II, waste: r0(live.filter((m: any) => m.type === "DAMAGE" && String(m.source || "").startsWith("sorting:")).reduce((s: number, m: any) => s + num(m.qtyKg), 0)) };
+}
+
+/** Available per grade = in stock of that grade − what other live orders promise of that grade. */
+export function gradeAvailability(lot: any, orders: any[], excludeOrderId?: any): { I: number; II: number; promisedI: number; promisedII: number; stockI: number; stockII: number } {
+  const stock = gradeStockNow(lot);
+  let promisedI = 0, promisedII = 0;
+  (orders || []).forEach(o => {
+    if (!o || ["Draft", "Cancelled"].includes(String(o.status))) return;
+    if (excludeOrderId != null && String(o.id) === String(excludeOrderId)) return;
+    // an order whose goods already left the lot is history, not a promise (v6.99.15 rule)
+    const gone = (o.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(lot?.number)) &&
+      (lot?.movements || []).some((m: any) => m && !m.voided && m.type === "SHIP_OUT" && String(m.soRef || "") === String(o.number));
+    if (gone) return;
+    (o.items || []).forEach((it: any) => {
+      if (it.sourceType !== "STOCK" || String(it.sourceRef) !== String(lot?.number)) return;
+      const g = String(it.grade || "I").toUpperCase() === "II" ? "II" : "I";
+      if (g === "II") promisedII += num(it.qty); else promisedI += num(it.qty);
+    });
+  });
+  return { I: r0(stock.I - promisedI), II: r0(stock.II - promisedII), promisedI: r0(promisedI), promisedII: r0(promisedII), stockI: stock.I, stockII: stock.II };
+}
+
+/** G-3: after sorting, say which live orders can no longer be served in the grade they promise. */
+export function gradeCommitmentWarning(lot: any, orders: any[]): string {
+  const a = gradeAvailability(lot, orders);
+  if (a.I >= -1) return "";
+  const gone = (o: any) => (lot?.movements || []).some((m: any) => m && !m.voided && m.type === "SHIP_OUT" && String(m.soRef || "") === String(o.number));
+  const affected = (orders || []).filter(o => o && !["Draft", "Cancelled"].includes(String(o.status)) && !gone(o) && (o.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(lot?.number) && String(it.grade || "I").toUpperCase() !== "II")).map(o => o.number);
+  return `${lot?.number}: class I in stock is ${a.stockI.toLocaleString("pl-PL")} kg but ${a.promisedI.toLocaleString("pl-PL")} kg are sold as class I${affected.length ? ` (${affected.join(", ")})` : ""} — short ${Math.abs(a.I).toLocaleString("pl-PL")} kg. Class II available: ${a.II.toLocaleString("pl-PL")} kg. Adjust the order(s): split by grade, source elsewhere, or short-deliver.`;
 }
