@@ -769,7 +769,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
             </div>
           );
         })()}
-        <ClaimEvidenceCard claim={selected} patch={(p: any) => patch(selected.id, p)} inspections={inspections} shipments={shipments} lots={lots} contacts={contacts} financeNotes={financeNotes} invoices={invoices} setInvoices={setInvoices} setFinanceNotes={setFinanceNotes} />
+        {selected && <ClaimEvidenceCard claim={selected} patch={(p: any) => patch(selected.id, p)} inspections={inspections} shipments={shipments} lots={lots} contacts={contacts} financeNotes={financeNotes} invoices={invoices} setInvoices={setInvoices} setFinanceNotes={setFinanceNotes} />}
       </div>
     </div>
   );
