@@ -156,6 +156,8 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     const claimers: string[] = [];
     orders.forEach((o: any) => {
       if (!RESERVING_SO_STATUSES.has(o.status)) return;
+      // v6.99.17 (A-R13-5): an order already loaded / shipped is history — its kilos left as SHIP_OUT and are not committed twice
+      if ((shipments || []).some((s: any) => s && String(s.status) !== "Cancelled" && String(s.purpose || "").toUpperCase() !== "INBOUND" && ["Loaded", "In transit", "Delivered", "Closed"].includes(String(s.status)) && ((s.soRefs || []).includes(o.number) || (s.goods || []).some((g: any) => g.soRef === o.number)))) return;
       arr(o.items).forEach((it: any) => {
         if (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number) && norm(it.product) === norm(lot.product)) {
           const q = num(it.qty);
