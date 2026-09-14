@@ -1627,12 +1627,12 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ Record inspection</button>}>INSPECTIONS{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
                 {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No inspections recorded. Record one when goods are checked on arrival, in storage, by a client, or at customs.</div>}
-                {([...(lot.inspections || []), ...((seasonInspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number)).map((x: any) => ({ date: x.date, result: `${x.stage} · defects ${inspectionTotals(x).totalPct}% · ${x.verdict}`, notes: (x.defects || []).map((d: any) => `${d.name} ${d.pct}%`).join(", ") + (x.observations ? ` — ${x.observations}` : ""), inspector: x.inspector, _season: true })))]).map((ins, i) => {
+                {([...(lot.inspections || []), ...((seasonInspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number)).map((x: any) => ({ date: x.date, context: `${x.stage} — quality inspection`, outcome: x.verdict, findings: `defects ${inspectionTotals(x).totalPct}%: ` + ((x.defects || []).map((d: any) => `${d.name} ${d.pct}%`).join(", ") || "none") + (x.observations ? ` — ${x.observations}` : "") + (x.inspector ? ` · ${x.inspector}` : ""), lossKg: 0, creditNote: null, _season: true })))]).map((ins, i) => {
                   const ctx = INSPECTION_CONTEXTS.find(c => c.code === ins.context);
                   const out = INSPECTION_OUTCOMES.find(o => o.code === ins.outcome);
                   const bad = ins.outcome !== "ok";
                   return (
-                    <div key={i} style={{ padding: "10px 0", borderBottom: i < lot.inspections.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                    <div key={i} style={{ padding: "10px 0", borderBottom: "1px solid #F3F4F6" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
                         <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111" }}>🔍 {ctx ? ctx.label.split(" (")[0] : ins.context}</div>
                         <span style={{ fontSize: 10.5, color: "#AAA" }}>{ins.date}</span>
