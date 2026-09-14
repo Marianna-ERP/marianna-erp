@@ -12,14 +12,14 @@ function refs(v: any): string[] { return arr(v).filter(Boolean).map(String); }
 
 export interface TraceTree {
   lot: { number: string; product: string; variety?: string; receivedKg?: number; physicalKg?: number };
-  origin: { poNumber: string | null; supplier: string | null; supplierAddress?: string; origin?: string };
-  shipments: Array<{ number: string; status?: string; direction?: string; carrier?: string; from?: string; to?: string; dates?: string }>;
-  sales: Array<{ soNumber: string; client: string; qtyKg: number; status?: string; destination?: string }>;
+  origin: { poNumber: string | null; supplier: string | null; supplierAddress?: string; origin?: string; variety?: string; receivedKg?: number };
+  shipments: Array<{ number: string; status?: string; direction?: string; carrier?: string; from?: string; to?: string; dates?: string; loadedAt?: string; unloadedAt?: string }>;
+  sales: Array<{ soNumber: string; client: string; qtyKg: number; status?: string; destination?: string; incoterm?: string }>;
   invoices: Array<{ number: string; kind?: string; counterparty?: string; gross?: string }>;
   generatedAt: string;
 }
 
-export function buildTraceTree(lot: any, inp: { pos?: any[]; orders?: any[]; shipments?: any[]; invoices?: any[] }, todayISO: string): TraceTree {
+export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; orders?: any[]; shipments?: any[]; invoices?: any[] }, todayISO: string): TraceTree {
   const pos = arr(inp.pos), orders = arr(inp.orders), shipments = arr(inp.shipments), invoices = arr(inp.invoices);
   const po = pos.find(p => p.number === lot.poRef) || null;
 
@@ -52,9 +52,12 @@ export function buildTraceTree(lot: any, inp: { pos?: any[]; orders?: any[]; shi
   };
   const ship = shipments.filter(carriesLot).map(s => ({
     number: s.number, status: s.status, direction: s.tradeDirection || undefined,
-    carrier: s.carrierName || undefined,
-    from: s.originText || s.legs?.[0]?.fromCustom || undefined,
-    to: s.destinationText || (s.legs || []).slice(-1)[0]?.toCustom || undefined,
+    // v6.99.19 (A-R14-4): places, dates and carrier come from the UNITS (the leg values are legacy defaults)
+    carrier: (() => { const ids = (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => u.carrierId ?? l.carrierId ?? l.forwarderId)).filter(Boolean); const names = Array.from(new Set(ids.map((id: any) => (inp.contacts || []).find((c: any) => String(c.id) === String(id))?.name).filter(Boolean))); return names.join(", ") || s.carrierName || undefined; })(),
+    from: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.pickupText || "").trim())).find(Boolean) || s.originText || s.legs?.[0]?.fromCustom || undefined,
+    to: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.deliveryText || "").trim())).find(Boolean) || s.destinationText || (s.legs || []).slice(-1)[0]?.toCustom || undefined,
+    loadedAt: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.loadedAt || u.plannedLoadingDate || "").slice(0, 10))).filter(Boolean).sort()[0] || s.actualLoadingDate || s.expectedLoadingDate || undefined,
+    unloadedAt: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.unloadedAt || u.deliveredAt || u.plannedDeliveryDate || "").slice(0, 10))).filter(Boolean).sort().slice(-1)[0] || s.actualDeliveryDate || s.expectedDeliveryDate || undefined,
     dates: [s.expectedLoadingDate, s.expectedDeliveryDate].filter(Boolean).join(" → ") || undefined,
   }));
 
@@ -85,6 +88,7 @@ export function buildTraceTree(lot: any, inp: { pos?: any[]; orders?: any[]; shi
         soNumber: o.number, client: o.client?.name || "(client)",
         qtyKg: parseFloat(it.qty) || 0, status: o.status,
         destination: o.destinationText || o.client?.address || undefined,
+        incoterm: o.sellIncoterm || undefined,   // v6.99.19 (A-R14-5)
       });
     });
   });

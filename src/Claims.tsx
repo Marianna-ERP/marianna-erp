@@ -76,7 +76,14 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
         <div><Lbl>Agreed extension / exception (CL-4)</Lbl><input value={claim.agreedExtension || ""} onChange={e => patch({ agreedExtension: e.target.value })} placeholder="e.g. QC deadline extended to 15/09 by email" style={inp} /></div>
       </div>
       <div style={{ marginTop: 8 }}><Lbl>Attach evidence by reference (CL-3)</Lbl>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <select value="" onChange={e => { const hit = cands.find((x: any) => String(x.ref) === e.target.value); if (hit) patch(attachEvidence(claim, hit)); }} style={{ ...inp, maxWidth: 560 }}>
+          <option value="">— attach: pick an inspection, document, protocol or recorder —</option>
+          {cands.filter((x: any) => !(claim.evidence || []).some((e: any) => String(e.ref) === String(x.ref))).map((x: any) => <option key={x.ref} value={x.ref}>{x.kind}: {x.label}</option>)}
+        </select>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+          {(claim.evidence || []).map((e: any, i: number) => <span key={i} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid #BBF7D0", background: "#F0FDF4", color: "#166534" }}>✓ {e.kind}: {e.note || e.ref}</span>)}
+        </div>
+        <div style={{ display: "none" }}>
           {cands.map((c: any) => { const on = (claim.evidence || []).some((e: any) => String(e.ref) === String(c.ref)); return <button key={c.ref} disabled={on} onClick={() => patch(attachEvidence(claim, c))} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 6, border: "1px solid " + (on ? "#BBF7D0" : "#E5E7EB"), background: on ? "#F0FDF4" : "#fff", color: on ? "#166534" : "#334155", cursor: on ? "default" : "pointer" }}>{on ? "✓ " : "+ "}{c.kind}: {c.label}</button>; })}
           {!cands.length && <span style={{ fontSize: 11, color: "#94A3B8" }}>nothing on the lots / shipments yet — record an inspection or the shipment's documents first</span>}
         </div>
@@ -381,7 +388,6 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
           const family = net.members.length > 1 ? net : null;
           return (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <ClaimEvidenceCard claim={selected} patch={(p: any) => patch(selected.id, p)} inspections={inspections} shipments={shipments} lots={lots} contacts={contacts} financeNotes={financeNotes} invoices={invoices} setInvoices={setInvoices} setFinanceNotes={setFinanceNotes} />
               <Card>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
                   <div style={{ fontSize: 15, fontWeight: 800 }}>{selected.number}</div>
@@ -763,6 +769,7 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
             </div>
           );
         })()}
+        <ClaimEvidenceCard claim={selected} patch={(p: any) => patch(selected.id, p)} inspections={inspections} shipments={shipments} lots={lots} contacts={contacts} financeNotes={financeNotes} invoices={invoices} setInvoices={setInvoices} setFinanceNotes={setFinanceNotes} />
       </div>
     </div>
   );
