@@ -391,7 +391,12 @@ export function healShipmentModel(sh: any): { sh: any; changed: boolean } {
   let next = syncUnitKgMirrors(sh); let changed = next !== sh && JSON.stringify(next.legs) !== JSON.stringify(sh.legs);
   const costs = sh?.costs || [];
   if (costs.some((c: any) => String(c.source || "").startsWith("LEGCAR:"))) {
-    const cleaned = costs.filter((c: any) => { const src = String(c.source || ""); const legacy = src.startsWith("leg-freight:") || src.startsWith("LEG:"); if (!legacy) return true; const legNo = src.split(":")[1]; const covered = costs.some((x: any) => String(x.source || "").startsWith("LEGCAR:") && String(x.source).split(":")[1] === String(Number(legNo) - 1)); return num(c.amount) > 0 && !covered; });
+    // v6.99.16: a MANUAL line equal (supplier, amount, currency) to a derived carrier×leg line is the workaround typed while the auto line was missing → drop it
+    const legcar = costs.filter((c: any) => String(c.source || "").startsWith("LEGCAR:"));
+    const dedup = costs.filter((c: any) => { if (String(c.source || "")) return true; return !legcar.some((x: any) => String(x.supplierId ?? "") === String(c.supplierId ?? "") && Math.abs(num(x.amount) - num(c.amount)) < 0.005 && String(x.currency || "PLN").toUpperCase() === String(c.currency || "PLN").toUpperCase()); });
+    if (dedup.length !== costs.length) { next = { ...next, costs: dedup }; changed = true; }
+    const costs2 = next.costs || [];
+    const cleaned = costs2.filter((c: any) => { const src = String(c.source || ""); const legacy = src.startsWith("leg-freight:") || src.startsWith("LEG:"); if (!legacy) return true; const legNo = src.split(":")[1]; const covered = costs.some((x: any) => String(x.source || "").startsWith("LEGCAR:") && String(x.source).split(":")[1] === String(Number(legNo) - 1)); return num(c.amount) > 0 && !covered; });
     if (cleaned.length !== costs.length) { next = { ...next, costs: cleaned }; changed = true; }
   }
   return { sh: next, changed };

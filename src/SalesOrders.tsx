@@ -2853,7 +2853,7 @@ export default function SalesOrders({
               .filter((value: any): value is string => typeof value === "string" && value.length > 0);
             const uniqueSources: string[] = Array.from(new Set<string>(sources));
             // Quick overage check for the row badge
-            const rowAvail = computeLineAvailability(o.items, orders, o.id);
+            const rowAvail = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(o, SHIPMENTS_REF || []))) ? [] : computeLineAvailability(o.items, orders, o.id);   // v6.99.16: history is not checked
             const rowOverageCount = rowAvail.filter(a => a.hasOverage).length;
             return (
               <div key={o.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}

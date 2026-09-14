@@ -1048,7 +1048,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
           {/* Pricing */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>PAYMENT · CURRENCY · FX</SectionTitle>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.4fr", gap: 14 }}>
               <div>
                 <Lbl>Payment days (from invoice issue date)</Lbl>
                 <Inp disabled={isLocked} type="number" value={order.paymentDays ?? paymentDaysFor(order, order.supplier)} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder={`default ${paymentDaysFor(order, order.supplier) || "—"}`} title="v6.94.0 (PO-2, owner ruling): payment terms always count from the invoice issue date; the purchase invoice's due date derives from this" />
@@ -1115,7 +1115,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     <div><Lbl>Unit</Lbl><Sel value={it.pricingUnit || "kg"} onChange={e => si(i, "pricingUnit", e.target.value)} title="v6.94.0 (PO-1): order in kg or in boxes — the other figure derives from the packaging type"><option value="kg">kg</option><option value="box">box</option></Sel></div>
                     <div><Lbl>Qty (kg){String(it.pricingUnit || "kg") === "box" ? " (derived)" : ""}{isEstimatedLine(it) ? " · ESTIMATED" : ""}</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 19500" disabled={isLocked && !isEstimatedLine(it)} title={isEstimatedLine(it) ? "v6.95.0 (PO-10): quantities are ESTIMATED until the producer's packing result — editable even on a confirmed order; prices and terms are locked" : ""} /></div>
-                    <div><Lbl>Quantity</Lbl><Sel value={isEstimatedLine(it) ? "ESTIMATED" : "FINAL"} onChange={e => si(i, "quantityStatus", e.target.value)} disabled={isLocked && !isEstimatedLine(it)} title="v6.95.0 (PO-10): ESTIMATED = agreed price, quantity to be confirmed by the producer's packing result"><option value="FINAL">Final</option><option value="ESTIMATED">Estimated</option></Sel></div>
+                    <div style={{ maxWidth: 110 }}><Lbl>Quantity</Lbl><Sel value={isEstimatedLine(it) ? "ESTIMATED" : "FINAL"} onChange={e => si(i, "quantityStatus", e.target.value)} disabled={isLocked && !isEstimatedLine(it)} title="v6.95.0 (PO-10): ESTIMATED = agreed price, quantity to be confirmed by the producer's packing result"><option value="FINAL">Final</option><option value="ESTIMATED">Estimated</option></Sel></div>
                     <div><Lbl>Unit price</Lbl>{(order.pricingMode || "firm") === "consignment"
                       ? <div style={{ padding: "8px 10px", border: "1px dashed #D8B4FE", borderRadius: 6, fontSize: 12, color: "#7C3AED", background: "#FAF5FF", fontWeight: 600 }} title="Consignment — the producer's price is settled from your sales">Consignment ⚖</div>
                       : <Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" />}</div>

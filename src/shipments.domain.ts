@@ -59,6 +59,9 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     const lastLeg = (sh.legs || [])[((sh.legs || []).length || 1) - 1] || {};
     const firstLeg = (sh.legs || [])[0] || {};
     const destId = lastLeg.toLocationId || sh.destinationLocationId || lot.locationId;
+      // v6.99.16 (A-R12-4): the unit's delivery place is the real destination when set
+      const unitDest = (sh.legs || []).flatMap((l: any) => l.vehicles || []).map((u: any) => u.deliveryLocationId).find((x: any) => x != null && x !== "");
+      const destIdFinal = unitDest ?? destId;
     const fromId = firstLeg.fromLocationId || lot.locationId;
     const currentPhysical = num(lot.physicalKg);
     // v6.63.0 (D-03): anchor the lot's ORIGINAL location before this posting moves
@@ -94,7 +97,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       if (isDirectLot && notYetIn) {
         const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;
         const inMove = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: fromId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — direct flow (ownership at handover)` };
-        const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, fromId, toId: destId, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — client collection / direct pass-through` };
+        const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, fromId, toId: destIdFinal, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — client collection / direct pass-through` };
         return { ...lot, receivedKg: Math.round((num(lot.receivedKg) + qty) * 1000) / 1000, physicalKg: currentPhysical, status: "Delivered (direct)", arrivalDate: lot.arrivalDate || date, movements: [...(lot.movements || []), inMove, outMove] };
       }
       const nextPhysical = Math.max(0, currentPhysical - qty);
@@ -252,7 +255,7 @@ export function buildCollectionShipment(so: any, lots: any[], shipments: any[], 
     purpose: "OUTBOUND",
     status: "Booked",
     poRefs: Array.from(new Set(goods.map((g: any) => g.poRef).filter(Boolean))),
-    soRefs: [so.number],
+    soRefs: [so.number], governingSoRef: so.number,   // v6.99.16 (A-R12-3): the collected order governs
     lotRefs: Array.from(new Set(goods.map((g: any) => g.lotRef))),
     costResponsibility: "Client",
     supplierManagedTransport: false,

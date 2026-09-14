@@ -121,8 +121,12 @@ function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) 
   };
   const stages: any[] = [];
   legs.forEach((lg: any, i: number) => {
-    const fromName = nameOf(lg.fromLocationId, lg.fromCustom);
-    const toName = nameOf(lg.toLocationId, lg.toCustom);
+    // v6.99.16 (A-R12-4): places live on the UNITS — the leg's from/to are legacy defaults (SHP-0035 showed a stale "Biedronka")
+    const us = (lg.vehicles || []);
+    const unitFrom = us.map((u: any) => String(u.pickupText || "").trim()).find(Boolean);
+    const unitTo = us.map((u: any) => String(u.deliveryText || "").trim()).find(Boolean);
+    const fromName = unitFrom || nameOf(lg.fromLocationId, lg.fromCustom);
+    const toName = unitTo || nameOf(lg.toLocationId, lg.toCustom);
     const mode = lg.mode || "Road";
     const kind = mode === "Sea" ? "transit_sea" : mode === "Air" ? "transit_air" : "transit_road";
     // the origin stage (once, from the first leg)

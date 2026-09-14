@@ -2131,8 +2131,8 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
             <div><Lbl>FX</Lbl><Inp type="number" value={c.fxRate} onChange={e => updateCost(i, "fxRate", e.target.value)} /></div>
             <div><Lbl>Status</Lbl><Sel value={c.invoiceStatus} onChange={e => updateCost(i, "invoiceStatus", e.target.value)}><option>Expected</option><option>Received</option><option>Approved</option><option>Posted</option><option>Paid</option></Sel></div>
             <div><Lbl>Invoice ref</Lbl><Inp value={c.invoiceRef} onChange={e => updateCost(i, "invoiceRef", e.target.value)} /></div>
-            <div><Lbl>&nbsp;</Lbl>{(isFreightCostType(c.type) && !draft.supplierManagedTransport)
-              ? <span title="Freight lines can't be deleted" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", height: 34, width: "100%", color: "#9CA3AF", fontSize: 14 }}>🔒</span>
+            <div><Lbl>&nbsp;</Lbl>{(isFreightCostType(c.type) && !draft.supplierManagedTransport && String(c.source || "").startsWith("LEGCAR:"))
+              ? <span title="Derived from the unit prices — set the unit's price to 0 to remove it" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", height: 34, width: "100%", color: "#9CA3AF", fontSize: 14 }}>🔒</span>
               : <button onClick={() => removeCost(i)} title="Delete this cost line" style={{ height: 34, width: "100%", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>✕</button>}</div>
           </div>)}
           {(() => {
@@ -2772,8 +2772,8 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
             {(() => { const prov = providerName(leg.carrierId || leg.forwarderId || (leg.mode === "Sea" || leg.mode === "Air" ? shipment.forwarderId : shipment.carrierId), contacts);
               return prov ? <div style={{ fontSize: 10, color: "#475569", marginTop: 4, maxWidth: 66, overflowWrap: "break-word" }} title={leg.forwarderId ? "Forwarder" : "Carrier"}>{prov}</div> : null; })()}
           </div>
-          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>LOADING</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedPickupDate || "").slice(0, 10) || "-"}</div></div>
-          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>UNLOADING</div><div style={{ fontSize: 12, color: "#333" }}>{locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedDeliveryDate || "").slice(0, 10) || "-"}</div></div>
+          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>LOADING</div><div style={{ fontSize: 12, color: "#333" }}>{((leg.vehicles || []).map((u: any) => String(u.pickupText || "").trim()).find(Boolean)) || locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedPickupDate || "").slice(0, 10) || "-"}</div></div>
+          <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>UNLOADING</div><div style={{ fontSize: 12, color: "#333" }}>{((leg.vehicles || []).map((u: any) => String(u.deliveryText || "").trim()).find(Boolean)) || locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{String(leg.plannedDeliveryDate || "").slice(0, 10) || "-"}</div></div>
           <div style={{ fontSize: 11.5, color: "#555", lineHeight: 1.45 }}>
             {transportUnitsForLeg(leg).length > 0 ? transportUnitsForLeg(leg).map((u, ui) => (
               <div key={u.id || ui} style={{ padding: "4px 0", borderBottom: ui === transportUnitsForLeg(leg).length - 1 ? "none" : "1px dashed #E5E7EB" }}>
