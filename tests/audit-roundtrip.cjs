@@ -1660,3 +1660,25 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.22 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.23 — ONE payment-terms source (basis + days) ══
+(function v69923(){
+  console.log("\n══ 49. v6.99.23: payment terms — one field, migrated from the legacy text ══");
+  const P = B("po.domain.js"); const Q = B("so.domain.js");
+  t("the legacy text migrates into basis + days, then retires; idempotent", () => {
+    const r = P.normalisePO({ number: "PO-1", paymentTerms: "30 days from invoice date", items: [] }, {});
+    eq(r.po.paymentBasis, "INVOICE"); eq(r.po.paymentDays, 30); ok(!("paymentTerms" in r.po)); ok(!P.normalisePO(r.po, {}).changed);
+    eq(P.normalisePO({ number: "PO-2", paymentTerms: "Advance payment", items: [] }, {}).po.paymentBasis, "ADVANCE");
+    eq(P.normalisePO({ number: "PO-3", paymentTerms: "Cash against documents", items: [] }, {}).po.paymentBasis, "CAD");
+    const so = Q.normaliseSO({ number: "SO-1", paymentTerms: "14 days from invoice date", items: [] });
+    eq(so.so.paymentBasis, "INVOICE"); eq(so.so.paymentDays, 14); ok(!("paymentTerms" in so.so));
+  });
+  t("the printed sentence and the due date come from that one source", () => {
+    eq(P.paymentTermsLabel("INVOICE", 30), "30 days from invoice date");
+    ok(P.paymentTermsLabel("ADVANCE", 0).startsWith("Advance"));
+    eq(P.dueDateFor("2026-09-15", "INVOICE", 30), "2026-10-15");
+    eq(P.dueDateFor("2026-09-15", "COD", 30), "2026-09-15", "days never apply to cash on delivery");
+  });
+  console.log("v6.99.23 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

@@ -62,6 +62,9 @@ export function normalisePO(po: any, ctx: { orders?: any[]; directFromSOs?: (po:
   ["flow", "flowLabel", "purchaseIncoterm", "handoverPoint", "requiresSea", "variance", "actualAvailabilityDate"].forEach(drop);   // expectedDeliveryDate: read-forward until the DDL (PO-3 partial)
   if (LEGACY_PO_STATUSES.includes(S(p.status))) { p.status = "Confirmed"; p.statusNormalisedFrom = po.status; changed = true; }
   if (!(num(p.paymentDays) > 0)) { const m = S(p.paymentTerms).match(/(\d{1,3})/); if (m) { p.paymentDays = num(m[1]); changed = true; } }
+  // v6.99.23: one source — basis + days; the legacy text is read once, then retired.
+  if (!S(p.paymentBasis)) { p.paymentBasis = paymentBasisOf(p); changed = true; }
+  ["paymentTerms", "paymentTermsOther"].forEach(k => { if (k in p) { delete p[k]; changed = true; } });
   if (Array.isArray(p.items)) {
     const items = p.items.map((it: any) => {
       const n: any = { ...it };
@@ -99,4 +102,39 @@ export function purchaseInvoiceVariance(inv: any, po: any, lots: any[], toleranc
   const diff = r2(invoicedPLN - agreedPLN); const pct = r2(diff / agreedPLN * 100);
   if (Math.abs(pct) <= tolerancePct) return null;
   return { poNumber: po.number, invoiceNumber: inv.number || String(inv.id), agreedPLN, invoicedPLN, diffPLN: diff, diffPct: pct };
+}
+
+// ── v6.99.23 (owner 15 Sept): ONE payment-terms source — basis + days, no legacy text beside it ──
+// The owner's ruling stands: days always count from the invoice issue date. The other three terms
+// in the legacy list (advance, COD, CAD) are not "days" at all — they are a BASIS, so the one field
+// is a basis plus, for the invoice basis, a number of days.
+export type PaymentBasis = "INVOICE" | "ADVANCE" | "COD" | "CAD";
+export const PAYMENT_BASES: Array<{ value: PaymentBasis; label: string; pl: string; usesDays: boolean }> = [
+  { value: "INVOICE", label: "days from invoice date", pl: "dni od daty faktury", usesDays: true },
+  { value: "ADVANCE", label: "Advance payment (before dispatch)", pl: "Przedpłata", usesDays: false },
+  { value: "COD", label: "Cash on delivery", pl: "Płatność przy odbiorze", usesDays: false },
+  { value: "CAD", label: "Cash against documents", pl: "Płatność za dokumenty", usesDays: false },
+];
+/** Read the basis from a document or a counterparty, migrating the legacy text on the fly. */
+export function paymentBasisOf(src: any): PaymentBasis {
+  const b = S(src?.paymentBasis || src?.terms?.paymentBasis).toUpperCase();
+  if (["INVOICE", "ADVANCE", "COD", "CAD"].includes(b)) return b as PaymentBasis;
+  const t = S(src?.paymentTerms || src?.terms?.paymentTerms).toLowerCase();
+  if (t.includes("advance") || t.includes("przedpł")) return "ADVANCE";
+  if (t.includes("cash on delivery")) return "COD";
+  if (t.includes("against documents")) return "CAD";
+  return "INVOICE";
+}
+/** The one sentence printed on documents and shown in lists. */
+export function paymentTermsLabel(basis: PaymentBasis, days: any, bilingual = false): string {
+  const spec = PAYMENT_BASES.find(b => b.value === basis) || PAYMENT_BASES[0];
+  if (!spec.usesDays) return bilingual ? `${spec.label} / ${spec.pl}` : spec.label;
+  const d = Math.round(num(days));
+  if (!(d > 0)) return bilingual ? "On invoice / Płatne po wystawieniu faktury" : "On invoice";
+  return bilingual ? `${d} ${spec.label} / ${d} ${spec.pl}` : `${d} ${spec.label}`;
+}
+/** Due date honours the basis: only the invoice basis counts days; the others are due at once. */
+export function dueDateFor(issueISO: string, basis: PaymentBasis, days: any): string {
+  if (basis !== "INVOICE") return S(issueISO);
+  return dueDateFromIssue(issueISO, num(days));
 }

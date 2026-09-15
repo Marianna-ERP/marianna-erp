@@ -1,6 +1,7 @@
 import { newestFirst } from "./moduleGuards.domain";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
+import { paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
 import { lineFromPOLine, lockRate, actualDeliveryDate, deliveryDelayDays, deliveryEventFor } from "./so.domain";
 import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
@@ -188,16 +189,7 @@ const INCOTERMS_SELL = [
 const CURRENCIES = ["PLN", "EUR", "USD"];
 const QUALITY_GRADES = ["I", "IB", "II", "Industrial"];
 
-const PAYMENT_TERMS = [
-  "Advance payment",
-  "Cash on delivery",
-  "Cash against documents",
-  "7 days from invoice date",
-  "14 days from invoice date",
-  "21 days from invoice date",
-  "30 days from invoice date",
-  "Other",
-];
+// v6.99.23: the legacy PAYMENT_TERMS list retired — one source: basis + days (po.domain)
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────
 // 5 example SOs in different lifecycle stages, covering both sourcing types.
@@ -676,7 +668,7 @@ function PrintLogo() {
 function SODoc({ order }: any) {
   const total = netTotal(order.items);
   const currency = order.currency || "PLN";
-  const paymentDisplay = order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms;
+  const paymentDisplay = paymentTermsLabel(paymentBasisOf(order), order.paymentDays, true);   // v6.99.23
   const destinationLabel = destinationDisplay(order);
 
   const meta = [
@@ -1596,12 +1588,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
               </div>
               <div>
                 <Lbl>Payment terms</Lbl>
-                <Sel value={order.paymentTerms || ""} onChange={e => sf("paymentTerms", e.target.value)}>
-                  {PAYMENT_TERMS.map(p => <option key={p}>{p}</option>)}
-                </Sel>
-                {order.paymentTerms === "Other" && (
-                  <Inp value={order.paymentTermsOther} onChange={e => sf("paymentTermsOther", e.target.value)} placeholder="Specify terms…" style={{ marginTop: 6 }} />
-                )}
+                <div style={{ display: "grid", gridTemplateColumns: paymentBasisOf(order) === "INVOICE" ? "90px 1fr" : "1fr", gap: 8 }}>
+                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? ""} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder="days" title="v6.99.23: days from the invoice issue date (owner ruling); the sales invoice's due date derives from this" />}
+                  <Sel disabled={isLocked} value={paymentBasisOf(order)} onChange={e => sf("paymentBasis", e.target.value)}>
+                    {PAYMENT_BASES.map((b: any) => <option key={b.value} value={b.value}>{b.value === "INVOICE" ? "days from invoice date" : b.label}</option>)}
+                  </Sel>
+                </div>
               </div>
               <div style={{ gridColumn: "span 2" }}>
                 <Lbl>Import permit no. <span style={{ color: "#AAA", fontWeight: 400 }}>· client-country import licence</span></Lbl>

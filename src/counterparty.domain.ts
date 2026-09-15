@@ -1,3 +1,4 @@
+import { paymentBasisOf } from "./po.domain";
 // ─────────────────────────────────────────────────────────────────────────────
 // counterparty.domain.ts — v6.99.2: COUNTERPARTIES BATCH (CP-1…CP-7, CP-9; owner 11 Sept 2026)
 // Pure.
@@ -33,6 +34,7 @@ export function normaliseCounterparty(c: any): { contact: any; changed: boolean 
   if (num(c.noticeDays) > 0 && !(num(terms.noticeDays) > 0)) terms.noticeDays = num(c.noticeDays);
   if (num(c.qualityReportDays) > 0 && !(num(terms.qualityReportDays) > 0)) terms.qualityReportDays = num(c.qualityReportDays);
   if (c.fakturowniaDepartmentId != null && terms.fakturowniaDepartmentId == null) terms.fakturowniaDepartmentId = c.fakturowniaDepartmentId;
+  if (!S(terms.paymentBasis)) terms.paymentBasis = paymentBasisOf(c);   // v6.99.23: one payment-terms source on the party too
   if (JSON.stringify(terms) !== JSON.stringify(c.terms || {})) { n.terms = terms; changed = true; }
   // mirrors kept in sync for existing readers (paymentTermsDays / creditLimitPLN are read by PO-2, SO-4, F-3)
   if (num(terms.paymentDays) > 0 && num(n.paymentTermsDays) !== num(terms.paymentDays)) { n.paymentTermsDays = num(terms.paymentDays); changed = true; }

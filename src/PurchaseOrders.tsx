@@ -16,7 +16,7 @@ import { getCounterpartiesByType } from "./Contacts";
 import { warehouseAddressLocations, unifiedLocations, locationById } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO, inspectionTotals } from "./seasonOps.domain";
-import { derivePOLineQuantities, paymentDaysFor } from "./po.domain";
+import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
 import { isEstimatedLine, applyPackingResult, proposeSOAdjustments } from "./so.domain";
 import { poResult } from "./financePlus.domain";
 import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
@@ -59,16 +59,7 @@ function getSuppliersStub() {
 // ─── REFERENCE ──────────────────────────────────────────────────────────────
 const CURRENCIES = ["PLN", "EUR", "USD"];
 
-const PAYMENT_TERMS = [
-  "Advance payment",
-  "Cash on delivery",
-  "Cash against documents",
-  "7 days from invoice date",
-  "14 days from invoice date",
-  "21 days from invoice date",
-  "30 days from invoice date",
-  "Other",
-];
+// v6.99.23: the legacy PAYMENT_TERMS list retired — one source: basis + days (po.domain)
 
 const INCOTERMS_BUY = [
   { code: "EXW", label: "EXW — Ex Works (we pick up at supplier)" },
@@ -280,7 +271,7 @@ function PrintLogo() {
 function PODoc({ order }: any) {
   const total = netTotal(order.items);
   const currency = order.currency || order.items[0]?.currency || "PLN";
-  const paymentDisplay = order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms;
+  const paymentDisplay = paymentTermsLabel(paymentBasisOf(order), order.paymentDays, true);   // v6.99.23: derived from the one source
 
   // Single source of truth for the row labels in the metadata + supplier blocks
   const meta = [
@@ -826,7 +817,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
   const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
-  const showOtherTerms = order.paymentTerms === "Other";
 
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
@@ -1050,17 +1040,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <SectionTitle>PAYMENT · CURRENCY · FX</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.4fr", gap: 14 }}>
               <div>
-                <Lbl>Payment days (from invoice issue date)</Lbl>
-                <Inp disabled={isLocked} type="number" value={order.paymentDays ?? paymentDaysFor(order, order.supplier)} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder={`default ${paymentDaysFor(order, order.supplier) || "—"}`} title="v6.94.0 (PO-2, owner ruling): payment terms always count from the invoice issue date; the purchase invoice's due date derives from this" />
-                <Lbl>Payment terms (legacy text)</Lbl>
-                <Sel disabled={isLocked} value={order.paymentTerms} onChange={e => sf("paymentTerms", e.target.value)}>
-                  {PAYMENT_TERMS.map(p => <option key={p}>{p}</option>)}
-                </Sel>
-                {showOtherTerms && (
-                  <div style={{ marginTop: 8 }}>
-                    <Inp value={order.paymentTermsOther || ""} onChange={e => sf("paymentTermsOther", e.target.value)} placeholder="Specify the terms" />
-                  </div>
-                )}
+                {/* v6.99.23 (owner): ONE payment-terms field — a basis, plus days only when days apply. The legacy text dropdown is retired. */}
+                <Lbl>Payment terms</Lbl>
+                <div style={{ display: "grid", gridTemplateColumns: paymentBasisOf(order) === "INVOICE" ? "90px 1fr" : "1fr", gap: 8 }}>
+                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? paymentDaysFor(order, order.supplier)} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder={String(paymentDaysFor(order, order.supplier) || 30)} title="Days counted from the invoice issue date (owner ruling) — the purchase invoice's due date derives from this" />}
+                  <Sel disabled={isLocked} value={paymentBasisOf(order)} onChange={e => sf("paymentBasis", e.target.value)}>
+                    {PAYMENT_BASES.map(b => <option key={b.value} value={b.value}>{b.value === "INVOICE" ? "days from invoice date" : b.label}</option>)}
+                  </Sel>
+                </div>
+                <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 4 }}>{paymentTermsLabel(paymentBasisOf(order), order.paymentDays ?? paymentDaysFor(order, order.supplier))} — printed on the order and used for the invoice's due date</div>
               </div>
               <div>
                 <Lbl>Pricing</Lbl>
@@ -1097,7 +1085,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
               return (
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.6fr 0.6fr 1fr 0.9fr minmax(120px, 1.6fr) 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 2.2fr) 0.9fr 0.7fr 0.7fr 1fr minmax(130px, 1.4fr) 38px", gap: 8, alignItems: "end" }}>
                     <div>
                       <Lbl>Item / Variety</Lbl>
                       <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => {
@@ -1113,16 +1101,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
-                    <div><Lbl>Unit</Lbl><Sel value={it.pricingUnit || "kg"} onChange={e => si(i, "pricingUnit", e.target.value)} title="v6.94.0 (PO-1): order in kg or in boxes — the other figure derives from the packaging type"><option value="kg">kg</option><option value="box">box</option></Sel></div>
                     <div><Lbl>Qty (kg){String(it.pricingUnit || "kg") === "box" ? " (derived)" : ""}{isEstimatedLine(it) ? " · ESTIMATED" : ""}</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 19500" disabled={isLocked && !isEstimatedLine(it)} title={isEstimatedLine(it) ? "v6.95.0 (PO-10): quantities are ESTIMATED until the producer's packing result — editable even on a confirmed order; prices and terms are locked" : ""} /></div>
-                    <div style={{ maxWidth: 110 }}><Lbl>Quantity</Lbl><Sel value={isEstimatedLine(it) ? "ESTIMATED" : "FINAL"} onChange={e => si(i, "quantityStatus", e.target.value)} disabled={isLocked && !isEstimatedLine(it)} title="v6.95.0 (PO-10): ESTIMATED = agreed price, quantity to be confirmed by the producer's packing result"><option value="FINAL">Final</option><option value="ESTIMATED">Estimated</option></Sel></div>
                     <div><Lbl>Unit price</Lbl>{(order.pricingMode || "firm") === "consignment"
                       ? <div style={{ padding: "8px 10px", border: "1px dashed #D8B4FE", borderRadius: 6, fontSize: 12, color: "#7C3AED", background: "#FAF5FF", fontWeight: 600 }} title="Consignment — the producer's price is settled from your sales">Consignment ⚖</div>
                       : <Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" />}</div>
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
-                    <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
+                    <button onClick={() => removeItem(i)} title="Delete this line" disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #DC2626", borderRadius: 6, background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 800, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.7fr 0.7fr 0.9fr", gap: 8, marginTop: 8 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "0.7fr 0.8fr 1fr 1.4fr 0.7fr 0.7fr 0.9fr", gap: 8, alignItems: "end", marginTop: 8 }}>
+                    <div><Lbl>Unit</Lbl><Sel value={it.pricingUnit || "kg"} onChange={e => si(i, "pricingUnit", e.target.value)} title="v6.94.0 (PO-1): order in kg or in boxes — the other figure derives from the packaging type"><option value="kg">kg</option><option value="box">box</option></Sel></div>
+                    <div style={{ maxWidth: 110 }}><Lbl>Quantity</Lbl><Sel value={isEstimatedLine(it) ? "ESTIMATED" : "FINAL"} onChange={e => si(i, "quantityStatus", e.target.value)} disabled={isLocked && !isEstimatedLine(it)} title="v6.95.0 (PO-10): ESTIMATED = agreed price, quantity to be confirmed by the producer's packing result"><option value="FINAL">Final</option><option value="ESTIMATED">Estimated</option></Sel></div>
                     <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PO_PACKAGING_TYPES || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="po-packaging-types" />
                       <datalist id="po-packaging-types">{(PO_PACKAGING_TYPES || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist></div>

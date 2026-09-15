@@ -2,7 +2,7 @@
 // so.domain.ts — v6.95.0: SALES ORDER RULES (owner decisions SO-1…SO-9 + PO-10, 10 Sept 2026)
 // Pure.
 // ─────────────────────────────────────────────────────────────────────────────
-import { dueDateFromIssue } from "./po.domain";
+import { paymentBasisOf, dueDateFor } from "./po.domain";
 
 const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
@@ -69,7 +69,7 @@ export function soPaymentDays(so: any, client: any): number {
   const inh = num(client?.paymentTermsDays); if (inh > 0) return inh;
   const m = S(so?.paymentTerms).match(/(\d{1,3})/); return m ? num(m[1]) : 0;
 }
-export function soInvoiceDueDate(issueISO: string, so: any, client: any): string { return dueDateFromIssue(issueISO, soPaymentDays(so, client)); }
+export function soInvoiceDueDate(issueISO: string, so: any, client: any): string { return dueDateFor(issueISO, paymentBasisOf(so?.paymentBasis ? so : client), soPaymentDays(so, client)); }   // v6.99.23: the basis decides whether days count
 
 // ── SO-6: normalisation (idempotent) ──────────────────────────────────────────
 export function normaliseSO(so: any): { so: any; changed: boolean } {
@@ -77,6 +77,8 @@ export function normaliseSO(so: any): { so: any; changed: boolean } {
   const drop = (k: string) => { if (k in s) { delete s[k]; changed = true; } };
   ["linkedInvoices", "linkedShipments", "actualDeliveryDate", "destinationMode", "_poETAByLine", "paymentTermsOther"].forEach(drop);
   if (!(num(s.paymentDays) > 0)) { const m = S(s.paymentTerms).match(/(\d{1,3})/); if (m) { s.paymentDays = num(m[1]); changed = true; } }
+  if (!S(s.paymentBasis)) { s.paymentBasis = paymentBasisOf(s); changed = true; }   // v6.99.23: one source
+  if ("paymentTerms" in s) { delete s.paymentTerms; changed = true; }
   if (Array.isArray(s.items)) s.items = s.items.map((it: any) => { const n: any = { ...it }; if ("shippedKg" in n) { delete n.shippedKg; changed = true; } if ("unit" in n && !n.pricingUnit) { n.pricingUnit = String(n.unit || "kg").toLowerCase() === "box" ? "box" : "kg"; changed = true; } if ("unit" in n) { delete n.unit; changed = true; } if (!n.pricingUnit) { n.pricingUnit = "kg"; changed = true; } return n; });
   return { so: s, changed };
 }
