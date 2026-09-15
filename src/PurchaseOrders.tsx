@@ -19,7 +19,6 @@ import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO, inspectionTotals } from "./seasonOps.domain";
 import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
 import { isEstimatedLine, applyPackingResult, proposeSOAdjustments } from "./so.domain";
-import { poResult } from "./financePlus.domain";
 import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
@@ -1145,21 +1144,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 
 
 // ── v6.99.1 (FN-5): THE RESULT OF EVERY PURCHASE — the firm-price mirror of the consignment settlement ──
-function PoResultCard({ order, lots = [], orders = [], shipments = [] }: any) {
-  const r = poResult(order, lots, orders, shipments);
-  if (!r.lots) return null;
-  const fmt = (n: number) => (n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
-  const Row = ({ k, v, color }: any) => <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, padding: "2px 0" }}><span style={{ color: "#64748B" }}>{k}</span><b style={{ color: color || "#111", fontVariantNumeric: "tabular-nums" }}>{v}</b></div>;
-  return (
-    <Card style={{ marginBottom: 16, borderLeft: "4px solid " + (r.marginPLN >= 0 ? "#16A34A" : "#DC2626") }}>
-      <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: r.fullySold ? "#16A34A" : "#B45309" }}>{r.fullySold ? "FULLY SOLD" : `${Math.max(0, r.receivedKg - r.soldKg).toLocaleString("pl-PL")} kg still to sell`}</span>}>Purchase result — {order.number}</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
-        <div><Row k={`Revenue (${r.soldKg.toLocaleString("pl-PL")} kg sold)`} v={fmt(r.revenuePLN)} /><Row k="Client concessions" v={"−" + fmt(r.concessionsPLN)} /><Row k="Purchase" v={"−" + fmt(r.purchasePLN)} /><Row k="Freight, customs, warehouse (landed)" v={"−" + fmt(r.landedOtherPLN)} /></div>
-        <div><Row k="Delivery freight (direct)" v={"−" + fmt(r.directPLN)} /><Row k="Recoveries" v={"+" + fmt(r.recoveriesPLN)} /><Row k="Margin" v={fmt(r.marginPLN)} color={r.marginPLN >= 0 ? "#16A34A" : "#DC2626"} /><Row k="Margin per kg sold" v={r.marginPerKg != null ? r.marginPerKg.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN/kg" : "—"} /></div>
-      </div>
-    </Card>
-  );
-}
 
 // ── v6.90.0: THE TRUCK'S FINAL RESULT — settlement per PO (owner rulings V1…V6) ──
 function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null }: any) {
@@ -1225,7 +1209,7 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
   );
 }
 
-function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+function OrderDetail({ users = [], userName = "", order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -1333,7 +1317,7 @@ function OrderDetail({ order, onBack, onEdit, onDelete, onPrint, onEmail, comput
 
               {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
               {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
-              {settlement && (order.pricingMode || "firm") !== "consignment" && order.status !== "Draft" && <PoResultCard order={order} lots={settlement.lots} orders={settlement.orders} shipments={settlement.shipments} />}
+              {/* v6.99.26 (owner ruling): the purchase RESULT left this screen — the PO is operational. It lives in Finance → Purchase results. */}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
@@ -1635,7 +1619,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null}: any = {}) {
+export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = ""}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.

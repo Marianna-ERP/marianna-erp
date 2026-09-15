@@ -8,7 +8,7 @@ import { advanceFromBankLine, advanceRemaining, applyAdvanceToInvoice, advanceSo
 import { realizedFxPLN } from "./payments.domain";
 import { statementFor, statementCurrencies } from "./statement.domain";
 import { buildSnapshot, cashProjection } from "./periodClose.domain";
-import { clientRiskTable } from "./financePlus.domain";
+import { clientRiskTable, poResult } from "./financePlus.domain";
 import { canOpenFinance } from "./permissions.domain";
 import { isShippedOrLater } from "./statusOwnership.domain";
 import { upsertBudget, budgetVariance, BUDGET_MEASURES } from "./budgets.domain";
@@ -181,6 +181,51 @@ function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSett
   );
 }
 
+
+
+// ── v6.99.26 (owner ruling 15 Sept): PURCHASE RESULTS — what every firm purchase earned. Analysis belongs to Finance;
+// the PO screen stays operational. The consignment trucks keep their settlement on the PO (it issues documents).
+function PurchaseResultsCard({ pos = [], lots = [], orders = [], shipments = [] }: any) {
+  const [supplier, setSupplier] = React.useState("");
+  const rows = (pos || [])
+    .filter((p: any) => p && (p.pricingMode || "firm") !== "consignment" && !["Draft", "Cancelled"].includes(String(p.status)))
+    .filter((p: any) => !supplier || String(p.supplier?.name) === supplier)
+    .map((p: any) => ({ po: p.number, supplier: p.supplier?.name || "—", date: p.orderDate || "", ...poResult(p, lots, orders, shipments) }))
+    .filter((r: any) => r.lots > 0)
+    .sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
+  const suppliers = Array.from(new Set((pos || []).filter((p: any) => (p.pricingMode || "firm") !== "consignment").map((p: any) => p.supplier?.name).filter(Boolean))).sort();
+  const f = (n: number) => (n || 0).toLocaleString("pl-PL", { maximumFractionDigits: 0 });
+  const tot = rows.reduce((s: any, r: any) => ({ revenue: s.revenue + r.revenuePLN, cost: s.cost + r.purchasePLN + r.landedOtherPLN + r.directPLN + r.concessionsPLN - r.recoveriesPLN, margin: s.margin + r.marginPLN, kg: s.kg + r.soldKg }), { revenue: 0, cost: 0, margin: 0, kg: 0 });
+  return (
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>🚚 Purchase results</div>
+        <span style={{ fontSize: 11, color: "#888" }}>what each firm purchase earned — revenue of the sales it supplied, minus its landed cost, delivery freight and concessions</span>
+        <select value={supplier} onChange={e => setSupplier(e.target.value)} style={{ marginLeft: "auto", border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 }}>
+          <option value="">All suppliers</option>{suppliers.map((s: any) => <option key={s}>{s}</option>)}
+        </select>
+        <SmallButton onClick={() => exportRowsToXlsx(`purchase_results_${xlsStamp()}`, rows, [{ key: "po", label: "PO" }, { key: "supplier", label: "Supplier" }, { key: "date", label: "Ordered" }, { key: "receivedKg", label: "Received kg" }, { key: "soldKg", label: "Sold kg" }, { key: "revenuePLN", label: "Revenue PLN" }, { key: "purchasePLN", label: "Purchase PLN" }, { key: "landedOtherPLN", label: "Landed PLN" }, { key: "directPLN", label: "Delivery freight PLN" }, { key: "concessionsPLN", label: "Concessions PLN" }, { key: "recoveriesPLN", label: "Recoveries PLN" }, { key: "marginPLN", label: "Margin PLN" }, { key: "marginPerKg", label: "Margin PLN/kg" }, { key: "fullySold", label: "Fully sold" }], "Purchase results")}>⬇ Excel</SmallButton>
+      </div>
+      {!rows.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No firm purchases with stock yet.</div>}
+      {!!rows.length && <>
+        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.8fr 0.8fr repeat(5, 1fr) 0.9fr", gap: 6, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>PO</div><div>SUPPLIER</div><div>RECEIVED</div><div>SOLD</div><div>REVENUE</div><div>PURCHASE</div><div>LANDED+FREIGHT</div><div>CLAIMS</div><div>MARGIN</div><div>PLN/KG</div></div>
+        {rows.map((r: any) => (
+          <div key={r.po} style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.8fr 0.8fr repeat(5, 1fr) 0.9fr", gap: 6, fontSize: 11.5, padding: "4px 0", borderTop: "1px solid #F8FAFC", fontVariantNumeric: "tabular-nums" }}>
+            <div><b>{r.po}</b>{!r.fullySold && <span style={{ color: "#B45309", fontSize: 10 }}> · selling</span>}</div>
+            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.supplier}</div>
+            <div>{f(r.receivedKg)}</div><div>{f(r.soldKg)}</div><div>{f(r.revenuePLN)}</div><div>{f(r.purchasePLN)}</div><div>{f(r.landedOtherPLN + r.directPLN)}</div>
+            <div style={{ color: r.concessionsPLN - r.recoveriesPLN > 0 ? "#B45309" : "#111" }}>{f(r.concessionsPLN - r.recoveriesPLN)}</div>
+            <div style={{ fontWeight: 800, color: r.marginPLN >= 0 ? "#16A34A" : "#DC2626" }}>{f(r.marginPLN)}</div>
+            <div style={{ color: (r.marginPerKg ?? 0) >= 0 ? "#166534" : "#DC2626" }}>{r.marginPerKg != null ? r.marginPerKg.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "—"}</div>
+          </div>
+        ))}
+        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.8fr 0.8fr repeat(5, 1fr) 0.9fr", gap: 6, fontSize: 12, padding: "6px 0", borderTop: "2px solid #E5E7EB", fontWeight: 800 }}>
+          <div>TOTAL</div><div /><div /><div>{f(tot.kg)}</div><div>{f(tot.revenue)}</div><div /><div /><div /><div style={{ color: tot.margin >= 0 ? "#16A34A" : "#DC2626" }}>{f(tot.margin)}</div><div>{tot.kg > 0 ? (tot.margin / tot.kg).toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "—"}</div>
+        </div>
+      </>}
+    </div>
+  );
+}
 
 // ── v6.99.1 (FN-4): CLIENT RISK — limit, exposure, overdue, days late, payment behaviour ──
 function ClientRiskCard({ invoices = [], orders = [], contacts = [] }: any) {
@@ -861,6 +906,7 @@ export default function Finance({
                 <StatBlock label="OVERHEAD" value={fmtPLN(totalAgg.totalOverheadPLN)} valueColor="#64748B" sub="allocated operating cost" />
                 <StatBlock label="NET P/L" value={fmtPLN(totalAgg.totalNetMarginPLN)} valueColor={totalAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgNetMarginPct)} />
               </div>
+              {canOpenFinance(users, userName, "pl") && <PurchaseResultsCard pos={pos} lots={lots} orders={orders} shipments={shipments} />}
               {canOpenFinance(users, userName, "pl") && <MonthCloseCard totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs: [], todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
               {canOpenFinance(users, userName, "budget") && typeof setBudgets === "function" && (() => {
                 const period = localTodayISO().slice(0, 7);

@@ -28,9 +28,12 @@ export function lotAvailabilityByGrade(lot: any, orders: any[], excludeOrderId?:
 }
 
 // ── SO-2: unit follows the PO line ────────────────────────────────────────────
-export function lineFromPOLine(poLine: any): { pricingUnit: string; boxes: any; kgPerBox: any; unit: string } {
+export function lineFromPOLine(poLine: any): { pricingUnit: string; boxes: any; kgPerBox: any; unit: string; coloration?: any; cnCode?: any; packaging?: any } {
   const unit = String(poLine?.pricingUnit || "kg").toLowerCase() === "box" ? "box" : "kg";
-  return { pricingUnit: unit, boxes: poLine?.boxes ?? null, kgPerBox: poLine?.kgPerBox ?? null, unit: unit === "box" ? "box" : "kg" };
+  return {
+    coloration: poLine?.coloration ?? "",   // v6.99.26 (owner): the sale inherits what was bought
+    cnCode: poLine?.cnCode ?? "",
+    packaging: poLine?.packaging ?? "", pricingUnit: unit, boxes: poLine?.boxes ?? null, kgPerBox: poLine?.kgPerBox ?? null, unit: unit === "box" ? "box" : "kg" };
 }
 
 // ── SO-3: the delivery EVENT depends on the sell incoterm ─────────────────────

@@ -1,4 +1,5 @@
 import { newestFirst } from "./moduleGuards.domain";
+import { readCountries } from "./Contacts";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
@@ -1440,7 +1441,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
           {/* Order details */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>ORDER DETAILS</SectionTitle>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
+            {/* v6.99.26 (owner): identity · dates · import documents, one row each */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 14, marginBottom: 14 }}>
               <div>
                 <Lbl>SO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
                 {/* BP-18: controlled document id — display/copy only. */}
@@ -1449,6 +1451,127 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy SO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
                 </div>
               </div>
+              <div style={{ gridColumn: "span 3" }}>
+                <Lbl>Client</Lbl>
+                <Sel value={order.client?.name || ""} onChange={e => setClient(e.target.value)}>
+                  <option value="">— select —</option>
+                  {clients.map(c => <option key={c.id} value={c.name}>{c.name} {c.country ? `· ${c.country}` : ""} {c.nip ? `(NIP ${c.nip})` : ""}</option>)}
+                </Sel>
+              </div>
+              <div><Lbl>Status</Lbl>
+                {/* v6.77.0 STATUS OWNERSHIP. The sales order owns the COMMERCIAL
+                    statuses (Draft, Confirmed, Invoiced, Closed, Cancelled). The
+                    PHYSICAL ones — Reserved, Loading, Shipped, Delivered — are
+                    the shipments' to state, and are shown here as a derived badge
+                    rather than typed. Owner rulings: no partial state, an order
+                    ships only when ALL of its goods have moved, and an override
+                    is allowed but must say so. */}
+                {(() => {
+                  const d = deriveSoStatus(order, SHIPMENTS_REF);
+                  if (!d.derived && !d.overridden) return null;
+                  return <div style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, fontSize: 11.5,
+                    background: d.overridden ? "#FFFBEB" : "#F0F9FF",
+                    border: `1px solid ${d.overridden ? "#FDE68A" : "#BAE6FD"}`,
+                    color: d.overridden ? "#92400E" : "#0369A1" }}>
+                    <strong>{d.status}</strong>{d.overridden ? " · set by hand" : " · from the shipments"}
+                    <div style={{ marginTop: 3, lineHeight: 1.45 }}>{d.reason}</div>
+                  </div>;
+                })()}
+                <Sel value={order.status || "Draft"} onChange={async e => {
+                  const nv = e.target.value;
+                  // v6.79.0 (W-1): the lock reads the EFFECTIVE status — what the shipments say.
+                  const effNow = effectiveSoStatus(order, SHIPMENTS_REF);
+                  const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(effNow);
+                  const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
+                  // v6.63.0 (D-10, ruling D4): a locked SO moves FORWARD only.
+                  // The old dropdown let Shipped→Draft happen silently, with the
+                  // shipped kg and postings left orphaned behind the label (M2).
+                  const curOrd = soRank(effNow); // v6.79.0 (W-1)
+                  const nvOrd = (SO_STATUSES[nv] || {}).order ?? 0;
+                  if (wasLocked && nv !== "Cancelled" && nvOrd < curOrd) {
+                    await ofAlert({ tone: "warn", title: "Forward only", message: `This sales order is ${order.status} — goods have physically moved, so its status can only advance (or be Cancelled, which reverses the postings). Moving it back to ${nv} would leave shipped kilograms behind a label that denies them.` });
+                    return;
+                  }
+                  // v6.77.0: typing a PHYSICAL status the shipments do not support
+                  // is exactly the drift that left six orders Shipped or Invoiced
+                  // with no dispatch and a zero COGS. Warned, not blocked — and
+                  // proceeding records it as a deliberate override so it never
+                  // looks like a derived fact.
+                  if (isPhysicalStatus(nv)) {
+                    const clash = statusContradiction({ ...order, status: nv, statusOverride: "" }, SHIPMENTS_REF);
+                    if (clash) {
+                      const go = await ofConfirm({ tone: "warn", title: `Set ${nv} by hand?`,
+                        message: `${clash}\n\nSetting it here records an override, so the screen will show it was set by hand rather than taken from the shipments.`,
+                        confirmLabel: `Set ${nv} anyway`, cancelLabel: "Go back" });
+                      if (!go) return;
+                      setOrder((o: any) => ({ ...o, statusOverride: nv, statusOverrideReason: "Set by hand — shipments do not show it yet", statusOverrideAt: localTodayISO() }));
+                    }
+                  }
+                  if (willLock && !wasLocked) {
+                    // v6.95.0 (SO-8): the rate becomes a locked fact at confirm, with its date.
+                    if (!order.fxLockedAt && String(order.currency || "PLN").toUpperCase() !== "PLN") setOrder((o: any) => lockRate(o, localTodayISO()));
+                    // v6.92.0 (A-R8-1, owner ruling R3): no line may be confirmed without a quantity and a price.
+                    const empty = (order.items || []).filter((it: any) => String(it.product || "").trim() && !((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) > 0 && (parseFloat(String(it.unitPrice)) || 0) > 0));
+                    if (empty.length) { await ofAlert({ tone: "warn", title: "Quantity and price required", message: `${empty.length} line(s) have no quantity or no price. A sales order cannot be confirmed with an empty line — fill them in first (owner ruling R3).` }); return; }
+                    // v6.92.0 (A-R8-2): a foreign-currency order needs a real rate — 1.0 is the PLN default, not a rate.
+                    if (String(order.currency || "PLN").toUpperCase() !== "PLN" && Math.abs((parseFloat(String(order.fxRate)) || 0) - 1) < 1e-9) { await ofAlert({ tone: "warn", title: "FX rate missing", message: `The order is in ${order.currency} but its rate to PLN is 1.0. Set the rate before confirming — every amount in the ERP nets in PLN at the document's own locked rate.` }); return; }
+                    // v6.89.0 (R2, owner ruling): every sale rests on a purchase — a line without a PO line or a lot cannot be confirmed.
+                    const unsourced = (order.items || []).filter((it: any) => String(it.product || "").trim() && !(["PO", "STOCK"].includes(String(it.sourceType || "")) && String(it.sourceRef || "").trim()));
+                    if (unsourced.length) { await ofAlert({ tone: "warn", title: "Every sale rests on a purchase", message: `${unsourced.length} line(s) have no source. Pick the PO line or the stock lot each line sells from — a free-typed line cannot be confirmed (owner ruling R2).` }); return; }
+                    // v6.68.0 (F-3): credit control at the moment of commitment.
+                    const clientRec = (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(order.client?.name || "").trim().toLowerCase());
+                    const limit = parseFloat(String(clientRec?.creditLimitPLN ?? "")) || 0;
+                    if (limit > 0) {
+                      const soPLN = (order.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) * (parseFloat(String(it.unitPrice)) || 0)), 0) * (parseFloat(String(order.fxRate)) || 1);
+                      const exposure = clientExposurePLN(order.client?.name, allInvoices || []);
+                      if (exposure + soPLN > limit) {
+                        const goOn = await ofConfirm({ tone: "danger", title: "Credit limit exceeded", message: `${order.client?.name}: open receivables ${exposure.toLocaleString("pl-PL")} PLN + this order ≈ ${Math.round(soPLN).toLocaleString("pl-PL")} PLN exceed the limit of ${limit.toLocaleString("pl-PL")} PLN.\n\nConfirm the order anyway?`, confirmLabel: "Confirm anyway", cancelLabel: "Hold the order" });
+                        if (!goOn) return;
+                      }
+                    }
+                    const ok = await ofConfirm({ tone: "warn", title: `Move to ${nv}?`, message: `Once this sales order is ${nv}, it becomes LOCKED — line items, quantities, sourcing and the shipping address can no longer be changed. To correct something afterwards you'd issue a credit/debit note or a new order.\n\nProceed?`, confirmLabel: `Yes, move to ${nv}`, cancelLabel: "Not yet" });
+                    if (!ok) return;
+                  }
+                  sf("status", nv);
+                }} disabled={order.status === "Cancelled"}
+                  title={order.status === "Cancelled" ? "This SO is cancelled — read-only and can't be reactivated." : ""}
+                  style={{ borderLeft: `4px solid ${(SO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (SO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
+                  {Object.keys(SO_STATUSES).map(s => {
+                    // Draft and Cancelled are always available; everything else requires all lines to be
+                    // (a) sourced AND (b) have enough combined available qty to cover the demanded qty.
+                    const curOrd2 = (SO_STATUSES[order.status || "Draft"] || {}).order ?? 0;
+                    const isBackward = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status)) && s !== "Cancelled" && ((SO_STATUSES[s] || {}).order ?? 0) < curOrd2;
+                    if (s === "Draft" || s === "Cancelled") return <option key={s} value={s} disabled={s === "Draft" && isBackward}>{s}{s === "Draft" && isBackward ? "  — forward only" : ""}</option>;
+                    if (isBackward) return <option key={s} value={s} disabled>{s}  — forward only</option>;
+                    const needsSource = !sourcing.allSourced;
+                    const needsSupply = overageCount > 0;
+                    const needsPOReady = poReadinessIssues.length > 0;
+                    const disabled = needsSource || needsSupply || needsPOReady;
+                    const reason = needsSource && needsSupply ? "  — needs sourcing + supply"
+                      : needsSource ? "  — needs sourcing"
+                      : needsSupply ? "  — short on supply"
+                      : needsPOReady ? "  — PO not confirmed"
+                      : "";
+                    return <option key={s} value={s} disabled={disabled}>{s}{reason}</option>;
+                  })}
+                </Sel>
+                {(!sourcing.allSourced || overageCount > 0 || poReadinessIssues.length > 0) && (
+                  <div style={{ fontSize: 10, color: "#D97706", marginTop: 3, lineHeight: 1.4 }}>
+                    {!sourcing.allSourced && (
+                      <div>{sourcing.unsourcedIndexes.length} line{sourcing.unsourcedIndexes.length === 1 ? "" : "s"} unsourced</div>
+                    )}
+                    {poReadinessIssues.length > 0 && (
+                      <div>{poReadinessIssues.length} line{poReadinessIssues.length === 1 ? "" : "s"} sourced from a Draft/Cancelled/missing PO</div>
+                    )}
+                    {overageCount > 0 && (
+                      <div>{overageCount} line{overageCount === 1 ? "" : "s"} short on supply</div>
+                    )}
+                    <div style={{ marginTop: 2 }}>only Draft / Cancelled available</div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 14 }}>
               <div>
                 <Lbl>Order date</Lbl>
                 <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" title="The date the SO was created/agreed with the client" />
@@ -1467,6 +1590,29 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 </div>
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>{order.status === "Delivered" ? "Fill in the date goods reached the client" : "Set status to Delivered to enable"}</div>
               </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              <div>
+                <Lbl>Import permit no. <span style={{ color: "#AAA", fontWeight: 400 }}>· client-country import licence</span></Lbl>
+                <Inp value={order.importPermitNo === "N/A" ? "" : (order.importPermitNo || "")} onChange={e => sf("importPermitNo", e.target.value)} placeholder={order.importPermitNo === "N/A" ? "Not applicable" : "e.g. IP-2026-00871"} disabled={order.importPermitNo === "N/A"} />
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#666", marginTop: 4, cursor: "pointer" }}>
+                  <input type="checkbox" checked={order.importPermitNo === "N/A"} onChange={e => sf("importPermitNo", e.target.checked ? "N/A" : "")} /> Not applicable
+                </label>
+                {permitDupes.importPermitNo && (
+                  <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.importPermitNo}</div>
+                )}
+              </div>
+              <div>
+                <Lbl>ACID no. <span style={{ color: "#AAA", fontWeight: 400 }}>· Egypt Advance Cargo Information Declaration</span></Lbl>
+                <Inp value={order.acidNo === "N/A" ? "" : (order.acidNo || "")} onChange={e => sf("acidNo", e.target.value)} placeholder={order.acidNo === "N/A" ? "Not applicable" : "19-digit ACID"} disabled={order.acidNo === "N/A"} />
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#666", marginTop: 4, cursor: "pointer" }}>
+                  <input type="checkbox" checked={order.acidNo === "N/A"} onChange={e => sf("acidNo", e.target.checked ? "N/A" : "")} /> Not applicable
+                </label>
+                {permitDupes.acidNo && (
+                  <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.acidNo}</div>
+                )}
+              </div>
+            </div>
               <div style={{ order: -1 }}><Lbl>Status</Lbl>
                 {/* v6.77.0 STATUS OWNERSHIP. The sales order owns the COMMERCIAL
                     statuses (Draft, Confirmed, Invoiced, Closed, Cancelled). The
@@ -1579,22 +1725,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   </div>
                 )}
               </div>
-              <div style={{ gridColumn: "span 3" }}>
-                <Lbl>Client</Lbl>
-                <Sel value={order.client?.name || ""} onChange={e => setClient(e.target.value)}>
-                  <option value="">— select —</option>
-                  {clients.map(c => <option key={c.id} value={c.name}>{c.name} {c.country ? `· ${c.country}` : ""} {c.nip ? `(NIP ${c.nip})` : ""}</option>)}
-                </Sel>
-              </div>
-              <div>
-                <Lbl>Payment terms</Lbl>
-                <div style={{ display: "grid", gridTemplateColumns: paymentBasisOf(order) === "INVOICE" ? "90px 1fr" : "1fr", gap: 8 }}>
-                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? ""} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder="days" title="v6.99.23: days from the invoice issue date (owner ruling); the sales invoice's due date derives from this" />}
-                  <Sel disabled={isLocked} value={paymentBasisOf(order)} onChange={e => sf("paymentBasis", e.target.value)}>
-                    {PAYMENT_BASES.map((b: any) => <option key={b.value} value={b.value}>{b.value === "INVOICE" ? "days from invoice date" : b.label}</option>)}
-                  </Sel>
-                </div>
-              </div>
               <div style={{ gridColumn: "span 2" }}>
                 <Lbl>Import permit no. <span style={{ color: "#AAA", fontWeight: 400 }}>· client-country import licence</span></Lbl>
                 <Inp value={order.importPermitNo === "N/A" ? "" : (order.importPermitNo || "")} onChange={e => sf("importPermitNo", e.target.value)} placeholder={order.importPermitNo === "N/A" ? "Not applicable" : "e.g. IP-2026-00871"} disabled={order.importPermitNo === "N/A"} />
@@ -1615,7 +1745,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.acidNo}</div>
                 )}
               </div>
-            </div>
           </Card>
 
           {/* Incoterm + destination */}
@@ -1675,8 +1804,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
 
           {/* Currency */}
           <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>CURRENCY{isLocked && <span style={{ marginLeft: 8, fontSize: 10, color: "#D97706", fontWeight: 600 }}>🔒 locked at {order.status}</span>}</SectionTitle>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 14 }}>
+            <SectionTitle>PAYMENT · CURRENCY{isLocked && <span style={{ marginLeft: 8, fontSize: 10, color: "#D97706", fontWeight: 600 }}>🔒 locked at {order.status}</span>}</SectionTitle>
+            <div style={{ display: "grid", gridTemplateColumns: "1.6fr 0.8fr 1fr", gap: 14, alignItems: "start" }}>   {/* v6.99.26 (owner): payment terms · currency · FX rate */}
+              <div>
+                <Lbl>Payment terms</Lbl>
+                <div style={{ display: "grid", gridTemplateColumns: paymentBasisOf(order) === "INVOICE" ? "90px 1fr" : "1fr", gap: 8 }}>
+                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? ""} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder="days" title="v6.99.23: days from the invoice issue date (owner ruling); the sales invoice's due date derives from this" />}
+                  <Sel disabled={isLocked} value={paymentBasisOf(order)} onChange={e => sf("paymentBasis", e.target.value)}>
+                    {PAYMENT_BASES.map((b: any) => <option key={b.value} value={b.value}>{b.value === "INVOICE" ? "days from invoice date" : b.label}</option>)}
+                  </Sel>
+                </div>
+              </div>
               <div><Lbl>Currency</Lbl>
                 <Sel value={order.currency} onChange={e => { const cur = e.target.value; setOrder((o: any) => ({ ...o, currency: cur, fxRate: cur === "PLN" ? 1 : ((parseFloat(String(o.fxRate)) || 1) !== 1 ? o.fxRate : defaultFxRate(cur)) })); }} disabled={isLocked}>
                   {CURRENCIES.map(c => <option key={c}>{c}</option>)}
@@ -1721,7 +1859,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle right={<div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => { const idx = order.items.length; addItem(); setTimeout(() => setSourceFor(idx), 0); }} style={{ padding: "4px 12px", borderRadius: 6, border: "none", background: "#0369A1", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }} title="Add a line sourced from a PO or stock — product, variety, packaging, origin, size and quality are copied automatically; you set only price, quantity and pallets.">+ Add from PO / stock</button>
-              <div style={{ marginTop: 8, padding: "6px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#166534" }} title="v6.99.6 (A-R9-2): totals of the lines — check before Confirm">Σ {totalsLine(documentTotals(order.items, PACKAGING_TYPES_REF, order.fxRate), order.currency)}</div>
               <button onClick={addItem} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: "#16A34A", fontSize: 11, fontWeight: 600, cursor: "pointer" }} title="Add an empty line to fill in manually">+ Blank line</button>
             </div>}>LINE ITEMS ({order.items.length}){fullyLocked && <span style={{ marginLeft: 8, fontSize: 10, color: "#DC2626", fontWeight: 700 }}>🔒 locked ({order.status})</span>}</SectionTitle>
             <datalist id="so-product-suggestions">
@@ -1858,50 +1995,44 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       )}
                     </div>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "1.8fr 0.7fr 0.55fr 0.7fr 0.8fr 0.7fr 0.7fr minmax(150px, 2fr) 34px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(190px, 1.9fr) 1fr 0.6fr 0.7fr 0.7fr 1fr 0.9fr minmax(140px, 1.5fr)", gap: 8, alignItems: "end" }}>   {/* v6.99.26 (owner) */}
                     <div>
                       <Lbl>Item / Variety {it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl>
                       {it.sourceType && it.sourceRef
                         ? <div style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F9FAFB", color: "#374151", minHeight: 18 }} title="Inherited from the linked source — clear the source link to change the product">{it.product || "—"}{it.variety ? ` — ${it.variety}` : ""}</div>
                         : <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />}
                     </div>
-                    <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" disabled={fullyLocked} /></div>
+                    <div><Lbl>Origin</Lbl><Sel value={it.origin || ""} onChange={e => si(i, "origin", e.target.value)} disabled={fullyLocked} title="v6.99.26 (owner): country of origin — the list is the Directory's Countries tab"><option value="">— country —</option>{readCountries().map((c: any) => <option key={c.iso} value={c.name}>{c.name}</option>)}{it.origin && !readCountries().some((c: any) => c.name === it.origin) && <option value={it.origin}>{it.origin}</option>}</Sel></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked} /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     <div><Lbl>Grade (sorting)</Lbl><Sel value={it.grade || "I"} onChange={e => si(i, "grade", e.target.value)} title="v6.95.0 (SO-1, owner decision 4): class II stays in the same lot as a grade — say which grade this line sells; the sales report and the availability read it"><option value="I">I</option><option value="II">II</option></Sel></div>
-                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
-                    {/* v6.61.0: sell by kg or by box. Kilos remain the stored
-                        quantity either way — entering boxes simply derives them
-                        from the packaging this line already names, which is
-                        exact because the boxes are exact by weight. */}
-                    <div><Lbl>Priced per</Lbl><Sel value={pricingUnitOf(it)} disabled={fullyLocked}
-                      onChange={e => setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? convertLineUnit(x, e.target.value, PACKAGING_TYPES_REF) : x) }))}>
-                      <option value="kg">kg</option>
-                      <option value="box">box</option>
-                    </Sel></div>
-                    {pricingUnitOf(it) === "box" ? (
                       <div><Lbl>Qty (boxes)</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => {
                         const b = Math.round(parseFloat(e.target.value) || 0);
                         const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
                         setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? { ...x, boxes: b, qty: kgPerBox > 0 ? Math.round(b * kgPerBox * 1000) / 1000 : x.qty } : x) }));
                       }} placeholder="e.g. 400" disabled={fullyLocked} /></div>
-                    ) : (
-                      <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
-                    )}
+                    <div><Lbl>Priced per</Lbl><Sel value={pricingUnitOf(it)} disabled={fullyLocked}
+                      onChange={e => setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? convertLineUnit(x, e.target.value, PACKAGING_TYPES_REF) : x) }))}>
+                      <option value="kg">kg</option>
+                      <option value="box">box</option>
+                    </Sel></div>
                     <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
-                    <div style={{ minWidth: 96 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 2px", fontSize: 12, fontWeight: 700, color: "#111", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
-                    <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 200px", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 0.8fr 0.8fr 1fr 1.1fr 38px", gap: 8, alignItems: "end", marginTop: 8 }}>
+                    <div><Lbl>Coloration</Lbl><Inp value={it.coloration ?? ""} onChange={e => si(i, "coloration", e.target.value)} disabled={fullyLocked} placeholder="from the PO line" title="v6.99.26 (owner): copied from the purchase line when the source is picked; editable" /></div>
                     <div>
                       <Lbl>Packaging</Lbl>
                       <Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PACKAGING_TYPES_REF || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="so-packaging-types" title="v6.88.0: pick from Settings → Packaging types so gross weight, pallet table and kg/box derive exactly" />
                       <datalist id="so-packaging-types">{(PACKAGING_TYPES_REF || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist>
                     </div>
+                    <div><Lbl>Boxes{pricingUnitOf(it) === "kg" ? " (derived)" : ""}</Lbl><Inp type="number" value={pricingUnitOf(it) === "kg" ? (Number(it.kgPerBox) > 0 && Number(it.qty) > 0 ? Math.round(Number(it.qty) / Number(it.kgPerBox)) : (it.boxes ?? "")) : (it.boxes ?? "")} onChange={e => si(i, "boxes", e.target.value)} disabled={fullyLocked || pricingUnitOf(it) === "kg"} title="v6.99.26: derived from the kilos and the packaging when the line is priced per kg" /></div>
                     <div>
                       <Lbl>Pallets (for this sale)</Lbl>
                       <Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 12" disabled={fullyLocked} />
                     </div>
+                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
+                    <div style={{ minWidth: 96 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 2px", fontSize: 12, fontWeight: 700, color: "#111", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
+                    <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
                 </div>
               );
@@ -1912,6 +2043,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtMoney(netTotal(order.items), order.currency)}</div>
               </div>
             </div>
+            <div style={{ marginTop: 12, padding: "6px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#166534" }} title="v6.99.6 (A-R9-2): totals of the lines — check before Confirm">Σ {totalsLine(documentTotals(order.items, PACKAGING_TYPES_REF, order.fxRate), order.currency)}</div>
           </Card>
 
           {/* Notes */}
