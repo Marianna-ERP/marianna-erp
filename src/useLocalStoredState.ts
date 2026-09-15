@@ -186,7 +186,7 @@ export const DATA_KEYS = [
   // v6.99.0: closed periods (FN-1) and FX settings (FN-7). settledRefs is DEPRECATED (FN-8) — kept importable only.
   "closedPeriods", "fxSettings",
   // v6.99.3: company settings, numbering prefixes.
-  "company", "numbering",
+  "company", "numbering", "defectTolerances", "reportRegister",
   "auditLog"];
 
 export function exportAllData(): string {

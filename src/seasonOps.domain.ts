@@ -90,11 +90,54 @@ export function inspectionTotals(ins: Inspection): { byCategory: Record<string, 
 /** The defect catalogue per product (Settings); a starting set for peppers the owner can edit. */
 export interface DefectCatalogueEntry { product: string; category: string; name: string; }
 export const PEPPER_DEFECTS: DefectCatalogueEntry[] = [
-  { product: "Capsicum", category: "Unacceptable", name: "Foreign matter" }, { product: "Capsicum", category: "Unacceptable", name: "Pest and disease" },
-  { product: "Capsicum", category: "Progressive", name: "Rots / moulds" }, { product: "Capsicum", category: "Progressive", name: "Soft / breakdown" },
-  { product: "Capsicum", category: "Major", name: "Sunburn" }, { product: "Capsicum", category: "Major", name: "Cracks" }, { product: "Capsicum", category: "Major", name: "Misshapen" },
-  { product: "Capsicum", category: "Minor", name: "Blemish / skin marks" }, { product: "Capsicum", category: "Minor", name: "Colour not uniform" }, { product: "Capsicum", category: "Minor", name: "Stem damage" },
+  // v6.99.31 (owner 15 Sept): the producer's own quality sheet, verbatim — these names print on the quality report.
+  { product: "Capsicum", category: "Unacceptable", name: "Spray deposits" },
+  { product: "Capsicum", category: "Unacceptable", name: "Non-vegetable foreign matter" },
+  { product: "Capsicum", category: "Unacceptable", name: "Foreign taints or smells" },
+  { product: "Capsicum", category: "Unacceptable", name: "Pests presence" },
+  { product: "Capsicum", category: "Progressive", name: "Rots and mould" },
+  { product: "Capsicum", category: "Major", name: "Mechanical damage (more than 1 cm² on surface)" },
+  { product: "Capsicum", category: "Major", name: "Black & sooty mould" },
+  { product: "Capsicum", category: "Major", name: "Purple/black discolouration (more than 3 cm² / more than 20 % on surface)" },
+  { product: "Capsicum", category: "Major", name: "Shrivel / dehydration" },
+  { product: "Capsicum", category: "Major", name: "Misshape" },
+  { product: "Capsicum", category: "Major", name: "Bruising" },
+  { product: "Capsicum", category: "Major", name: "Insect damage" },
+  { product: "Capsicum", category: "Major", name: "Heavy skin scarring" },
+  { product: "Capsicum", category: "Minor", name: "Broken calyx" },
+  { product: "Capsicum", category: "Minor", name: "Shrivelling (more than 1 cm² on surface)" },
+  { product: "Capsicum", category: "Minor", name: "Red/green discolouration (more than 5 cm² / 30 % on surface)" },
+  { product: "Capsicum", category: "Minor", name: "Purple/black discolouration (1–3 cm² / less than 20 % on surface)" },
+  { product: "Capsicum", category: "Minor", name: "Mechanical damage (less than 1 cm² on surface)" },
+  { product: "Capsicum", category: "Minor", name: "Light russetting (more than 5 % on surface)" },
+  { product: "Capsicum", category: "Minor", name: "Minor scarring" },
+  { product: "Capsicum", category: "Minor", name: "Silvering / thrips" },
 ];
+
+// ── v6.99.31 (owner): TOLERANCE per category decides Acceptable / Not acceptable. Unacceptable is always 0 %;
+// the other three are editable per product in Settings. These defaults make the report work from the first day.
+export const DEFAULT_TOLERANCES: Record<string, number> = { Unacceptable: 0, Progressive: 1, Major: 5, Minor: 10 };
+export function tolerancesFor(settings: any, product: any): Record<string, number> {
+  const per = (settings || {})[String(product || "").toLowerCase()] || (settings || {})["*"] || {};
+  return { ...DEFAULT_TOLERANCES, ...per, Unacceptable: 0 };
+}
+/** The verdict of a quality report: per-category totals against their tolerance, then the whole sheet. */
+export function inspectionVerdict(ins: Inspection, tolerances: Record<string, number>): {
+  rows: Array<{ category: string; pct: number; tolerance: number; acceptable: boolean }>; totalPct: number; acceptable: boolean; advice: string;
+} {
+  const t = inspectionTotals(ins);
+  const rows = DEFECT_CATEGORIES.map(cat => {
+    const pct = r2(t.byCategory[cat] || 0);
+    const tol = num((tolerances || {})[cat]);
+    return { category: cat, pct, tolerance: tol, acceptable: pct <= tol + 1e-9 };
+  });
+  const acceptable = rows.every(r => r.acceptable);
+  const unacceptableHit = rows.find(r => r.category === "Unacceptable" && r.pct > 0);
+  const advice = unacceptableHit ? `Reject — unacceptable defects found (${unacceptableHit.pct} %).`
+    : acceptable ? "Accept — within the agreed tolerances."
+    : `Sort — combined defects ${t.totalPct} % exceed the tolerance for ${rows.filter(r => !r.acceptable).map(r => r.category.toLowerCase()).join(" and ")} defects.`;
+  return { rows, totalPct: t.totalPct, acceptable, advice };
+}
 export function defectsFor(catalogue: DefectCatalogueEntry[], product: any): DefectCatalogueEntry[] {
   const p = S(product).toLowerCase();
   return (catalogue || []).filter(d => S(d.product).toLowerCase() === p || p.includes(S(d.product).toLowerCase()));

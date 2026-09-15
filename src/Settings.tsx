@@ -444,11 +444,29 @@ function UsersPanel({ users = [], setUsers = null }: any) {
 
 
 // ── v6.89.0: DEFECT CATALOGUE (per product · category · defect) — drives the inspection form ──
-function DefectCataloguePanel({ defectCatalogue = [], setDefectCatalogue = null }: any) {
+function DefectCataloguePanel({ defectCatalogue = [], setDefectCatalogue = null, defectTolerances = {}, setDefectTolerances = null }: any) {
+  // v6.99.31 (owner): the tolerance per category decides Acceptable / Not acceptable on the quality report.
+  // Unacceptable is fixed at 0 % — a single pest or foreign object rejects the consignment, whatever the percentages say.
+  const [tolProduct, setTolProduct] = useState("Capsicum");
+  const tolOf = (cat: string) => { const per = (defectTolerances || {})[String(tolProduct).toLowerCase()] || {}; const def: any = { Unacceptable: 0, Progressive: 1, Major: 5, Minor: 10 }; return per[cat] ?? def[cat]; };
+  const setTol = (cat: string, v: any) => setDefectTolerances && setDefectTolerances((prev: any) => ({ ...(prev || {}), [String(tolProduct).toLowerCase()]: { ...((prev || {})[String(tolProduct).toLowerCase()] || {}), [cat]: parseFloat(v) || 0 } }));
   const [txt, setTxt] = useState((defectCatalogue || []).map((d: any) => `${d.product} | ${d.category} | ${d.name}`).join("\n"));
   if (typeof setDefectCatalogue !== "function") return null;
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+      <div style={{ background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>TOLERANCES — what the quality report calls acceptable</div>
+        <div style={{ display: "flex", gap: 12, alignItems: "end", flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12 }}>Product<br /><input value={tolProduct} onChange={e => setTolProduct(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 140 }} /></label>
+          {["Unacceptable", "Progressive", "Major", "Minor"].map(cat => (
+            <label key={cat} style={{ fontSize: 12 }}>{cat}<br />
+              <input type="number" step="0.1" disabled={cat === "Unacceptable"} value={tolOf(cat)} onChange={e => setTol(cat, e.target.value)}
+                title={cat === "Unacceptable" ? "Always 0 % — a single unacceptable defect rejects the consignment" : "Above this, the category is marked Not acceptable on the report"}
+                style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 80, background: cat === "Unacceptable" ? "#F3F4F6" : "#fff" }} /> %
+            </label>
+          ))}
+        </div>
+      </div>
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🔬 Defect catalogue</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>One line per defect: <b>product | category | defect</b> — categories: Unacceptable, Progressive, Major, Minor (the Daifressh structure). Empty = a starter list for peppers is offered in the inspection form.</div>
       <textarea value={txt} onChange={e => setTxt(e.target.value)} rows={8} placeholder={"Capsicum | Progressive | Rots / moulds\nCapsicum | Major | Sunburn"} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }} />
@@ -529,6 +547,8 @@ export default function Settings({
   setCompany = null,
   numbering = {},
   setNumbering = null,
+  defectTolerances = {},
+  setDefectTolerances = null,
 }: {
   reloadFromStorage: () => void;
   refStores?: any;
@@ -551,6 +571,8 @@ export default function Settings({
   setCompany?: any;
   numbering?: any;
   setNumbering?: any;
+  defectTolerances?: any;
+  setDefectTolerances?: any;
 }) {
   const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
   const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
@@ -798,7 +820,7 @@ export default function Settings({
         <FxSettingsPanel fxSettings={fxSettings} setFxSettings={setFxSettings} />
         <NumberingPanel numbering={numbering} setNumbering={setNumbering} />
         <UsersPanel users={users} setUsers={setUsers} />
-        <DefectCataloguePanel defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} />
+        <DefectCataloguePanel defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} defectTolerances={defectTolerances} setDefectTolerances={setDefectTolerances} />
 
         {/* v6.38.0 (R1-C): reference data opens in dedicated editor windows */}
         <ManageCard

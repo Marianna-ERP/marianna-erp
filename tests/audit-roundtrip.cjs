@@ -1720,3 +1720,30 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.29 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.31 — the quality report (Daifressh structure) ══
+(function v69931(){
+  console.log("\n══ 52. v6.99.31: defect categories, tolerances and the report verdict ══");
+  const Z = B("seasonOps.domain.js");
+  t("A-R22-3: the producer's defect list is the catalogue — four categories, the owner's names", () => {
+    const cats = {}; Z.PEPPER_DEFECTS.forEach(d => { cats[d.category] = (cats[d.category] || 0) + 1; });
+    eq(cats.Unacceptable, 4); eq(cats.Progressive, 1); eq(cats.Major, 8); eq(cats.Minor, 8);
+    ok(Z.PEPPER_DEFECTS.some(d => d.name === "Spray deposits") && Z.PEPPER_DEFECTS.some(d => d.name === "Silvering / thrips"));
+  });
+  t("A-R22-2: the owner's own sheet reproduced — 4 % rots, 3.5 % mechanical = 7.5 %, sorting advised", () => {
+    const ins = { defects: [ { category: "Progressive", name: "Rots and mould", pct: 4 }, { category: "Major", name: "Mechanical damage (more than 1 cm² on surface)", pct: 3.5 } ] };
+    const v = Z.inspectionVerdict(ins, Z.tolerancesFor({}, "Capsicum"));
+    eq(v.totalPct, 7.5); ok(!v.acceptable);
+    eq(v.rows.find(r => r.category === "Progressive").acceptable, false, "4 % rots is over the 1 % tolerance");
+    eq(v.rows.find(r => r.category === "Minor").acceptable, true, "no minor defects found — that category passes");
+    ok(v.advice.startsWith("Sort"));
+  });
+  t("A-R22-2: any unacceptable defect rejects the consignment, whatever the totals", () => {
+    const v = Z.inspectionVerdict({ defects: [{ category: "Unacceptable", name: "Pests presence", pct: 0.5 }] }, Z.tolerancesFor({}, "Capsicum"));
+    ok(!v.acceptable); ok(v.advice.startsWith("Reject"));
+    eq(Z.tolerancesFor({ capsicum: { Unacceptable: 3, Major: 7 } }, "Capsicum").Unacceptable, 0, "unacceptable can never be given a tolerance");
+    eq(Z.tolerancesFor({ capsicum: { Major: 7 } }, "Capsicum").Major, 7, "the product's own tolerance wins");
+  });
+  console.log("v6.99.31 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
