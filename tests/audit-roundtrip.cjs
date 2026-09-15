@@ -1682,3 +1682,16 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.23 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.27 — one class per sales line ══
+(function v69927(){
+  console.log("\n══ 50. v6.99.27: the sales line has ONE class (grade ↔ quality kept in step) ══");
+  const Q = B("so.domain.js");
+  t("a line written with either name ends up with both, and the check is idempotent", () => {
+    const a = Q.normaliseSO({ number: "SO-1", items: [{ product: "Capsicum", grade: "II" }, { product: "Apples", quality: "I" }, { product: "Pears" }] });
+    ok(a.changed); eq(a.so.items[0].quality, "II"); eq(a.so.items[1].grade, "I"); eq(a.so.items[2].grade, "I"); eq(a.so.items[2].quality, "I");
+    ok(!Q.normaliseSO(a.so).changed);
+  });
+  console.log("v6.99.27 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

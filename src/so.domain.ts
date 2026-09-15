@@ -81,6 +81,13 @@ export function normaliseSO(so: any): { so: any; changed: boolean } {
   ["linkedInvoices", "linkedShipments", "actualDeliveryDate", "destinationMode", "_poETAByLine", "paymentTermsOther"].forEach(drop);
   if (!(num(s.paymentDays) > 0)) { const m = S(s.paymentTerms).match(/(\d{1,3})/); if (m) { s.paymentDays = num(m[1]); changed = true; } }
   if (!S(s.paymentBasis)) { s.paymentBasis = paymentBasisOf(s); changed = true; }   // v6.99.23: one source
+  // v6.99.27: the line's class had two names — `quality` (commercial, read by invoices, shipments, settlement)
+  // and `grade` (sorting, read by the availability engine). One control writes both; here they are kept in step.
+  (s.items || []).forEach((it: any) => {
+    const cls = S(it.grade) || S(it.quality) || "I";
+    if (S(it.grade) !== cls) { it.grade = cls; changed = true; }
+    if (S(it.quality) !== cls) { it.quality = cls; changed = true; }
+  });
   if ("paymentTerms" in s) { delete s.paymentTerms; changed = true; }
   if (Array.isArray(s.items)) s.items = s.items.map((it: any) => { const n: any = { ...it }; if ("shippedKg" in n) { delete n.shippedKg; changed = true; } if ("unit" in n && !n.pricingUnit) { n.pricingUnit = String(n.unit || "kg").toLowerCase() === "box" ? "box" : "kg"; changed = true; } if ("unit" in n) { delete n.unit; changed = true; } if (!n.pricingUnit) { n.pricingUnit = "kg"; changed = true; } return n; });
   return { so: s, changed };

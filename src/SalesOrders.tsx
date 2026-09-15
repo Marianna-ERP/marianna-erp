@@ -1451,7 +1451,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                   <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy SO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
                 </div>
               </div>
-              <div style={{ gridColumn: "span 3" }}>
+              <div>
                 <Lbl>Client</Lbl>
                 <Sel value={order.client?.name || ""} onChange={e => setClient(e.target.value)}>
                   <option value="">— select —</option>
@@ -1613,144 +1613,14 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 )}
               </div>
             </div>
-              <div style={{ order: -1 }}><Lbl>Status</Lbl>
-                {/* v6.77.0 STATUS OWNERSHIP. The sales order owns the COMMERCIAL
-                    statuses (Draft, Confirmed, Invoiced, Closed, Cancelled). The
-                    PHYSICAL ones — Reserved, Loading, Shipped, Delivered — are
-                    the shipments' to state, and are shown here as a derived badge
-                    rather than typed. Owner rulings: no partial state, an order
-                    ships only when ALL of its goods have moved, and an override
-                    is allowed but must say so. */}
-                {(() => {
-                  const d = deriveSoStatus(order, SHIPMENTS_REF);
-                  if (!d.derived && !d.overridden) return null;
-                  return <div style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, fontSize: 11.5,
-                    background: d.overridden ? "#FFFBEB" : "#F0F9FF",
-                    border: `1px solid ${d.overridden ? "#FDE68A" : "#BAE6FD"}`,
-                    color: d.overridden ? "#92400E" : "#0369A1" }}>
-                    <strong>{d.status}</strong>{d.overridden ? " · set by hand" : " · from the shipments"}
-                    <div style={{ marginTop: 3, lineHeight: 1.45 }}>{d.reason}</div>
-                  </div>;
-                })()}
-                <Sel value={order.status || "Draft"} onChange={async e => {
-                  const nv = e.target.value;
-                  // v6.79.0 (W-1): the lock reads the EFFECTIVE status — what the shipments say.
-                  const effNow = effectiveSoStatus(order, SHIPMENTS_REF);
-                  const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(effNow);
-                  const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
-                  // v6.63.0 (D-10, ruling D4): a locked SO moves FORWARD only.
-                  // The old dropdown let Shipped→Draft happen silently, with the
-                  // shipped kg and postings left orphaned behind the label (M2).
-                  const curOrd = soRank(effNow); // v6.79.0 (W-1)
-                  const nvOrd = (SO_STATUSES[nv] || {}).order ?? 0;
-                  if (wasLocked && nv !== "Cancelled" && nvOrd < curOrd) {
-                    await ofAlert({ tone: "warn", title: "Forward only", message: `This sales order is ${order.status} — goods have physically moved, so its status can only advance (or be Cancelled, which reverses the postings). Moving it back to ${nv} would leave shipped kilograms behind a label that denies them.` });
-                    return;
-                  }
-                  // v6.77.0: typing a PHYSICAL status the shipments do not support
-                  // is exactly the drift that left six orders Shipped or Invoiced
-                  // with no dispatch and a zero COGS. Warned, not blocked — and
-                  // proceeding records it as a deliberate override so it never
-                  // looks like a derived fact.
-                  if (isPhysicalStatus(nv)) {
-                    const clash = statusContradiction({ ...order, status: nv, statusOverride: "" }, SHIPMENTS_REF);
-                    if (clash) {
-                      const go = await ofConfirm({ tone: "warn", title: `Set ${nv} by hand?`,
-                        message: `${clash}\n\nSetting it here records an override, so the screen will show it was set by hand rather than taken from the shipments.`,
-                        confirmLabel: `Set ${nv} anyway`, cancelLabel: "Go back" });
-                      if (!go) return;
-                      setOrder((o: any) => ({ ...o, statusOverride: nv, statusOverrideReason: "Set by hand — shipments do not show it yet", statusOverrideAt: localTodayISO() }));
-                    }
-                  }
-                  if (willLock && !wasLocked) {
-                    // v6.95.0 (SO-8): the rate becomes a locked fact at confirm, with its date.
-                    if (!order.fxLockedAt && String(order.currency || "PLN").toUpperCase() !== "PLN") setOrder((o: any) => lockRate(o, localTodayISO()));
-                    // v6.92.0 (A-R8-1, owner ruling R3): no line may be confirmed without a quantity and a price.
-                    const empty = (order.items || []).filter((it: any) => String(it.product || "").trim() && !((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) > 0 && (parseFloat(String(it.unitPrice)) || 0) > 0));
-                    if (empty.length) { await ofAlert({ tone: "warn", title: "Quantity and price required", message: `${empty.length} line(s) have no quantity or no price. A sales order cannot be confirmed with an empty line — fill them in first (owner ruling R3).` }); return; }
-                    // v6.92.0 (A-R8-2): a foreign-currency order needs a real rate — 1.0 is the PLN default, not a rate.
-                    if (String(order.currency || "PLN").toUpperCase() !== "PLN" && Math.abs((parseFloat(String(order.fxRate)) || 0) - 1) < 1e-9) { await ofAlert({ tone: "warn", title: "FX rate missing", message: `The order is in ${order.currency} but its rate to PLN is 1.0. Set the rate before confirming — every amount in the ERP nets in PLN at the document's own locked rate.` }); return; }
-                    // v6.89.0 (R2, owner ruling): every sale rests on a purchase — a line without a PO line or a lot cannot be confirmed.
-                    const unsourced = (order.items || []).filter((it: any) => String(it.product || "").trim() && !(["PO", "STOCK"].includes(String(it.sourceType || "")) && String(it.sourceRef || "").trim()));
-                    if (unsourced.length) { await ofAlert({ tone: "warn", title: "Every sale rests on a purchase", message: `${unsourced.length} line(s) have no source. Pick the PO line or the stock lot each line sells from — a free-typed line cannot be confirmed (owner ruling R2).` }); return; }
-                    // v6.68.0 (F-3): credit control at the moment of commitment.
-                    const clientRec = (contacts || []).find((c: any) => String(c.name || "").trim().toLowerCase() === String(order.client?.name || "").trim().toLowerCase());
-                    const limit = parseFloat(String(clientRec?.creditLimitPLN ?? "")) || 0;
-                    if (limit > 0) {
-                      const soPLN = (order.items || []).reduce((a: number, it: any) => a + ((String(it.pricingUnit || "") === "box" ? (parseFloat(String(it.boxes)) || 0) : (parseFloat(String(it.qty)) || 0)) * (parseFloat(String(it.unitPrice)) || 0)), 0) * (parseFloat(String(order.fxRate)) || 1);
-                      const exposure = clientExposurePLN(order.client?.name, allInvoices || []);
-                      if (exposure + soPLN > limit) {
-                        const goOn = await ofConfirm({ tone: "danger", title: "Credit limit exceeded", message: `${order.client?.name}: open receivables ${exposure.toLocaleString("pl-PL")} PLN + this order ≈ ${Math.round(soPLN).toLocaleString("pl-PL")} PLN exceed the limit of ${limit.toLocaleString("pl-PL")} PLN.\n\nConfirm the order anyway?`, confirmLabel: "Confirm anyway", cancelLabel: "Hold the order" });
-                        if (!goOn) return;
-                      }
-                    }
-                    const ok = await ofConfirm({ tone: "warn", title: `Move to ${nv}?`, message: `Once this sales order is ${nv}, it becomes LOCKED — line items, quantities, sourcing and the shipping address can no longer be changed. To correct something afterwards you'd issue a credit/debit note or a new order.\n\nProceed?`, confirmLabel: `Yes, move to ${nv}`, cancelLabel: "Not yet" });
-                    if (!ok) return;
-                  }
-                  sf("status", nv);
-                }} disabled={order.status === "Cancelled"}
-                  title={order.status === "Cancelled" ? "This SO is cancelled — read-only and can't be reactivated." : ""}
-                  style={{ borderLeft: `4px solid ${(SO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (SO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
-                  {Object.keys(SO_STATUSES).map(s => {
-                    // Draft and Cancelled are always available; everything else requires all lines to be
-                    // (a) sourced AND (b) have enough combined available qty to cover the demanded qty.
-                    const curOrd2 = (SO_STATUSES[order.status || "Draft"] || {}).order ?? 0;
-                    const isBackward = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(order.status)) && s !== "Cancelled" && ((SO_STATUSES[s] || {}).order ?? 0) < curOrd2;
-                    if (s === "Draft" || s === "Cancelled") return <option key={s} value={s} disabled={s === "Draft" && isBackward}>{s}{s === "Draft" && isBackward ? "  — forward only" : ""}</option>;
-                    if (isBackward) return <option key={s} value={s} disabled>{s}  — forward only</option>;
-                    const needsSource = !sourcing.allSourced;
-                    const needsSupply = overageCount > 0;
-                    const needsPOReady = poReadinessIssues.length > 0;
-                    const disabled = needsSource || needsSupply || needsPOReady;
-                    const reason = needsSource && needsSupply ? "  — needs sourcing + supply"
-                      : needsSource ? "  — needs sourcing"
-                      : needsSupply ? "  — short on supply"
-                      : needsPOReady ? "  — PO not confirmed"
-                      : "";
-                    return <option key={s} value={s} disabled={disabled}>{s}{reason}</option>;
-                  })}
-                </Sel>
-                {(!sourcing.allSourced || overageCount > 0 || poReadinessIssues.length > 0) && (
-                  <div style={{ fontSize: 10, color: "#D97706", marginTop: 3, lineHeight: 1.4 }}>
-                    {!sourcing.allSourced && (
-                      <div>{sourcing.unsourcedIndexes.length} line{sourcing.unsourcedIndexes.length === 1 ? "" : "s"} unsourced</div>
-                    )}
-                    {poReadinessIssues.length > 0 && (
-                      <div>{poReadinessIssues.length} line{poReadinessIssues.length === 1 ? "" : "s"} sourced from a Draft/Cancelled/missing PO</div>
-                    )}
-                    {overageCount > 0 && (
-                      <div>{overageCount} line{overageCount === 1 ? "" : "s"} short on supply</div>
-                    )}
-                    <div style={{ marginTop: 2 }}>only Draft / Cancelled available</div>
-                  </div>
-                )}
-              </div>
-              <div style={{ gridColumn: "span 2" }}>
-                <Lbl>Import permit no. <span style={{ color: "#AAA", fontWeight: 400 }}>· client-country import licence</span></Lbl>
-                <Inp value={order.importPermitNo === "N/A" ? "" : (order.importPermitNo || "")} onChange={e => sf("importPermitNo", e.target.value)} placeholder={order.importPermitNo === "N/A" ? "Not applicable" : "e.g. IP-2026-00871"} disabled={order.importPermitNo === "N/A"} />
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#666", marginTop: 4, cursor: "pointer" }}>
-                  <input type="checkbox" checked={order.importPermitNo === "N/A"} onChange={e => sf("importPermitNo", e.target.checked ? "N/A" : "")} /> Not applicable
-                </label>
-                {permitDupes.importPermitNo && (
-                  <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.importPermitNo}</div>
-                )}
-              </div>
-              <div style={{ gridColumn: "span 2" }}>
-                <Lbl>ACID no. <span style={{ color: "#AAA", fontWeight: 400 }}>· Egypt Advance Cargo Information Declaration</span></Lbl>
-                <Inp value={order.acidNo === "N/A" ? "" : (order.acidNo || "")} onChange={e => sf("acidNo", e.target.value)} placeholder={order.acidNo === "N/A" ? "Not applicable" : "19-digit ACID"} disabled={order.acidNo === "N/A"} />
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#666", marginTop: 4, cursor: "pointer" }}>
-                  <input type="checkbox" checked={order.acidNo === "N/A"} onChange={e => sf("acidNo", e.target.checked ? "N/A" : "")} /> Not applicable
-                </label>
-                {permitDupes.acidNo && (
-                  <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>⚠ Already used on {permitDupes.acidNo}</div>
-                )}
-              </div>
+              {/* v6.99.27: duplicated Status / import-permit / ACID blocks removed — the reorder in v6.99.26 left a second copy */}
           </Card>
 
           {/* Incoterm + destination */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>INCOTERM · DELIVERY</SectionTitle>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 14 }}>
+            {/* v6.99.27 (owner): the sale's terms panel wears the same colours as the purchase terms on the PO */}
+            <div style={{ border: "1px solid #E0E7FF", background: "#F5F7FF", borderRadius: 10, padding: "12px 14px", display: "grid", gridTemplateColumns: "1fr 2fr", gap: 14 }}>
               <div>
                 <Lbl>Sell Incoterm</Lbl>
                 <Sel value={order.sellIncoterm || ""} onChange={e => sf("sellIncoterm", e.target.value)} disabled={isLocked}>
@@ -1995,7 +1865,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       )}
                     </div>
                   )}
-                  <div style={{ display: "grid", gridTemplateColumns: "minmax(190px, 1.9fr) 1fr 0.6fr 0.7fr 0.7fr 1fr 0.9fr minmax(140px, 1.5fr)", gap: 8, alignItems: "end" }}>   {/* v6.99.26 (owner) */}
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(190px, 1.9fr) 1fr 0.6fr 0.7fr 1fr 0.9fr minmax(140px, 1.6fr)", gap: 8, alignItems: "end" }}>   {/* v6.99.27 (owner): item · origin · size · class · qty · priced per · sell price */}
                     <div>
                       <Lbl>Item / Variety {it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl>
                       {it.sourceType && it.sourceRef
@@ -2004,8 +1874,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     </div>
                     <div><Lbl>Origin</Lbl><Sel value={it.origin || ""} onChange={e => si(i, "origin", e.target.value)} disabled={fullyLocked} title="v6.99.26 (owner): country of origin — the list is the Directory's Countries tab"><option value="">— country —</option>{readCountries().map((c: any) => <option key={c.iso} value={c.name}>{c.name}</option>)}{it.origin && !readCountries().some((c: any) => c.name === it.origin) && <option value={it.origin}>{it.origin}</option>}</Sel></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked} /></div>
-                    <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
-                    <div><Lbl>Grade (sorting)</Lbl><Sel value={it.grade || "I"} onChange={e => si(i, "grade", e.target.value)} title="v6.95.0 (SO-1, owner decision 4): class II stays in the same lot as a grade — say which grade this line sells; the sales report and the availability read it"><option value="I">I</option><option value="II">II</option></Sel></div>
+                    <div><Lbl>Class</Lbl><Sel value={it.grade || it.quality || "I"} disabled={fullyLocked} title="v6.99.27 (one source): the class sold — the same fact the sorting produces. Availability is checked against this class in the source lot." onChange={e => { const v = e.target.value; si(i, "grade", v); si(i, "quality", v); }}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                       <div><Lbl>Qty (boxes)</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => {
                         const b = Math.round(parseFloat(e.target.value) || 0);
                         const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
