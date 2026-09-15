@@ -1,4 +1,5 @@
 import { newestFirst } from "./moduleGuards.domain";
+import { readCountries } from "./Contacts";
 import LocationPicker from "./LocationPicker";
 import { documentTotals, totalsLine } from "./pricingUnit.domain";
 import { exportRowsToXlsx, stamp as xlsStamp, exportVegaProSalesReport } from "./exportXlsx";
@@ -884,15 +885,8 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
           {/* Header card */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>ORDER DETAILS</SectionTitle>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
-              <div>
-                <Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)} disabled={hasDependents || order.status === "Cancelled"}
-                  title={order.status === "Cancelled" ? "This PO is cancelled — kept for the record, read-only, and can't be reactivated." : hasDependents ? "Locked — a Sales Order, shipment or inventory depends on this PO. Unlink everything first." : ""}
-                  style={{ borderLeft: `4px solid ${(PO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (PO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
-                  {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
-                </Sel>
-              </div>
+            {/* v6.99.24 (owner): identity on one line, the four dates on the next */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 14, marginBottom: 14 }}>
               <div>
                 <Lbl>PO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
                 {/* BP-6: number is a controlled document id — display/copy only, never edited. */}
@@ -901,6 +895,23 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy PO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
                 </div>
               </div>
+              <div>
+                <Lbl>Supplier</Lbl>
+                <Sel disabled={isLocked} value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
+                  <option value="">— select —</option>
+                  {suppliers.map(s => <option key={s.id} value={s.name}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
+                </Sel>
+              </div>
+              <div>
+                <Lbl>Status</Lbl>
+                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)} disabled={hasDependents || order.status === "Cancelled"}
+                  title={order.status === "Cancelled" ? "This PO is cancelled — kept for the record, read-only, and can't be reactivated." : hasDependents ? "Locked — a Sales Order, shipment or inventory depends on this PO. Unlink everything first." : ""}
+                  style={{ borderLeft: `4px solid ${(PO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (PO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
+                  {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
+                </Sel>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
               <div>
                 <Lbl>Order date</Lbl>
                 <Inp disabled={isLocked} value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" max={localTodayISO()} title="The date the PO was created/agreed with the supplier" />
@@ -923,13 +934,6 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                   {order.actualAvailabilityDate ? `${order.actualAvailabilityDate} · from arrival/receipt` : "From shipment arrival / inventory receipt"}
                 </div>
                 <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once it arrives</div>
-              </div>
-              <div style={{ gridColumn: "span 3" }}>
-                <Lbl>Supplier</Lbl>
-                <Sel disabled={isLocked} value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
-                  <option value="">— select —</option>
-                  {suppliers.map(s => <option key={s.id} value={s.name}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
-                </Sel>
               </div>
             </div>
           </Card>
@@ -1038,7 +1042,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
           {/* Pricing */}
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>PAYMENT · CURRENCY · FX</SectionTitle>
-            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1.4fr", gap: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1.3fr 0.8fr 0.9fr", gap: 14, alignItems: "start" }}>   {/* v6.99.24 (owner): terms · pricing · currency · rate on one line */}
               <div>
                 {/* v6.99.23 (owner): ONE payment-terms field — a basis, plus days only when days apply. The legacy text dropdown is retired. */}
                 <Lbl>Payment terms</Lbl>
@@ -1085,7 +1089,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
               // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
               return (
                 <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 2.2fr) 0.9fr 0.7fr 0.7fr 1fr minmax(130px, 1.4fr) 38px", gap: 8, alignItems: "end" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(190px, 2fr) 1fr 0.7fr 0.7fr 1fr 0.8fr 1fr minmax(130px, 1.3fr)", gap: 8, alignItems: "end" }}>   {/* v6.99.24 (owner): item · origin · size · quality · qty · unit · quantity type · unit price */}
                     <div>
                       <Lbl>Item / Variety</Lbl>
                       <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => {
@@ -1098,25 +1102,25 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                         }) }));
                       }} onVariety={(v: string) => si(i, "variety", v)} />
                     </div>
-                    <div><Lbl>Origin</Lbl><Inp value={it.origin} onChange={e => si(i, "origin", e.target.value)} placeholder="Poland" /></div>
+                    <div><Lbl>Origin</Lbl><Sel value={it.origin || ""} onChange={e => si(i, "origin", e.target.value)} title="v6.99.24 (owner): country of origin — the list is the Directory's Countries tab"><option value="">— country —</option>{readCountries().map((c: any) => <option key={c.iso} value={c.name}>{c.name}</option>)}{it.origin && !readCountries().some((c: any) => c.name === it.origin) && <option value={it.origin}>{it.origin}</option>}</Sel></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
                     <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     <div><Lbl>Qty (kg){String(it.pricingUnit || "kg") === "box" ? " (derived)" : ""}{isEstimatedLine(it) ? " · ESTIMATED" : ""}</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 19500" disabled={isLocked && !isEstimatedLine(it)} title={isEstimatedLine(it) ? "v6.95.0 (PO-10): quantities are ESTIMATED until the producer's packing result — editable even on a confirmed order; prices and terms are locked" : ""} /></div>
+                    <div><Lbl>Unit</Lbl><Sel value={it.pricingUnit || "kg"} onChange={e => si(i, "pricingUnit", e.target.value)} title="v6.94.0 (PO-1): order in kg or in boxes — the other figure derives from the packaging type"><option value="kg">kg</option><option value="box">box</option></Sel></div>
+                    <div><Lbl>Quantity</Lbl><Sel value={isEstimatedLine(it) ? "ESTIMATED" : "FINAL"} onChange={e => si(i, "quantityStatus", e.target.value)} disabled={isLocked && !isEstimatedLine(it)} title="v6.95.0 (PO-10): ESTIMATED = agreed price, quantity to be confirmed by the producer's packing result"><option value="FINAL">Final</option><option value="ESTIMATED">Estimated</option></Sel></div>
                     <div><Lbl>Unit price</Lbl>{(order.pricingMode || "firm") === "consignment"
                       ? <div style={{ padding: "8px 10px", border: "1px dashed #D8B4FE", borderRadius: 6, fontSize: 12, color: "#7C3AED", background: "#FAF5FF", fontWeight: 600 }} title="Consignment — the producer's price is settled from your sales">Consignment ⚖</div>
                       : <Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" />}</div>
-                    <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
-                    <button onClick={() => removeItem(i)} title="Delete this line" disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #DC2626", borderRadius: 6, background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 800, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "0.7fr 0.8fr 1fr 1.4fr 0.7fr 0.7fr 0.9fr", gap: 8, alignItems: "end", marginTop: 8 }}>
-                    <div><Lbl>Unit</Lbl><Sel value={it.pricingUnit || "kg"} onChange={e => si(i, "pricingUnit", e.target.value)} title="v6.94.0 (PO-1): order in kg or in boxes — the other figure derives from the packaging type"><option value="kg">kg</option><option value="box">box</option></Sel></div>
-                    <div style={{ maxWidth: 110 }}><Lbl>Quantity</Lbl><Sel value={isEstimatedLine(it) ? "ESTIMATED" : "FINAL"} onChange={e => si(i, "quantityStatus", e.target.value)} disabled={isLocked && !isEstimatedLine(it)} title="v6.95.0 (PO-10): ESTIMATED = agreed price, quantity to be confirmed by the producer's packing result"><option value="FINAL">Final</option><option value="ESTIMATED">Estimated</option></Sel></div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.8fr 0.7fr 1fr 1.1fr 38px", gap: 8, alignItems: "end", marginTop: 8 }}>   {/* coloration · packaging · boxes · pallets · CN/HS · line total · delete */}
                     <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PO_PACKAGING_TYPES || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="po-packaging-types" />
                       <datalist id="po-packaging-types">{(PO_PACKAGING_TYPES || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist></div>
                     <div><Lbl>Boxes{String(it.pricingUnit || "kg") === "kg" ? " (derived)" : ""}</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
                     <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode ?? ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 0808 10" title="Customs tariff code for this item — carried to the SO and shipment" /></div>
+                    <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
+                    <button onClick={() => removeItem(i)} title="Delete this line" disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #DC2626", borderRadius: 6, background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 800, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
                 </div>
               );
