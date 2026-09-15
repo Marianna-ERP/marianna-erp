@@ -1,3 +1,4 @@
+import { gradeStockNow } from "./seasonOps.domain";
 // ─────────────────────────────────────────────────────────────────────────────
 // trace.domain.ts — one-click lot traceability (Safeguards batch 7a)
 //
@@ -11,10 +12,10 @@ function arr(v: any): any[] { return Array.isArray(v) ? v : []; }
 function refs(v: any): string[] { return arr(v).filter(Boolean).map(String); }
 
 export interface TraceTree {
-  lot: { number: string; product: string; variety?: string; receivedKg?: number; physicalKg?: number };
+  lot: { number: string; product: string; variety?: string; receivedKg?: number; physicalKg?: number; packaging?: string; size?: string; inStockI?: number; inStockII?: number };
   origin: { poNumber: string | null; supplier: string | null; supplierAddress?: string; origin?: string; variety?: string; receivedKg?: number };
   shipments: Array<{ number: string; status?: string; direction?: string; carrier?: string; from?: string; to?: string; dates?: string; loadedAt?: string; unloadedAt?: string }>;
-  sales: Array<{ soNumber: string; client: string; qtyKg: number; status?: string; destination?: string; incoterm?: string }>;
+  sales: Array<{ soNumber: string; client: string; qtyKg: number; status?: string; destination?: string; incoterm?: string; deliveredAt?: string }>;
   invoices: Array<{ number: string; kind?: string; counterparty?: string; gross?: string }>;
   generatedAt: string;
 }
@@ -89,6 +90,7 @@ export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; o
         soNumber: o.number, client: o.client?.name || "(client)",
         qtyKg: parseFloat(it.qty) || 0, status: o.status,
         destination: o.destinationText || o.client?.address || undefined,
+        deliveredAt: o.actualDeliveryDate || (shipments.filter((s: any) => String(s?.status) !== "Cancelled" && ((s.soRefs || []).includes(o.number) || (s.goods || []).some((g: any) => g.soRef === o.number))).flatMap((s: any) => (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.unloadedAt || u.deliveredAt || "").slice(0, 10)))).filter(Boolean).sort().slice(-1)[0]) || undefined,
         incoterm: o.sellIncoterm || undefined,   // v6.99.19 (A-R14-5)
       });
     });
@@ -105,7 +107,7 @@ export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; o
   }).map(v => ({ number: v.number || "(draft)", kind: v.kind, counterparty: v.counterparty?.name, gross: v.grossAmount != null ? `${v.grossAmount} ${v.currency || ""}`.trim() : undefined }));
 
   return {
-    lot: { number: lot.number, product: lot.product || "", variety: lot.variety || undefined, receivedKg: lot.receivedKg, physicalKg: lot.physicalKg },
+    lot: { number: lot.number, product: lot.product || "", variety: lot.variety || undefined, packaging: lot.packaging || undefined, size: lot.size || undefined, inStockI: gradeStockNow(lot).I, inStockII: gradeStockNow(lot).II, receivedKg: lot.receivedKg, physicalKg: lot.physicalKg },
     origin: { poNumber: lot.poRef || null, supplier: po?.supplier?.name || null, supplierAddress: po?.supplier?.address || undefined, origin: (po?.items || [])[0]?.origin || undefined },
     shipments: ship, sales, invoices: inv,
     generatedAt: todayISO,

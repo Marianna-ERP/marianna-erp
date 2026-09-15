@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { PrintLogo } from "./brand";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
@@ -1344,7 +1345,25 @@ function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orde
   );
 }
 
-function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [], season = null }: any) {
+
+// ── v6.99.30 (A-R21-3): TRC numbering — one counter per year in the same store discipline as every other document ──
+function issueTraceNumber(lot: any, by: string): string {
+  const year = new Date().getFullYear();
+  const KEY = "marianna-erp:v2:traceRegister";
+  let reg: any[] = [];
+  try { reg = JSON.parse(window.localStorage.getItem(KEY) || "[]"); } catch { reg = []; }
+  const seq = reg.filter((r: any) => String(r.number || "").includes(`-${year}-`)).length + 1;
+  const number = `TRC-${year}-${String(seq).padStart(4, "0")}`;
+  reg.push({ number, lot: lot?.number, issuedAt: new Date().toISOString().slice(0, 10), by: by || "" });
+  try { window.localStorage.setItem(KEY, JSON.stringify(reg)); } catch { /* best effort */ }
+  recordAudit({ module: "Inventory", docType: "Trace", docNumber: number, action: "created", summary: `Traceability / recall report issued for ${lot?.number}` });
+  return number;
+}
+
+function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [], season = null , userName = "" }: any) {
+  // v6.99.30 (A-R21-3, owner): a recall document must be identifiable afterwards — it carries its own number,
+  // minted when it is issued and written to the audit trail with the lot and the person who ran it.
+  const [traceNo, setTraceNo] = useState<string>("");
   const seasonInspections = season?.inspections || [];   // v6.99.17 (A-R13-9): ONE inspections store — the legacy card reads it too
   const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   const cpk = costPerKg(lot);
@@ -1368,7 +1387,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Inventory</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
           <button onClick={onMove} title="v6.99.28: cost-free transfers only — damage belongs to the quality inspection" style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7DD3FC", background: "#E0F2FE", color: "#0369A1", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Record movement</button>
-          <button onClick={onQualityIssue} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
+          {/* v6.99.30 (A-R21-1, owner): the header's "Report quality issue" is gone — quality has ONE entry, the Quality inspection in Season actions */}
           {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
             <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
           )}
@@ -1457,7 +1476,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
                     {(lotClaims || []).length ? `Producer claim (${(lotClaims || []).length})` : "Producer claim"}
                   </button>
                 )}
-                <button onClick={() => printHtmlNodeInv("lot-trace-doc", `Trace-${lot.number}`)} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #0F766E", background: "#fff", color: "#0F766E", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="One-click recall report: where this lot came from and everywhere it went — supplier, shipments, clients, invoices.">
+                <button onClick={() => { const no = issueTraceNumber(lot, userName); setTraceNo(no); setTimeout(() => printHtmlNodeInv("lot-trace-doc", `${no}-${lot.number}`), 60); }} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #0F766E", background: "#fff", color: "#0F766E", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="One-click recall report: where this lot came from and everywhere it went — supplier, shipments, clients, invoices.">
                   🔎 Trace / recall
                 </button>
               </div>
@@ -1676,29 +1695,47 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
                   const cell = { border: "1px solid #999", padding: "4px 6px", fontSize: 11 } as any;
                   const hd = { ...cell, background: "#F3F4F6", fontWeight: 700 } as any;
                   return (
-                    <div id="lot-trace-doc" style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", color: "#111", fontFamily: "Arial, sans-serif", fontSize: 12, padding: 24 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12, borderBottom: "2px solid #111", paddingBottom: 8, marginBottom: 10 }}>
-                        <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: "-0.5px" }}><span style={{ color: "#7CB342" }}>M</span><span style={{ color: "#111" }}>arianna</span></div>
-                        <div style={{ fontSize: 9, color: "#666", marginTop: 6 }}>AUTHENTIC TASTE OF QUALITY</div>
+                    <div id="lot-trace-doc" style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", color: "#111", fontFamily: "Arial, Calibri, sans-serif", fontSize: 12, padding: 24 }}>
+                      {/* v6.99.30 (owner 15 Sept): the recall document — real logo, its own number, three sections in the owner's order */}
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 14, borderBottom: "2px solid #111", paddingBottom: 10, marginBottom: 12 }}>
+                        <PrintLogo width={200} />
                         <div style={{ marginLeft: "auto", textAlign: "right", fontSize: 9.5, color: "#444" }}>{companyName}<br />{companyAddress}<br />{companyNip ? `NIP ${companyNip}` : ""}</div>
                       </div>
-                      <div style={{ fontSize: 17, fontWeight: 800 }}>TRACEABILITY / RECALL REPORT — {t.lot.number}</div>
-                      <div style={{ marginBottom: 10 }}>Generated / Wygenerowano: {t.generatedAt} · {t.lot.product}{t.lot.variety ? ` — ${t.lot.variety}` : ""} · received {Number(t.lot.receivedKg || 0).toLocaleString("pl-PL")} kg</div>
-                      <div style={{ fontWeight: 800, margin: "8px 0 4px" }}>ORIGIN / POCHODZENIE</div>
-                      <div>PO / Zamówienie: <b>{t.origin.poNumber || "—"}</b></div>
-                      <div>Supplier / Dostawca: <b>{t.origin.supplier || "—"}</b></div>
-                      <div>Origin / Pochodzenie: <b>{t.origin.origin || "—"}</b></div>
-                      <div>Product / Produkt: <b>{t.lot.product}{t.lot.variety ? ` — ${t.lot.variety}` : ""}</b> · received / przyjęto <b>{Number(t.lot.receivedKg || 0).toLocaleString("pl-PL")} kg</b></div>
-                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>SHIPMENTS / TRANSPORTY ({t.shipments.length})</div>
-                      <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["Shipment / Transport", "Loading place / date", "Unloading place / date", "Carrier / Przewoźnik"].map(h => <th key={h} style={hd}>{h}</th>)}</tr></thead>
-                        <tbody>{t.shipments.map((s: any) => <tr key={s.number}>{[s.number, `${s.from || "—"}${s.loadedAt ? `
-${s.loadedAt}` : ""}`, `${s.to || "—"}${s.unloadedAt ? `
-${s.unloadedAt}` : ""}`, s.carrier || "—"].map((v: any, k: number) => <td key={String(k)} style={cell}>{v}</td>)}</tr>)}</tbody></table>
-                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>SOLD TO / SPRZEDANO ({t.sales.length})</div>
-                      <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["SO", "Client / Klient", "Qty kg", "Incoterm", "Destination / Miejsce"].map(h => <th key={h} style={hd}>{h}</th>)}</tr></thead>
-                        <tbody>{t.sales.map((s: any, k: number) => <tr key={String(k)}>{[s.soNumber, s.client, s.qtyKg.toLocaleString("pl-PL"), s.incoterm || "—", s.destination || "—"].map((v: any, j: number) => <td key={String(j)} style={cell}>{v}</td>)}</tr>)}</tbody></table>
-                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>RELATED INVOICES / FAKTURY ({t.invoices.length})</div>
-                      <div>{t.invoices.map((v: any) => `${v.number}${v.counterparty ? ` (${v.counterparty})` : ""}`).join(" · ") || "—"}</div>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                        <div style={{ fontSize: 17, fontWeight: 800 }}>TRACEABILITY / RECALL REPORT</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{traceNo}</div>
+                      </div>
+                      <div style={{ marginBottom: 12, fontSize: 11, color: "#444" }}>Lot / Partia: <b>{t.lot.number}</b> · generated / wygenerowano {t.generatedAt}{userName ? ` · ${userName}` : ""}</div>
+
+                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>1. PURCHASE / ZAKUP</div>
+                      <table><tbody>
+                        {[["PO / Zamówienie", t.origin.poNumber || "—"], ["Lot / Partia", t.lot.number], ["Supplier / Dostawca", t.origin.supplier || "—"], ["Origin / Pochodzenie", t.origin.origin || "—"],
+                          ["Product / Produkt", `${t.lot.product}${t.lot.variety ? ` — ${t.lot.variety}` : ""}`], ["Packaging / Opakowanie", t.lot.packaging || "—"], ["Size / Kaliber", t.lot.size || "—"],
+                          ["Quantity received / Ilość przyjęta", `${Number(t.lot.receivedKg || 0).toLocaleString("pl-PL")} kg`],
+                          ["Still in stock / Na stanie", `${Number(t.lot.physicalKg || 0).toLocaleString("pl-PL")} kg${(t.lot.inStockII || 0) > 0 ? ` — class I ${Number(t.lot.inStockI || 0).toLocaleString("pl-PL")} kg · class II ${Number(t.lot.inStockII || 0).toLocaleString("pl-PL")} kg` : ""}`]
+                        ].map(([k, v]: any) => <tr key={k}><td style={{ ...cell, width: 230, background: "#F9FAFB" }}>{k}</td><td style={cell}>{v}</td></tr>)}
+                      </tbody></table>
+
+                      <div style={{ fontWeight: 800, margin: "14px 0 4px" }}>2. SHIPMENTS / TRANSPORTY ({t.shipments.length})</div>
+                      <table><tbody>
+                        <tr>{["Shipment / Transport", "Loading place / Miejsce załadunku", "Loading date", "Unloading place / Miejsce rozładunku", "Unloading date", "Carrier / Przewoźnik"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
+                        {!t.shipments.length && <tr><td style={cell} colSpan={6}>— none yet / brak —</td></tr>}
+                        {t.shipments.map((s: any) => <tr key={s.number}>{[s.number, s.from || "—", s.loadedAt || "—", s.to || "—", s.unloadedAt || "—", s.carrier || "—"].map((v: any, k: number) => <td key={k} style={cell}>{v}</td>)}</tr>)}
+                      </tbody></table>
+
+                      <div style={{ fontWeight: 800, margin: "14px 0 4px" }}>3. SOLD TO / SPRZEDANO ({t.sales.length})</div>
+                      <table><tbody>
+                        <tr>{["SO", "Client / Klient", "Qty kg", "Incoterm", "Delivery place / Miejsce dostawy", "Delivery date"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
+                        {!t.sales.length && <tr><td style={cell} colSpan={6}>— none yet / brak —</td></tr>}
+                        {t.sales.map((s: any) => <tr key={s.soNumber}>{[s.soNumber, s.client, Number(s.qtyKg || 0).toLocaleString("pl-PL"), s.incoterm || "—", s.destination || "—", s.deliveredAt || "—"].map((v: any, k: number) => <td key={k} style={cell}>{v}</td>)}</tr>)}
+                      </tbody></table>
+                      <div style={{ fontWeight: 700, margin: "10px 0 4px", fontSize: 11 }}>Related invoices / Powiązane faktury ({t.invoices.length})</div>
+                      <table><tbody>
+                        <tr>{["Invoice / Faktura", "Kind", "Counterparty / Kontrahent", "Gross"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
+                        {!t.invoices.length && <tr><td style={cell} colSpan={4}>— none yet / brak —</td></tr>}
+                        {t.invoices.map((iv: any) => <tr key={iv.number}>{[iv.number, iv.kind || "—", iv.counterparty || "—", iv.gross || "—"].map((v: any, k: number) => <td key={k} style={cell}>{v}</td>)}</tr>)}
+                      </tbody></table>
+                      <div style={{ marginTop: 16, fontSize: 9.5, color: "#666" }}>Issued from MARIANNA ERP · {traceNo} · this report is recorded in the audit trail.</div>
                     </div>
                   );
                 })()}
