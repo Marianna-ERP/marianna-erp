@@ -8,7 +8,7 @@ import DateInput from "./DateInput";
 import React, { useState, useMemo, useRef } from "react";
 import { Lbl, useConfirm, ActionButton} from "./ui";
 import { nextId } from "./ids";
-import {contactAddresses, warehouseCpLocId, allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation } from "./locations";
+import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -120,7 +120,13 @@ function showServicesRow(c) {
 // Mimics the legacy flat arrays (SUPPLIERS, CLIENTS, …) so Invoices.tsx etc.
 // can switch to a single source of truth later with one-line changes.
 export function getCounterpartiesByType(counterparties, type) {
-  return counterparties.filter(c => c.type === type || (c.additionalTypes || []).includes(type)).map(c => {
+  // v6.99.29 (A-R19-1/2, owner 15 Sept): ONE builder for every party picker.
+  //  · roles[] is the source (CP-1); the legacy type / additionalTypes are read as a fallback so nothing disappears
+  //    while both exist — a party given a role only in the new UI used to show in no picker at all.
+  //  · the result is sorted by name (Polish collation): a counterparty added today belongs in its alphabetical place,
+  //    not at the bottom of the list, which is what store order gave us.
+  const hasRole = (c) => (Array.isArray(c.roles) && c.roles.length ? c.roles.includes(type) : false) || c.type === type || (c.additionalTypes || []).includes(type);
+  return counterparties.filter(hasRole).slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pl", { sensitivity: "base" })).map(c => {
     const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
     return {
       id: c.id,
@@ -1382,12 +1388,27 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
 // ── v6.99.11 (owner, 13 Sept): PORTS TAB — ports · border crossings · customs points. Everything with an owner
 // (warehouses, port warehouses like Silvertech, supplier / client sites) lives on its COUNTERPARTY; these are the
 // places nobody invoices us for. Edited here, read everywhere through the one LocationPicker.
-function PortsView({ contacts = [] }: any) {
+function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [] }: any) {
   const [, force] = useState(0);
   const [form, setForm] = useState<any>({ name: "", country: "", type: "Port", address: "", unlocode: "" });
   const [editId, setEditId] = useState<any>(null);
   const KINDS: Array<[string, string]> = [["Port", "Port"], ["Airport", "Airport"], ["BorderCrossing", "Border crossing"], ["Customs", "Customs point"]];
-  const rows = allLocations().filter((l: any) => ["Port", "Airport", "BorderCrossing", "Customs"].includes(String(l.type)) || ["PORT", "CUSTOMS", "BORDER"].includes(String(l.legacyType))).sort((a: any, b: any) => String(a.type).localeCompare(String(b.type)) || String(a.name).localeCompare(String(b.name), "pl"));
+  // v6.99.29 (A-R19-5, owner): EVERY place is listed here with its source — a stray legacy place (WH-01) used to be
+  // visible in the pickers and removable nowhere. Counterparty sites are shown read-only; they are edited on their party.
+  const [showAll, setShowAll] = useState(true);
+  const customIds = new Set(readCustomLocations().map((l: any) => String(l.id)));
+  const siteIds = new Set(counterpartyLocations(counterparties || []).map((l: any) => String(l.id)));
+  const sourceOf = (l: any) => siteIds.has(String(l.id)) ? "counterparty site" : (customIds.has(String(l.id)) ? ((readCustomLocations().find((x: any) => String(x.id) === String(l.id)) as any)?.migratedFromSeed ? "migrated (legacy)" : "added here") : "built-in");
+  const usageOf = (id: any) => {
+    const s = String(id); let n = 0;
+    (lots || []).forEach((l: any) => { if (String(l.locationId) === s || String(l.baseLocationId) === s) n++; });
+    (pos || []).forEach((p: any) => { if (String(p.destinationLocationId) === s) n++; });
+    (orders || []).forEach((o: any) => { if (String(o.destinationLocationId) === s) n++; });
+    (shipments || []).forEach((sh: any) => (sh.legs || []).forEach((lg: any) => { if (String(lg.fromLocationId) === s || String(lg.toLocationId) === s) n++; (lg.vehicles || []).forEach((u: any) => { if (String(u.pickupLocationId) === s || String(u.deliveryLocationId) === s) n++; }); }));
+    return n;
+  };
+  const isPortKind = (l: any) => ["Port", "Airport", "BorderCrossing", "Customs"].includes(String(l.type)) || ["PORT", "CUSTOMS", "BORDER"].includes(String(l.legacyType));
+  const rows = unifiedLocations(counterparties || []).filter((l: any) => showAll || isPortKind(l)).sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pl"));
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const save = () => {
     if (!String(form.name).trim()) return;
@@ -1399,7 +1420,10 @@ function PortsView({ contacts = [] }: any) {
   };
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>
-      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>⚓ Ports, border crossings, customs points</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <div style={{ fontSize: 13, fontWeight: 800 }}>📍 Places</div>
+        <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!showAll} onChange={e => setShowAll(!e.target.checked)} /> ports, crossings &amp; customs only</label>
+      </div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Places nobody invoices us for. A warehouse near a port (Silvertech, Koper) is a COUNTERPARTY with the flag "charged through our forwarder" — add it under Companies. Everything here appears in every location picker, alphabetically.</div>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1.2fr 2fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 12 }}>
         <div><Lbl>Name</Lbl><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Koper Port" style={inp} /></div>
@@ -1409,11 +1433,17 @@ function PortsView({ contacts = [] }: any) {
         <div><Lbl>UN/LOCODE</Lbl><input value={form.unlocode} onChange={e => setForm({ ...form, unlocode: e.target.value.toUpperCase() })} placeholder="SIKOP" style={inp} /></div>
         <button onClick={save} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "+ Add"}</button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1.2fr 2fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>NAME</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div /></div>
-      {rows.map((l: any) => <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1.2fr 2fr auto", gap: 8, fontSize: 12, padding: "5px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}>
-        <div><b>{l.name}</b></div><div>{l.type || l.legacyType}</div><div>{l.country || ""}</div><div style={{ color: "#64748B" }}>{l.address || ""}</div>
-        <div style={{ display: "flex", gap: 6 }}><button onClick={() => { setEditId(l.id); setForm({ name: l.name, country: l.country || "", type: l.type || "Port", address: l.address || "", unlocode: l.unlocode || "" }); }} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button>{l.source === "Custom" && <button onClick={() => { if (window.confirm(`Remove ${l.name}?`)) { removeCustomLocation(Number(l.id)); setTimeout(() => window.location.reload(), 150); } }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button>}</div>
-      </div>)}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>NAME</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>SOURCE · USED BY</div><div /></div>
+      {rows.map((l: any) => { const src = sourceOf(l); const used = usageOf(l.id); const mine = src === "added here" || src === "migrated (legacy)";
+        return <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 12, padding: "5px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}>
+        <div><b>{l.name}</b></div><div>{l.type || l.legacyType}</div><div>{l.country || ""}</div><div style={{ color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.address || ""}</div>
+        <div style={{ fontSize: 10.5, color: src === "migrated (legacy)" ? "#B45309" : "#64748B" }}>{src}{used ? ` · ${used} doc(s)` : ""}</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {mine && <button onClick={() => { setEditId(l.id); setForm({ name: l.name, country: l.country || "", type: l.type || "Port", address: l.address || "", unlocode: l.unlocode || "" }); }} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button>}
+          {mine && <button onClick={() => { if (used > 0) { window.alert(`${l.name} is used by ${used} document(s) — it cannot be removed while they reference it.`); return; } if (window.confirm(`Remove ${l.name}?`)) { removeCustomLocation(Number(l.id)); setTimeout(() => window.location.reload(), 150); } }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button>}
+          {src === "counterparty site" && <span style={{ fontSize: 10.5, color: "#94A3B8" }}>edited on its party</span>}
+        </div>
+      </div>; })}
     </div>
   );
 }
@@ -1450,7 +1480,7 @@ function CountriesView() {
   );
 }
 
-export default function Contacts({ contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [], users = [], userName = "" }: any = {}) {
+export default function Contacts({ lots = [], contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [], users = [], userName = "" }: any = {}) {
   // v6.81.0 (D-57): commission terms visible to the owner and the finance role (finance.pl) only; with no users defined, everyone.
   const _cu = currentUser(users, userName);
   const canSeeCommission = _cu === null ? true : !!(_cu && (_cu.isOwner || _cu.finance?.pl === true));
@@ -1524,6 +1554,12 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
 
   // ── mutations ──────────────────────────────────────────────────────────
   function saveCounterparty(c) {
+    // v6.99.29 (A-R19-2): the two role vocabularies are written together until the DDL retires the legacy pair,
+    // so a party can never be a client in one list and invisible in another.
+    {
+      const roles = Array.from(new Set([...(c.roles || []), c.type, ...(c.additionalTypes || [])].map(x => String(x || "").trim()).filter(Boolean)));
+      c = { ...c, roles, type: c.type || roles[0] || "Client", additionalTypes: roles.filter(r => r !== (c.type || roles[0])) };
+    }
     // v6.3.0: duplicate guard — on a NEW record, or when an existing record's
     // name/tax-ID changed, check for matches (tax-ID strict, name fuzzy) and
     // let the user open the existing record, merge, or save anyway.
@@ -1727,7 +1763,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           {[
             { key: "companies", label: "Companies", icon: "🏢" },
             { key: "people", label: "People", icon: "👤" },
-            { key: "ports", label: "Ports & crossings", icon: "⚓" },
+            { key: "ports", label: "Places", icon: "📍" },
             { key: "countries", label: "Countries", icon: "🌍" },   // v6.99.11 (owner): the Directory's places tab is back — ports, border crossings, customs points
           ].map(o => (
             <button key={o.key} onClick={() => setViewMode(o.key)}
@@ -1769,7 +1805,7 @@ export default function Contacts({ contacts: extContacts, setContacts: extSetCon
           {/* Table */}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
             {viewMode === "ports" ? (
-              <PortsView />
+              <PortsView counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} />
             ) : viewMode === "countries" ? (
               <CountriesView />
             ) : (<>

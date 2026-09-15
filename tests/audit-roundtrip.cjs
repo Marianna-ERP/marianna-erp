@@ -1695,3 +1695,28 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.27 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.29 — party pickers and places (A-R19) ══
+(function v69929(){
+  console.log("\n══ 51. v6.99.29: pickers sorted & roles-aware; orphaned migrated places pruned ══");
+  const L = B("locations.js");
+  t("A-R19-4: a migrated demo place no document points at is dropped; one that is still referenced stays", () => {
+    const store = {}; global.window = global.window || {}; 
+    // emulate the browser store the function uses
+    const backup = global.window.localStorage;
+    global.window.localStorage = { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+    store["marianna-erp:v2:customLocations"] = JSON.stringify([
+      { id: 1, name: "WH-01 Poznań (Logipark)", migratedFromSeed: true },
+      { id: 3, name: "Białski Owoc", migratedFromSeed: true },
+      { id: 10001, name: "Silver Tech" },
+    ]);
+    const dropped = L.pruneOrphanMigratedSeeds(["3", "126"]);
+    eq(dropped.length, 1); eq(dropped[0].name.slice(0, 5), "WH-01");
+    const left = JSON.parse(store["marianna-erp:v2:customLocations"]).map(x => String(x.id)).sort();
+    eq(left.join(","), "10001,3", "a referenced migrated place and a place added by hand both stay");
+    eq(L.pruneOrphanMigratedSeeds(["3", "126"]).length, 0, "idempotent");
+    global.window.localStorage = backup;
+  });
+  console.log("v6.99.29 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

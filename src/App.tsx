@@ -10,7 +10,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { migrateReferencedSeeds, stampSiteIds } from "./locations";
+import { migrateReferencedSeeds, pruneOrphanMigratedSeeds, stampSiteIds } from "./locations";
 import { normaliseLot } from "./seasonOps.domain";
 import { normalisePO } from "./po.domain";
 import { normaliseSO } from "./so.domain";
@@ -363,6 +363,8 @@ export default function App() {
     (orders || []).forEach((o: any) => ids.add(String(o.destinationLocationId)));
     (shipments || []).forEach((s: any) => (s.legs || []).forEach((lg: any) => { ids.add(String(lg.fromLocationId)); ids.add(String(lg.toLocationId)); }));
     const added = migrateReferencedSeeds(ids);
+    const dropped = pruneOrphanMigratedSeeds(ids);   // v6.99.29 (A-R19-4): and the ones nothing points at any more go
+    if (dropped.length) recordAudit({ module: "System", docType: "Locations", docNumber: "PRUNE-6.99.29", action: "healed", summary: `Removed ${dropped.length} migrated demo place(s) no document references: ${dropped.map((d: any) => d.name).join(", ")}` });
     if (added.length) recordAudit({ module: "System", docType: "Locations", docNumber: "MIGRATE-6.86", action: "healed", summary: `Referenced demo locations kept as custom: ${added.map(a => a.name).join(", ")}` });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -503,7 +505,7 @@ export default function App() {
       case "finance":
         return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={userName}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
-        return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName} />;
+        return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName}  lots={lots} />;
       case "pos":
         return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} setInvoices={setInvoices}  users={users} userName={userName} />;
       case "lots":

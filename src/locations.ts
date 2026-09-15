@@ -179,7 +179,8 @@ export function readCustomLocations(): Location[] {
         country: String(l.country || ""),
         address: l.address || undefined,
         custom: true,
-      } as Location & { custom: boolean }));
+        migratedFromSeed: !!l.migratedFromSeed,   // v6.99.29 (A-R19-4): the mapper used to drop this flag, so a migrated seed could never be told apart — or pruned
+      } as Location & { custom: boolean; migratedFromSeed: boolean }));
   } catch (err) {
     console.warn("[locations] Could not read custom locations:", err);
     return [];
@@ -661,4 +662,16 @@ export function migrateReferencedSeeds(referencedIds: Iterable<any>): Location[]
     } catch { /* best effort */ }
   });
   return added;
+}
+
+// ── v6.99.29 (A-R19-4, owner 15 Sept): a migrated demo seed that no document points at any more is removed.
+// The v6.86 migration copies a seed into the user's custom places so an old document keeps its address; it never
+// cleaned up afterwards, so a deleted document left its place behind for ever (this is why WH-01 Poznań survived).
+export function pruneOrphanMigratedSeeds(referencedIds: Iterable<any>): Location[] {
+  const wanted = new Set(Array.from(referencedIds).map(String));
+  const list = readCustomLocations();
+  const keep = list.filter(l => !(l as any).migratedFromSeed || wanted.has(String(l.id)));
+  const dropped = list.filter(l => !keep.includes(l));
+  if (dropped.length) writeCustomLocations(keep);
+  return dropped;
 }
