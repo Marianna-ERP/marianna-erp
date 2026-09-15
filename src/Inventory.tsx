@@ -9,7 +9,7 @@ import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.
 import { claimsForLot } from "./claims.domain";
 import { buildTraceTree } from "./trace.domain";
 import { fmtNum } from "./format";
-import { Card, Lbl, useConfirm, DocRef, cancelledDocSet, ActionButton} from "./ui";
+import { Card, Lbl, useConfirm, DocRef, cancelledDocSet} from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
@@ -632,7 +632,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
   // receipt automatically, and an EXW client-collection posts the ship-out via its
   // collection shipment. This removes the manual receipt/dispatch that let a lot's state
   // drift from its shipment (T-20). Quality corrections stay in the separate quality mode.
-  const MOVEMENT_MODE_TYPES = ["TRANSFER", "DAMAGE"]; // v6.96.0 (IN-1, owner money rule): by hand only cost-free transfers and damage/corrections — receipts, ship-outs and reversals are shipment postings
+  const MOVEMENT_MODE_TYPES = ["TRANSFER"]; // v6.99.28 (owner): DAMAGE is owned by the QUALITY INSPECTION (and the sorting job / stock count) — a manual movement moves goods, it never judges them. Legacy damage rows stay visible and voidable in the history. // v6.96.0 (IN-1, owner money rule): by hand only cost-free transfers and damage/corrections — receipts, ship-outs and reversals are shipment postings
   const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
   const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : "TRANSFER"));
   // v6.13 (#15): where the quality problem was detected along the journey.
@@ -1367,12 +1367,13 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Inventory</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          <ActionButton action="create" label="Record movement" onClick={onMove} />
+          <button onClick={onMove} title="v6.99.28: cost-free transfers only — damage belongs to the quality inspection" style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7DD3FC", background: "#E0F2FE", color: "#0369A1", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Record movement</button>
           <button onClick={onQualityIssue} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record quality issue</button>
           {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
             <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
           )}
-          {typeof onDirectReceive === "function" && (lot.status === "Expected" || lot.status === "Direct Expected") && !(lot.movements || []).some((m: any) => !m.voided) && (
+          {/* v6.99.28 (owner): only a purchase the SUPPLIER delivers (DDP / DAP / DPU) is received here — every other lot arrives through its shipment */}
+          {typeof onDirectReceive === "function" && (lot.status === "Expected" || lot.status === "Direct Expected") && !(lot.movements || []).some((m: any) => !m.voided) && ["DDP", "DAP", "DPU"].includes(String((pos || []).find((x: any) => String(x.number) === String(lot.poRef))?.buyIncoterm || "").toUpperCase()) && (
             <button onClick={onDirectReceive} title="For DDP / direct arrivals with no shipment of ours: posts the receipt movement so the stock becomes available." style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📥 Receive into stock (direct/DDP)</button>
           )}
           <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
@@ -2110,6 +2111,8 @@ export default function Inventory({ lots: extLots, setLots: extSetLots, allOrder
   if (view === "detail" && selected) {
     return (
       <>
+        {/* v6.99.28 (owner): the prompts/confirmations of the lot actions were mounted only in the LIST view — pressing "Receive into stock" seemed to do nothing until you went back */}
+        {dialogNode}
         {showMovement && <MovementModal lot={selected} liveSOs={liveSOs} editing={editingMovement} initialMode={movementMode} contacts={extContacts} allLots={lots} shipments={shipments} onCancel={() => { setShowMovement(false); setEditingMovement(null); }} onConfirm={recordMovement} />}
 
         {sortingLot && <SortingModal lot={sortingLot} onCancel={() => setSortingLot(null)} onConfirm={({ kg, date, note }) => {
