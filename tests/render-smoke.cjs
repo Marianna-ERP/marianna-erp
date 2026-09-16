@@ -26,4 +26,14 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 { const html = renderToStaticMarkup(React.createElement(Inventory, { ...common, initialSelectedNumber: lot && lot.number }));
   const ok = html.includes("QUALITY &amp; HANDLING") || html.includes("LOT WORKBENCH");
   if (ok) { passed++; console.log("  \u2713 Inventory detail really opened (workbench present)"); } else { failed++; console.log("  \u2717 Inventory detail did not open — the smoke was testing the list"); } }
+// v6.99.35: a per-kg sales line must offer a KILO quantity field — the regression that blocked the owner
+{ const SalesOrders = require(path.resolve("./src/SalesOrders")).default;
+  const soKg = { id: 99901, number: "SO-TEST-KG", status: "Draft", client: d.contacts[0], currency: "PLN", fxRate: 1,
+    items: [{ id: 1, product: "Capsicum", pricingUnit: "kg", qty: 1000, unitPrice: 5, sourceType: "", sourceRef: "" }] };
+  try {
+    const html = renderToStaticMarkup(React.createElement(SalesOrders, { ...common, orders: [...d.orders, soKg], initialSelectedNumber: "SO-TEST-KG", initialView: "form" }));
+    const ok = html.includes("Qty (kg)") || html.includes("Qty (boxes)");
+    if (ok) { passed++; console.log("  \u2713 sales line offers a quantity field for its pricing unit"); }
+    else { failed++; console.log("  \u2717 sales line has no quantity field"); }
+  } catch (e) { failed++; console.log("  \u2717 sales line quantity check —", (e.message || "").slice(0, 120)); } }
 console.log(`RENDER SMOKE: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);

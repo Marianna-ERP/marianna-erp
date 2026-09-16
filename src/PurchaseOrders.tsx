@@ -1161,6 +1161,16 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
   const closed = rec?.status === "Closed";
   const rows = salesReportRows(calc);
+
+  const [askClose, setAskClose] = React.useState(false);
+  const docBtn = (colour: string, bg: string): any => ({ padding: "7px 14px", borderRadius: 8, border: `1px solid ${colour}`, background: bg, color: colour, fontSize: 12.5, fontWeight: 800, cursor: "pointer" });
+  function doClose() {
+    const number = nextSettlementNumberPO(settlements, new Date().getFullYear());
+    upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, commissionPct: pct });
+    const cn = expectedProducerCreditNote(order, calc, { nextId, todayISO: localTodayISO });
+    if (cn && typeof setFinanceNotes === "function") { setFinanceNotes((prev: any[]) => [...(prev || []), cn]); upd({ expectedCreditNoteId: cn.id }); }
+    recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: "status", summary: `Truck settlement ${number} closed${calc.fullySold ? "" : " (interim)"} — net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} EUR, commission ${calc.commissionEUR.toLocaleString("pl-PL")} EUR${cn ? ", expected credit note " + cn.amount.toLocaleString("pl-PL") + " EUR" : ""}` });
+  }
   const myIns = (inspections || []).filter((x: any) => calc.lines.some(l => String(l.lotNumber) === String(x.lotNumber)));
   return (
     <Card style={{ marginBottom: 16, borderLeft: "4px solid #7C3AED" }}>
@@ -1172,8 +1182,29 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
         <div><Lbl>Provisional value (EUR)</Lbl><input type="number" disabled={closed} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
       </div>
       <div id={`sales-report-${order.id}`} style={{ fontSize: 11.5 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr", gap: 6, fontWeight: 700, color: "#94A3B8", fontSize: 10 }}><div>VARIETY</div><div>RECEIVED</div><div>CLASS I</div><div>CLASS II</div><div>WASTE</div><div>SOLD I / II</div><div>PLN</div><div>ON STOCK</div></div>
-        {calc.lines.map(l => <div key={l.lotNumber} style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr", gap: 6, padding: "3px 0", borderTop: "1px solid #F8FAFC" }}><div><b>{l.variety || l.product}</b> <span style={{ color: "#94A3B8" }}>{l.lotNumber}</span></div><div>{l.receivedKg.toLocaleString("pl-PL")}</div><div>{l.classIKg.toLocaleString("pl-PL")}</div><div>{l.classIIKg.toLocaleString("pl-PL")}</div><div>{l.wasteKg.toLocaleString("pl-PL")}</div><div>{l.soldKg.toLocaleString("pl-PL")} / {l.soldKgII.toLocaleString("pl-PL")}</div><div>{fmt(l.salesPLN + l.salesPLNII)}</div><div style={{ color: l.onStockKg > 1 ? "#B45309" : "#16A34A" }}>{l.onStockKg.toLocaleString("pl-PL")}</div></div>)}
+        {/* v6.99.36 (A-R25-1, owner): grouped headers, figures right-aligned with separators, a totals row, the currency named once. */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontWeight: 700, color: "#64748B", fontSize: 9.5, textAlign: "right" }}>
+          <div style={{ textAlign: "left" }} />
+          <div style={{ gridColumn: "span 1", color: "#0F766E" }}>ARRIVED</div><div style={{ gridColumn: "span 3", color: "#7C3AED" }}>SORTED INTO</div><div style={{ gridColumn: "span 2", color: "#16A34A" }}>SOLD</div><div style={{ color: "#B45309" }}>LEFT</div><div />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontWeight: 700, color: "#94A3B8", fontSize: 10, textAlign: "right" }}><div style={{ textAlign: "left" }}>VARIETY · LOT</div><div>RECEIVED kg</div><div>CLASS I kg</div><div>CLASS II kg</div><div>WASTE kg</div><div>SOLD I kg</div><div>SOLD II kg</div><div>VALUE ({"PLN"})</div><div>ON STOCK kg</div></div>
+        {calc.lines.map(l => <div key={l.lotNumber} style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, padding: "4px 0", borderTop: "1px solid #F1F5F9", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+          <div style={{ textAlign: "left" }}><b>{l.variety || l.product}</b> <span style={{ color: "#94A3B8" }}>{l.lotNumber}</span></div>
+          <div>{Math.round(l.receivedKg).toLocaleString("pl-PL")}</div>
+          <div>{Math.round(l.classIKg).toLocaleString("pl-PL")}</div>
+          <div>{Math.round(l.classIIKg).toLocaleString("pl-PL")}</div>
+          <div style={{ color: "#94A3B8" }}>{Math.round(l.wasteKg).toLocaleString("pl-PL")}</div>
+          <div>{Math.round(l.soldKg || 0).toLocaleString("pl-PL")}</div>
+          <div>{Math.round(l.soldKgII || 0).toLocaleString("pl-PL")}</div>
+          <div style={{ fontWeight: 700 }}>{fmt((l.salesPLN || 0) + (l.salesPLNII || 0)).replace(" PLN", "")}</div>
+          <div style={{ color: (l.onStockKg || 0) > 0 ? "#B45309" : "#94A3B8" }}>{Math.round(l.onStockKg || 0).toLocaleString("pl-PL")}</div>
+        </div>)}
+        {(() => { const T = calc.lines.reduce((a: any, l: any) => ({ r: a.r + l.receivedKg, i: a.i + l.classIKg, ii: a.ii + l.classIIKg, w: a.w + l.wasteKg, si: a.si + (l.soldKg || 0), sii: a.sii + (l.soldKgII || 0), v: a.v + (l.salesPLN || 0) + (l.salesPLNII || 0), s: a.s + (l.onStockKg || 0) }), { r: 0, i: 0, ii: 0, w: 0, si: 0, sii: 0, v: 0, s: 0 });
+          return <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, padding: "5px 0", borderTop: "2px solid #E5E7EB", textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
+            <div style={{ textAlign: "left" }}>TOTAL</div>
+            {[T.r, T.i, T.ii, T.w, T.si, T.sii].map((n: number, k: number) => <div key={k}>{Math.round(n).toLocaleString("pl-PL")}</div>)}
+            <div>{fmt(T.v).replace(" PLN", "")}</div><div>{Math.round(T.s).toLocaleString("pl-PL")}</div>
+          </div>; })()}
         <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "3px 14px" }}>
           <div>Gross sales <b>{fmt(calc.grossPLN)}</b></div><div>Client credit notes <b>−{fmt(calc.creditNotesPLN)}</b></div><div>Warehouse service <b>−{fmt(calc.warehousePLN)}</b></div>
           <div>Additional costs (transport…) <b>−{fmt(calc.additionalPLN)}</b></div><div>Third-party recoveries <b>+{fmt(calc.thirdPartyRecoveriesPLN)}</b></div><div>Producer recoveries <b>−{fmt(calc.producerRecoveriesPLN)}</b></div>
@@ -1184,20 +1215,33 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
         {calc.warnings.map((w, i) => <div key={i} style={{ marginTop: 6, fontSize: 11, color: "#B45309" }}>⚠ {w}</div>)}
         <div style={{ marginTop: 8, fontSize: 10, color: "#94A3B8" }}>SALES REPORT rows (template): {rows.map(r => `${r.item} ${r.soldKg} kg${r.amountEUR ? " · " + r.amountEUR.toLocaleString("pl-PL") + " EUR" : ""}`).join(" · ")}</div>
       </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-        <SmallButton onClick={() => printHtmlNode(`sales-report-${order.id}`, `${order.number} — Sales report`)}>⎙ Sales report</SmallButton>
-        <SmallButton onClick={() => exportVegaProSalesReport({ completionDate: localTodayISO(), shipmentRef: (order.supplierRef || (shipments || []).find((s: any) => (s.poRefs || []).includes(order.number) && s.supplierRef)?.supplierRef || ""), poNumber: order.number }, rows, { pct: calc.commissionPct, eur: calc.commissionEUR })} title="v6.99.3: the report in the producer's own sheet layout — upload to their platform without retyping">⬇ Producer's template (xlsx)</SmallButton>
-        {myIns.length > 0 && <SmallButton onClick={() => { const el = document.getElementById(`qc-report-${order.id}`); if (el) printHtmlNode(`qc-report-${order.id}`, `${order.number} — Quality report`); }}>⎙ Quality report ({myIns.length})</SmallButton>}
-        {!closed && setSettlements && <SmallButton kind="dark" onClick={() => {
-          const number = nextSettlementNumberPO(settlements, new Date().getFullYear());
-          upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, commissionPct: pct });
-          const cn = expectedProducerCreditNote(order, calc, { nextId, todayISO: localTodayISO });
-          if (cn && typeof setFinanceNotes === "function") { setFinanceNotes((prev: any[]) => [...(prev || []), cn]); upd({ expectedCreditNoteId: cn.id }); }
-          recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: "status", summary: `Truck settlement ${number} closed — net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} EUR, commission ${calc.commissionEUR.toLocaleString("pl-PL")} EUR${cn ? ", expected credit note " + cn.amount.toLocaleString("pl-PL") + " EUR" : ""}` });
-        }}>Close settlement{calc.fullySold ? "" : " (interim)"}</SmallButton>}
+      {/* v6.99.36 (A-R25-4/5, owner): the reports read as documents, and closing a settlement is confirmed in place — with a way back. */}
+      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={() => printHtmlNode(`sales-report-${order.id}`, `${order.number} — Sales report`)} style={docBtn("#0E7490", "#F0FDFA")}>📄 Sales report</button>
+        <button onClick={() => exportVegaProSalesReport({ completionDate: localTodayISO(), shipmentRef: (order.supplierRef || (shipments || []).find((s: any) => (s.poRefs || []).includes(order.number) && s.supplierRef)?.supplierRef || ""), poNumber: order.number }, rows, { pct: calc.commissionPct, eur: calc.commissionEUR })} style={docBtn("#7C3AED", "#F5F3FF")} title="the producer's own sheet layout, ready to upload">⬇ Producer's template</button>
+        <button onClick={() => printHtmlNode(`qc-report-${order.id}`, `${order.number} — Quality report`)} disabled={!myIns.length} style={{ ...docBtn("#B45309", "#FFFBEB"), opacity: myIns.length ? 1 : 0.45, cursor: myIns.length ? "pointer" : "not-allowed" }}>🔬 Quality report ({myIns.length})</button>
+        {!closed && setSettlements && (
+          askClose
+            ? <span style={{ display: "flex", gap: 8, alignItems: "center", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#92400E" }}>{calc.fullySold ? "Close this settlement" : "Close as INTERIM (the truck is not fully sold)"} — net sales {calc.netSalesEUR.toLocaleString("pl-PL")} EUR, commission {calc.commissionEUR.toLocaleString("pl-PL")} EUR. It can be re-opened until the commission is invoiced.</span>
+                <SmallButton onClick={() => setAskClose(false)}>No</SmallButton>
+                <button onClick={() => { setAskClose(false); doClose(); }} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Yes, close</button>
+              </span>
+            : <button onClick={() => setAskClose(true)} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>🔒 Close settlement{calc.fullySold ? "" : " (interim)"}</button>
+        )}
+        {closed && setSettlements && !rec?.commissionInvoiceId && (
+          <button onClick={() => { if (!window.confirm(`Re-open settlement ${rec?.number || ""}? Its expected credit note is withdrawn and the figures become live again.`)) return;
+            upd({ status: "Open", closedAt: null }); recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: "status", summary: `Truck settlement ${rec?.number || ""} re-opened` }); }}
+            style={docBtn("#DC2626", "#FEF2F2")} title="possible until the commission invoice is issued">↩ Re-open settlement</button>
+        )}
+        {closed && rec?.commissionInvoiceId && <span style={{ fontSize: 11, color: "#94A3B8" }}>commission invoiced — the settlement is final</span>}
       </div>
-      <div id={`qc-report-${order.id}`} style={{ display: "none" }}>
-        <h2 style={{ fontFamily: "Arial" }}>MARIANNA — Quality report · {order.number}{order.supplier?.name ? ` · ${order.supplier.name}` : ""}</h2>
+      <div id={`qc-report-${order.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 760, background: "#fff", padding: 20, fontFamily: "Arial" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 10, marginBottom: 14 }}>
+          <PrintLogo />
+          <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ fontSize: 15, fontWeight: 800 }}>QUALITY REPORTS</div><div style={{ fontSize: 12, color: "#444" }}>{order.number} · {order.supplier?.name || ""}</div></div>
+        </div>
+        <h3 style={{ margin: "0 0 10px" }}>Quality report · {order.number}{order.supplier?.name ? ` · ${order.supplier.name}` : ""}</h3>
         {myIns.map((x: any) => { const tt = inspectionTotals(x); return <div key={String(x.id)} style={{ marginBottom: 12, fontFamily: "Arial", fontSize: 12 }}>
           <div><b>{x.lotNumber}</b> · {x.variety || x.product} · {x.stage} · QC date {x.date} · inspector {x.inspector || "—"} · ordered {x.orderedQty} / checked {x.checkedQty} {x.unit} ({tt.samplePct}% sample) · temp {x.temperature || "—"}</div>
           <table style={{ borderCollapse: "collapse", marginTop: 4 }}><tbody>{(x.defects || []).map((d: any, i: number) => <tr key={i}><td style={{ border: "1px solid #ccc", padding: "2px 6px" }}>{d.category}</td><td style={{ border: "1px solid #ccc", padding: "2px 6px" }}>{d.name}</td><td style={{ border: "1px solid #ccc", padding: "2px 6px", textAlign: "right" }}>{d.pct}%</td></tr>)}
@@ -1206,6 +1250,49 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
         </div>; })}
       </div>
     </Card>
+  );
+}
+
+
+// ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
+function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: any) {
+  const [f, setF] = React.useState<any>({ plate: "", trailer: "", driver: "", supplierRef: "", eta: "", recorder: "", note: "" });
+  const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
+  const myLots = (lots || []).filter((l: any) => String(l.poRef) === String(order.number));
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const [asking, setAsking] = React.useState(false);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "50px 16px", overflow: "auto" }}>
+      <div style={{ background: "#fff", borderRadius: 12, width: "min(820px, 100%)", border: "2px solid #0F766E", overflow: "hidden" }}>
+        <div style={{ background: "#F0FDFA", borderBottom: "1px solid #99F6E4", padding: "10px 16px" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#0F766E" }}>🚚 Register the supplier's truck</div>
+          <div style={{ fontSize: 11.5, color: "#64748B" }}>{order.number} · {order.supplier?.name || ""} · the supplier delivers ({order.buyIncoterm}) — we track the truck, we do not pay for it</div>
+        </div>
+        <div style={{ padding: "14px 16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+            <div><Lbl>Truck plate</Lbl><input value={f.plate} onChange={e => set("plate", e.target.value)} placeholder="WGM 4421K" style={inp} /></div>
+            <div><Lbl>Trailer plate</Lbl><input value={f.trailer} onChange={e => set("trailer", e.target.value)} style={inp} /></div>
+            <div><Lbl>Driver</Lbl><input value={f.driver} onChange={e => set("driver", e.target.value)} style={inp} /></div>
+            <div><Lbl>Supplier's reference</Lbl><input value={f.supplierRef} onChange={e => set("supplierRef", e.target.value)} placeholder="GM-004" style={inp} title="their own shipment reference — the link between their paperwork and ours" /></div>
+            <div><Lbl>ETA</Lbl><DateInput value={f.eta} onChange={(e: any) => set("eta", e.target.value)} /></div>
+            <div><Lbl>Temperature recorder</Lbl><input value={f.recorder} onChange={e => set("recorder", e.target.value)} placeholder="TR-88412" style={inp} /></div>
+          </div>
+          <div style={{ marginTop: 10 }}><Lbl>Note</Lbl><input value={f.note} onChange={e => set("note", e.target.value)} style={inp} /></div>
+          <div style={{ marginTop: 12, fontSize: 11.5, color: "#64748B" }}>
+            Carrying {myLots.length} lot(s): {myLots.map((l: any) => `${l.number} · ${l.product}${l.variety ? " " + l.variety : ""} ${Math.round(Number(l.expectedKg) || 0).toLocaleString("pl-PL")} kg`).join(" · ") || "—"}
+          </div>
+        </div>
+        <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, alignItems: "center" }}>
+          {asking && <span style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>Create the inbound shipment for {f.plate || "this truck"}{f.supplierRef ? ` (${f.supplierRef})` : ""}?</span>}
+          <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <SmallButton onClick={onClose}>Close</SmallButton>
+            {asking
+              ? <><SmallButton onClick={() => setAsking(false)}>No</SmallButton><button onClick={() => onConfirm(f)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, register</button></>
+              : <button onClick={() => setAsking(true)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Register truck</button>}
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1316,6 +1403,26 @@ function OrderDetail({ users = [], userName = "", order, onBack, onEdit, onDelet
               </Card>
 
               {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
+              {/* v6.99.36 (A-R25-6): SUPPLIER'S TRUCK — its own box under the lines, showing what was registered */}
+              {["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status !== "Draft" && (() => {
+                const trucks = (computedShipments || []).filter((s: any) => s && s.arrangedBy === "SUPPLIER" && String(s.status) !== "Cancelled");
+                return (
+                  <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>
+                    <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 Register supplier's truck</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
+                    {!trucks.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No truck registered yet. Register it when the supplier announces the plates and the ETA.</div>}
+                    {trucks.map((s: any) => { const u = (s.legs || []).flatMap((l: any) => l.vehicles || [])[0] || {}; return (
+                      <div key={s.number} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr 1fr 1fr 1fr", gap: 8, fontSize: 12, padding: "5px 0", borderTop: "1px solid #F1F5F9" }}>
+                        <div><b>{s.number}</b></div>
+                        <div>{u.truckPlate || "—"}{u.trailerPlate ? ` / ${u.trailerPlate}` : ""}</div>
+                        <div>{s.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef}</span> : "—"}</div>
+                        <div>ETA {u.eta || s.expectedDeliveryDate || "—"}</div>
+                        <div>{u.tempRecorderNo ? `recorder ${u.tempRecorderNo}` : "—"}</div>
+                        <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
+                      </div>
+                    ); })}
+                  </Card>
+                );
+              })()}
               {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
               {/* v6.99.26 (owner ruling): the purchase RESULT left this screen — the PO is operational. It lives in Finance → Purchase results. */}
               <Card style={{ marginBottom: 16 }}>
@@ -1333,11 +1440,7 @@ function OrderDetail({ users = [], userName = "", order, onBack, onEdit, onDelet
                     <button onClick={onPackingResult} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: "#B45309", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📦 Enter packing result → quantities final</button>
                   </div>
                 )}
-                {typeof onRegisterTruck === "function" && ["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status === "Confirmed" && (
-                  <div style={{ marginTop: 8 }}>
-                    <button onClick={onRegisterTruck} title="v6.89.0 (owner ruling): the supplier's truck is TRACKED in Shipments (plates, ETA, arrival, supplier's reference) but not paid — no transport order, no cost of ours" style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>🚚 Register supplier's truck (tracked, not paid)</button>
-                  </div>
-                )}
+                {/* v6.99.36 (A-R25-6, owner): the supplier truck moved OUT of Linked documents — it has its own box under the line items */}
                 {typeof onReceiveLot === "function" && (expectedLots || []).length > 0 && (
                   <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
@@ -1634,6 +1737,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState(null);
   const [printOrder, setPrintOrder] = useState(null);
+  const [truckWindow, setTruckWindow] = useState(false);   // v6.99.36 (A-R25-6): the supplier truck is registered in one window
   const [emailOrder, setEmailOrder] = useState(null);
 
   // filters
@@ -1957,6 +2061,20 @@ ${blockNote}`.trim(),
         {poDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
+        {truckWindow && selected && <SupplierTruckWindow order={selected} lots={extLots} onClose={() => setTruckWindow(false)} onConfirm={(f: any) => {
+          const etaISO = String(f.eta || "").slice(0, 10);
+          let created: any = null;
+          extSetShipments((prev: any[]) => { const all = prev || []; const yr = new Date().getFullYear();
+            const seq = all.map((s: any) => String(s.number || "")).filter((n: string) => n.includes(`-${yr}-`)).length + 1;
+            created = supplierDeliveryFromPO({ ...selected, items: (selected.items || []).map((it: any, i2: number) => ({ ...it, lotRef: ((extLots || []).find((l: any) => String(l.poRef) === String(selected.number) && String(l.poLineId ?? i2 + 1) === String(it.id ?? i2 + 1)) || {}).number })) },
+              { nextId, nextNumber: () => `SHP-${yr}-${String(seq).padStart(4, "0")}`, todayISO: localTodayISO },
+              { plate: f.plate, driver: f.driver, eta: etaISO, supplierRef: f.supplierRef });
+            // v6.99.36: the extra facts the one-step window collects but the builder does not take
+            if (created) { const u = ((created.legs || [])[0]?.vehicles || [])[0]; if (u) { u.trailerPlate = f.trailer || u.trailerPlate; u.tempRecorderNo = f.recorder || u.tempRecorderNo; } if (f.note) created.notes = f.note; }
+            return [...all, created]; });
+          recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "created", summary: `Supplier's truck registered — ${created?.number}${f.plate ? " · " + f.plate : ""}${f.supplierRef ? " · " + f.supplierRef : ""}` });
+          setTruckWindow(false);
+        }} />}
         <OrderDetail
           order={selected}
           expectedLots={["DDP", "DAP", "DPU"].includes(String(selected.buyIncoterm || "").toUpperCase())
@@ -1979,18 +2097,7 @@ ${blockNote}`.trim(),
             await uiAlert({ tone: adj.length ? "warn" : "info", title: adj.length ? "Quantities final — sales to adjust" : "Quantities final", message: adj.length ? adj.map((a: any) => `${a.soNumber} · ${a.product}: sold ${a.soldKg.toLocaleString("pl-PL")} kg, final allows ${a.finalKg.toLocaleString("pl-PL")} kg (−${a.overKg.toLocaleString("pl-PL")})`).join("\n") + "\n\nNothing was changed on the sales orders — adjust the lines above and confirm them." : "Every sale is covered by the final quantities. Expected lots re-sync from the PO lines." });
           }}
           settlement={{ lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, setInvoices: extSetInvoices }}
-          onRegisterTruck={typeof extSetShipments === "function" ? async () => {
-            const plate = await uiPrompt({ title: "Supplier's truck", message: "Plates announced by the supplier (leave blank if not yet known):", defaultValue: "", confirmLabel: "Next" }); if (plate === null) return;
-            const ref = await uiPrompt({ title: "Supplier's reference", message: "The supplier's own shipment reference / acronym (e.g. GM-004):", defaultValue: "", confirmLabel: "Next" }); if (ref === null) return;
-            const eta = await uiPrompt({ title: "Expected arrival", message: "ETA (dd/mm/yyyy), blank if unknown:", defaultValue: "", confirmLabel: "Register" }); if (eta === null) return;
-            const m = String(eta || "").trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/); const etaISO = m ? `${m[3]}-${String(m[2]).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}` : "";
-            let created: any = null;
-            extSetShipments((prev: any[]) => { const all = prev || []; const yr = new Date().getFullYear(); const seq = all.map((s: any) => String(s.number || "")).filter((n: string) => n.startsWith(`SHP-${yr}-`)).map((n: string) => parseInt(n.slice(-4), 10) || 0).reduce((a: number, b: number) => Math.max(a, b), 0) + 1;
-              created = supplierDeliveryFromPO({ ...selected, items: (selected.items || []).map((it: any, i: number) => ({ ...it, lotRef: ((extLots || []).find((l: any) => String(l.poRef) === String(selected.number) && String(l.poLineId ?? "") === String(it.id ?? i + 1)) || {}).number || null })) }, { nextId, nextNumber: () => `SHP-${yr}-${String(seq).padStart(4, "0")}`, todayISO: localTodayISO }, { plate: String(plate), supplierRef: String(ref), eta: etaISO });
-              return [...all, created]; });
-            recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "created", summary: `Supplier's truck registered as ${created?.number} (tracked, not paid)` });
-            await uiAlert({ tone: "info", title: "Truck registered", message: `${created?.number} created in Shipments — purpose Inbound, arranged by the supplier. Plates, ETA and the supplier's reference sit on the truck; arrival and unloading post the receipt.` });
-          } : null}
+          onRegisterTruck={typeof extSetShipments === "function" ? () => setTruckWindow(true) : null}
           onReceiveLot={async (l: any) => {
             const expectedKg = parseFloat(String(l.expectedKg)) || 0;
             // v6.89.0 (G1): ask the ACTUAL kilos; the variance is recorded on the receipt.

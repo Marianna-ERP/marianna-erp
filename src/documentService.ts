@@ -20,10 +20,18 @@ export function printHtmlNode(nodeId, title) {
   @page { size: A4; margin: 10mm; }
   html, body { margin: 0; padding: 0; background: #fff; }
   body { font-family: Arial, Calibri, sans-serif; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  table { border-collapse: collapse; width: 100%; page-break-inside: avoid; }
+  * { box-sizing: border-box; max-width: 100%; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; page-break-inside: avoid; }
+  td, th { word-wrap: break-word; overflow-wrap: anywhere; vertical-align: top; }
   tr { page-break-inside: avoid; }
   img { max-width: 100%; }
-</style></head><body>${node.outerHTML}</body></html>`;
+</style></head><body>${(() => {
+    // v6.99.36 (A-R25-2, owner): the source node is hidden on the screen — display:none or parked off-page. Copying it
+    // as-is printed an empty sheet (the quality report on the settlement). Clone it and make the copy visible.
+    const c = node.cloneNode(true) as HTMLElement;
+    c.style.display = "block"; c.style.position = "static"; c.style.left = "auto"; c.style.top = "auto"; c.style.width = "100%"; c.style.maxWidth = "100%"; c.style.visibility = "visible";
+    return c.outerHTML;
+  })()}</body></html>`;
   const doc = iframe.contentDocument || iframe.contentWindow?.document;
   if (!doc) { iframe.remove(); return; }
   doc.open(); doc.write(html); doc.close();

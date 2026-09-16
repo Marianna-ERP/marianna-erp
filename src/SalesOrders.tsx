@@ -1875,11 +1875,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                     <div><Lbl>Origin</Lbl><Sel value={it.origin || ""} onChange={e => si(i, "origin", e.target.value)} disabled={fullyLocked} title="v6.99.26 (owner): country of origin — the list is the Directory's Countries tab"><option value="">— country —</option>{readCountries().map((c: any) => <option key={c.iso} value={c.name}>{c.name}</option>)}{it.origin && !readCountries().some((c: any) => c.name === it.origin) && <option value={it.origin}>{it.origin}</option>}</Sel></div>
                     <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked} /></div>
                     <div><Lbl>Class</Lbl><Sel value={it.grade || it.quality || "I"} disabled={fullyLocked} title="v6.99.27 (one source): the class sold — the same fact the sorting produces. Availability is checked against this class in the source lot." onChange={e => { const v = e.target.value; si(i, "grade", v); si(i, "quality", v); }}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
+                    {/* v6.99.35 (P0): the quantity follows the pricing unit. My v6.99.26 reorder kept only the BOXES branch,
+                        so a line priced per kg had no kilo field at all — the order could not be completed. */}
+                    {pricingUnitOf(it) === "box" ? (
                       <div><Lbl>Qty (boxes)</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => {
                         const b = Math.round(parseFloat(e.target.value) || 0);
                         const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
                         setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? { ...x, boxes: b, qty: kgPerBox > 0 ? Math.round(b * kgPerBox * 1000) / 1000 : x.qty } : x) }));
                       }} placeholder="e.g. 400" disabled={fullyLocked} /></div>
+                    ) : (
+                      <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
+                    )}
                     <div><Lbl>Priced per</Lbl><Sel value={pricingUnitOf(it)} disabled={fullyLocked}
                       onChange={e => setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? convertLineUnit(x, e.target.value, PACKAGING_TYPES_REF) : x) }))}>
                       <option value="kg">kg</option>
@@ -2267,6 +2273,8 @@ export default function SalesOrders({
   productCatalog = [],
   setProductCatalog,
   onStartClaim = null,
+  initialSelectedNumber = "",
+  initialView = "",
 }: any = {}) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: soDialogNode } = useConfirm(); // P2-6
   // v6.35.1: cancelled document numbers (POs, SOs, shipments) for struck-through refs.
@@ -2338,9 +2346,11 @@ export default function SalesOrders({
   });
   const clients = useMemo(() => clientsFromContacts((extContacts || []).filter((c: any) => !c.archived)), [extContacts]); // v6.99.2 (CP-4): archived parties leave the picker
 
-  const [view, setView] = useState("list"); // list | form | detail
-  const [selected, setSelected] = useState(null);
-  const [form, setForm] = useState(null);
+  // v6.99.35: an order can be opened directly (deep link, and the render smoke exercises the EDITOR, where the regression was)
+  const openDirect = (extOrders || []).find((o: any) => String(o.number) === String(initialSelectedNumber)) || null;
+  const [view, setView] = useState(openDirect ? (initialView || "detail") : "list"); // list | form | detail
+  const [selected, setSelected] = useState<any>(openDirect);
+  const [form, setForm] = useState<any>(openDirect && initialView === "form" ? { ...openDirect } : null);
   const [printOrder, setPrintOrder] = useState(null);
   const [emailOrder, setEmailOrder] = useState(null);
   const [invoiceOrder, setInvoiceOrder] = useState(null); // SO being invoiced via the modal
