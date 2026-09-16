@@ -23,8 +23,9 @@ export function lotAvailabilityByGrade(lot: any, orders: any[], excludeOrderId?:
     });
   });
   const I = Math.max(0, r0(num(g.I) - reserved.I)), II = Math.max(0, r0(num(g.II) - reserved.II));
-  const sorted = num(g.I) + num(g.II) + num(g.waste);
-  return { I, II, unsorted: Math.max(0, r0(num(lot?.physicalKg) - Math.max(0, sorted - num(g.waste)) )) };
+  // v6.99.34 (A-R24-2, owner): what is unsorted is simply the physical stock minus what sorting has already classified.
+  // The waste left the stock when it was written off, so it is never part of the unsorted pool.
+  return { I, II, unsorted: Math.max(0, r0(num(lot?.physicalKg) - num(g.I) - num(g.II))) };
 }
 
 // ── SO-2: unit follows the PO line ────────────────────────────────────────────

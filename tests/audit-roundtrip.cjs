@@ -1802,3 +1802,33 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.33 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.34 — waste vs damage, unsorted, sorting pools ══
+(function v69934(){
+  console.log("\n══ 55. v6.99.34: the ledger tells waste and damage apart; sorting takes from a pool ══");
+  const I = B("inventory.domain.js"); const Z = B("seasonOps.domain.js"); const SO = B("so.domain.js");
+  t("A-R24-1: sorting waste and other damage are two different figures", () => {
+    const mv = [
+      { id: 1, type: "IN", date: "2026-08-13", qtyKg: 14300 },
+      { id: 2, type: "DAMAGE", date: "2026-08-13", qtyKg: 30 },                                  // short delivery against the PO
+      { id: 3, type: "RECLASS", date: "2026-08-16", qtyKg: 250, toGrade: "II", source: "sorting:9" },
+      { id: 4, type: "DAMAGE", date: "2026-08-16", qtyKg: 20, source: "sorting:9" },             // what the sorting threw away
+    ];
+    const lot = I.recomputeLotFromMovements({ number: "L1" }, mv);
+    eq(lot.damagedKg, 30, "only the loss outside sorting"); eq(lot.wasteKg, 20, "what the sorting discarded");
+    eq(lot.physicalKg, 14250);
+  });
+  t("A-R24-2: the unsorted pool never contains the waste", () => {
+    const lot = { number: "L1", physicalKg: 14250, grades: { I: 14000, II: 250, waste: 20 } };
+    eq(SO.lotAvailabilityByGrade(lot, []).unsorted, 0, "everything is classified — nothing unsorted");
+    eq(SO.lotAvailabilityByGrade({ number: "L2", physicalKg: 1000, grades: { I: 300, II: 100, waste: 50 } }, []).unsorted, 600);
+  });
+  t("A-R24-3: a second sorting is offered the pools that still hold goods, not the whole lot", () => {
+    const lot = { number: "L1", physicalKg: 14250, movements: [ { type: "RECLASS", qtyKg: 250, toGrade: "II" } ] };
+    const pools = Z.sortablePools(lot);
+    eq(pools.find(p => p.key === "UNSORTED").kg, 0, "after the first sorting nothing is unsorted");
+    eq(pools.find(p => p.key === "II").kg, 250); eq(pools.find(p => p.key === "I").kg, 14000);
+  });
+  console.log("v6.99.34 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

@@ -341,3 +341,16 @@ export function countLinesForLot(lot: any): Array<{ grade: "I" | "II" | "WASTE" 
   ];
   return [{ grade: "", systemKg: r0(num(lot?.physicalKg)), label: String(lot?.number || "") }, ...wasteLine];
 }
+
+
+/** v6.99.34 (A-R24-3, owner): what is left to sort, by pool. A second sorting of a lot must not be offered the fruit
+ *  it already classified — it takes from the unsorted remainder, or re-sorts a class on purpose. */
+export function sortablePools(lot: any): Array<{ key: "UNSORTED" | "I" | "II"; label: string; kg: number }> {
+  const g = gradeStockNow(lot);
+  const unsorted = Math.max(0, r0(num(lot?.physicalKg) - g.I - g.II));
+  return [
+    { key: "UNSORTED", label: "Unsorted goods", kg: unsorted },
+    { key: "I", label: "Class I (re-sort)", kg: g.I },
+    { key: "II", label: "Class II (re-sort)", kg: g.II },
+  ];
+}

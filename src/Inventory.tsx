@@ -4,7 +4,7 @@ import { PrintLogo } from "./brand";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
-import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, applyStockCount, plateMismatch, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf } from "./seasonOps.domain";
+import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, applyStockCount, plateMismatch, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf, sortablePools } from "./seasonOps.domain";
 import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
@@ -1226,7 +1226,14 @@ const qhPrint: any = { ...qhBtn, border: "1px solid #0E7490", background: "#F0FD
 const qhDelete: any = { ...qhBtn, border: "1px solid #DC2626", background: "#DC2626", color: "#fff" };
 const r0 = (v: number) => Math.round(v);
 
-function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "" }: any) {
+function supplierRefOf(lot: any, shipments: any[]): string {
+  // v6.99.34: the supplier's own reference travels on the truck that brought the lot (GM-004 and the like).
+  const sh = (shipments || []).find((s: any) => s && String(s.status) !== "Cancelled" && ((s.poRefs || []).includes(lot?.poRef) || (s.goods || []).some((g: any) => String(g.lotRef) === String(lot?.number))) && (s.supplierRef || (s.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => u.supplierRef))));
+  if (!sh) return "";
+  return String(sh.supplierRef || (sh.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => u.supplierRef)).find(Boolean) || "");
+}
+
+function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "", shipments: shipmentsRef = [] }: any) {
   // v6.99.19 (A-R14-8): once a claim on this lot is finalised or its truck settlement is closed, the facts behind them are frozen.
   const frozenBy = (() => {
     const cl = (claims || []).find((c: any) => ["Settled", "Accepted", "Closed"].includes(String(c.status)) && ((c.subjects || []).some((s: any) => String(s.ref) === String(lot.number)) || String(c.rootDoc?.number) === String(lot.poRef)));
@@ -1264,12 +1271,17 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
   }
   function openSorting() {
     const last = myIns[0];
-    setSortF({ date: localTodayISO(), followsInspection: last ? String(last.id) : "", kgIn: Math.round(num(lot.physicalKg)) || "", classIKg: "", classIIKg: "", wasteKg: "", by: "", hours: "", note: "" });
+    // v6.99.34 (A-R24-3): start from the pool that still has goods — the unsorted remainder first, never the whole lot again.
+    const pools = sortablePools(lot);
+    const first = pools.find(x => x.kg > 0) || pools[0];
+    setSortF({ date: localTodayISO(), followsInspection: last ? String(last.id) : "", fromPool: first.key, kgIn: first.kg || "", classIKg: "", classIIKg: "", wasteKg: "", by: "", hours: "", note: "" });
     setWin("sort");
   }
   function openCount() {
+    // v6.99.34 (A-R24-4): only what the counter types is held in state — the system figures are read from the lot at render,
+    // so a sorting or another count in the same session cannot leave the window counting against stale numbers.
     const kgPerBox = num((po?.items || []).find((it: any) => String(it.id) === String(lot.poLineId))?.kgPerBox) || num(lot.kgPerBox) || "";
-    setCountF({ date: localTodayISO(), by: userName || "", reason: "", rows: countLinesForLot(lot).map((l: any) => ({ ...l, pallets: "", boxesPerPallet: "", looseBoxes: "", kgPerBox, countedKg: "" })) });
+    setCountF({ date: localTodayISO(), by: userName || "", reason: "", kgPerBox, entries: {} });
     setWin("count");
   }
   React.useEffect(() => { const h = () => openInspection(); window.addEventListener("marianna:open-inspection", h); return () => window.removeEventListener("marianna:open-inspection", h); });
@@ -1311,7 +1323,7 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
               <button style={qhPrint} onClick={() => { const no = lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</button>
               {!frozenBy && setInspections && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).filter((p: any) => String(p.id) !== String(x.id))); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} deleted` }); }}>🗑 Delete</button>}
             </span>
-            <InspectionPrintDoc x={x} lot={lot} no={qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} />
+            <InspectionPrintDoc x={x} lot={lot} no={qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} supplierRef={supplierRefOf(lot, shipmentsRef)} />
           </div>
         ); })}
         {myJobs.map((j: any) => (
@@ -1343,7 +1355,7 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
       )}
       {win === "sort" && sortF && (
         <SortingWindow f={sortF} setF={setSortF} lot={lot} inspections={myIns} contacts={contacts} onClose={() => setWin("")} onSave={() => {
-          const r = runSortingJob(lot, { ...sortF, date: sortF.date || localTodayISO() }, { nextId });
+          const r = runSortingJob(lot, { ...sortF, fromPool: sortF.fromPool || "UNSORTED", date: sortF.date || localTodayISO() }, { nextId });
           if (r.error) { window.alert(r.error); return; }
           const healed = recompute(r.lot, r.lot.movements);
           setLots && setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? healed : l));
@@ -1354,7 +1366,8 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
       )}
       {win === "count" && countF && (
         <CountWindow f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={() => {
-          const lines = (countF.rows || []).filter((r: any) => !r.informational).map((r: any) => ({ lotNumber: lot.number, grade: r.grade, countedKg: countedKgOf(r), systemKg: r.systemKg, diffKg: r0(countedKgOf(r) - num(r.systemKg)), pallets: r.pallets, boxesPerPallet: r.boxesPerPallet, looseBoxes: r.looseBoxes }));
+          const lines = countLinesForLot(lot).filter((r: any) => !r.informational).map((r: any) => { const e = { ...(countF.entries || {})[r.grade || "-"], kgPerBox: countF.kgPerBox }; const counted = countedKgOf(e as any);
+            return { lotNumber: lot.number, grade: r.grade, countedKg: counted, systemKg: r.systemKg, diffKg: r0(counted - num(r.systemKg)), pallets: (e as any).pallets, boxesPerPallet: (e as any).boxesPerPallet, looseBoxes: (e as any).looseBoxes }; });
           const count = { id: nextId(), date: countF.date || localTodayISO(), locationId: lot.locationId, by: countF.by || userName || "", lines };
           const res = applyStockCount(lots || [], count as any, countF.reason || "stock count", { nextId });
           setLots && setLots((prev: any[]) => (prev || []).map((l: any) => { const hit = (res.lots || []).find((x: any) => x.id === l.id); return hit ? recompute(hit, hit.movements) : l; }));
@@ -1368,7 +1381,9 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
 }
 
 // ── v6.99.32: the three windows of Quality & Handling (A-QH-1/3/5/6/8) ──
-function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save", children, extra = null }: any) {
+function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save", confirmText = "", children, extra = null }: any) {
+  // v6.99.34 (A-R24-5, owner): the confirmation belongs to THIS window — the application-wide dialog appeared detached from it.
+  const [asking, setAsking] = React.useState(false);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 16px", overflow: "auto" }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "min(980px, 100%)", border: `2px solid ${colour}`, overflow: "hidden" }}>
@@ -1376,11 +1391,20 @@ function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save"
           <div><div style={{ fontSize: 14, fontWeight: 800, color: colour }}>{title}</div><div style={{ fontSize: 11.5, color: "#64748B" }}>{subtitle}</div></div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             {extra}
-            <SmallButton onClick={onClose}>Cancel</SmallButton>
-            <button onClick={onSave} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{saveLabel}</button>
+            <SmallButton onClick={onClose}>Close</SmallButton>
+            <button onClick={() => (confirmText ? setAsking(true) : onSave())} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{saveLabel}</button>
           </div>
         </div>
         <div style={{ padding: "14px 16px", maxHeight: "72vh", overflow: "auto" }}>{children}</div>
+        {asking && (
+          <div style={{ borderTop: `2px solid ${colour}`, background: "#F8FAFC", padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700 }}>{confirmText}</div>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+              <SmallButton onClick={() => setAsking(false)}>No, go back</SmallButton>
+              <button onClick={() => { setAsking(false); onSave(); }} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, {saveLabel.toLowerCase()}</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1476,10 +1500,16 @@ function SortingWindow({ f, setF, lot, inspections = [], contacts = [], onClose,
   const follows = inspections.find((x: any) => String(x.id) === String(f.followsInspection));
   return (
     <QhWindow title="⚖ Sorting job" subtitle={`${lot.number} · splits what the inspection said to sort`} colour="#7C3AED" onClose={onClose}
-      onSave={() => { if (!follows && !window.confirm("No quality inspection is referenced. Sort anyway?")) return; onSave(); }} saveLabel="Post sorting">
+      onSave={onSave} saveLabel="Post sorting"
+      confirmText={`Post this sorting: ${num(f.kgIn).toLocaleString("pl-PL")} kg → class I ${num(f.classIKg).toLocaleString("pl-PL")} · class II ${num(f.classIIKg).toLocaleString("pl-PL")} · waste ${num(f.wasteKg).toLocaleString("pl-PL")}${follows ? "" : " (no inspection referenced)"}?`}>
       {!inspections.length && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>No quality inspection on this lot yet — sorting normally follows one. You can still post it.</div>}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
         <QhField label="Date sorted"><DateInput value={f.date} onChange={(e: any) => set("date", e.target.value)} /></QhField>
+        <QhField label="What is being sorted" hint="a second sorting takes from what is left, not from the whole lot">
+          <Sel value={f.fromPool || "UNSORTED"} onChange={(e: any) => { const k = e.target.value; const pool = sortablePools(lot).find((x: any) => x.key === k); setF((x: any) => ({ ...x, fromPool: k, kgIn: pool ? pool.kg : x.kgIn })); }}>
+            {sortablePools(lot).map((x: any) => <option key={x.key} value={x.key}>{x.label} — {x.kg.toLocaleString("pl-PL")} kg available</option>)}
+          </Sel>
+        </QhField>
         <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{x.date} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
         <QhField label="Sorted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} placeholder="our team / warehouse" style={qhInp} list="qh-sorters" /><datalist id="qh-sorters">{(contacts || []).filter((c: any) => (c.roles || [c.type]).includes("Warehouse")).map((c: any) => <option key={String(c.id)} value={c.name} />)}</datalist></QhField>
         <QhField label="Hours"><input type="number" value={f.hours ?? ""} onChange={e => set("hours", e.target.value)} style={qhInp} /></QhField>
@@ -1501,9 +1531,10 @@ function SortingWindow({ f, setF, lot, inspections = [], contacts = [], onClose,
 /** A-QH-6: counted as the warehouse counts — pallets and boxes, per class. */
 function CountWindow({ f, setF, lot, onClose, onSave }: any) {
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
-  const setRow = (i: number, k: string, v: any) => set("rows", f.rows.map((r: any, j: number) => j === i ? { ...r, [k]: v } : r));
+  const setRow = (grade: string, k: string, v: any) => set("entries", { ...(f.entries || {}), [grade || "-"]: { ...((f.entries || {})[grade || "-"] || {}), [k]: v } });
   return (
-    <QhWindow title="📋 Stock count" subtitle={`${lot.number} · what is physically on the floor`} colour="#B45309" onClose={onClose} onSave={onSave} saveLabel="Save count & adjust">
+    <QhWindow title="📋 Stock count" subtitle={`${lot.number} · what is physically on the floor`} colour="#B45309" onClose={onClose} onSave={onSave} saveLabel="Save count & adjust"
+      confirmText="Save this count? Differences beyond 1 kg are posted as reasoned adjustments on their class.">
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
         <QhField label="Date counted"><DateInput value={f.date} onChange={(e: any) => set("date", e.target.value)} /></QhField>
         <QhField label="Counted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} style={qhInp} /></QhField>
@@ -1512,14 +1543,14 @@ function CountWindow({ f, setF, lot, onClose, onSave }: any) {
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 0.9fr 0.8fr 0.8fr 1fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>
         <div>LINE</div><div>PALLETS</div><div>BOXES / PAL</div><div>LOOSE BOXES</div><div>KG / BOX</div><div>COUNTED KG</div><div>SYSTEM · DIFF</div>
       </div>
-      {(f.rows || []).map((r: any, i: number) => { const kg = countedKgOf(r); const diff = r0(kg - num(r.systemKg)); return (
+      {countLinesForLot(lot).map((r: any, i: number) => { const e = { ...((f.entries || {})[r.grade || "-"] || {}), kgPerBox: (f.entries || {})[r.grade || "-"]?.kgPerBox ?? f.kgPerBox }; const kg = countedKgOf(e as any); const diff = r0(kg - num(r.systemKg)); return (
         <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 0.9fr 0.8fr 0.8fr 1fr 1fr", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F8FAFC" }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: r.informational ? "#94A3B8" : "#111" }}>{r.label}</div>
-          <input type="number" value={r.pallets ?? ""} onChange={e => setRow(i, "pallets", e.target.value)} style={qhInp} />
-          <input type="number" value={r.boxesPerPallet ?? ""} onChange={e => setRow(i, "boxesPerPallet", e.target.value)} style={qhInp} />
-          <input type="number" value={r.looseBoxes ?? ""} onChange={e => setRow(i, "looseBoxes", e.target.value)} style={qhInp} />
-          <input type="number" value={r.kgPerBox ?? ""} onChange={e => setRow(i, "kgPerBox", e.target.value)} style={qhInp} />
-          <input type="number" value={kg > 0 ? kg : (r.countedKg ?? "")} onChange={e => setRow(i, "countedKg", e.target.value)} disabled={kg > 0} title={kg > 0 ? "derived from the boxes" : "loose goods — type the kilos"} style={{ ...qhInp, background: kg > 0 ? "#F8FAFC" : "#fff", fontWeight: 700 }} />
+          <input type="number" value={(e as any).pallets ?? ""} onChange={ev => setRow(r.grade, "pallets", ev.target.value)} style={qhInp} />
+          <input type="number" value={(e as any).boxesPerPallet ?? ""} onChange={ev => setRow(r.grade, "boxesPerPallet", ev.target.value)} style={qhInp} />
+          <input type="number" value={(e as any).looseBoxes ?? ""} onChange={ev => setRow(r.grade, "looseBoxes", ev.target.value)} style={qhInp} />
+          <input type="number" value={(e as any).kgPerBox ?? ""} onChange={ev => setRow(r.grade, "kgPerBox", ev.target.value)} style={qhInp} />
+          <input type="number" value={kg > 0 ? kg : ((e as any).countedKg ?? "")} onChange={ev => setRow(r.grade, "countedKg", ev.target.value)} disabled={kg > 0} title={kg > 0 ? "derived from the boxes" : "loose goods — type the kilos"} style={{ ...qhInp, background: kg > 0 ? "#F8FAFC" : "#fff", fontWeight: 700 }} />
           <div style={{ fontSize: 11.5 }}>{r.informational ? <span style={{ color: "#94A3B8" }}>not adjusted</span> : <>{Math.round(num(r.systemKg)).toLocaleString("pl-PL")} · <b style={{ color: diff === 0 ? "#16A34A" : "#B45309" }}>{diff >= 0 ? "+" : ""}{diff}</b></>}</div>
         </div>
       ); })}
@@ -1529,7 +1560,7 @@ function CountWindow({ f, setF, lot, onClose, onSave }: any) {
 }
 
 /** The printable quality report (hidden; printed by number). */
-function InspectionPrintDoc({ x, lot, no }: any) {
+function InspectionPrintDoc({ x, lot, no, supplierRef = "" }: any) {
   const v = inspectionVerdict(x);
   // v6.99.33 (owner): readable on paper — wide first columns that never wrap, centred figures, air between the sections.
   const cell = { border: "1px solid #999", padding: "4px 7px", fontSize: 11, textAlign: "center" } as any;
@@ -1545,8 +1576,9 @@ function InspectionPrintDoc({ x, lot, no }: any) {
         <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ fontSize: 15, fontWeight: 800 }}>QUALITY REPORT</div><div style={{ fontSize: 13, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{no || ""}</div></div>
       </div>
       <div style={{ textAlign: "center", margin: "22px 0 24px" }}>
-        <div style={{ fontSize: 17, fontWeight: 800 }}>{lot.product}{lot.variety ? ` — ${lot.variety}` : ""}</div>
-        <div style={{ fontSize: 13, color: "#444", marginTop: 4 }}>{lot.number}</div>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>{lot.product}{lot.variety ? ` — ${lot.variety}` : ""}</div>
+        {/* v6.99.34 (A-R24-7, owner): our reference and the supplier's, same type, side by side — the only link between the two vocabularies */}
+        <div style={{ fontSize: 16, fontWeight: 800, marginTop: 6 }}>{lot.number}{supplierRef ? `  ·  supplier ref ${supplierRef}` : ""}</div>
       </div>
 
       <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
@@ -1626,8 +1658,17 @@ function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orde
     </div>
   );
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>LOT WORKBENCH · {lot.number} · {lot.product}{lot.variety ? " — " + lot.variety : ""}{lot.poRef ? " · " + lot.poRef : ""}{unit?.supplierRef ? " · supplier ref " + unit.supplierRef : ""}</div>
+    <div style={{ background: "#fff", border: "2px solid #1E293B", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
+      {/* v6.99.34 (A-R24-6, owner): the title line is the ONE place where our lot number and the supplier's reference
+          sit together — the only link between their vocabulary and ours. It is set in type you can read across the room. */}
+      <div style={{ background: "#0F172A", color: "#fff", padding: "10px 16px", display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "#94A3B8" }}>LOT WORKBENCH</span>
+        <span style={{ fontSize: 16, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{lot.number}</span>
+        {unit?.supplierRef ? <span style={{ fontSize: 13, fontWeight: 700, background: "#1D4ED8", padding: "2px 10px", borderRadius: 20 }}>supplier ref {unit.supplierRef}</span> : null}
+        <span style={{ fontSize: 13.5 }}>{lot.product}{lot.variety ? ` — ${lot.variety}` : ""}</span>
+        {lot.poRef ? <span style={{ fontSize: 12, color: "#CBD5E1" }}>· {lot.poRef}</span> : null}
+      </div>
+      <div style={{ padding: "12px 16px" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
         {tile("ARRIVAL", arrival ? <>{arrival.number} · {arrival.arrangedBy === "SUPPLIER" ? "supplier's truck" : "our shipment"}<br />{unit?.truckPlate || unit?.announcedPlate || "plates —"}{plateMismatch(unit) ? <b style={{ color: "#DC2626" }}> · plates differ from announced!</b> : ""}<br />{arrivedAt ? `arrived ${arrivedAt}` : (unit?.eta ? `ETA ${unit.eta}` : "not arrived")}</> : <span style={{ color: "#94A3B8" }}>no inbound shipment{lot.poRef ? " — register the supplier's truck on the PO" : ""}</span>)}
         {/* v6.99.17 (A-R13-7): RECEIPT tile removed — the quantity breakdown already shows expected / received / variance */}
@@ -1637,6 +1678,7 @@ function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orde
         {tile("SETTLEMENT (on the PO)", settlement ? <>{settlement.number ? settlement.number + " · " : ""}<b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? ` · closed ${settlement.closedAt}` : ""}<br />{settlement.commissionInvoiceId ? "commission invoice issued" : settlement.status === "Closed" ? "commission not yet invoiced — waiting for the Monday commission run" : "closes on the PO when the truck is sold"}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `not opened yet — on ${lot.poRef}` : "—"}</span>)}
       </div>
       <div style={{ marginTop: 8, fontSize: 10.5, color: "#94A3B8" }}>Actions live below in their owning sections: Receive · Inspect · Sort · Count · Move · Return · Claim; the settlement, its reports and the commission run are on the PO. This strip stores nothing — it reads what each module owns.</div>
+      </div>
     </div>
   );
 }
@@ -1653,7 +1695,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
   const total = totalCost(lot);
   const value = valueInStock(lot);
   const variance = (lot.receivedKg || 0) - (lot.expectedKg || 0);
-  const shippedOutKg = Math.max(0, (lot.receivedKg || 0) - (lot.physicalKg || 0) - (lot.damagedKg || 0));
+  const shippedOutKg = Math.max(0, (lot.receivedKg || 0) - (lot.physicalKg || 0) - (lot.damagedKg || 0) - (lot.wasteKg || 0));   // v6.99.34 (A-R24-1)
 
   // Qty stripe segments — show the lifecycle of the receivedKg
   const segments = [
@@ -1661,6 +1703,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
     { key: "Reserved",    kg: res.totalReserved,   color: "#7C3AED" },
     { key: "Shipped out", kg: shippedOutKg,        color: "#2563EB" },
     { key: "Damaged",     kg: lot.damagedKg || 0,  color: "#DC2626" },
+    { key: "Waste (sorting)", kg: lot.wasteKg || 0, color: "#6B7280" },
   ].filter(s => s.kg > 0);
   const totalKg = segments.reduce((s, x) => s + x.kg, 0);
 
@@ -1720,7 +1763,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
               <div><div style={{ fontSize: 9, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#111" }}>{fmtNum(lot.receivedKg)} kg</div></div>
               <div title="Live: physicalKg − reservations from pre-dispatch SOs"><div style={{ fontSize: 9, color: "#16A34A" }}>AVAILABLE</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} kg</div></div>
               <div title="From Confirmed/Reserved/Loading SOs"><div style={{ fontSize: 9, color: "#7C3AED" }}>RESERVED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#7C3AED" }}>{fmtNum(res.totalReserved)} kg</div></div>
-              {(() => { const g = gradeSplit(lot); return (g.II > 0 || g.waste > 0) ? <><div title="v6.99.19: sorted classes — CLASS II is sound fruit reclassified by sorting; WASTE is what the sorting threw away (a DAMAGE movement with source sorting:). DAMAGED is any other loss: transit damage, a count adjustment, damage found in store."><div style={{ fontSize: 9, color: "#166534" }}>CLASS I</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#166534" }}>{fmtNum(g.I)} kg</div></div><div><div style={{ fontSize: 9, color: "#B45309" }}>CLASS II</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#B45309" }}>{fmtNum(g.II)} kg</div></div><div><div style={{ fontSize: 9, color: "#6B7280" }}>WASTE (sorting)</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#6B7280" }}>{fmtNum(g.waste)} kg</div></div></> : null; })()}
+              {(() => { const g = { ...gradeSplit(lot), waste: num(lot.wasteKg) || gradeSplit(lot).waste }; return (g.II > 0 || g.waste > 0) ? <><div title="v6.99.19: sorted classes — CLASS II is sound fruit reclassified by sorting; WASTE is what the sorting threw away (a DAMAGE movement with source sorting:). DAMAGED is any other loss: transit damage, a count adjustment, damage found in store."><div style={{ fontSize: 9, color: "#166534" }}>CLASS I</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#166534" }}>{fmtNum(g.I)} kg</div></div><div><div style={{ fontSize: 9, color: "#B45309" }}>CLASS II</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#B45309" }}>{fmtNum(g.II)} kg</div></div><div><div style={{ fontSize: 9, color: "#6B7280" }}>WASTE (sorting)</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#6B7280" }}>{fmtNum(g.waste)} kg</div></div></> : null; })()}
               <div><div title="v6.99.19: DAMAGED = losses outside sorting (transit, store, count adjustments). Sorting waste is shown separately."><div style={{ fontSize: 9, color: "#DC2626" }}>DAMAGED</div></div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#DC2626" }}>{fmtNum(lot.damagedKg)} kg</div></div>
               <div>
                 {totalKg > 0 && (
@@ -2479,7 +2522,7 @@ export default function Inventory({ initialSelectedNumber = "", lots: extLots, s
             if (close) setSettlementLot(null);
           }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
-          season={{ lots, orders: liveSOs, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
+          season={{ lots, orders: liveSOs, shipments, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
           pos={extPOs}
           allLots={lots}
           lotClaims={claimsForLot(extClaims || [], selected?.number).filter((c: any) => c.direction === "RECOVERY")}

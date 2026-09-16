@@ -26,7 +26,7 @@ export type LocByIdFn = (id: any) => LocResolved | null | undefined;
  * - Status is derived from the final physical state + location taxonomy.
  */
 export function recomputeLotFromMovements(lot: any, movements: any[], locById: LocByIdFn) {
-  let receivedKg = 0, physicalKg = 0, damagedKg = 0, claimedKg = 0;
+  let receivedKg = 0, physicalKg = 0, damagedKg = 0, wasteKg = 0, claimedKg = 0;
   let overIssuedKg = 0; // Safeguards 7a: clamped excess, surfaced not swallowed
   let locationId = lot.baseLocationId ?? lot.locationId;
   // v6.35.5: voided movements must not count toward the status decision — a lot whose
@@ -49,8 +49,13 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
         physicalKg = Math.max(0, physicalKg - q); sawShipOut = true; break;
       case "REVERSAL": physicalKg += q; if (m.toId) locationId = m.toId; break;
       case "DAMAGE":
+        // v6.99.34 (A-R24-1, owner): waste and damage are two different facts. What a SORTING job threw away is WASTE;
+        // everything else — a shortfall against the PO, transit damage, a count adjustment — is DAMAGED. Counting the
+        // sorting waste in both made the breakdown show the same number twice.
         if (q > physicalKg) overIssuedKg += q - physicalKg;
-        physicalKg = Math.max(0, physicalKg - q); damagedKg += q; break;
+        physicalKg = Math.max(0, physicalKg - q);
+        if (String(m.source || "").startsWith("sorting:")) wasteKg += q; else damagedKg += q;
+        break;
       case "CLAIM": claimedKg += q; break;
       case "RECLASS": break;
       default: break;
@@ -68,5 +73,5 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
     status = "Expected";
   }
   return { ...lot,
-    overIssuedKg, movements: ordered, receivedKg, physicalKg, damagedKg, claimedKg, locationId, status };
+    overIssuedKg, movements: ordered, receivedKg, physicalKg, damagedKg, wasteKg, claimedKg, locationId, status };
 }
