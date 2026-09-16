@@ -4,7 +4,7 @@ import { PrintLogo } from "./brand";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
-import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, buildStockCount, applyStockCount, plateMismatch, gradeCommitmentWarning, inspectionVerdict, tolerancesFor } from "./seasonOps.domain";
+import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, applyStockCount, plateMismatch, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf } from "./seasonOps.domain";
 import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
@@ -1214,7 +1214,14 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
 // ── v6.89.0 (consignment season): QUALITY INSPECTION · SORTING JOB · STOCK COUNT ──
 // One owner per fact: inspections store (lot-referenced), sorting posts DAMAGE + grade split on the lot,
 // stock counts create reasoned adjustments. Compact forms; the Lot Workbench (v6.91) composes them.
-function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, defectCatalogue = [], defectTolerances = {}, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [] }: any) {
+// ── v6.99.32 (A-QH-1…8, owner ruling 15 Sept): QUALITY & HANDLING — the warehouse's own screen ──
+// Three acts, in the order they happen in the building: inspect → sort → count. Each opens its own WINDOW
+// (the old toggles unfolded a form under the buttons and read as a wall of text). Ownership is unchanged:
+// the inspection judges, the sorting re-classes, the count corrects — none of them does another's job.
+const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const r0 = (v: number) => Math.round(v);
+
+function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, defectCatalogue = [], stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "" }: any) {
   // v6.99.19 (A-R14-8): once a claim on this lot is finalised or its truck settlement is closed, the facts behind them are frozen.
   const frozenBy = (() => {
     const cl = (claims || []).find((c: any) => ["Settled", "Accepted", "Closed"].includes(String(c.status)) && ((c.subjects || []).some((s: any) => String(s.ref) === String(lot.number)) || String(c.rootDoc?.number) === String(lot.poRef)));
@@ -1223,109 +1230,319 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
     if (st) return `settlement ${st.number || ""} is closed`.trim();
     return "";
   })();
-  const [mode, setMode] = React.useState<"" | "inspect" | "sort" | "count">("");
+
+  const [win, setWin] = React.useState<"" | "inspect" | "sort" | "count">("");
   const [ins, setIns] = React.useState<any>(null);
-  const [qrNos, setQrNos] = React.useState<any>({});   // v6.99.31: the quality report number per inspection
-  React.useEffect(() => { const h = () => { setIns(blankInspection(lot, { nextId, todayISO: localTodayISO })); setMode("inspect"); }; window.addEventListener("marianna:open-inspection", h); return () => window.removeEventListener("marianna:open-inspection", h); }, [lot]);   // v6.99.17 (A-R13-10): one inspection entry
-  const [sortF, setSortF] = React.useState<any>({ kgIn: "", classIKg: "", classIIKg: "", wasteKg: "", by: "", hours: "" });
-  const [countRows, setCountRows] = React.useState<Record<string, string>>({});
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
+  const [qrNos, setQrNos] = React.useState<any>({});
+  const [sortF, setSortF] = React.useState<any>(null);
+  const [countF, setCountF] = React.useState<any>(null);
   const cat = (defectCatalogue && defectCatalogue.length ? defectCatalogue : PEPPER_DEFECTS);
-  const myIns = (inspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number));
+  const myIns = (inspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number)).sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
+  const myJobs = (lot.sortingJobs || []).slice().sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
+  const myCounts = (stockCounts || []).filter((c: any) => (c.lines || []).some((l: any) => String(l.lotNumber) === String(lot.number))).sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
+  const po = (pos || []).find((p: any) => String(p.number) === String(lot.poRef)) || null;
   const g = gradeSplit(lot);
-  const sameLoc = (lots || []).filter((l: any) => String(l.locationId) === String(lot.locationId) && (Number(l.physicalKg) || 0) > 0);
+
+  function openInspection(existing?: any) {
+    setIns(existing ? { ...existing } : blankInspection(lot, { nextId, todayISO: localTodayISO, po, tolerances: tolerancesFromLast(inspections, lot.product) }));
+    setWin("inspect");
+  }
+  function openSorting() {
+    const last = myIns[0];
+    setSortF({ date: localTodayISO(), followsInspection: last ? String(last.id) : "", kgIn: Math.round(num(lot.physicalKg)) || "", classIKg: "", classIIKg: "", wasteKg: "", by: "", hours: "", note: "" });
+    setWin("sort");
+  }
+  function openCount() {
+    const kgPerBox = num((po?.items || []).find((it: any) => String(it.id) === String(lot.poLineId))?.kgPerBox) || num(lot.kgPerBox) || "";
+    setCountF({ date: localTodayISO(), by: userName || "", reason: "", rows: countLinesForLot(lot).map((l: any) => ({ ...l, pallets: "", boxesPerPallet: "", looseBoxes: "", kgPerBox, countedKg: "" })) });
+    setWin("count");
+  }
+  React.useEffect(() => { const h = () => openInspection(); window.addEventListener("marianna:open-inspection", h); return () => window.removeEventListener("marianna:open-inspection", h); });
+
+  const bigBtn = (color: string, bg: string, icon: string, title: string, sub: string, onClick: any) => (
+    <button onClick={onClick} disabled={!!frozenBy} style={{ flex: "1 1 210px", textAlign: "left", padding: "10px 14px", borderRadius: 10, border: `1px solid ${color}`, background: frozenBy ? "#F3F4F6" : bg, cursor: frozenBy ? "not-allowed" : "pointer" }}>
+      <div style={{ fontSize: 13.5, fontWeight: 800, color }}>{icon} {title}</div>
+      <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>{sub}</div>
+    </button>
+  );
+
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
-      {frozenBy && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 8 }}>🔒 Locked — {frozenBy}. Inspections, sorting and counts on this lot can no longer be changed; correct by voiding a movement in the history (with a reason) or by re-opening the settlement.</div>}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginRight: "auto" }}>QUALITY & HANDLING · grade I {g.I.toLocaleString("pl-PL")} · II {g.II.toLocaleString("pl-PL")} · waste {g.waste.toLocaleString("pl-PL")} kg</div>
-        {setInspections && <button onClick={() => { setIns(blankInspection(lot, { nextId, todayISO: localTodayISO })); setMode(mode === "inspect" ? "" : "inspect"); }} disabled={!!frozenBy} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: frozenBy ? "#F3F4F6" : "#fff", color: "#0E7490", borderRadius: 6, cursor: frozenBy ? "not-allowed" : "pointer", fontWeight: 700 }}>🔬 Quality inspection</button>}
-        {setLots && <button onClick={() => { setSortF({ kgIn: String(Math.round(Number(lot.physicalKg) || 0)), classIKg: "", classIIKg: "", wasteKg: "", by: "", hours: "" }); setMode(mode === "sort" ? "" : "sort"); }} disabled={!!frozenBy} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #7C3AED", background: frozenBy ? "#F3F4F6" : "#fff", color: "#7C3AED", borderRadius: 6, cursor: frozenBy ? "not-allowed" : "pointer", fontWeight: 700 }}>⚖ Sorting job</button>}
-        {setLots && setStockCounts && <button onClick={() => { const r: Record<string, string> = {}; sameLoc.forEach((l: any) => { r[l.number] = String(Math.round(Number(l.physicalKg) || 0)); }); setCountRows(r); setMode(mode === "count" ? "" : "count"); }} disabled={!!frozenBy} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #B45309", background: frozenBy ? "#F3F4F6" : "#fff", color: "#B45309", borderRadius: 6, cursor: frozenBy ? "not-allowed" : "pointer", fontWeight: 700 }}>📋 Stock count (this location)</button>}
+    <div style={{ background: "#fff", border: "2px solid #0E7490", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
+      <div style={{ background: "#ECFEFF", borderBottom: "1px solid #A5F3FC", padding: "8px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: "#0E7490", letterSpacing: "0.04em" }}>QUALITY &amp; HANDLING</div>
+        <div style={{ fontSize: 11.5, color: "#0F766E" }}>class I {g.I.toLocaleString("pl-PL")} kg · class II {g.II.toLocaleString("pl-PL")} kg · waste {g.waste.toLocaleString("pl-PL")} kg</div>
       </div>
-      {(lot.sortingJobs || []).length > 0 && <div style={{ fontSize: 11.5, color: "#334155", marginBottom: 4 }}>{(lot.sortingJobs || []).map((j: any) => <div key={String(j.id)}>⚖ {j.date} · sorted {Math.round(j.kgIn).toLocaleString("pl-PL")} kg → I {Math.round(j.classIKg).toLocaleString("pl-PL")} · II {Math.round(j.classIIKg).toLocaleString("pl-PL")} · waste {Math.round(j.wasteKg).toLocaleString("pl-PL")}{j.by ? ` · ${j.by}` : ""}{j.hours ? ` · ${j.hours} h` : ""} <span style={{ color: "#94A3B8" }}>(to correct: void its RECLASS / DAMAGE movements in the history and post again)</span></div>)}</div>}
-      {(stockCounts || []).filter((c: any) => String(c.locationId) === String(lot.locationId) && (c.lines || []).some((l: any) => String(l.lotNumber) === String(lot.number))).length > 0 && <div style={{ fontSize: 11.5, color: "#334155", marginBottom: 4 }}>{(stockCounts || []).filter((c: any) => String(c.locationId) === String(lot.locationId) && (c.lines || []).some((l: any) => String(l.lotNumber) === String(lot.number))).map((c: any) => { const ln = (c.lines || []).find((l: any) => String(l.lotNumber) === String(lot.number)); return <div key={String(c.id)}>📋 {c.date} count · counted {Math.round(ln.countedKg).toLocaleString("pl-PL")} vs system {Math.round(ln.systemKg).toLocaleString("pl-PL")} kg → {ln.diffKg >= 0 ? "+" : ""}{ln.diffKg} kg{c.by ? ` · ${c.by}` : ""}</div>; })}</div>}
-      {myIns.length > 0 && <div style={{ fontSize: 11.5, color: "#334155", marginBottom: 6 }}>{myIns.map((x: any) => { const tt = inspectionTotals(x); return <div key={String(x.id)} style={{ display: "flex", gap: 8, alignItems: "center", padding: "2px 0" }}><span>🔬 {x.date} · {x.stage} · {x.inspector || "—"} · checked {x.checkedQty || "—"} {x.unit || ""} · defects <b>{tt.totalPct}%</b> ({(x.defects || []).map((d: any) => `${d.name} ${d.pct}%`).join(", ") || "none"}) · <b style={{ color: x.verdict === "Rejected" ? "#DC2626" : x.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{x.verdict}</b>{x.links?.[0] ? <> · <a href={x.links[0]} target="_blank" rel="noreferrer">report</a></> : null}</span>{setInspections && !frozenBy && <button onClick={() => { setIns({ ...x }); setMode("inspect"); }} style={{ fontSize: 10.5, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>Edit</button>}
-        {setInspections && !frozenBy && <button onClick={() => { if (!window.confirm(`Cancel the inspection of ${x.date}? It is removed from the lot's quality record.`)) return; setInspections((prev: any[]) => (prev || []).filter((p: any) => String(p.id) !== String(x.id))); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} cancelled` }); }} style={{ fontSize: 10.5, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 5, cursor: "pointer" }}>Cancel</button>}<button onClick={() => { const no = lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, "", "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }} style={{ fontSize: 10.5, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>⎙ Print</button>
-        <div id={`insp-print-${x.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 760, background: "#fff", fontFamily: "Arial", fontSize: 12, padding: 16 }}>
-          <div style={{ display: "flex", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 8, marginBottom: 10 }}><PrintLogo width={180} /><div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ fontSize: 15, fontWeight: 800 }}>QUALITY REPORT</div><div style={{ fontSize: 13, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))}</div></div></div>
-          <h3 style={{ margin: "0 0 6px" }}>{lot.product}{lot.variety ? ` — ${lot.variety}` : ""} · lot {lot.number}</h3><div>Date {x.date} · stage {x.stage} · inspector {x.inspector || "—"} · ordered {x.orderedQty || "—"} / checked {x.checkedQty || "—"} {x.unit || ""} ({tt.samplePct}% sample) · temperature {x.temperature || "—"}</div><table style={{ borderCollapse: "collapse", marginTop: 8 }}><tbody>{(x.defects || []).map((d: any, k: number) => <tr key={k}><td style={{ border: "1px solid #ccc", padding: "2px 6px" }}>{d.category}</td><td style={{ border: "1px solid #ccc", padding: "2px 6px" }}>{d.name}</td><td style={{ border: "1px solid #ccc", padding: "2px 6px", textAlign: "right" }}>{d.pct}%</td></tr>)}<tr><td colSpan={2} style={{ border: "1px solid #ccc", padding: "2px 6px", fontWeight: 700 }}>Total defects</td><td style={{ border: "1px solid #ccc", padding: "2px 6px", textAlign: "right", fontWeight: 700 }}>{tt.totalPct}%</td></tr></tbody></table>{(() => { const v = inspectionVerdict(x, tolerancesFor(defectTolerances, lot.product)); return (
-            <table style={{ borderCollapse: "collapse", marginTop: 8, width: "100%" }}><tbody>
-              <tr>{["Category", "Total %", "Tolerance %", "Result"].map(h => <th key={h} style={{ border: "1px solid #999", padding: "3px 6px", background: "#F3F4F6", fontSize: 11 }}>{h}</th>)}</tr>
-              {v.rows.map((r: any) => <tr key={r.category}><td style={{ border: "1px solid #999", padding: "3px 6px" }}>{r.category} defects</td><td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right" }}>{r.pct}</td><td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right" }}>{r.tolerance}</td><td style={{ border: "1px solid #999", padding: "3px 6px", fontWeight: 700 }}>{r.acceptable ? "Acceptable" : "Not acceptable"}</td></tr>)}
-              <tr><td style={{ border: "1px solid #999", padding: "3px 6px", fontWeight: 800 }}>Total quality report</td><td style={{ border: "1px solid #999", padding: "3px 6px", textAlign: "right", fontWeight: 800 }}>{v.totalPct}</td><td style={{ border: "1px solid #999", padding: "3px 6px" }} /><td style={{ border: "1px solid #999", padding: "3px 6px", fontWeight: 800 }}>{v.acceptable ? "Acceptable" : "Not acceptable"}</td></tr>
-            </tbody></table>); })()}
-          <div style={{ marginTop: 6 }}>Verdict: <b>{x.verdict}</b>{x.observations ? ` · ${x.observations}` : ""}</div>
-          <div style={{ marginTop: 4, fontSize: 11 }}>{inspectionVerdict(x, tolerancesFor(defectTolerances, lot.product)).advice}</div>
-          <div style={{ marginTop: 12, fontSize: 9.5, color: "#666" }}>Issued from MARIANNA ERP · recorded in the audit trail.</div></div></div>; })}</div>}
-      {mode === "inspect" && ins && (
-        <div style={{ borderTop: "1px solid #F1F5F9", paddingTop: 8 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, marginBottom: 8 }}>
-            <DateInput value={ins.date} onChange={(e: any) => setIns({ ...ins, date: e.target.value })} title="v6.99.17: the date the inspection was DONE (defaults to today)" />
-            <select value={ins.stage} onChange={e => setIns({ ...ins, stage: e.target.value })} style={inp}><option value="pre-unloading">Pre-unloading</option><option value="warehouse">Warehouse</option><option value="client">At client</option><option value="other">Other</option></select>
-            <input placeholder="Inspector" value={ins.inspector} onChange={e => setIns({ ...ins, inspector: e.target.value })} style={inp} />
-            <input placeholder="Ordered qty" value={ins.orderedQty ?? ""} onChange={e => setIns({ ...ins, orderedQty: e.target.value })} style={inp} />
-            <input placeholder="Checked qty" value={ins.checkedQty ?? ""} onChange={e => setIns({ ...ins, checkedQty: e.target.value })} style={inp} />
-            <select value={ins.unit} onChange={e => setIns({ ...ins, unit: e.target.value })} style={inp}><option value="boxes">boxes</option><option value="kg">kg</option></select>
-            <input placeholder="Temp °C" value={ins.temperature ?? ""} onChange={e => setIns({ ...ins, temperature: e.target.value })} style={inp} />
+      <div style={{ padding: "12px 16px" }}>
+        {frozenBy && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>🔒 Locked — {frozenBy}. Correct by voiding a movement in the history, or by re-opening the settlement.</div>}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          {bigBtn("#0E7490", "#F0FDFA", "🔬", "Quality inspection", "check the goods and judge them", () => openInspection())}
+          {bigBtn("#7C3AED", "#F5F3FF", "⚖", "Sorting job", "split what the inspection said to sort", openSorting)}
+          {bigBtn("#B45309", "#FFFBEB", "📋", "Stock count", "verify what is physically there", openCount)}
+        </div>
+
+        {/* the timeline — one line per act, newest first */}
+        {!myIns.length && !myJobs.length && !myCounts.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>Nothing recorded yet — inspect the goods before sorting.</div>}
+        {myIns.map((x: any) => { const v = inspectionVerdict(x); return (
+          <div key={String(x.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
+            <span style={{ width: 20 }}>🔬</span>
+            <b style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{qrNos[String(x.id)] || lastReportNumber("QR", String(x.id)) || "—"}</b>
+            <span>{x.date} · {x.stage} · {x.inspector || "—"}</span>
+            <span>checked {num(x.checkedQty).toLocaleString("pl-PL")} {x.unit || "kg"} ({samplePctOf(x)} %)</span>
+            <span>defects <b>{v.totalPct} %</b></span>
+            <span style={{ fontWeight: 800, color: v.acceptable ? "#16A34A" : "#DC2626" }}>{v.acceptable ? "Acceptable" : "Not acceptable"}</span>
+            <span style={{ color: "#64748B" }}>· {x.verdict}</span>
+            <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+              {!frozenBy && <SmallButton onClick={() => openInspection(x)}>Edit</SmallButton>}
+              <SmallButton onClick={() => { const no = lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</SmallButton>
+              {!frozenBy && setInspections && <SmallButton kind="danger" onClick={() => { if (!window.confirm(`Cancel the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).filter((p: any) => String(p.id) !== String(x.id))); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} cancelled` }); }}>Cancel</SmallButton>}
+            </span>
+            <InspectionPrintDoc x={x} lot={lot} no={qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} />
           </div>
-          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", marginBottom: 4 }}>DEFECTS (Daifressh structure: category · defect · % of sample)</div>
-          {(ins.defects || []).map((d: any, i: number) => (
-            <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 1fr 90px 30px", gap: 6, marginBottom: 4 }}>
-              <select value={d.category} onChange={e => setIns({ ...ins, defects: ins.defects.map((x: any, k: number) => k === i ? { ...x, category: e.target.value, name: "" } : x) })} style={inp}>{DEFECT_CATEGORIES.map((c: string) => <option key={c}>{c}</option>)}</select>
-              <select value={d.name} onChange={e => setIns({ ...ins, defects: ins.defects.map((x: any, k: number) => k === i ? { ...x, name: e.target.value } : x) })} style={inp} title="v6.99.31 (owner): the defects of the chosen category only — the producer's own list">
-                <option value="">— defect —</option>
-                {defectsFor(cat, lot.product).filter((x: any) => String(x.category) === String(d.category)).map((x: any, k: number) => <option key={k} value={x.name}>{x.name}</option>)}
-                {d.name && !defectsFor(cat, lot.product).some((x: any) => x.name === d.name) && <option value={d.name}>{d.name}</option>}
-              </select>
-              <input type="number" step="0.01" placeholder="%" value={d.pct ?? ""} onChange={e => setIns({ ...ins, defects: ins.defects.map((x: any, k: number) => k === i ? { ...x, pct: e.target.value } : x) })} style={inp} />
-              <button onClick={() => setIns({ ...ins, defects: ins.defects.filter((_: any, k: number) => k !== i) })} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer" }}>✕</button>
+        ); })}
+        {myJobs.map((j: any) => (
+          <div key={String(j.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
+            <span style={{ width: 20 }}>⚖</span><span>{j.date}</span>
+            <span>sorted <b>{Math.round(num(j.kgIn)).toLocaleString("pl-PL")} kg</b> → I {Math.round(num(j.classIKg)).toLocaleString("pl-PL")} · II {Math.round(num(j.classIIKg)).toLocaleString("pl-PL")} · waste {Math.round(num(j.wasteKg)).toLocaleString("pl-PL")}</span>
+            {j.by ? <span>· {j.by}</span> : null}{j.hours ? <span>· {j.hours} h</span> : null}
+            <span style={{ marginLeft: "auto", color: "#94A3B8", fontSize: 10.5 }}>to correct: void its RECLASS / DAMAGE in the history and post again</span>
+          </div>
+        ))}
+        {myCounts.map((c: any) => { const mine = (c.lines || []).filter((l: any) => String(l.lotNumber) === String(lot.number)); return (
+          <div key={String(c.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
+            <span style={{ width: 20 }}>📋</span><span>{c.date} count</span>
+            {mine.map((l: any, k: number) => <span key={k}>{l.grade ? `class ${l.grade}: ` : ""}counted {Math.round(num(l.countedKg)).toLocaleString("pl-PL")} vs system {Math.round(num(l.systemKg)).toLocaleString("pl-PL")} → <b style={{ color: num(l.diffKg) ? "#B45309" : "#16A34A" }}>{num(l.diffKg) >= 0 ? "+" : ""}{Math.round(num(l.diffKg))} kg</b></span>)}
+            {c.by ? <span>· {c.by}</span> : null}
+          </div>
+        ); })}
+      </div>
+
+      {win === "inspect" && ins && (
+        <InspectionWindow ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={(final: any) => {
+          setInspections && setInspections((prev: any[]) => (prev || []).some((p: any) => String(p.id) === String(final.id)) ? (prev || []).map((p: any) => String(p.id) === String(final.id) ? final : p) : [...(prev || []), final]);
+          recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Quality inspection ${final.date} · defects ${inspectionVerdict(final).totalPct}% · ${final.verdict}` });
+          setWin("");
+        }} />
+      )}
+      {win === "sort" && sortF && (
+        <SortingWindow f={sortF} setF={setSortF} lot={lot} inspections={myIns} contacts={contacts} onClose={() => setWin("")} onSave={() => {
+          const r = runSortingJob(lot, { ...sortF, date: sortF.date || localTodayISO() }, { nextId });
+          if (r.error) { window.alert(r.error); return; }
+          const healed = recompute(r.lot, r.lot.movements);
+          setLots && setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? healed : l));
+          recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job: I ${sortF.classIKg} · II ${sortF.classIIKg} · waste ${sortF.wasteKg} kg` });
+          const warn = gradeCommitmentWarning(healed, orders || []); if (warn) window.alert("⚠ " + warn);
+          setWin("");
+        }} />
+      )}
+      {win === "count" && countF && (
+        <CountWindow f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={() => {
+          const lines = (countF.rows || []).map((r: any) => ({ lotNumber: lot.number, grade: r.grade, countedKg: countedKgOf(r), systemKg: r.systemKg, diffKg: r0(countedKgOf(r) - num(r.systemKg)), pallets: r.pallets, boxesPerPallet: r.boxesPerPallet, looseBoxes: r.looseBoxes }));
+          const count = { id: nextId(), date: countF.date || localTodayISO(), locationId: lot.locationId, by: countF.by || userName || "", lines };
+          const res = applyStockCount(lots || [], count as any, countF.reason || "stock count", { nextId });
+          setLots && setLots((prev: any[]) => (prev || []).map((l: any) => { const hit = (res.lots || []).find((x: any) => x.id === l.id); return hit ? recompute(hit, hit.movements) : l; }));
+          setStockCounts && setStockCounts((prev: any[]) => [...(prev || []), count]);
+          recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Stock count ${count.date}: ${lines.map((l: any) => `${l.grade ? "class " + l.grade + " " : ""}${l.diffKg >= 0 ? "+" : ""}${l.diffKg} kg`).join(" · ")}` });
+          setWin("");
+        }} />
+      )}
+    </div>
+  );
+}
+
+// ── v6.99.32: the three windows of Quality & Handling (A-QH-1/3/5/6/8) ──
+function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save", children, extra = null }: any) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 16px", overflow: "auto" }}>
+      <div style={{ background: "#fff", borderRadius: 12, width: "min(980px, 100%)", border: `2px solid ${colour}`, overflow: "hidden" }}>
+        <div style={{ background: "#F8FAFC", borderBottom: `1px solid ${colour}33`, padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+          <div><div style={{ fontSize: 14, fontWeight: 800, color: colour }}>{title}</div><div style={{ fontSize: 11.5, color: "#64748B" }}>{subtitle}</div></div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            {extra}
+            <SmallButton onClick={onClose}>Cancel</SmallButton>
+            <button onClick={onSave} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{saveLabel}</button>
+          </div>
+        </div>
+        <div style={{ padding: "14px 16px", maxHeight: "72vh", overflow: "auto" }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+const qhInp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+function QhField({ label, hint, children }: any) {
+  return <div><div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", marginBottom: 3 }}>{label}</div>{children}{hint ? <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{hint}</div> : null}</div>;
+}
+
+/** A-QH-3/4/7/8: the quality report as the producer's sheet — header · external quality · defects · conclusion. */
+function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
+  const set = (k: string, v: any) => setIns((x: any) => ({ ...x, [k]: v }));
+  const v = inspectionVerdict(ins);
+  const checks: any[] = ins.externalChecks || [];
+  const setCheck = (i: number, k: string, val: any) => set("externalChecks", checks.map((c, j) => j === i ? { ...c, [k]: val } : c));
+  const setTol = (categoryName: string, val: any) => set("tolerances", { ...(ins.tolerances || {}), [categoryName]: parseFloat(val) || 0 });
+  return (
+    <QhWindow title="🔬 Quality inspection" subtitle={`${lot.number} · ${lot.product}${lot.variety ? " — " + lot.variety : ""}`} colour="#0E7490" onClose={onClose} onSave={() => onSave(ins)} saveLabel="Save report">
+      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>HEADER</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+        <QhField label="Date of inspection"><DateInput value={ins.date} onChange={(e: any) => set("date", e.target.value)} /></QhField>
+        <QhField label="Location of inspection"><Sel value={ins.stage} onChange={(e: any) => set("stage", e.target.value)}><option value="pre-unloading">On arrival / pre-unloading</option><option value="warehouse">In our warehouse</option><option value="client">At the client</option><option value="other">Other</option></Sel></QhField>
+        <QhField label="Inspector"><input value={ins.inspector || ""} onChange={e => set("inspector", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="Temperature (°C)"><input value={ins.temperature ?? ""} onChange={e => set("temperature", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="Quantity delivered"><input type="number" value={ins.orderedQty ?? ""} onChange={e => set("orderedQty", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="Quantity checked"><input type="number" value={ins.checkedQty ?? ""} onChange={e => set("checkedQty", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="Unit"><Sel value={ins.unit || "kg"} onChange={(e: any) => set("unit", e.target.value)}><option value="kg">kg</option><option value="boxes">boxes</option></Sel></QhField>
+        <QhField label="Sample %" hint="computed: checked ÷ delivered"><div style={{ ...qhInp, background: "#F8FAFC", fontWeight: 800 }}>{samplePctOf(ins)} %</div></QhField>
+      </div>
+
+      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>EXTERNAL QUALITY — what we ordered against what arrived</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.7fr 0.7fr 0.7fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>CHECK</div><div>EXPECTED</div><div>MAX</div><div>AVG</div><div>MIN</div><div>RESULT</div></div>
+      {checks.map((c: any, i: number) => (
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.7fr 0.7fr 0.7fr 1fr", gap: 8, alignItems: "center", padding: "3px 0" }}>
+          <div style={{ fontSize: 12 }}>{c.name}</div>
+          <input value={c.expected ?? ""} onChange={e => setCheck(i, "expected", e.target.value)} style={qhInp} />
+          <input value={c.max ?? ""} onChange={e => setCheck(i, "max", e.target.value)} style={qhInp} />
+          <input value={c.avg ?? ""} onChange={e => setCheck(i, "avg", e.target.value)} style={qhInp} />
+          <input value={c.min ?? ""} onChange={e => setCheck(i, "min", e.target.value)} style={qhInp} />
+          <Sel value={c.status || "Not checked"} onChange={(e: any) => setCheck(i, "status", e.target.value)}><option>Not checked</option><option>Correct</option><option>Not correct</option></Sel>
+        </div>
+      ))}
+
+      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "14px 0 6px" }}>DEFECTS</div>
+      {(ins.defects || []).map((d: any, i: number) => (
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "150px 1fr 90px 90px 34px", gap: 8, marginBottom: 5, alignItems: "center" }}>
+          <Sel value={d.category} onChange={(e: any) => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, category: e.target.value, name: "" } : x))}>{DEFECT_CATEGORIES.map((c: string) => <option key={c}>{c}</option>)}</Sel>
+          <Sel value={d.name} onChange={(e: any) => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, name: e.target.value } : x))}>
+            <option value="">— defect —</option>
+            {defectsFor(cat, lot.product).filter((x: any) => String(x.category) === String(d.category)).map((x: any, k: number) => <option key={k} value={x.name}>{x.name}</option>)}
+            {d.name && !defectsFor(cat, lot.product).some((x: any) => x.name === d.name) && <option value={d.name}>{d.name}</option>}
+          </Sel>
+          <input type="number" step="0.01" placeholder="% found" value={d.pct ?? ""} onChange={e => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, pct: e.target.value } : x))} style={qhInp} />
+          <div style={{ fontSize: 10.5, color: "#94A3B8", textAlign: "center" }}>tol. {(ins.tolerances || {})[d.category] ?? 0} %</div>
+          <button onClick={() => set("defects", ins.defects.filter((_: any, k: number) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 32, cursor: "pointer" }}>✕</button>
+        </div>
+      ))}
+      <button onClick={() => set("defects", [...(ins.defects || []), { category: "Major", name: "", pct: "" }])}
+        style={{ width: "100%", padding: "9px", marginTop: 4, border: "2px dashed #0E7490", borderRadius: 8, background: "#F0FDFA", color: "#0E7490", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add defect</button>
+
+      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "14px 0 6px" }}>TOLERANCES &amp; CONCLUSION <span style={{ fontWeight: 500, textTransform: "none" }}>— the limits this report is judged against; they travel with it</span></div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
+        {v.rows.map((r: any) => (
+          <div key={r.category} style={{ border: `1px solid ${r.acceptable ? "#BBF7D0" : "#FECACA"}`, background: r.acceptable ? "#F0FDF4" : "#FEF2F2", borderRadius: 8, padding: "7px 9px" }}>
+            <div style={{ fontSize: 11, fontWeight: 800 }}>{r.category}</div>
+            <div style={{ fontSize: 13, fontWeight: 800 }}>{r.pct} %</div>
+            <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: 3 }}>
+              <span style={{ fontSize: 10.5, color: "#64748B" }}>tolerance</span>
+              <input type="number" step="0.1" disabled={r.category === "Unacceptable"} value={(ins.tolerances || {})[r.category] ?? r.tolerance} onChange={e => setTol(r.category, e.target.value)}
+                title={r.category === "Unacceptable" ? "Always 0 % — one unacceptable defect rejects the consignment" : ""} style={{ ...qhInp, width: 62, padding: "3px 6px", background: r.category === "Unacceptable" ? "#F3F4F6" : "#fff" }} />
+              <span style={{ fontSize: 10.5 }}>%</span>
             </div>
-          ))}
-          <datalist id={`defects-${lot.id}`}>{defectsFor(cat, lot.product).map((d: any, i: number) => <option key={i} value={d.name} />)}</datalist>
-          {(() => {   // v6.99.31 (owner): the verdict of the sheet — each category against its tolerance, then the whole report
-            const v = inspectionVerdict(ins, tolerancesFor(defectTolerances, lot.product));
-            return (
-              <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: v.acceptable ? "#F0FDF4" : "#FFFBEB", border: `1px solid ${v.acceptable ? "#BBF7D0" : "#FDE68A"}` }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, fontSize: 11.5 }}>
-                  {v.rows.map((r: any) => <div key={r.category}><span style={{ color: "#64748B" }}>{r.category}</span> <b>{r.pct} %</b> <span style={{ color: r.acceptable ? "#16A34A" : "#DC2626", fontWeight: 700 }}>{r.acceptable ? "acceptable" : "not acceptable"}</span> <span style={{ color: "#94A3B8" }}>(tol. {r.tolerance} %)</span></div>)}
-                </div>
-                <div style={{ marginTop: 6, fontSize: 12, fontWeight: 700 }}>Total {v.totalPct} % · {v.advice}</div>
-              </div>
-            );
-          })()}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
-            <button onClick={() => setIns({ ...ins, defects: [...(ins.defects || []), { category: "Major", name: "", pct: "" }] })} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>+ Defect</button>
-            <span style={{ fontSize: 11.5, fontWeight: 800 }}>Total {inspectionTotals(ins).totalPct}%</span>
-            <select value={ins.verdict} onChange={e => setIns({ ...ins, verdict: e.target.value })} style={{ ...inp, width: 140 }}><option>Pending</option><option>Accepted</option><option>Sort</option><option>Rejected</option></select>
-            <input placeholder="Report / photos link (Dropbox)" value={ins.links?.[0] || ""} onChange={e => setIns({ ...ins, links: [e.target.value] })} style={{ ...inp, width: 260 }} />
-            <input placeholder="Observations" value={ins.observations || ""} onChange={e => setIns({ ...ins, observations: e.target.value })} style={{ ...inp, flex: 1, minWidth: 160 }} />
-            <button onClick={() => { setInspections((prev: any[]) => (prev || []).some((p: any) => String(p.id) === String(ins.id)) ? (prev || []).map((p: any) => String(p.id) === String(ins.id) ? ins : p) : [...(prev || []), ins]); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "claim", summary: `Inspection ${ins.stage}: ${inspectionTotals(ins).totalPct}% defects → ${ins.verdict}` }); setMode(""); }} style={{ fontSize: 11.5, padding: "5px 12px", border: "none", background: "#0E7490", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 800 }}>Save inspection</button>
+            <div style={{ fontSize: 10.5, fontWeight: 800, color: r.acceptable ? "#16A34A" : "#DC2626", marginTop: 3 }}>{r.acceptable ? "Acceptable" : "Not acceptable"}</div>
           </div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "150px 1fr", gap: 10, alignItems: "start" }}>
+        <QhField label="Verdict" hint={v.advice}><Sel value={ins.verdict} onChange={(e: any) => set("verdict", e.target.value)}><option>Pending</option><option>Accepted</option><option>Sort</option><option>Rejected</option></Sel></QhField>
+        <QhField label={`Comments · total defects ${v.totalPct} %`}><textarea value={ins.observations || ""} onChange={e => set("observations", e.target.value)} rows={2} style={{ ...qhInp, resize: "vertical" }} /></QhField>
+      </div>
+      <QhField label="Pictures / report link"><input value={(ins.links || [])[0] || ""} onChange={e => set("links", [e.target.value])} placeholder="https://…" style={qhInp} /></QhField>
+    </QhWindow>
+  );
+}
+
+/** A-QH-5: sorting follows an inspection; it warns when there is none but never blocks. */
+function SortingWindow({ f, setF, lot, inspections = [], contacts = [], onClose, onSave }: any) {
+  const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
+  const placed = num(f.classIKg) + num(f.classIIKg) + num(f.wasteKg);
+  const remaining = r0(num(f.kgIn) - placed);
+  const follows = inspections.find((x: any) => String(x.id) === String(f.followsInspection));
+  return (
+    <QhWindow title="⚖ Sorting job" subtitle={`${lot.number} · splits what the inspection said to sort`} colour="#7C3AED" onClose={onClose}
+      onSave={() => { if (!follows && !window.confirm("No quality inspection is referenced. Sort anyway?")) return; onSave(); }} saveLabel="Post sorting">
+      {!inspections.length && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>No quality inspection on this lot yet — sorting normally follows one. You can still post it.</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+        <QhField label="Date sorted"><DateInput value={f.date} onChange={(e: any) => set("date", e.target.value)} /></QhField>
+        <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{x.date} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
+        <QhField label="Sorted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} placeholder="our team / warehouse" style={qhInp} list="qh-sorters" /><datalist id="qh-sorters">{(contacts || []).filter((c: any) => (c.roles || [c.type]).includes("Warehouse")).map((c: any) => <option key={String(c.id)} value={c.name} />)}</datalist></QhField>
+        <QhField label="Hours"><input type="number" value={f.hours ?? ""} onChange={e => set("hours", e.target.value)} style={qhInp} /></QhField>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+        <QhField label="Kg sorted (in)"><input type="number" value={f.kgIn ?? ""} onChange={e => set("kgIn", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="→ Class I"><input type="number" value={f.classIKg ?? ""} onChange={e => set("classIKg", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="→ Class II"><input type="number" value={f.classIIKg ?? ""} onChange={e => set("classIIKg", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="→ Waste"><input type="number" value={f.wasteKg ?? ""} onChange={e => set("wasteKg", e.target.value)} style={qhInp} /></QhField>
+      </div>
+      <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: remaining === 0 ? "#16A34A" : "#B45309" }}>
+        {remaining === 0 ? "✓ the three add up to the kilos sorted" : `${remaining > 0 ? remaining.toLocaleString("pl-PL") + " kg not yet placed" : Math.abs(remaining).toLocaleString("pl-PL") + " kg more than sorted"}`}
+      </div>
+      <QhField label="Note"><input value={f.note || ""} onChange={e => set("note", e.target.value)} style={qhInp} /></QhField>
+    </QhWindow>
+  );
+}
+
+/** A-QH-6: counted as the warehouse counts — pallets and boxes, per class. */
+function CountWindow({ f, setF, lot, onClose, onSave }: any) {
+  const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
+  const setRow = (i: number, k: string, v: any) => set("rows", f.rows.map((r: any, j: number) => j === i ? { ...r, [k]: v } : r));
+  return (
+    <QhWindow title="📋 Stock count" subtitle={`${lot.number} · what is physically on the floor`} colour="#B45309" onClose={onClose} onSave={onSave} saveLabel="Save count & adjust">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
+        <QhField label="Date counted"><DateInput value={f.date} onChange={(e: any) => set("date", e.target.value)} /></QhField>
+        <QhField label="Counted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="Reason / note"><input value={f.reason || ""} onChange={e => set("reason", e.target.value)} placeholder="monthly count, spot check…" style={qhInp} /></QhField>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 0.9fr 0.8fr 0.8fr 1fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>
+        <div>LINE</div><div>PALLETS</div><div>BOXES / PAL</div><div>LOOSE BOXES</div><div>KG / BOX</div><div>COUNTED KG</div><div>SYSTEM · DIFF</div>
+      </div>
+      {(f.rows || []).map((r: any, i: number) => { const kg = countedKgOf(r); const diff = r0(kg - num(r.systemKg)); return (
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 0.9fr 0.8fr 0.8fr 1fr 1fr", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F8FAFC" }}>
+          <div style={{ fontSize: 12, fontWeight: 700 }}>{r.label}</div>
+          <input type="number" value={r.pallets ?? ""} onChange={e => setRow(i, "pallets", e.target.value)} style={qhInp} />
+          <input type="number" value={r.boxesPerPallet ?? ""} onChange={e => setRow(i, "boxesPerPallet", e.target.value)} style={qhInp} />
+          <input type="number" value={r.looseBoxes ?? ""} onChange={e => setRow(i, "looseBoxes", e.target.value)} style={qhInp} />
+          <input type="number" value={r.kgPerBox ?? ""} onChange={e => setRow(i, "kgPerBox", e.target.value)} style={qhInp} />
+          <input type="number" value={kg > 0 ? kg : (r.countedKg ?? "")} onChange={e => setRow(i, "countedKg", e.target.value)} disabled={kg > 0} title={kg > 0 ? "derived from the boxes" : "loose goods — type the kilos"} style={{ ...qhInp, background: kg > 0 ? "#F8FAFC" : "#fff", fontWeight: 700 }} />
+          <div style={{ fontSize: 11.5 }}>{Math.round(num(r.systemKg)).toLocaleString("pl-PL")} · <b style={{ color: diff === 0 ? "#16A34A" : "#B45309" }}>{diff >= 0 ? "+" : ""}{diff}</b></div>
         </div>
-      )}
-      {mode === "sort" && (
-        <div style={{ borderTop: "1px solid #F1F5F9", paddingTop: 8, display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 8, alignItems: "end" }}>
-          <div><Lbl>Date done</Lbl><DateInput value={sortF.date || localTodayISO()} onChange={(e: any) => setSortF({ ...sortF, date: e.target.value })} /></div>
-          <div><Lbl>Kg sorted</Lbl><input type="number" value={sortF.kgIn} onChange={e => setSortF({ ...sortF, kgIn: e.target.value })} style={inp} /></div>
-          <div><Lbl>Class I kg</Lbl><input type="number" value={sortF.classIKg} onChange={e => setSortF({ ...sortF, classIKg: e.target.value })} style={inp} /></div>
-          <div><Lbl>Class II kg</Lbl><input type="number" value={sortF.classIIKg} onChange={e => setSortF({ ...sortF, classIIKg: e.target.value })} style={inp} /></div>
-          <div><Lbl>Waste kg</Lbl><input type="number" value={sortF.wasteKg} onChange={e => setSortF({ ...sortF, wasteKg: e.target.value })} style={inp} /></div>
-          <div><Lbl>By</Lbl><input value={sortF.by} onChange={e => setSortF({ ...sortF, by: e.target.value })} placeholder="Agrohurt" style={inp} /></div>
-          <div><Lbl>Hours</Lbl><input type="number" value={sortF.hours} onChange={e => setSortF({ ...sortF, hours: e.target.value })} style={inp} /></div>
-          <button onClick={() => { const r = runSortingJob(lot, { ...sortF, date: sortF.date || localTodayISO() }, { nextId }); if (r.error) { window.alert(r.error); return; } const healed = recompute(r.lot, r.lot.movements); setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? healed : l)); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job: I ${sortF.classIKg} · II ${sortF.classIIKg} · waste ${sortF.wasteKg} kg` });
-            // v6.99.22 (G-3, owner approval): sorting never blocks — but it says at once which sales it just undercut.
-            const warn = gradeCommitmentWarning(healed, orders || []); if (warn) window.alert("⚠ " + warn);
-            setMode(""); }} style={{ fontSize: 11.5, padding: "7px 12px", border: "none", background: "#7C3AED", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 800 }}>Post sorting</button>
-        </div>
-      )}
-      {mode === "count" && (
-        <div style={{ borderTop: "1px solid #F1F5F9", paddingTop: 8 }}>
-          <div style={{ fontSize: 10.5, color: "#94A3B8", marginBottom: 6 }}>Counted kg per lot at this location (system figure pre-filled). Differences beyond 1 kg become reasoned adjustments.</div>
-          {sameLoc.map((l: any) => <div key={l.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 120px 120px", gap: 8, fontSize: 11.5, alignItems: "center", marginBottom: 4 }}><b>{l.number}</b><span style={{ color: "#64748B" }}>{l.product} {l.variety || ""}</span><span>system {Math.round(Number(l.physicalKg) || 0).toLocaleString("pl-PL")}</span><input type="number" value={countRows[l.number] ?? ""} onChange={e => setCountRows({ ...countRows, [l.number]: e.target.value })} style={inp} /></div>)}
-          <button onClick={() => { const reason = window.prompt("Reason for the differences (shrinkage, mis-count, damage found…):", "stock count") || "stock count"; const c = buildStockCount(lots, lot.locationId, sameLoc.map((l: any) => ({ lotNumber: l.number, countedKg: countRows[l.number] })), { nextId, todayISO: localTodayISO }); const a = applyStockCount(lots, c, reason, { nextId }); setLots((prev: any[]) => (prev || []).map((l: any) => { const nl = a.lots.find((x: any) => x.id === l.id); return nl && nl !== l ? recompute(nl, nl.movements) : l; })); setStockCounts((prev: any[]) => [...(prev || []), c]); recordAudit({ module: "Inventory", docType: "Location", docNumber: String(lot.locationId), action: "movement", summary: `Stock count: ${a.adjusted} lot(s) adjusted — ${reason}` }); setMode(""); }} style={{ marginTop: 6, fontSize: 11.5, padding: "6px 12px", border: "none", background: "#B45309", color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 800 }}>Save count & adjust</button>
-        </div>
-      )}
+      ); })}
+      <div style={{ marginTop: 8, fontSize: 11, color: "#64748B" }}>Waste is already out of stock and is not counted. A difference beyond 1 kg becomes a reasoned adjustment on that class.</div>
+    </QhWindow>
+  );
+}
+
+/** The printable quality report (hidden; printed by number). */
+function InspectionPrintDoc({ x, lot, no }: any) {
+  const v = inspectionVerdict(x);
+  const cell = { border: "1px solid #999", padding: "3px 6px", fontSize: 11 } as any;
+  const hd = { ...cell, background: "#F3F4F6", fontWeight: 700 } as any;
+  return (
+    <div id={`insp-print-${x.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 760, background: "#fff", fontFamily: "Arial", fontSize: 12, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 8, marginBottom: 10 }}>
+        <PrintLogo width={180} />
+        <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ fontSize: 15, fontWeight: 800 }}>QUALITY REPORT</div><div style={{ fontSize: 13, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{no || ""}</div></div>
+      </div>
+      <h3 style={{ margin: "0 0 6px" }}>{lot.product}{lot.variety ? ` — ${lot.variety}` : ""} · lot {lot.number}</h3>
+      <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
+        <tr><td style={hd}>Date</td><td style={cell}>{x.date}</td><td style={hd}>Location</td><td style={cell}>{x.stage}</td></tr>
+        <tr><td style={hd}>Inspector</td><td style={cell}>{x.inspector || "—"}</td><td style={hd}>Temperature</td><td style={cell}>{x.temperature ?? "—"}</td></tr>
+        <tr><td style={hd}>Quantity delivered</td><td style={cell}>{num(x.orderedQty).toLocaleString("pl-PL")} {x.unit || "kg"}</td><td style={hd}>Quantity checked</td><td style={cell}>{num(x.checkedQty).toLocaleString("pl-PL")} {x.unit || "kg"} ({samplePctOf(x)} %)</td></tr>
+      </tbody></table>
+      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>EXTERNAL QUALITY</div>
+      <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
+        <tr>{["Check", "Expected", "Max", "Avg", "Min", "Result"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
+        {(x.externalChecks || []).map((c: any, i: number) => <tr key={i}>{[c.name, c.expected ?? "—", c.max ?? "—", c.avg ?? "—", c.min ?? "—", c.status || "Not checked"].map((val: any, k: number) => <td key={k} style={cell}>{val}</td>)}</tr>)}
+      </tbody></table>
+      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>DEFECTS</div>
+      <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
+        <tr>{["Category", "Defect", "% found"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
+        {(x.defects || []).map((d: any, i: number) => <tr key={i}><td style={cell}>{d.category}</td><td style={cell}>{d.name}</td><td style={{ ...cell, textAlign: "right" }}>{d.pct}</td></tr>)}
+      </tbody></table>
+      <table style={{ borderCollapse: "collapse", marginTop: 8, width: "100%" }}><tbody>
+        <tr>{["Category", "Total %", "Tolerance %", "Result"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
+        {v.rows.map((r: any) => <tr key={r.category}><td style={cell}>{r.category} defects</td><td style={{ ...cell, textAlign: "right" }}>{r.pct}</td><td style={{ ...cell, textAlign: "right" }}>{r.tolerance}</td><td style={{ ...cell, fontWeight: 700 }}>{r.acceptable ? "Acceptable" : "Not acceptable"}</td></tr>)}
+        <tr><td style={{ ...cell, fontWeight: 800 }}>Total quality report</td><td style={{ ...cell, textAlign: "right", fontWeight: 800 }}>{v.totalPct}</td><td style={cell} /><td style={{ ...cell, fontWeight: 800 }}>{v.acceptable ? "Acceptable" : "Not acceptable"}</td></tr>
+      </tbody></table>
+      <div style={{ marginTop: 6 }}>Verdict: <b>{x.verdict}</b>{x.observations ? ` · ${x.observations}` : ""}</div>
+      <div style={{ marginTop: 4, fontSize: 11 }}>{v.advice}</div>
+      <div style={{ marginTop: 12, fontSize: 9.5, color: "#666" }}>Issued from MARIANNA ERP · recorded in the audit trail.</div>
     </div>
   );
 }
@@ -1926,7 +2143,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
 // v6.79.0 (W-2): the legacy lot-side Claim Request Form was retired — claims are
 // one document type with one numbering scheme in the Claims module (D-13).
 
-export default function Inventory({ defectTolerances: extDefectTolerances = {}, lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [] }: any = {}) {
+export default function Inventory({ initialSelectedNumber = "", defectTolerances: extDefectTolerances = {}, lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [] }: any = {}) {
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode } = useConfirm(); // Batch 2 (P2-6) + v6.89.0 prompt
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
@@ -1937,8 +2154,9 @@ export default function Inventory({ defectTolerances: extDefectTolerances = {}, 
   // If shell doesn't pass any (standalone), helpers fall through to local SOS via their default param.
   const liveSOs = extOrders;
   const shipments = extShipments;
-  const [view, setView] = useState("list");
-  const [selectedId, setSelectedId] = useState(null);
+  // v6.99.32: a lot can be opened directly (deep link, and the render smoke exercises the DETAIL, not just the list)
+  const [view, setView] = useState(initialSelectedNumber ? "detail" : "list");
+  const [selectedId, setSelectedId] = useState<any>(() => (extLots || []).find((l: any) => String(l.number) === String(initialSelectedNumber))?.id ?? null);
   const selected = useMemo(() => lots.find(l => l.id === selectedId) ?? null, [lots, selectedId]);
   const [showMovement, setShowMovement] = useState(false);
   const [movementMode, setMovementMode] = useState<"movement" | "quality">("movement");

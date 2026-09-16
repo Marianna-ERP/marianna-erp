@@ -70,15 +70,17 @@ export interface Inspection {
   measurements: Measurement[];
   finalWeightKg?: any; expectedWeightKg?: any;
   defects: DefectLine[];
+  externalChecks?: ExternalCheck[];      // v6.99.32 (QH-3): size · unit pack weight · labelling, expected vs measured
+  tolerances?: Record<string, number>;  // v6.99.32 (QH-7): the limits THIS report was judged against
   verdict: "Accepted" | "Sort" | "Rejected" | "Pending";
   observations?: string; links: string[];
 }
-export function blankInspection(lot: any, deps: { nextId: () => any; todayISO: () => string }, stage: Inspection["stage"] = "warehouse"): Inspection {
+export function blankInspection(lot: any, deps: { nextId: () => any; todayISO: () => string; po?: any; tolerances?: Record<string, number> }, stage: Inspection["stage"] = "warehouse"): Inspection {
   return { id: deps.nextId(), lotNumber: S(lot?.number), poRef: lot?.poRef || "", stage, date: deps.todayISO(), inspector: "",
     product: lot?.product || "", variety: lot?.variety || "", orderedQty: num(lot?.expectedKg) || "", checkedQty: "", unit: "kg", samplePct: 0, temperature: "",
     labellingBox: "Not checked", labellingProduct: "Not checked",
     measurements: [{ name: "Box weight", status: "Not checked" }, { name: "Calibre / count", status: "Not checked" }, { name: "Size (mm)", status: "Not checked" }, { name: "Unit / pack weight", status: "Not checked" }],
-    finalWeightKg: "", expectedWeightKg: num(lot?.expectedKg) || "", defects: [], verdict: "Pending", observations: "", links: [] };
+    finalWeightKg: "", expectedWeightKg: num(lot?.expectedKg) || "", defects: [], externalChecks: blankExternalChecks(lot, (deps as any).po), tolerances: (deps as any).tolerances || { ...DEFAULT_TOLERANCES }, verdict: "Pending", observations: "", links: [] };
 }
 export function inspectionTotals(ins: Inspection): { byCategory: Record<string, number>; totalPct: number; samplePct: number } {
   const byCategory: Record<string, number> = {};
@@ -122,13 +124,14 @@ export function tolerancesFor(settings: any, product: any): Record<string, numbe
   return { ...DEFAULT_TOLERANCES, ...per, Unacceptable: 0 };
 }
 /** The verdict of a quality report: per-category totals against their tolerance, then the whole sheet. */
-export function inspectionVerdict(ins: Inspection, tolerances: Record<string, number>): {
+export function inspectionVerdict(ins: Inspection, tolerances?: Record<string, number>): {
   rows: Array<{ category: string; pct: number; tolerance: number; acceptable: boolean }>; totalPct: number; acceptable: boolean; advice: string;
 } {
   const t = inspectionTotals(ins);
+  const tol0 = { ...DEFAULT_TOLERANCES, ...(tolerances || {}), ...(ins?.tolerances || {}), Unacceptable: 0 };   // v6.99.32 (QH-7): the report keeps the limits it was judged against
   const rows = DEFECT_CATEGORIES.map(cat => {
     const pct = r2(t.byCategory[cat] || 0);
-    const tol = num((tolerances || {})[cat]);
+    const tol = num(tol0[cat]);
     return { category: cat, pct, tolerance: tol, acceptable: pct <= tol + 1e-9 };
   });
   const acceptable = rows.every(r => r.acceptable);
@@ -286,4 +289,45 @@ export function gradeCommitmentWarning(lot: any, orders: any[]): string {
   const gone = (o: any) => (lot?.movements || []).some((m: any) => m && !m.voided && m.type === "SHIP_OUT" && String(m.soRef || "") === String(o.number));
   const affected = (orders || []).filter(o => o && !["Draft", "Cancelled"].includes(String(o.status)) && !gone(o) && (o.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(lot?.number) && String(it.grade || "I").toUpperCase() !== "II")).map(o => o.number);
   return `${lot?.number}: class I in stock is ${a.stockI.toLocaleString("pl-PL")} kg but ${a.promisedI.toLocaleString("pl-PL")} kg are sold as class I${affected.length ? ` (${affected.join(", ")})` : ""} — short ${Math.abs(a.I).toLocaleString("pl-PL")} kg. Class II available: ${a.II.toLocaleString("pl-PL")} kg. Adjust the order(s): split by grade, source elsewhere, or short-deliver.`;
+}
+
+// ── v6.99.32 (A-QH-3/4/6/7, owner 15 Sept): the quality report is self-contained and the count is done the warehouse's way ──
+
+/** QH-3: what we ordered against what arrived — size, unit pack weight, labelling. */
+export interface ExternalCheck { name: string; expected?: any; max?: any; avg?: any; min?: any; status?: "Correct" | "Not correct" | "Not checked"; }
+export function blankExternalChecks(lot: any, po: any): ExternalCheck[] {
+  const line = (po?.items || []).find((it: any) => String(it.id) === String(lot?.poLineId)) || (po?.items || [])[0] || {};
+  return [
+    { name: "Size (mm / calibre)", expected: lot?.size || line.size || "", max: "", avg: "", min: "", status: "Not checked" },
+    { name: "Unit pack weight (kg)", expected: num(line.kgPerBox) || "", max: "", avg: "", min: "", status: "Not checked" },
+    { name: "Labelling", expected: line.labelSpec || "as agreed", max: "", avg: "", min: "", status: "Not checked" },
+  ];
+}
+/** QH-4: the sample is never typed — it is checked ÷ delivered. */
+export function samplePctOf(ins: any): number {
+  const d = num(ins?.orderedQty), c = num(ins?.checkedQty);
+  return d > 0 ? r2((c / d) * 100) : 0;
+}
+/** QH-7: tolerances live ON the report. A new one starts from the last inspection of the same product. */
+export function tolerancesFromLast(inspections: any[], product: any): Record<string, number> {
+  const mine = (inspections || []).filter(x => S(x?.product).toLowerCase() === S(product).toLowerCase() && x?.tolerances)
+    .sort((a, b) => S(b.date).localeCompare(S(a.date)));
+  return { ...DEFAULT_TOLERANCES, ...(mine[0]?.tolerances || {}), Unacceptable: 0 };
+}
+
+/** QH-6: a count line the way the warehouse counts — pallets × boxes per pallet + loose boxes, kilos derived. */
+export interface CountEntry { lotNumber: string; grade?: "I" | "II" | ""; pallets?: any; boxesPerPallet?: any; looseBoxes?: any; kgPerBox?: any; countedKg?: any; }
+export function countedKgOf(e: CountEntry): number {
+  const boxes = num(e.pallets) * num(e.boxesPerPallet) + num(e.looseBoxes);
+  if (boxes > 0 && num(e.kgPerBox) > 0) return r0(boxes * num(e.kgPerBox));
+  return r0(num(e.countedKg));
+}
+/** QH-6: after sorting, a lot is two piles — the count asks for each class separately (waste has already left). */
+export function countLinesForLot(lot: any): Array<{ grade: "I" | "II" | ""; systemKg: number; label: string }> {
+  const g = gradeStockNow(lot);
+  if (g.II > 0) return [
+    { grade: "I", systemKg: g.I, label: `${lot.number} · class I` },
+    { grade: "II", systemKg: g.II, label: `${lot.number} · class II` },
+  ];
+  return [{ grade: "", systemKg: r0(num(lot?.physicalKg)), label: String(lot?.number || "") }];
 }

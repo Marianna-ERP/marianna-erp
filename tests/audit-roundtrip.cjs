@@ -1747,3 +1747,29 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.31 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.32 — the warehouse's own screen (QH) ══
+(function v69932(){
+  console.log("\n══ 53. v6.99.32: sample %, report-held tolerances, counting by boxes and by class ══");
+  const Z = B("seasonOps.domain.js");
+  t("QH-4: the sample percentage is computed from checked ÷ delivered", () => {
+    eq(Z.samplePctOf({ orderedQty: 14270, checkedQty: 120 }), 0.84); eq(Z.samplePctOf({ orderedQty: 2055, checkedQty: 206 }), 10.02); eq(Z.samplePctOf({ orderedQty: 0, checkedQty: 5 }), 0);
+  });
+  t("QH-7: a report is judged by ITS OWN tolerances, whatever the settings say later", () => {
+    const ins = { defects: [{ category: "Major", name: "Bruising", pct: 4 }], tolerances: { Major: 8 } };
+    ok(Z.inspectionVerdict(ins, { Major: 2 }).acceptable, "the report's own 8 % wins over a later 2 %");
+    eq(Z.inspectionVerdict({ defects: [{ category: "Unacceptable", name: "Pests presence", pct: 1 }], tolerances: { Unacceptable: 5 } }).acceptable, false, "unacceptable stays 0 % even if the report says otherwise");
+    const last = Z.tolerancesFromLast([{ product: "Capsicum", date: "2026-08-15", tolerances: { Major: 6, Minor: 12 } }], "Capsicum");
+    eq(last.Major, 6); eq(last.Minor, 12); eq(last.Unacceptable, 0);
+  });
+  t("QH-6: kilos derive from pallets × boxes per pallet + loose boxes; after sorting the lot is counted per class", () => {
+    eq(Z.countedKgOf({ pallets: 20, boxesPerPallet: 72, looseBoxes: 6, kgPerBox: 13 }), 18798);
+    eq(Z.countedKgOf({ countedKg: 5350 }), 5350, "loose goods still counted in kilos");
+    const sorted = { number: "L1", physicalKg: 5350, movements: [{ type: "RECLASS", qtyKg: 3750, toGrade: "II" }] };
+    const lines = Z.countLinesForLot(sorted);
+    eq(lines.length, 2); eq(lines[0].systemKg, 1600); eq(lines[1].systemKg, 3750);
+    eq(Z.countLinesForLot({ number: "L2", physicalKg: 900, movements: [] }).length, 1, "an unsorted lot is one line");
+  });
+  console.log("v6.99.32 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

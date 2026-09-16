@@ -21,5 +21,9 @@ const mods = [["Dashboard", "./src/Dashboard"], ["Contacts", "./src/Contacts"], 
 mods.forEach(([name, p]) => { let C; try { C = require(path.resolve(p)).default; } catch (e) { failed++; console.log("  ✗", name, "import —", (e.message || "").split("\n")[0].slice(0, 160)); return; } render(name + " (list)", React.createElement(C, { ...common, notes: d.financeNotes || [], setNotes: noop })); });
 // detail states: open the first real record of each module through its "initial selection" props where supported
 const Inventory = require(path.resolve("./src/Inventory")).default; const lot = d.lots.find(l => l.number === "LOT-2026-0106") || d.lots[0];
-render("Inventory detail " + (lot && lot.number), React.createElement(Inventory, { ...common, initialSelectedId: lot && lot.id, initialSelectedNumber: lot && lot.number }));
+render("Inventory detail " + (lot && lot.number), React.createElement(Inventory, { ...common, initialSelectedNumber: lot && lot.number }));
+// the detail must actually be the detail — assert a marker only the lot screen renders
+{ const html = renderToStaticMarkup(React.createElement(Inventory, { ...common, initialSelectedNumber: lot && lot.number }));
+  const ok = html.includes("QUALITY &amp; HANDLING") || html.includes("LOT WORKBENCH");
+  if (ok) { passed++; console.log("  \u2713 Inventory detail really opened (workbench present)"); } else { failed++; console.log("  \u2717 Inventory detail did not open — the smoke was testing the list"); } }
 console.log(`RENDER SMOKE: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);
