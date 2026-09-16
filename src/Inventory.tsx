@@ -1219,9 +1219,14 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
 // (the old toggles unfolded a form under the buttons and read as a wall of text). Ownership is unchanged:
 // the inspection judges, the sorting re-classes, the count corrects — none of them does another's job.
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+// v6.99.33 (owner): the row actions are unmistakable - edit in the same blue as Claims, delete in red.
+const qhBtn: any = { padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" };
+const qhEdit: any = { ...qhBtn, border: "1px solid #2563EB", background: "#EFF6FF", color: "#1D4ED8" };
+const qhPrint: any = { ...qhBtn, border: "1px solid #0E7490", background: "#F0FDFA", color: "#0E7490" };
+const qhDelete: any = { ...qhBtn, border: "1px solid #DC2626", background: "#DC2626", color: "#fff" };
 const r0 = (v: number) => Math.round(v);
 
-function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, defectCatalogue = [], stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "" }: any) {
+function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "" }: any) {
   // v6.99.19 (A-R14-8): once a claim on this lot is finalised or its truck settlement is closed, the facts behind them are frozen.
   const frozenBy = (() => {
     const cl = (claims || []).find((c: any) => ["Settled", "Accepted", "Closed"].includes(String(c.status)) && ((c.subjects || []).some((s: any) => String(s.ref) === String(lot.number)) || String(c.rootDoc?.number) === String(lot.poRef)));
@@ -1236,13 +1241,23 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
   const [qrNos, setQrNos] = React.useState<any>({});
   const [sortF, setSortF] = React.useState<any>(null);
   const [countF, setCountF] = React.useState<any>(null);
-  const cat = (defectCatalogue && defectCatalogue.length ? defectCatalogue : PEPPER_DEFECTS);
+  const cat = PEPPER_DEFECTS;   // v6.99.33 (owner): the producer's defect list is part of the report definition — nothing to configure
   const myIns = (inspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number)).sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
   const myJobs = (lot.sortingJobs || []).slice().sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
   const myCounts = (stockCounts || []).filter((c: any) => (c.lines || []).some((l: any) => String(l.lotNumber) === String(lot.number))).sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
   const po = (pos || []).find((p: any) => String(p.number) === String(lot.poRef)) || null;
   const g = gradeSplit(lot);
 
+
+  // v6.99.33 (owner): a sorting job can be corrected or removed. The ledger is never rewritten: its RECLASS / DAMAGE
+  // movements are VOIDED (visible, with a reason) and the job record is dropped; editing then re-posts a fresh job.
+  function voidJob(j: any, why: string) {
+    const src = `sorting:${j.id}`;
+    const next = { ...lot, movements: (lot.movements || []).map((m: any) => String(m.source || "") === src && !m.voided ? { ...m, voided: true, voidReason: `sorting job ${why} on ${localTodayISO()}` } : m), sortingJobs: (lot.sortingJobs || []).filter((x: any) => String(x.id) !== String(j.id)) };
+    const healed = recompute(next, next.movements);
+    setLots && setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? healed : l));
+    recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job of ${j.date} ${why} — its movements voided` });
+  }
   function openInspection(existing?: any) {
     setIns(existing ? { ...existing } : blankInspection(lot, { nextId, todayISO: localTodayISO, po, tolerances: tolerancesFromLast(inspections, lot.product) }));
     setWin("inspect");
@@ -1292,9 +1307,9 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
             <span style={{ fontWeight: 800, color: v.acceptable ? "#16A34A" : "#DC2626" }}>{v.acceptable ? "Acceptable" : "Not acceptable"}</span>
             <span style={{ color: "#64748B" }}>· {x.verdict}</span>
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              {!frozenBy && <SmallButton onClick={() => openInspection(x)}>Edit</SmallButton>}
-              <SmallButton onClick={() => { const no = lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</SmallButton>
-              {!frozenBy && setInspections && <SmallButton kind="danger" onClick={() => { if (!window.confirm(`Cancel the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).filter((p: any) => String(p.id) !== String(x.id))); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} cancelled` }); }}>Cancel</SmallButton>}
+              {!frozenBy && <button onClick={() => openInspection(x)} style={qhEdit}>✎ Edit</button>}
+              <button style={qhPrint} onClick={() => { const no = lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</button>
+              {!frozenBy && setInspections && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).filter((p: any) => String(p.id) !== String(x.id))); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} deleted` }); }}>🗑 Delete</button>}
             </span>
             <InspectionPrintDoc x={x} lot={lot} no={qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} />
           </div>
@@ -1304,7 +1319,10 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
             <span style={{ width: 20 }}>⚖</span><span>{j.date}</span>
             <span>sorted <b>{Math.round(num(j.kgIn)).toLocaleString("pl-PL")} kg</b> → I {Math.round(num(j.classIKg)).toLocaleString("pl-PL")} · II {Math.round(num(j.classIIKg)).toLocaleString("pl-PL")} · waste {Math.round(num(j.wasteKg)).toLocaleString("pl-PL")}</span>
             {j.by ? <span>· {j.by}</span> : null}{j.hours ? <span>· {j.hours} h</span> : null}
-            <span style={{ marginLeft: "auto", color: "#94A3B8", fontSize: 10.5 }}>to correct: void its RECLASS / DAMAGE in the history and post again</span>
+            <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+              {!frozenBy && <button style={qhEdit} onClick={() => { voidJob(j, "corrected"); setSortF({ date: j.date, followsInspection: j.followsInspection || "", kgIn: j.kgIn, classIKg: j.classIKg, classIIKg: j.classIIKg, wasteKg: j.wasteKg, by: j.by || "", hours: j.hours || "", note: j.note || "" }); setWin("sort"); }}>✎ Edit</button>}
+              {!frozenBy && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the sorting job of ${j.date}? Its RECLASS and DAMAGE movements are voided (they stay visible in the history).`)) return; voidJob(j, "deleted"); }}>🗑 Delete</button>}
+            </span>
           </div>
         ))}
         {myCounts.map((c: any) => { const mine = (c.lines || []).filter((l: any) => String(l.lotNumber) === String(lot.number)); return (
@@ -1336,7 +1354,7 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
       )}
       {win === "count" && countF && (
         <CountWindow f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={() => {
-          const lines = (countF.rows || []).map((r: any) => ({ lotNumber: lot.number, grade: r.grade, countedKg: countedKgOf(r), systemKg: r.systemKg, diffKg: r0(countedKgOf(r) - num(r.systemKg)), pallets: r.pallets, boxesPerPallet: r.boxesPerPallet, looseBoxes: r.looseBoxes }));
+          const lines = (countF.rows || []).filter((r: any) => !r.informational).map((r: any) => ({ lotNumber: lot.number, grade: r.grade, countedKg: countedKgOf(r), systemKg: r.systemKg, diffKg: r0(countedKgOf(r) - num(r.systemKg)), pallets: r.pallets, boxesPerPallet: r.boxesPerPallet, looseBoxes: r.looseBoxes }));
           const count = { id: nextId(), date: countF.date || localTodayISO(), locationId: lot.locationId, by: countF.by || userName || "", lines };
           const res = applyStockCount(lots || [], count as any, countF.reason || "stock count", { nextId });
           setLots && setLots((prev: any[]) => (prev || []).map((l: any) => { const hit = (res.lots || []).find((x: any) => x.id === l.id); return hit ? recompute(hit, hit.movements) : l; }));
@@ -1387,9 +1405,11 @@ function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
         <QhField label="Location of inspection"><Sel value={ins.stage} onChange={(e: any) => set("stage", e.target.value)}><option value="pre-unloading">On arrival / pre-unloading</option><option value="warehouse">In our warehouse</option><option value="client">At the client</option><option value="other">Other</option></Sel></QhField>
         <QhField label="Inspector"><input value={ins.inspector || ""} onChange={e => set("inspector", e.target.value)} style={qhInp} /></QhField>
         <QhField label="Temperature (°C)"><input value={ins.temperature ?? ""} onChange={e => set("temperature", e.target.value)} style={qhInp} /></QhField>
-        <QhField label="Quantity delivered"><input type="number" value={ins.orderedQty ?? ""} onChange={e => set("orderedQty", e.target.value)} style={qhInp} /></QhField>
-        <QhField label="Quantity checked"><input type="number" value={ins.checkedQty ?? ""} onChange={e => set("checkedQty", e.target.value)} style={qhInp} /></QhField>
-        <QhField label="Unit"><Sel value={ins.unit || "kg"} onChange={(e: any) => set("unit", e.target.value)}><option value="kg">kg</option><option value="boxes">boxes</option></Sel></QhField>
+        <QhField label={`Quantity delivered (${ins.unit || "kg"})`}><input type="number" value={ins.orderedQty ?? ""} onChange={e => set("orderedQty", e.target.value)} style={qhInp} /></QhField>
+        <QhField label={`Quantity checked (${ins.unit || "kg"})`} hint="same unit as delivered"><input type="number" value={ins.checkedQty ?? ""} onChange={e => set("checkedQty", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="Unit" hint="applies to both quantities"><Sel value={ins.unit || "kg"} onChange={(e: any) => { const u = e.target.value; const kpb = num((ins.externalChecks || []).find((c: any) => String(c.name).startsWith("Unit pack weight"))?.expected) || 0;
+        setIns((x: any) => { const conv = (val: any) => { const n = num(val); if (!n || !kpb) return val; return u === "boxes" ? Math.round(n / kpb) : Math.round(n * kpb); };
+          return { ...x, unit: u, orderedQty: conv(x.orderedQty), checkedQty: conv(x.checkedQty) }; }); }}><option value="kg">kg</option><option value="boxes">boxes</option></Sel></QhField>
         <QhField label="Sample %" hint="computed: checked ÷ delivered"><div style={{ ...qhInp, background: "#F8FAFC", fontWeight: 800 }}>{samplePctOf(ins)} %</div></QhField>
       </div>
 
@@ -1494,16 +1514,16 @@ function CountWindow({ f, setF, lot, onClose, onSave }: any) {
       </div>
       {(f.rows || []).map((r: any, i: number) => { const kg = countedKgOf(r); const diff = r0(kg - num(r.systemKg)); return (
         <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 0.9fr 0.8fr 0.8fr 1fr 1fr", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F8FAFC" }}>
-          <div style={{ fontSize: 12, fontWeight: 700 }}>{r.label}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: r.informational ? "#94A3B8" : "#111" }}>{r.label}</div>
           <input type="number" value={r.pallets ?? ""} onChange={e => setRow(i, "pallets", e.target.value)} style={qhInp} />
           <input type="number" value={r.boxesPerPallet ?? ""} onChange={e => setRow(i, "boxesPerPallet", e.target.value)} style={qhInp} />
           <input type="number" value={r.looseBoxes ?? ""} onChange={e => setRow(i, "looseBoxes", e.target.value)} style={qhInp} />
           <input type="number" value={r.kgPerBox ?? ""} onChange={e => setRow(i, "kgPerBox", e.target.value)} style={qhInp} />
           <input type="number" value={kg > 0 ? kg : (r.countedKg ?? "")} onChange={e => setRow(i, "countedKg", e.target.value)} disabled={kg > 0} title={kg > 0 ? "derived from the boxes" : "loose goods — type the kilos"} style={{ ...qhInp, background: kg > 0 ? "#F8FAFC" : "#fff", fontWeight: 700 }} />
-          <div style={{ fontSize: 11.5 }}>{Math.round(num(r.systemKg)).toLocaleString("pl-PL")} · <b style={{ color: diff === 0 ? "#16A34A" : "#B45309" }}>{diff >= 0 ? "+" : ""}{diff}</b></div>
+          <div style={{ fontSize: 11.5 }}>{r.informational ? <span style={{ color: "#94A3B8" }}>not adjusted</span> : <>{Math.round(num(r.systemKg)).toLocaleString("pl-PL")} · <b style={{ color: diff === 0 ? "#16A34A" : "#B45309" }}>{diff >= 0 ? "+" : ""}{diff}</b></>}</div>
         </div>
       ); })}
-      <div style={{ marginTop: 8, fontSize: 11, color: "#64748B" }}>Waste is already out of stock and is not counted. A difference beyond 1 kg becomes a reasoned adjustment on that class.</div>
+      <div style={{ marginTop: 8, fontSize: 11, color: "#64748B" }}>Waste and damaged boxes were written off when they were found — count them on their own line if they are still on the floor; that figure never adjusts the stock. A difference beyond 1 kg on class I or class II becomes a reasoned adjustment on that class.</div>
     </QhWindow>
   );
 }
@@ -1511,38 +1531,70 @@ function CountWindow({ f, setF, lot, onClose, onSave }: any) {
 /** The printable quality report (hidden; printed by number). */
 function InspectionPrintDoc({ x, lot, no }: any) {
   const v = inspectionVerdict(x);
-  const cell = { border: "1px solid #999", padding: "3px 6px", fontSize: 11 } as any;
+  // v6.99.33 (owner): readable on paper — wide first columns that never wrap, centred figures, air between the sections.
+  const cell = { border: "1px solid #999", padding: "4px 7px", fontSize: 11, textAlign: "center" } as any;
+  const left = { ...cell, textAlign: "left", whiteSpace: "nowrap" } as any;
   const hd = { ...cell, background: "#F3F4F6", fontWeight: 700 } as any;
+  const hdL = { ...left, background: "#F3F4F6", fontWeight: 700 } as any;
+  const section = { fontWeight: 800, margin: "20px 0 6px", fontSize: 12.5, letterSpacing: "0.03em" } as any;
+  const green = "#166534", red = "#B91C1C";
   return (
-    <div id={`insp-print-${x.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 760, background: "#fff", fontFamily: "Arial", fontSize: 12, padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 8, marginBottom: 10 }}>
+    <div id={`insp-print-${x.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", fontFamily: "Arial", fontSize: 12, padding: 20 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 10, marginBottom: 10 }}>
         <PrintLogo width={180} />
         <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ fontSize: 15, fontWeight: 800 }}>QUALITY REPORT</div><div style={{ fontSize: 13, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{no || ""}</div></div>
       </div>
-      <h3 style={{ margin: "0 0 6px" }}>{lot.product}{lot.variety ? ` — ${lot.variety}` : ""} · lot {lot.number}</h3>
+      <div style={{ textAlign: "center", margin: "22px 0 24px" }}>
+        <div style={{ fontSize: 17, fontWeight: 800 }}>{lot.product}{lot.variety ? ` — ${lot.variety}` : ""}</div>
+        <div style={{ fontSize: 13, color: "#444", marginTop: 4 }}>{lot.number}</div>
+      </div>
+
       <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
-        <tr><td style={hd}>Date</td><td style={cell}>{x.date}</td><td style={hd}>Location</td><td style={cell}>{x.stage}</td></tr>
-        <tr><td style={hd}>Inspector</td><td style={cell}>{x.inspector || "—"}</td><td style={hd}>Temperature</td><td style={cell}>{x.temperature ?? "—"}</td></tr>
-        <tr><td style={hd}>Quantity delivered</td><td style={cell}>{num(x.orderedQty).toLocaleString("pl-PL")} {x.unit || "kg"}</td><td style={hd}>Quantity checked</td><td style={cell}>{num(x.checkedQty).toLocaleString("pl-PL")} {x.unit || "kg"} ({samplePctOf(x)} %)</td></tr>
+        <tr><td style={hdL}>Date</td><td style={cell}>{x.date}</td><td style={hdL}>Location</td><td style={cell}>{x.stage}</td></tr>
+        <tr><td style={hdL}>Inspector</td><td style={cell}>{x.inspector || "—"}</td><td style={hdL}>Temperature</td><td style={cell}>{x.temperature ?? "—"}</td></tr>
+        <tr><td style={hdL}>Quantity delivered</td><td style={cell}>{num(x.orderedQty).toLocaleString("pl-PL")} {x.unit || "kg"}</td><td style={hdL}>Quantity checked</td><td style={cell}>{num(x.checkedQty).toLocaleString("pl-PL")} {x.unit || "kg"} ({samplePctOf(x)} %)</td></tr>
       </tbody></table>
-      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>EXTERNAL QUALITY</div>
-      <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
-        <tr>{["Check", "Expected", "Max", "Avg", "Min", "Result"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
-        {(x.externalChecks || []).map((c: any, i: number) => <tr key={i}>{[c.name, c.expected ?? "—", c.max ?? "—", c.avg ?? "—", c.min ?? "—", c.status || "Not checked"].map((val: any, k: number) => <td key={k} style={cell}>{val}</td>)}</tr>)}
-      </tbody></table>
-      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>DEFECTS</div>
-      <table style={{ borderCollapse: "collapse", width: "100%" }}><tbody>
-        <tr>{["Category", "Defect", "% found"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
-        {(x.defects || []).map((d: any, i: number) => <tr key={i}><td style={cell}>{d.category}</td><td style={cell}>{d.name}</td><td style={{ ...cell, textAlign: "right" }}>{d.pct}</td></tr>)}
-      </tbody></table>
-      <table style={{ borderCollapse: "collapse", marginTop: 8, width: "100%" }}><tbody>
-        <tr>{["Category", "Total %", "Tolerance %", "Result"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
-        {v.rows.map((r: any) => <tr key={r.category}><td style={cell}>{r.category} defects</td><td style={{ ...cell, textAlign: "right" }}>{r.pct}</td><td style={{ ...cell, textAlign: "right" }}>{r.tolerance}</td><td style={{ ...cell, fontWeight: 700 }}>{r.acceptable ? "Acceptable" : "Not acceptable"}</td></tr>)}
-        <tr><td style={{ ...cell, fontWeight: 800 }}>Total quality report</td><td style={{ ...cell, textAlign: "right", fontWeight: 800 }}>{v.totalPct}</td><td style={cell} /><td style={{ ...cell, fontWeight: 800 }}>{v.acceptable ? "Acceptable" : "Not acceptable"}</td></tr>
-      </tbody></table>
-      <div style={{ marginTop: 6 }}>Verdict: <b>{x.verdict}</b>{x.observations ? ` · ${x.observations}` : ""}</div>
-      <div style={{ marginTop: 4, fontSize: 11 }}>{v.advice}</div>
-      <div style={{ marginTop: 12, fontSize: 9.5, color: "#666" }}>Issued from MARIANNA ERP · recorded in the audit trail.</div>
+
+      <div style={section}>EXTERNAL QUALITY</div>
+      <table style={{ borderCollapse: "collapse", width: "100%", tableLayout: "fixed" }}>
+        <colgroup><col style={{ width: "34%" }} /><col style={{ width: "18%" }} /><col style={{ width: "12%" }} /><col style={{ width: "12%" }} /><col style={{ width: "12%" }} /><col style={{ width: "12%" }} /></colgroup>
+        <tbody>
+          <tr><th style={hdL}>Check</th>{["Expected", "Max", "Avg", "Min", "Result"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
+          {(x.externalChecks || []).map((c: any, i: number) => <tr key={i}><td style={left}>{c.name}</td>{[c.expected ?? "—", c.max ?? "—", c.avg ?? "—", c.min ?? "—", c.status || "Not checked"].map((val: any, k: number) => <td key={k} style={cell}>{val}</td>)}</tr>)}
+        </tbody>
+      </table>
+
+      <div style={section}>DEFECTS</div>
+      <table style={{ borderCollapse: "collapse", width: "100%", tableLayout: "fixed" }}>
+        <colgroup><col style={{ width: "22%" }} /><col style={{ width: "58%" }} /><col style={{ width: "20%" }} /></colgroup>
+        <tbody>
+          <tr><th style={hdL}>Category</th><th style={hdL}>Defect</th><th style={hd}>% found</th></tr>
+          {!(x.defects || []).length && <tr><td style={left} colSpan={3}>— none recorded —</td></tr>}
+          {(x.defects || []).map((d: any, i: number) => <tr key={i}><td style={left}>{d.category}</td><td style={{ ...left, whiteSpace: "normal" }}>{d.name}</td><td style={cell}>{d.pct}</td></tr>)}
+        </tbody>
+      </table>
+
+      <table style={{ borderCollapse: "collapse", marginTop: 14, width: "100%", tableLayout: "fixed" }}>
+        <colgroup><col style={{ width: "34%" }} /><col style={{ width: "16%" }} /><col style={{ width: "16%" }} /><col style={{ width: "14%" }} /><col style={{ width: "20%" }} /></colgroup>
+        <tbody>
+          <tr><th style={hdL}>Category</th>{["Total %", "Tolerance %", "Net %", "Result"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
+          {v.rows.map((r: any) => <tr key={r.category}>
+            <td style={left}>{r.category} defects</td><td style={cell}>{r.pct}</td><td style={cell}>{r.tolerance}</td><td style={{ ...cell, fontWeight: 700 }}>{r.net}</td>
+            <td style={{ ...cell, fontWeight: 800, color: r.acceptable ? green : red }}>{r.acceptable ? "Acceptable" : "Not acceptable"}</td>
+          </tr>)}
+          <tr style={{ background: "#F9FAFB" }}>
+            <td style={{ ...left, fontWeight: 800 }}>Total quality report</td>
+            <td style={{ ...cell, fontWeight: 800 }}>{v.totalPct}</td><td style={{ ...cell, fontWeight: 800 }}>{v.totalTolerance}</td><td style={{ ...cell, fontWeight: 800 }}>{v.totalNet}</td>
+            <td style={{ ...cell, fontWeight: 800, color: v.acceptable ? green : red }}>{v.acceptable ? "Acceptable" : "Not acceptable"}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style={{ margin: "22px 0 6px", fontSize: 12.5 }}>Verdict: <b>{x.verdict}</b>{x.observations ? ` · ${x.observations}` : ""}</div>
+      <div style={{ margin: "6px 0 22px", fontSize: 13, fontWeight: 800, color: v.recommendation === "Reject" ? red : v.recommendation === "Sort" ? "#B45309" : green }}>
+        Recommendation: {v.recommendation} <span style={{ fontWeight: 500, color: "#444", fontSize: 11.5 }}>— {v.advice}</span>
+      </div>
+      <div style={{ fontSize: 9.5, color: "#666", borderTop: "1px solid #DDD", paddingTop: 8 }}>Issued from MARIANNA ERP · {no || ""} · recorded in the audit trail.</div>
     </div>
   );
 }
@@ -2143,7 +2195,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
 // v6.79.0 (W-2): the legacy lot-side Claim Request Form was retired — claims are
 // one document type with one numbering scheme in the Claims module (D-13).
 
-export default function Inventory({ initialSelectedNumber = "", defectTolerances: extDefectTolerances = {}, lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [] }: any = {}) {
+export default function Inventory({ initialSelectedNumber = "", lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [] }: any = {}) {
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode } = useConfirm(); // Batch 2 (P2-6) + v6.89.0 prompt
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
@@ -2427,7 +2479,7 @@ export default function Inventory({ initialSelectedNumber = "", defectTolerances
             if (close) setSettlementLot(null);
           }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
-          season={{ lots, orders: liveSOs, setLots: extSetLots, defectTolerances: extDefectTolerances, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
+          season={{ lots, orders: liveSOs, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
           pos={extPOs}
           allLots={lots}
           lotClaims={claimsForLot(extClaims || [], selected?.number).filter((c: any) => c.direction === "RECOVERY")}

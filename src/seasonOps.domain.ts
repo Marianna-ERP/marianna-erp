@@ -11,6 +11,7 @@
 const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
 const r0 = (v: number) => Math.round(v);
+const r1 = (v: number) => Math.round(v * 10) / 10;
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
 // ── SUPPLIER-DELIVERY SHIPMENT (decision 1) ─────────────────────────────────
@@ -119,27 +120,28 @@ export const PEPPER_DEFECTS: DefectCatalogueEntry[] = [
 // ── v6.99.31 (owner): TOLERANCE per category decides Acceptable / Not acceptable. Unacceptable is always 0 %;
 // the other three are editable per product in Settings. These defaults make the report work from the first day.
 export const DEFAULT_TOLERANCES: Record<string, number> = { Unacceptable: 0, Progressive: 1, Major: 5, Minor: 10 };
-export function tolerancesFor(settings: any, product: any): Record<string, number> {
-  const per = (settings || {})[String(product || "").toLowerCase()] || (settings || {})["*"] || {};
-  return { ...DEFAULT_TOLERANCES, ...per, Unacceptable: 0 };
-}
+// v6.99.33: tolerancesFor() retired with the Settings panel — a report carries its own tolerances (tolerancesFromLast seeds a new one).
 /** The verdict of a quality report: per-category totals against their tolerance, then the whole sheet. */
 export function inspectionVerdict(ins: Inspection, tolerances?: Record<string, number>): {
-  rows: Array<{ category: string; pct: number; tolerance: number; acceptable: boolean }>; totalPct: number; acceptable: boolean; advice: string;
+  rows: Array<{ category: string; pct: number; tolerance: number; net: number; acceptable: boolean }>; totalPct: number; totalTolerance: number; totalNet: number; acceptable: boolean; advice: string; recommendation: "Accept" | "Sort" | "Reject";
 } {
   const t = inspectionTotals(ins);
   const tol0 = { ...DEFAULT_TOLERANCES, ...(tolerances || {}), ...(ins?.tolerances || {}), Unacceptable: 0 };   // v6.99.32 (QH-7): the report keeps the limits it was judged against
+  // v6.99.33 (owner): NET % = what exceeds the tolerance, never negative — it is the net figure the verdict reads.
   const rows = DEFECT_CATEGORIES.map(cat => {
     const pct = r2(t.byCategory[cat] || 0);
     const tol = num(tol0[cat]);
-    return { category: cat, pct, tolerance: tol, acceptable: pct <= tol + 1e-9 };
+    const net = r2(Math.max(0, pct - tol));
+    return { category: cat, pct, tolerance: tol, net, acceptable: net <= 1e-9 };
   });
   const acceptable = rows.every(r => r.acceptable);
   const unacceptableHit = rows.find(r => r.category === "Unacceptable" && r.pct > 0);
+  // v6.99.33 (owner): the recommendation — reject on any unacceptable defect, sort when a tolerance is exceeded, otherwise accept.
+  const recommendation: "Accept" | "Sort" | "Reject" = unacceptableHit ? "Reject" : (acceptable ? "Accept" : "Sort");
   const advice = unacceptableHit ? `Reject — unacceptable defects found (${unacceptableHit.pct} %).`
-    : acceptable ? "Accept — within the agreed tolerances."
-    : `Sort — combined defects ${t.totalPct} % exceed the tolerance for ${rows.filter(r => !r.acceptable).map(r => r.category.toLowerCase()).join(" and ")} defects.`;
-  return { rows, totalPct: t.totalPct, acceptable, advice };
+    : acceptable ? "Accept — every category is within its tolerance."
+    : `Sort — ${rows.filter(r => !r.acceptable).map(r => `${r.category.toLowerCase()} ${r.net} % over tolerance`).join(", ")}.`;
+  return { rows, totalPct: t.totalPct, totalTolerance: r2(rows.reduce((s, r) => s + r.tolerance, 0)), totalNet: r2(rows.reduce((s, r) => s + r.net, 0)), acceptable, advice, recommendation };
 }
 export function defectsFor(catalogue: DefectCatalogueEntry[], product: any): DefectCatalogueEntry[] {
   const p = S(product).toLowerCase();
@@ -305,8 +307,11 @@ export function blankExternalChecks(lot: any, po: any): ExternalCheck[] {
 }
 /** QH-4: the sample is never typed — it is checked ÷ delivered. */
 export function samplePctOf(ins: any): number {
+  // v6.99.33 (owner): both figures are in the inspection's own unit — a percentage of kilos against boxes is meaningless.
   const d = num(ins?.orderedQty), c = num(ins?.checkedQty);
-  return d > 0 ? r2((c / d) * 100) : 0;
+  if (!(d > 0) || !(c > 0)) return 0;
+  const pct = (c / d) * 100;
+  return pct >= 10 ? r1(pct) : r2(pct);   // 10,02 % reads better than 10,0248 %; a small sample keeps two decimals
 }
 /** QH-7: tolerances live ON the report. A new one starts from the last inspection of the same product. */
 export function tolerancesFromLast(inspections: any[], product: any): Record<string, number> {
@@ -323,11 +328,16 @@ export function countedKgOf(e: CountEntry): number {
   return r0(num(e.countedKg));
 }
 /** QH-6: after sorting, a lot is two piles — the count asks for each class separately (waste has already left). */
-export function countLinesForLot(lot: any): Array<{ grade: "I" | "II" | ""; systemKg: number; label: string }> {
+export function countLinesForLot(lot: any): Array<{ grade: "I" | "II" | "WASTE" | ""; systemKg: number; label: string; informational?: boolean }> {
   const g = gradeStockNow(lot);
+  // v6.99.33 (owner): waste and damaged boxes are often still on the floor when the count is taken. They left the STOCK
+  // when they were written off, so they must never be counted into class I — they get their own informational line
+  // whose figure never adjusts anything.
+  const wasteLine = g.waste > 0 ? [{ grade: "WASTE" as const, systemKg: 0, label: `${lot.number} · waste / damaged (written off — not in stock)`, informational: true }] : [];
   if (g.II > 0) return [
     { grade: "I", systemKg: g.I, label: `${lot.number} · class I` },
     { grade: "II", systemKg: g.II, label: `${lot.number} · class II` },
+    ...wasteLine,
   ];
-  return [{ grade: "", systemKg: r0(num(lot?.physicalKg)), label: String(lot?.number || "") }];
+  return [{ grade: "", systemKg: r0(num(lot?.physicalKg)), label: String(lot?.number || "") }, ...wasteLine];
 }

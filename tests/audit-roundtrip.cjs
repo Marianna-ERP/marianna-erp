@@ -1732,17 +1732,16 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("A-R22-2: the owner's own sheet reproduced — 4 % rots, 3.5 % mechanical = 7.5 %, sorting advised", () => {
     const ins = { defects: [ { category: "Progressive", name: "Rots and mould", pct: 4 }, { category: "Major", name: "Mechanical damage (more than 1 cm² on surface)", pct: 3.5 } ] };
-    const v = Z.inspectionVerdict(ins, Z.tolerancesFor({}, "Capsicum"));
+    const v = Z.inspectionVerdict(ins);
     eq(v.totalPct, 7.5); ok(!v.acceptable);
     eq(v.rows.find(r => r.category === "Progressive").acceptable, false, "4 % rots is over the 1 % tolerance");
     eq(v.rows.find(r => r.category === "Minor").acceptable, true, "no minor defects found — that category passes");
     ok(v.advice.startsWith("Sort"));
   });
   t("A-R22-2: any unacceptable defect rejects the consignment, whatever the totals", () => {
-    const v = Z.inspectionVerdict({ defects: [{ category: "Unacceptable", name: "Pests presence", pct: 0.5 }] }, Z.tolerancesFor({}, "Capsicum"));
+    const v = Z.inspectionVerdict({ defects: [{ category: "Unacceptable", name: "Pests presence", pct: 0.5 }] });
     ok(!v.acceptable); ok(v.advice.startsWith("Reject"));
-    eq(Z.tolerancesFor({ capsicum: { Unacceptable: 3, Major: 7 } }, "Capsicum").Unacceptable, 0, "unacceptable can never be given a tolerance");
-    eq(Z.tolerancesFor({ capsicum: { Major: 7 } }, "Capsicum").Major, 7, "the product's own tolerance wins");
+    eq(Z.inspectionVerdict({ tolerances: { Unacceptable: 3 }, defects: [{ category: "Unacceptable", name: "Pests presence", pct: 0.5 }] }).acceptable, false, "unacceptable can never be given a tolerance");
   });
   console.log("v6.99.31 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
@@ -1753,7 +1752,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ 53. v6.99.32: sample %, report-held tolerances, counting by boxes and by class ══");
   const Z = B("seasonOps.domain.js");
   t("QH-4: the sample percentage is computed from checked ÷ delivered", () => {
-    eq(Z.samplePctOf({ orderedQty: 14270, checkedQty: 120 }), 0.84); eq(Z.samplePctOf({ orderedQty: 2055, checkedQty: 206 }), 10.02); eq(Z.samplePctOf({ orderedQty: 0, checkedQty: 5 }), 0);
+    eq(Z.samplePctOf({ orderedQty: 14270, checkedQty: 120 }), 0.84); eq(Z.samplePctOf({ orderedQty: 2055, checkedQty: 206 }), 10, "a sample over 10 % reads to one decimal"); eq(Z.samplePctOf({ orderedQty: 0, checkedQty: 5 }), 0);
   });
   t("QH-7: a report is judged by ITS OWN tolerances, whatever the settings say later", () => {
     const ins = { defects: [{ category: "Major", name: "Bruising", pct: 4 }], tolerances: { Major: 8 } };
@@ -1771,5 +1770,35 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Z.countLinesForLot({ number: "L2", physicalKg: 900, movements: [] }).length, 1, "an unsorted lot is one line");
   });
   console.log("v6.99.32 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.33 — net %, recommendation, waste line, sample % ══
+(function v69933(){
+  console.log("\n══ 54. v6.99.33: net % over tolerance, the recommendation, the waste line ══");
+  const Z = B("seasonOps.domain.js");
+  t("net % is what exceeds the tolerance and is never negative; the totals row sums each column", () => {
+    const ins = { tolerances: { Progressive: 1, Major: 5, Minor: 10 }, defects: [ { category: "Progressive", name: "Rots and mould", pct: 4 }, { category: "Major", name: "Bruising", pct: 3.5 }, { category: "Minor", name: "Minor scarring", pct: 3 } ] };
+    const v = Z.inspectionVerdict(ins);
+    eq(v.rows.find(r => r.category === "Progressive").net, 3, "4 % against a 1 % tolerance");
+    eq(v.rows.find(r => r.category === "Major").net, 0, "3.5 % inside a 5 % tolerance is zero, never −1.5");
+    eq(v.rows.find(r => r.category === "Minor").net, 0);
+    eq(v.totalPct, 10.5); eq(v.totalTolerance, 16); eq(v.totalNet, 3);
+    eq(v.recommendation, "Sort");
+  });
+  t("the recommendation: reject on an unacceptable defect, accept when everything is within tolerance", () => {
+    eq(Z.inspectionVerdict({ defects: [{ category: "Unacceptable", name: "Pests presence", pct: 0.2 }] }).recommendation, "Reject");
+    eq(Z.inspectionVerdict({ tolerances: { Major: 5 }, defects: [{ category: "Major", name: "Bruising", pct: 4 }] }).recommendation, "Accept");
+  });
+  t("a sorted lot is counted as class I, class II and a WASTE line that never adjusts stock", () => {
+    const lot = { number: "L1", physicalKg: 5350, movements: [ { type: "RECLASS", qtyKg: 3750, toGrade: "II" }, { type: "DAMAGE", qtyKg: 200, source: "sorting:1" } ] };
+    const lines = Z.countLinesForLot(lot);
+    eq(lines.length, 3); eq(lines[0].systemKg, 1600); eq(lines[1].systemKg, 3750);
+    eq(lines[2].grade, "WASTE"); eq(lines[2].systemKg, 0); eq(lines[2].informational, true);
+  });
+  t("the sample percentage reads both quantities in the inspection's own unit", () => {
+    eq(Z.samplePctOf({ orderedQty: 2055, checkedQty: 206 }), 10); eq(Z.samplePctOf({ orderedQty: 14270, checkedQty: 120 }), 0.84);
+  });
+  console.log("v6.99.33 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();

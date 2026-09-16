@@ -444,21 +444,8 @@ function UsersPanel({ users = [], setUsers = null }: any) {
 
 
 // ── v6.89.0: DEFECT CATALOGUE (per product · category · defect) — drives the inspection form ──
-function DefectCataloguePanel({ defectCatalogue = [], setDefectCatalogue = null, defectTolerances = {}, setDefectTolerances = null }: any) {
-  // v6.99.31 (owner): the tolerance per category decides Acceptable / Not acceptable on the quality report.
-  // Unacceptable is fixed at 0 % — a single pest or foreign object rejects the consignment, whatever the percentages say.
-  const [txt, setTxt] = useState((defectCatalogue || []).map((d: any) => `${d.product} | ${d.category} | ${d.name}`).join("\n"));
-  if (typeof setDefectCatalogue !== "function") return null;
-  return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
-      {/* v6.99.32 (QH-7, owner ruling): the tolerances moved ONTO the quality report — a report must keep the limits it was judged against. Set them in the inspection window; a new report starts from the last one for that product. */}
-      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🔬 Defect catalogue</div>
-      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>One line per defect: <b>product | category | defect</b> — categories: Unacceptable, Progressive, Major, Minor (the Daifressh structure). Empty = a starter list for peppers is offered in the inspection form.</div>
-      <textarea value={txt} onChange={e => setTxt(e.target.value)} rows={8} placeholder={"Capsicum | Progressive | Rots / moulds\nCapsicum | Major | Sunburn"} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }} />
-      <button onClick={() => setDefectCatalogue(txt.split("\n").map(l => l.split("|").map(x => x.trim())).filter(p => p.length === 3 && p[2]).map(([product, category, name]) => ({ product, category, name })))} style={{ marginTop: 8, padding: "7px 14px", borderRadius: 7, border: "none", background: "#0E7490", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Save catalogue</button>
-    </div>
-  );
-}
+// v6.99.33 (owner): the defect catalogue panel retired — the producer's defect list is part of the quality report's definition
+// (seasonOps.domain PEPPER_DEFECTS) and the tolerances travel on each report. Nothing about quality is configured here any more.
 
 
 // ── v6.99.0 (FN-7): REFERENCE FX RATES — the season's rates, set by the owner; documents still lock their own rate ──
@@ -524,16 +511,12 @@ export default function Settings({
   setPackagingTypes,
   users = [],
   setUsers = null,
-  defectCatalogue = [],
-  setDefectCatalogue = null,
   fxSettings = {},
   setFxSettings = null,
   company = {},
   setCompany = null,
   numbering = {},
   setNumbering = null,
-  defectTolerances = {},
-  setDefectTolerances = null,
 }: {
   reloadFromStorage: () => void;
   refStores?: any;
@@ -548,16 +531,12 @@ export default function Settings({
   setPackagingTypes?: (v: any) => void;
   users?: any[];
   setUsers?: any;
-  defectCatalogue?: any[];
-  setDefectCatalogue?: any;
   fxSettings?: any;
   setFxSettings?: any;
   company?: any;
   setCompany?: any;
   numbering?: any;
   setNumbering?: any;
-  defectTolerances?: any;
-  setDefectTolerances?: any;
 }) {
   const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
   const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
@@ -805,7 +784,6 @@ export default function Settings({
         <FxSettingsPanel fxSettings={fxSettings} setFxSettings={setFxSettings} />
         <NumberingPanel numbering={numbering} setNumbering={setNumbering} />
         <UsersPanel users={users} setUsers={setUsers} />
-        <DefectCataloguePanel defectCatalogue={defectCatalogue} setDefectCatalogue={setDefectCatalogue} defectTolerances={defectTolerances} setDefectTolerances={setDefectTolerances} />
 
         {/* v6.38.0 (R1-C): reference data opens in dedicated editor windows */}
         <ManageCard
