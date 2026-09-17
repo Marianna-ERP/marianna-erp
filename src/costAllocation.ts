@@ -86,3 +86,43 @@ export function allocateShipmentCostsToLots(shipment: any, lots: any[], mapper: 
     return { ...lot, costs: [...kept, ...additions] };
   });
 }
+
+
+// ── v6.99.37 (QA-2/QA-3, owner approval 16 Sept): a lot's cost lines are INVENTORY's fact ──
+// Every module that adds or removes one goes through these. Three private implementations of the
+// "replace by source" discipline (shipments, warehouse invoices, claims) is how landed cost silently
+// doubles; one function is one place to get right — and one place the DDL has to migrate.
+
+/** Remove every cost line a source produced (a cancelled shipment must leave no phantom landed cost). */
+export function removeCostsBySource(lots: any[], sourcePrefix: string): { lots: any[]; touched: number } {
+  const pre = String(sourcePrefix || "");
+  if (!pre) return { lots: lots || [], touched: 0 };
+  let touched = 0;
+  const next = (lots || []).map(lot => {
+    const had = (lot?.costs || []).some((c: any) => String(c?.source || "").startsWith(pre));
+    if (!had) return lot;
+    touched++;
+    return { ...lot, costs: (lot.costs || []).filter((c: any) => !String(c?.source || "").startsWith(pre)) };
+  });
+  return { lots: next, touched };
+}
+
+/** Write one invoice's share onto each lot, replacing anything this invoice wrote before. */
+export function allocateInvoiceCostsToLots(
+  lots: any[],
+  spec: { source: string; byLot: Record<string, number>; type: string; label: string; date?: string; nextId: () => any },
+): { lots: any[]; touched: number } {
+  const source = String(spec?.source || "");
+  if (!source) return { lots: lots || [], touched: 0 };
+  let touched = 0;
+  const next = (lots || []).map(lot => {
+    const amt = Number((spec.byLot || {})[String(lot?.number)] || 0);
+    const had = (lot?.costs || []).some((c: any) => String(c?.source || "") === source);
+    if (!amt && !had) return lot;
+    touched++;
+    const withoutPrior = (lot.costs || []).filter((c: any) => String(c?.source || "") !== source);
+    if (!(amt > 0)) return { ...lot, costs: withoutPrior };
+    return { ...lot, costs: [...withoutPrior, { id: spec.nextId(), type: spec.type, label: spec.label, pln: Math.round(amt * 100) / 100, source, date: spec.date || "" }] };
+  });
+  return { lots: next, touched };
+}

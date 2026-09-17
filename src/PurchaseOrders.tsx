@@ -1,4 +1,6 @@
 import { newestFirst } from "./moduleGuards.domain";
+import QualityReportDoc from "./QualityReportDoc";
+import { lastReportNumber, issueReportNumber } from "./reportNumbers";
 import { readCountries } from "./Contacts";
 import LocationPicker from "./LocationPicker";
 import { documentTotals, totalsLine } from "./pricingUnit.domain";
@@ -16,7 +18,7 @@ import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import { warehouseAddressLocations, unifiedLocations, locationById } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
-import { receiptMovement, supplierDeliveryFromPO, inspectionTotals } from "./seasonOps.domain";
+import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
 import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
 import { isEstimatedLine, applyPackingResult, proposeSOAdjustments } from "./so.domain";
 import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
@@ -1219,7 +1221,7 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
         <button onClick={() => printHtmlNode(`sales-report-${order.id}`, `${order.number} — Sales report`)} style={docBtn("#0E7490", "#F0FDFA")}>📄 Sales report</button>
         <button onClick={() => exportVegaProSalesReport({ completionDate: localTodayISO(), shipmentRef: (order.supplierRef || (shipments || []).find((s: any) => (s.poRefs || []).includes(order.number) && s.supplierRef)?.supplierRef || ""), poNumber: order.number }, rows, { pct: calc.commissionPct, eur: calc.commissionEUR })} style={docBtn("#7C3AED", "#F5F3FF")} title="the producer's own sheet layout, ready to upload">⬇ Producer's template</button>
-        <button onClick={() => printHtmlNode(`qc-report-${order.id}`, `${order.number} — Quality report`)} disabled={!myIns.length} style={{ ...docBtn("#B45309", "#FFFBEB"), opacity: myIns.length ? 1 : 0.45, cursor: myIns.length ? "pointer" : "not-allowed" }}>🔬 Quality report ({myIns.length})</button>
+        <button onClick={() => { myIns.forEach((x: any) => { if (!lastReportNumber("QR", String(x.id))) issueReportNumber("QR", `${x.lotNumber} · inspection ${x.date}`, "", "Purchase orders"); }); setTimeout(() => printHtmlNode(`qc-report-${order.id}`, `${order.number} — Quality reports`), 60); }} disabled={!myIns.length} style={{ ...docBtn("#B45309", "#FFFBEB"), opacity: myIns.length ? 1 : 0.45, cursor: myIns.length ? "pointer" : "not-allowed" }}>🔬 Quality report ({myIns.length})</button>
         {!closed && setSettlements && (
           askClose
             ? <span style={{ display: "flex", gap: 8, alignItems: "center", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>
@@ -1236,18 +1238,16 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
         )}
         {closed && rec?.commissionInvoiceId && <span style={{ fontSize: 11, color: "#94A3B8" }}>commission invoiced — the settlement is final</span>}
       </div>
-      <div id={`qc-report-${order.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 760, background: "#fff", padding: 20, fontFamily: "Arial" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 10, marginBottom: 14 }}>
-          <PrintLogo />
-          <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ fontSize: 15, fontWeight: 800 }}>QUALITY REPORTS</div><div style={{ fontSize: 12, color: "#444" }}>{order.number} · {order.supplier?.name || ""}</div></div>
-        </div>
-        <h3 style={{ margin: "0 0 10px" }}>Quality report · {order.number}{order.supplier?.name ? ` · ${order.supplier.name}` : ""}</h3>
-        {myIns.map((x: any) => { const tt = inspectionTotals(x); return <div key={String(x.id)} style={{ marginBottom: 12, fontFamily: "Arial", fontSize: 12 }}>
-          <div><b>{x.lotNumber}</b> · {x.variety || x.product} · {x.stage} · QC date {x.date} · inspector {x.inspector || "—"} · ordered {x.orderedQty} / checked {x.checkedQty} {x.unit} ({tt.samplePct}% sample) · temp {x.temperature || "—"}</div>
-          <table style={{ borderCollapse: "collapse", marginTop: 4 }}><tbody>{(x.defects || []).map((d: any, i: number) => <tr key={i}><td style={{ border: "1px solid #ccc", padding: "2px 6px" }}>{d.category}</td><td style={{ border: "1px solid #ccc", padding: "2px 6px" }}>{d.name}</td><td style={{ border: "1px solid #ccc", padding: "2px 6px", textAlign: "right" }}>{d.pct}%</td></tr>)}
-          <tr><td colSpan={2} style={{ border: "1px solid #ccc", padding: "2px 6px", fontWeight: 700 }}>Total defects</td><td style={{ border: "1px solid #ccc", padding: "2px 6px", textAlign: "right", fontWeight: 700 }}>{tt.totalPct}%</td></tr></tbody></table>
-          <div>Verdict: <b>{x.verdict}</b>{x.observations ? ` · ${x.observations}` : ""}{x.links?.[0] ? ` · ${x.links[0]}` : ""}</div>
-        </div>; })}
+      <div id={`qc-report-${order.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff" }}>
+        {/* v6.99.37 (QA-1, owner ruling): the settlement prints the SAME quality report the lot prints —
+            one component, so a producer never receives two different papers for one inspection. */}
+        {myIns.map((x: any) => {
+          const lot = (lots || []).find((l: any) => String(l.number) === String(x.lotNumber)) || { number: x.lotNumber, product: x.product || "", variety: x.variety || "" };
+          const sh = (shipments || []).find((s: any) => s && String(s.status) !== "Cancelled" && ((s.poRefs || []).includes(order.number) || (s.goods || []).some((g: any) => String(g.lotRef) === String(lot.number))) && s.supplierRef);
+          return <div key={String(x.id)} style={{ pageBreakAfter: "always" }}>
+            <QualityReportDoc x={x} lot={lot} no={lastReportNumber("QR", String(x.id))} supplierRef={sh?.supplierRef || ""} inline />
+          </div>;
+        })}
       </div>
     </Card>
   );
@@ -1722,7 +1722,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = ""}: any = {}) {
+export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = ""}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
@@ -1733,8 +1733,10 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
   const setOrders = extSetPOs ?? setLocalOrders;
   const suppliers = useMemo(() => suppliersFromContacts((extContacts || []).filter((c: any) => !c.archived)), [extContacts]); // v6.99.2 (CP-4)
   const lots = extLots || [];
-  const [view, setView] = useState("list");
-  const [selected, setSelected] = useState(null);
+  // v6.99.37: a PO can be opened directly — deep link, and the render smoke exercises the settlement card
+  const openDirectPO = (extPOs || []).find((o: any) => String(o.number) === String(initialSelectedNumber)) || null;
+  const [view, setView] = useState(openDirectPO ? "detail" : "list");
+  const [selected, setSelected] = useState<any>(openDirectPO);
   const [form, setForm] = useState(null);
   const [printOrder, setPrintOrder] = useState(null);
   const [truckWindow, setTruckWindow] = useState(false);   // v6.99.36 (A-R25-6): the supplier truck is registered in one window

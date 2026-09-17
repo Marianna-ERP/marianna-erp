@@ -1,4 +1,5 @@
 import { useConfirm, SmallButton } from "./ui";
+import { allocateInvoiceCostsToLots } from "./costAllocation";
 import { recordAudit } from "./audit";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { printHtmlNode } from "./documentService";
@@ -566,20 +567,16 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     const totalExpectedPLN = result.totalPLN || 1;
     const allocations = result.rows.map((r: any) => ({ lotNumber: r.lotNumber, amountPLN: Math.round(invoice.amountPLN * (r.totalPLN / totalExpectedPLN) * 100) / 100 }));
     if (setLots) {
+      // v6.99.37 (QA-3, owner approval): the lot's cost line is INVENTORY's fact. Finance still decides the allocation;
+      // writing it goes through the one inventory function, which also owns the replace-by-source discipline.
       const source = `WHINV-${invoice.id}`;
-      const byLot = new Map(allocations.map((a: any) => [String(a.lotNumber), a.amountPLN]));
-      setLots((prev: any[]) => prev.map((lot: any) => {
-        // Replace-by-ref discipline: remove any prior line tagged to THIS invoice
-        // (so re-approving a corrected invoice re-allocates cleanly instead of
-        // stacking or going stale), then add the fresh share if this lot has one.
-        const withoutPrior = (lot.costs || []).filter((c: any) => c.source !== source);
-        const amt = byLot.get(String(lot.number));
-        if (amt && amt > 0) {
-          return { ...lot, costs: [...withoutPrior, { id: nextId(), type: "Warehousing", label: `${invoice.warehouseName || "Warehouse"} ${period} · inv ${invoice.invoiceNo}`, pln: amt, source }] };
-        }
-        // Lot no longer in the allocation set: keep it stripped of any stale line.
-        return withoutPrior.length === (lot.costs || []).length ? lot : { ...lot, costs: withoutPrior };
-      }));
+      const byLot: Record<string, number> = {};
+      allocations.forEach((a: any) => { byLot[String(a.lotNumber)] = a.amountPLN; });
+      setLots((prev: any[]) => allocateInvoiceCostsToLots(prev || [], {
+        source, byLot, type: "Warehousing",
+        label: `${invoice.warehouseName || "Warehouse"} ${period} · invoice ${invoice.invoiceNo || ""}`.trim(),
+        date: invoice.issueDate || invoice.date || "", nextId,
+      }).lots);
     }
     setWarehouseInvoices((prev: any[]) => prev.map((i: any) => i.id === invoice.id ? { ...i, status: "Approved", allocatedLots: allocations } : i));
   }

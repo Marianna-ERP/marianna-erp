@@ -1832,3 +1832,28 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.34 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.37 — one owner for a lot's cost lines (QA-2 / QA-3) ══
+(function v69937(){
+  console.log("\n══ 56. v6.99.37: cost lines are written and removed by ONE function ══");
+  const C = B("costAllocation.js");
+  const lots = [
+    { number: "L1", costs: [{ id: 1, type: "Freight", pln: 1200, source: "SHP-2026-0044/leg1" }, { id: 2, type: "Warehousing", pln: 300, source: "WHINV-9" }] },
+    { number: "L2", costs: [{ id: 3, type: "Warehousing", pln: 100, source: "WHINV-9" }] },
+  ];
+  t("QA-2: cancelling a shipment removes exactly its own cost lines and leaves the rest", () => {
+    const r = C.removeCostsBySource(lots, "SHP-2026-0044");
+    eq(r.touched, 1); eq(r.lots[0].costs.length, 1); eq(r.lots[0].costs[0].source, "WHINV-9"); eq(r.lots[1].costs.length, 1);
+    eq(C.removeCostsBySource(r.lots, "SHP-2026-0044").touched, 0, "idempotent");
+  });
+  t("QA-3: an invoice allocation replaces its own earlier lines, never stacks, and clears a lot dropped from the set", () => {
+    let id = 100; const nextId = () => ++id;
+    const r = C.allocateInvoiceCostsToLots(lots, { source: "WHINV-9", byLot: { L1: 450 }, type: "Warehousing", label: "Agrohurt 2026-08", nextId });
+    const l1 = r.lots[0].costs.filter(c => c.source === "WHINV-9");
+    eq(l1.length, 1, "one line, not two"); eq(l1[0].pln, 450, "the new share replaces the old");
+    eq(r.lots[1].costs.filter(c => c.source === "WHINV-9").length, 0, "a lot no longer in the allocation keeps no stale line");
+    eq(r.lots[0].costs.find(c => c.source === "SHP-2026-0044/leg1").pln, 1200, "another source is untouched");
+  });
+  console.log("v6.99.37 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

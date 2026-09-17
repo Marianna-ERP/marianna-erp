@@ -36,4 +36,15 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     if (ok) { passed++; console.log("  \u2713 sales line offers a quantity field for its pricing unit"); }
     else { failed++; console.log("  \u2717 sales line has no quantity field"); }
   } catch (e) { failed++; console.log("  \u2717 sales line quantity check —", (e.message || "").slice(0, 120)); } }
+// v6.99.37 (QA-1/QA-5): the settlement prints the SAME quality report as the lot — one component, both screens
+{ const PO = require(path.resolve("./src/PurchaseOrders")).default;
+  const conPo = (d.pos || []).find(p => (p.pricingMode === "consignment") && (d.inspections || []).some(x => (d.lots || []).some(l => l.poRef === p.number && l.number === x.lotNumber)));
+  if (conPo) {
+    try { const html = renderToStaticMarkup(React.createElement(PO, { ...common, initialSelectedNumber: conPo.number }));
+      const full = ["EXTERNAL QUALITY", "Tolerance %", "Net %", "Recommendation"].every(s => html.includes(s));
+      if (full) { passed++; console.log("  \u2713 settlement prints the shared quality report (" + conPo.number + ")"); }
+      else { failed++; console.log("  \u2717 settlement's quality report is not the shared component"); }
+    } catch (e) { failed++; console.log("  \u2717 settlement quality report —", (e.message || "").slice(0, 120)); }
+  }
+}
 console.log(`RENDER SMOKE: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);

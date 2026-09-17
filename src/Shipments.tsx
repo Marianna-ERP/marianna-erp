@@ -21,7 +21,7 @@ import LoadPlans from "./LoadPlans";
 import { inspectLink, summariseDocs } from "./docLinks.domain";
 import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
-import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix } from "./costAllocation";
+import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix, removeCostsBySource } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
 import { unifiedLocations, locationById } from "./locations";
@@ -3293,14 +3293,10 @@ export default function Shipments({
         // v6.37.1 (F-3): also remove this shipment's ALLOCATED COST lines from lots —
         // a cancelled shipment must not leave phantom landed cost (cost-side mirror of
         // the v6.35.5 phantom-stock fix).
+        // v6.99.37 (QA-2): removing a cost line is INVENTORY's business — one function, tested, used by everyone.
         const prefix = shipmentAllocationSourcePrefix(next.number);
         let costTouched = 0;
-        setLots(prev => (prev || []).map(lot => {
-          const had = (lot.costs || []).some((c: any) => String(c.source || "").startsWith(prefix));
-          if (!had) return lot;
-          costTouched++;
-          return { ...lot, costs: (lot.costs || []).filter((c: any) => !String(c.source || "").startsWith(prefix)) };
-        }));
+        setLots(prev => { const r = removeCostsBySource(prev || [], prefix); costTouched = r.touched; return r.lots; });
         // v6.54.0: the truck never ran, so its signed sheets are no longer
         // evidence of anything. They stay on record (nothing is deleted) but
         // read as void, and cannot be issued or marked returned.
