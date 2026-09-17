@@ -5,7 +5,7 @@ import { PrintLogo } from "./brand";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
-import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, applyStockCount, plateMismatch, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf, sortablePools } from "./seasonOps.domain";
+import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, applyStockCount, plateMismatch, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, lotReceiptDate } from "./seasonOps.domain";
 import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
@@ -1349,6 +1349,7 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
 
       {win === "inspect" && ins && (
         <InspectionWindow ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={(final: any) => {
+          const w = beforeReceiptWarning(lot, final.date); if (w) { window.alert("⚠ " + w); return; }
           setInspections && setInspections((prev: any[]) => (prev || []).some((p: any) => String(p.id) === String(final.id)) ? (prev || []).map((p: any) => String(p.id) === String(final.id) ? final : p) : [...(prev || []), final]);
           recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Quality inspection ${final.date} · defects ${inspectionVerdict(final).totalPct}% · ${final.verdict}` });
           setWin("");
@@ -1356,6 +1357,7 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
       )}
       {win === "sort" && sortF && (
         <SortingWindow f={sortF} setF={setSortF} lot={lot} inspections={myIns} contacts={contacts} onClose={() => setWin("")} onSave={() => {
+          const w = beforeReceiptWarning(lot, sortF.date); if (w) { window.alert("⚠ " + w); return; }
           const r = runSortingJob(lot, { ...sortF, fromPool: sortF.fromPool || "UNSORTED", date: sortF.date || localTodayISO() }, { nextId });
           if (r.error) { window.alert(r.error); return; }
           const healed = recompute(r.lot, r.lot.movements);
@@ -1367,6 +1369,7 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
       )}
       {win === "count" && countF && (
         <CountWindow f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={() => {
+          const w = beforeReceiptWarning(lot, countF.date); if (w) { window.alert("⚠ " + w); return; }
           const lines = countLinesForLot(lot).filter((r: any) => !r.informational).map((r: any) => { const e = { ...(countF.entries || {})[r.grade || "-"], kgPerBox: countF.kgPerBox }; const counted = countedKgOf(e as any);
             return { lotNumber: lot.number, grade: r.grade, countedKg: counted, systemKg: r.systemKg, diffKg: r0(counted - num(r.systemKg)), pallets: (e as any).pallets, boxesPerPallet: (e as any).boxesPerPallet, looseBoxes: (e as any).looseBoxes }; });
           const count = { id: nextId(), date: countF.date || localTodayISO(), locationId: lot.locationId, by: countF.by || userName || "", lines };
@@ -1426,7 +1429,7 @@ function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
     <QhWindow title="🔬 Quality inspection" subtitle={`${lot.number} · ${lot.product}${lot.variety ? " — " + lot.variety : ""}`} colour="#0E7490" onClose={onClose} onSave={() => onSave(ins)} saveLabel="Save report">
       <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>HEADER</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
-        <QhField label="Date of inspection"><DateInput value={ins.date} onChange={(e: any) => set("date", e.target.value)} /></QhField>
+        <QhField label="Date of inspection" hint={beforeReceiptWarning(lot, ins.date) || undefined}><DateInput value={ins.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>
         <QhField label="Location of inspection"><Sel value={ins.stage} onChange={(e: any) => set("stage", e.target.value)}><option value="pre-unloading">On arrival / pre-unloading</option><option value="warehouse">In our warehouse</option><option value="client">At the client</option><option value="other">Other</option></Sel></QhField>
         <QhField label="Inspector"><input value={ins.inspector || ""} onChange={e => set("inspector", e.target.value)} style={qhInp} /></QhField>
         <QhField label="Temperature (°C)"><input value={ins.temperature ?? ""} onChange={e => set("temperature", e.target.value)} style={qhInp} /></QhField>
@@ -1505,7 +1508,7 @@ function SortingWindow({ f, setF, lot, inspections = [], contacts = [], onClose,
       confirmText={`Post this sorting: ${num(f.kgIn).toLocaleString("pl-PL")} kg → class I ${num(f.classIKg).toLocaleString("pl-PL")} · class II ${num(f.classIIKg).toLocaleString("pl-PL")} · waste ${num(f.wasteKg).toLocaleString("pl-PL")}${follows ? "" : " (no inspection referenced)"}?`}>
       {!inspections.length && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>No quality inspection on this lot yet — sorting normally follows one. You can still post it.</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
-        <QhField label="Date sorted"><DateInput value={f.date} onChange={(e: any) => set("date", e.target.value)} /></QhField>
+        <QhField label="Date sorted" hint={beforeReceiptWarning(lot, f.date) || undefined}><DateInput value={f.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>
         <QhField label="What is being sorted" hint="a second sorting takes from what is left, not from the whole lot">
           <Sel value={f.fromPool || "UNSORTED"} onChange={(e: any) => { const k = e.target.value; const pool = sortablePools(lot).find((x: any) => x.key === k); setF((x: any) => ({ ...x, fromPool: k, kgIn: pool ? pool.kg : x.kgIn })); }}>
             {sortablePools(lot).map((x: any) => <option key={x.key} value={x.key}>{x.label} — {x.kg.toLocaleString("pl-PL")} kg available</option>)}
@@ -1537,7 +1540,7 @@ function CountWindow({ f, setF, lot, onClose, onSave }: any) {
     <QhWindow title="📋 Stock count" subtitle={`${lot.number} · what is physically on the floor`} colour="#B45309" onClose={onClose} onSave={onSave} saveLabel="Save count & adjust"
       confirmText="Save this count? Differences beyond 1 kg are posted as reasoned adjustments on their class.">
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
-        <QhField label="Date counted"><DateInput value={f.date} onChange={(e: any) => set("date", e.target.value)} /></QhField>
+        <QhField label="Date counted" hint={beforeReceiptWarning(lot, f.date) || undefined}><DateInput value={f.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>
         <QhField label="Counted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} style={qhInp} /></QhField>
         <QhField label="Reason / note"><input value={f.reason || ""} onChange={e => set("reason", e.target.value)} placeholder="monthly count, spot check…" style={qhInp} /></QhField>
       </div>

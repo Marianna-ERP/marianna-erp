@@ -1,4 +1,5 @@
 import { newestFirst } from "./moduleGuards.domain";
+import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 import { readCountries } from "./Contacts";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
@@ -549,7 +550,15 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
             ) : (
               matchingLots.map(lot => {
                 const live = lotReservations(lot, allOrders, currentOrderId);
-                const isEmpty = live.liveAvailable <= 0;
+                // v6.99.38 (A-R26-3, owner): a class I line may only be offered what class I holds. The lot's raw
+                // stock would show class II fruit as if it could serve a class I sale — which is how a sorted lot
+                // appeared to have more first class than it had.
+                const rawLot = (RAW_LOTS || []).find((l: any) => String(l.number) === String(lot.number)) || null;
+                const lineClass = String(lineItem?.grade || lineItem?.quality || "I").toUpperCase() === "II" ? "II" : "I";
+                const byGrade = rawLot ? gradeAvailabilityOf(rawLot, allOrders, currentOrderId) : null;
+                const classAvailable = byGrade ? (lineClass === "II" ? byGrade.II : byGrade.I) : live.liveAvailable;
+                const offer = byGrade ? Math.max(0, Math.min(live.liveAvailable, classAvailable)) : live.liveAvailable;
+                const isEmpty = offer <= 0;
                 return (
                 <div key={lot.number} onClick={() => pickLot(lot)}
                   style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "12px 14px", marginBottom: 8, cursor: "pointer", display: "grid", gridTemplateColumns: "140px 1fr 90px 130px", gap: 12, alignItems: "center", opacity: isEmpty ? 0.65 : 1 }}
@@ -583,8 +592,9 @@ function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId
                   </div>
                   <div><QualityBadge quality={lot.quality} /></div>
                   <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#16A34A" }}>{fmtNum(live.liveAvailable)} kg</div>
-                    <div style={{ fontSize: 10, color: "#888" }}>live available</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#16A34A" }}>{fmtNum(offer)} kg</div>
+                    <div style={{ fontSize: 10, color: "#888" }}>available as class {lineClass}</div>
+                    {byGrade && (byGrade.II > 0 || byGrade.I > 0) && <div style={{ fontSize: 9.5, color: "#94A3B8" }}>lot holds I {fmtNum(byGrade.I)} · II {fmtNum(byGrade.II)}</div>}
                     {live.totalReserved > 0 && (
                       <div style={{ fontSize: 9.5, color: "#AAA", marginTop: 1 }}>of {fmtNum(lot.availableKg)} total</div>
                     )}
@@ -1900,7 +1910,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       <Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PACKAGING_TYPES_REF || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="so-packaging-types" title="v6.88.0: pick from Settings → Packaging types so gross weight, pallet table and kg/box derive exactly" />
                       <datalist id="so-packaging-types">{(PACKAGING_TYPES_REF || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist>
                     </div>
-                    <div><Lbl>Boxes{pricingUnitOf(it) === "kg" ? " (derived)" : ""}</Lbl><Inp type="number" value={pricingUnitOf(it) === "kg" ? (Number(it.kgPerBox) > 0 && Number(it.qty) > 0 ? Math.round(Number(it.qty) / Number(it.kgPerBox)) : (it.boxes ?? "")) : (it.boxes ?? "")} onChange={e => si(i, "boxes", e.target.value)} disabled={fullyLocked || pricingUnitOf(it) === "kg"} title="v6.99.26: derived from the kilos and the packaging when the line is priced per kg" /></div>
+                    <div><Lbl>Boxes{pricingUnitOf(it) === "kg" ? " (derived)" : ""}</Lbl><Inp type="number" value={pricingUnitOf(it) === "kg" ? (() => { const k = kgPerBoxForLine(it, PACKAGING_TYPES_REF); return k > 0 && Number(it.qty) > 0 ? Math.round(Number(it.qty) / k) : (it.boxes ?? ""); })() : (it.boxes ?? "")}   /* v6.99.38 (A-R26-1): the packaging decides the conversion — the same resolver the Σ line uses */ onChange={e => si(i, "boxes", e.target.value)} disabled={fullyLocked || pricingUnitOf(it) === "kg"} title="v6.99.26: derived from the kilos and the packaging when the line is priced per kg" /></div>
                     <div>
                       <Lbl>Pallets (for this sale)</Lbl>
                       <Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 12" disabled={fullyLocked} />

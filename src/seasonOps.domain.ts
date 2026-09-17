@@ -254,14 +254,25 @@ export function portStageTransfers(sh: any, lots: any[], portLocationId: any, da
 
 /** What is in stock NOW, by grade. class II = reclassified in − shipped out as II; class I = the rest of the physical stock. */
 export function gradeStockNow(lot: any): { I: number; II: number; waste: number } {
+  // v6.99.38 (A-R26-2, owner): every class is derived from the LEDGER, never from physicalKg.
+  // LOT-2026-0108 showed why: its sorting was dated before its receipt, the replay swallowed the waste,
+  // physical stayed 20 kg high and class I (physical − class II) read 20 kg too many — which is exactly
+  // how 20 kg of waste came to be sold as class I.
   const live = (lot?.movements || []).filter((m: any) => m && !m.voided);
-  const toII = live.filter((m: any) => m.type === "RECLASS" && String(m.toGrade || "II").toUpperCase() === "II").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
-  const backToI = live.filter((m: any) => m.type === "RECLASS" && String(m.toGrade).toUpperCase() === "I").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
-  const outII = live.filter((m: any) => ["SHIP_OUT", "DAMAGE"].includes(m.type) && String(m.grade || "").toUpperCase() === "II").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
-  const backII = live.filter((m: any) => m.type === "REVERSAL" && String(m.grade || "").toUpperCase() === "II").reduce((s: number, m: any) => s + num(m.qtyKg), 0);
-  const physical = num(lot?.physicalKg);
-  const II = Math.max(0, Math.min(physical, r0(toII - backToI - outII + backII)));
-  return { I: Math.max(0, r0(physical - II)), II, waste: r0(live.filter((m: any) => m.type === "DAMAGE" && String(m.source || "").startsWith("sorting:")).reduce((s: number, m: any) => s + num(m.qtyKg), 0)) };
+  const sum = (f: (m: any) => boolean) => r0(live.filter(f).reduce((s: number, m: any) => s + num(m.qtyKg), 0));
+  const received = sum((m: any) => m.type === "IN");
+  const toII = sum((m: any) => m.type === "RECLASS" && String(m.toGrade || "II").toUpperCase() === "II");
+  const backToI = sum((m: any) => m.type === "RECLASS" && String(m.toGrade).toUpperCase() === "I");
+  const waste = sum((m: any) => m.type === "DAMAGE" && String(m.source || "").startsWith("sorting:"));
+  const otherDamage = sum((m: any) => m.type === "DAMAGE" && !String(m.source || "").startsWith("sorting:"));
+  const outII = sum((m: any) => ["SHIP_OUT", "CLAIM"].includes(m.type) && String(m.grade || "").toUpperCase() === "II");
+  const outI = sum((m: any) => ["SHIP_OUT", "CLAIM"].includes(m.type) && String(m.grade || "I").toUpperCase() !== "II");
+  const backI = sum((m: any) => m.type === "REVERSAL" && String(m.grade || "I").toUpperCase() !== "II");
+  const backII = sum((m: any) => m.type === "REVERSAL" && String(m.grade || "").toUpperCase() === "II");
+  const II = Math.max(0, r0(toII - backToI - outII + backII));
+  // the damage that is not sorting waste comes off the unsorted / class I side
+  const I = Math.max(0, r0(received - toII + backToI - waste - otherDamage - outI + backI));
+  return { I, II, waste };
 }
 
 /** Available per grade = in stock of that grade − what other live orders promise of that grade. */
@@ -353,4 +364,16 @@ export function sortablePools(lot: any): Array<{ key: "UNSORTED" | "I" | "II"; l
     { key: "I", label: "Class I (re-sort)", kg: g.I },
     { key: "II", label: "Class II (re-sort)", kg: g.II },
   ];
+}
+
+
+/** v6.99.38 (A-R26-2, owner): the date a lot's goods actually entered stock. Nothing done TO the goods may predate it. */
+export function lotReceiptDate(lot: any): string {
+  const ins = (lot?.movements || []).filter((m: any) => m && !m.voided && m.type === "IN").map((m: any) => S(m.date)).filter(Boolean).sort();
+  return ins[0] || S(lot?.arrivalDate) || "";
+}
+export function beforeReceiptWarning(lot: any, dateISO: any): string {
+  const rec = lotReceiptDate(lot); const d = S(dateISO).slice(0, 10);
+  if (!rec || !d || d >= rec) return "";
+  return `${d} is before the goods arrived (${rec}). The ledger replays in date order, so an act dated before the receipt takes from an empty lot and corrupts the class split. Use ${rec} or later.`;
 }

@@ -1,3 +1,4 @@
+import { lotReceiptDate } from "./seasonOps.domain";
 import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 import { missingPeopleInfo } from "./counterparty.domain";
 import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
@@ -166,6 +167,15 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
         }
       });
     });
+    // v6.99.38 (A-R26-2): an act dated before the receipt corrupts the replay — the waste is taken from an empty lot.
+    {
+      const rec = lotReceiptDate(lot);
+      const early = (lot.movements || []).filter((m: any) => m && !m.voided && m.type !== "IN" && String(m.date || "") < rec).map((m: any) => `${m.type} ${m.date}`);
+      if (rec && early.length) {
+        add("error", "MOVEMENT_BEFORE_RECEIPT", "Inventory", lot.number, `${early.length} movement(s) are dated before the goods arrived (${rec}): ${early.slice(0, 3).join(", ")}. Re-date the act (quality inspection, sorting or count) to the receipt date or later — until then the stock figures and the class split cannot be trusted.`);
+      }
+    }
+
     // v6.99.22 (G-1): the same promise, per grade — a sorted lot cannot serve more class I than it holds
     const ga = gradeAvailabilityOf(lot, orders);
     if (ga.stockI + ga.stockII > 0 && ga.promisedI > ga.stockI + 0.01) {

@@ -1764,7 +1764,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("QH-6: kilos derive from pallets × boxes per pallet + loose boxes; after sorting the lot is counted per class", () => {
     eq(Z.countedKgOf({ pallets: 20, boxesPerPallet: 72, looseBoxes: 6, kgPerBox: 13 }), 18798);
     eq(Z.countedKgOf({ countedKg: 5350 }), 5350, "loose goods still counted in kilos");
-    const sorted = { number: "L1", physicalKg: 5350, movements: [{ type: "RECLASS", qtyKg: 3750, toGrade: "II" }] };
+    // v6.99.38: classes derive from the LEDGER, so a fixture needs its receipt — a lot with stock and no IN never existed.
+    const sorted = { number: "L1", physicalKg: 5350, movements: [{ type: "IN", date: "2026-08-13", qtyKg: 5350 }, { type: "RECLASS", date: "2026-08-14", qtyKg: 3750, toGrade: "II" }] };
     const lines = Z.countLinesForLot(sorted);
     eq(lines.length, 2); eq(lines[0].systemKg, 1600); eq(lines[1].systemKg, 3750);
     eq(Z.countLinesForLot({ number: "L2", physicalKg: 900, movements: [] }).length, 1, "an unsorted lot is one line");
@@ -1791,7 +1792,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Z.inspectionVerdict({ tolerances: { Major: 5 }, defects: [{ category: "Major", name: "Bruising", pct: 4 }] }).recommendation, "Accept");
   });
   t("a sorted lot is counted as class I, class II and a WASTE line that never adjusts stock", () => {
-    const lot = { number: "L1", physicalKg: 5350, movements: [ { type: "RECLASS", qtyKg: 3750, toGrade: "II" }, { type: "DAMAGE", qtyKg: 200, source: "sorting:1" } ] };
+    const lot = { number: "L1", physicalKg: 5350, movements: [ { type: "IN", date: "2026-08-13", qtyKg: 5550 }, { type: "RECLASS", date: "2026-08-14", qtyKg: 3750, toGrade: "II" }, { type: "DAMAGE", date: "2026-08-14", qtyKg: 200, source: "sorting:1" } ] };
     const lines = Z.countLinesForLot(lot);
     eq(lines.length, 3); eq(lines[0].systemKg, 1600); eq(lines[1].systemKg, 3750);
     eq(lines[2].grade, "WASTE"); eq(lines[2].systemKg, 0); eq(lines[2].informational, true);
@@ -1824,7 +1825,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(SO.lotAvailabilityByGrade({ number: "L2", physicalKg: 1000, grades: { I: 300, II: 100, waste: 50 } }, []).unsorted, 600);
   });
   t("A-R24-3: a second sorting is offered the pools that still hold goods, not the whole lot", () => {
-    const lot = { number: "L1", physicalKg: 14250, movements: [ { type: "RECLASS", qtyKg: 250, toGrade: "II" } ] };
+    const lot = { number: "L1", physicalKg: 14250, movements: [ { type: "IN", date: "2026-08-13", qtyKg: 14250 }, { type: "RECLASS", date: "2026-08-14", qtyKg: 250, toGrade: "II" } ] };
     const pools = Z.sortablePools(lot);
     eq(pools.find(p => p.key === "UNSORTED").kg, 0, "after the first sorting nothing is unsorted");
     eq(pools.find(p => p.key === "II").kg, 250); eq(pools.find(p => p.key === "I").kg, 14000);
@@ -1855,5 +1856,37 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(r.lots[0].costs.find(c => c.source === "SHP-2026-0044/leg1").pln, 1200, "another source is untouched");
   });
   console.log("v6.99.37 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.38 — the class split comes from the ledger (A-R26) ══
+(function v69938(){
+  console.log("\n══ 57. v6.99.38: classes from the ledger; nothing dated before the receipt ══");
+  const Z = B("seasonOps.domain.js");
+  // the owner's LOT-2026-0108 exactly: sorting dated 16 Aug, receipt 15 Sept
+  const lot = { number: "L108", physicalKg: 14270, arrivalDate: "2026-09-15", movements: [
+    { id: 1, type: "RECLASS", date: "2026-08-16", qtyKg: 250, toGrade: "II", source: "sorting:9" },
+    { id: 2, type: "DAMAGE", date: "2026-08-16", qtyKg: 20, source: "sorting:9" },
+    { id: 3, type: "IN", date: "2026-09-15", qtyKg: 14270 },
+  ] };
+  t("A-R26-2: the class split is right even when physicalKg is wrong — class I is 14 000, not 14 020", () => {
+    const g = Z.gradeStockNow(lot);
+    eq(g.I, 14000, "received − class II − waste"); eq(g.II, 250); eq(g.waste, 20);
+  });
+  t("A-R26-2: selling 11 000 + 3 020 as class I is now 20 kg short, and the orders are named", () => {
+    const orders = [
+      { id: 23, number: "SO-23", status: "Confirmed", items: [{ product: "Capsicum", sourceType: "STOCK", sourceRef: "L108", qty: 11000, grade: "I" }] },
+      { id: 24, number: "SO-24", status: "Confirmed", items: [{ product: "Capsicum", sourceType: "STOCK", sourceRef: "L108", qty: 3020, quality: "I" }] },
+    ];
+    const a = Z.gradeAvailability(lot, orders);
+    eq(a.stockI, 14000); eq(a.promisedI, 14020); eq(a.I, -20);
+    const w = Z.gradeCommitmentWarning(lot, orders); ok(w.includes("SO-23") && w.includes("SO-24"));
+  });
+  t("A-R26-2: an act dated before the receipt is refused with the reason; on or after it passes", () => {
+    ok(Z.beforeReceiptWarning(lot, "2026-08-16").includes("2026-09-15"));
+    eq(Z.beforeReceiptWarning(lot, "2026-09-15"), ""); eq(Z.beforeReceiptWarning(lot, "2026-09-20"), "");
+    eq(Z.lotReceiptDate(lot), "2026-09-15");
+  });
+  console.log("v6.99.38 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
