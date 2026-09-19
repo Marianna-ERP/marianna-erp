@@ -23,6 +23,8 @@ export function poTermsMissing(o: any): string | null {
   if (!(o?.supplier?.name || "").trim() && o?.supplierId == null) return "the supplier";
   if (!o?.buyIncoterm) return "the purchase incoterm";
   if (!(o?.destinationLocationId || (o?.destinationText || "").trim())) return `the named place for ${o.buyIncoterm}`;
+  // v6.99.39 (G-1, owner): the named place PRINTS on the order with its address — it must be a registered place, not typed text.
+  if (o?.destinationLocationId == null || o.destinationLocationId === "") return `a registered place as the named place for ${o.buyIncoterm} (pick it from the list — it prints with its address)`;
   return null;
 }
 

@@ -36,6 +36,14 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     if (ok) { passed++; console.log("  \u2713 sales line offers a quantity field for its pricing unit"); }
     else { failed++; console.log("  \u2717 sales line has no quantity field"); }
   } catch (e) { failed++; console.log("  \u2717 sales line quantity check —", (e.message || "").slice(0, 120)); } }
+// G-B (owner 18 Sept): every printable document must render with its key headings — an empty report never ships again
+{ const html = renderToStaticMarkup(React.createElement(Inventory, { ...common, initialSelectedNumber: lot && lot.number }));
+  const checks = [["TRACEABILITY / RECALL REPORT", "1. PURCHASE"], ["2. SHIPMENTS"], ["3. SOLD TO"]];
+  const okTrace = checks.every(group => group.every(s => html.includes(s)));
+  if (okTrace) { passed++; console.log("  \u2713 recall report renders its three sections"); } else { failed++; console.log("  \u2717 recall report is missing a section"); }
+  const hasInspection = (d.inspections || []).some(x => lot && x.lotNumber === lot.number);
+  if (hasInspection) { const okQ = ["QUALITY REPORT", "EXTERNAL QUALITY", "Net %", "Recommendation"].every(s => html.includes(s));
+    if (okQ) { passed++; console.log("  \u2713 quality report renders with tolerances, net % and recommendation"); } else { failed++; console.log("  \u2717 quality report missing a section"); } } }
 // v6.99.37 (QA-1/QA-5): the settlement prints the SAME quality report as the lot — one component, both screens
 { const PO = require(path.resolve("./src/PurchaseOrders")).default;
   const conPo = (d.pos || []).find(p => (p.pricingMode === "consignment") && (d.inspections || []).some(x => (d.lots || []).some(l => l.poRef === p.number && l.number === x.lotNumber)));
@@ -47,4 +55,13 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     } catch (e) { failed++; console.log("  \u2717 settlement quality report —", (e.message || "").slice(0, 120)); }
   }
 }
+// v6.99.42 (hotfix): the PO's supplier-truck box must SHOW the truck it registered (it filtered numbers as objects and always read empty)
+{ const PO = require(path.resolve("./src/PurchaseOrders")).default;
+  const sup = (d.shipments || []).find(s => String(s.arrangedBy || "").toUpperCase() === "SUPPLIER" && s.status !== "Cancelled" && (s.poRefs || []).length);
+  if (sup) { try {
+    const html = renderToStaticMarkup(React.createElement(PO, { ...common, initialSelectedNumber: sup.poRefs[0] }));
+    const plate = ((sup.legs || []).flatMap(l => l.vehicles || [])[0] || {}).truckPlate || "";
+    const ok = html.includes(sup.number) && (!plate || html.includes(plate)) && !html.includes("No truck registered yet");
+    if (ok) { passed++; console.log("  \u2713 supplier-truck box shows the registered truck (" + sup.number + ")"); } else { failed++; console.log("  \u2717 supplier-truck box does not show " + sup.number); }
+  } catch (e) { failed++; console.log("  \u2717 supplier-truck box —", (e.message || "").slice(0, 120)); } } }
 console.log(`RENDER SMOKE: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);

@@ -14,7 +14,7 @@ import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain
 import { lotStockCheck } from "./receipts.domain";
 import { shipmentPostBlockReason, shipmentWarnings, newestFirst } from "./moduleGuards.domain";
 import { carriedRefs, overShipReport, derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
-import { containerRecorder, setFxFallback, jobsByCarrierLeg, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, costLinesByCarrierLeg } from "./shipmentModel.domain";
+import { containerRecorder, setFxFallback, jobsByCarrierLeg, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, costLinesByCarrierLeg, carrierOfUnit } from "./shipmentModel.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, CUSTOMS_DOCS, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -24,7 +24,7 @@ import { SmallButton, DocRef, cancelledDocSet, useConfirm } from "./ui";
 import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, shipmentAllocationSourcePrefix, removeCostsBySource } from "./costAllocation";
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
-import { unifiedLocations, locationById } from "./locations";
+import { unifiedLocations, locationById, placeForPrint } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
@@ -375,10 +375,8 @@ function providerRoleForLeg(leg, providerId) {
 function providerIdsForShipment(shipment) {
   const ids = [];
   // v6.99.6 (A-R9-15 / D9): the carrier lives on the UNIT — providers are whoever the units name (leg-level only as legacy fallback)
-  (shipment.legs || []).forEach(leg => {
-    (leg.vehicles || []).forEach((u: any) => { if (u.carrierId) ids.push(u.carrierId); });
-    if (!(leg.vehicles || []).some((u: any) => u.carrierId)) { if (leg.carrierId) ids.push(leg.carrierId); if (leg.forwarderId) ids.push(leg.forwarderId); }
-  });
+  // v6.99.39 (D-2): providers are whoever carrierOfUnit() names — containers belong to the booking's forwarder
+  (shipment.legs || []).forEach(leg => { (transportUnitsForLeg(leg) || []).forEach((u: any) => { const c = carrierOfUnit(shipment, leg, u); if (c != null) ids.push(c); }); });
   // NOTE: we intentionally do NOT pull from shipment.costs[].supplierId — a cost
   // line can reference a broker or other party not actually performing transport,
   // which would wrongly appear in the transport-order provider dropdown.
@@ -393,7 +391,7 @@ function providerIdsForShipment(shipment) {
 function providerLegs(shipment, providerId) {
   const pid = String(providerId || "");
   // v6.99.6 (A-R9-15): a provider's legs are the legs where one of ITS units rides (leg-level ids as legacy fallback)
-  const legs = (shipment.legs || []).filter(leg => (leg.vehicles || []).some((u: any) => String(u.carrierId || "") === pid) || ((!(leg.vehicles || []).some((u: any) => u.carrierId)) && (String(leg.carrierId || "") === pid || String(leg.forwarderId || "") === pid)));
+  const legs = (shipment.legs || []).filter(leg => (transportUnitsForLeg(leg) || []).some((u: any) => String(carrierOfUnit(shipment, leg, u) ?? "") === pid));   // v6.99.39 (D-2)
   // v6.18.17 (E12): do NOT fall back to the first leg — a provider's transport order must
   // reflect only its OWN leg(s). Returning leg 1 for a provider not on it is the multimodal
   // bug where the second-leg forwarder's order showed the first leg's loading/unloading.
@@ -480,11 +478,13 @@ function legacyUnitFromLeg(leg) {
 }
 
 /** v6.99.6 (A-R9-15): the units a given provider carries on a leg (all units when none names a carrier — legacy). */
-function providerUnitsForLeg(leg: any, providerId: any): any[] {
+function providerUnitsForLeg(leg: any, providerId: any, sh: any = null): any[] {
+  // v6.99.39 (D-2): the units a provider carries on a leg — by carrierOfUnit(), never "all units" as a fallback
+  // (that fallback is how the road carrier's trucks appeared under the sea leg)
   const all = transportUnitsForLeg(leg); const pid = String(providerId || "");
-  const named = all.filter((u: any) => u.carrierId != null && u.carrierId !== "");
-  if (!named.length) return all;
-  return all.filter((u: any) => String(u.carrierId) === pid);
+  const named = all.filter((u: any) => carrierOfUnit(sh, leg, u) != null);
+  if (!named.length) return sh ? [] : all;
+  return all.filter((u: any) => String(carrierOfUnit(sh, leg, u) ?? "") === pid);
 }
 function transportUnitsForLeg(leg) {
   if (Array.isArray(leg.vehicles) && leg.vehicles.length) return leg.vehicles;
@@ -956,8 +956,8 @@ function buildManualShipment__raw(opts, shipments) {
   };
 }
 
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max, list }: any) {
-  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, title = "", max, list, min, noFuture }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} title={title} max={max} list={list} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: disabled ? "#888" : "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", ...style }} />;
 }
@@ -2034,8 +2034,8 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   <div><Lbl>Temp recorder no.</Lbl><Inp value={feedersOf(u).length > 0 ? containerRecorder(u, draft) : (u.tempRecorderNo || "")} onChange={e => updateVehicle(i, ui, "tempRecorderNo", e.target.value)} placeholder="e.g. TR-88412" title="Temperature recorder serial for this container's load" disabled={feedersOf(u).length > 0} /></div>
                 </div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.4fr", gap: 9, marginTop: 9 }}>
-                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" max={localTodayISO()} value={u.loadedAt || u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "loadedAt", e.target.value)} /></div>
-                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" max={localTodayISO()} value={u.unloadedAt || u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "unloadedAt", e.target.value)} /></div>
+                  <div><Lbl>Actual loaded on</Lbl><Inp type="date" noFuture value={u.loadedAt || u.actualLoadDate || ""} onChange={e => updateVehicle(i, ui, "loadedAt", e.target.value)} /></div>
+                  <div><Lbl>Actual unloaded on</Lbl><Inp type="date" noFuture value={u.unloadedAt || u.actualUnloadDate || ""} onChange={e => updateVehicle(i, ui, "unloadedAt", e.target.value)} /></div>
                   <div><Lbl>Kg{((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length) ? " (derived)" : ""}</Lbl>
                     {((u.load || []).some((a: any) => parseNum(a?.qtyKg, 0) > 0) || feedersOf(u).length)
                       ? <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F9FAFB", fontWeight: 600 }} title="v6.85.0 (D8): derived from the goods allocation / feeder trucks — never typed">{Math.round(unitKg(u, draft)).toLocaleString("pl-PL")}</div>
@@ -2184,7 +2184,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                       documents they track (user ruling, reversing v6.50.0). */}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                     <div><Lbl>Courier tracking nr — originals to client</Lbl><Inp value={draft.docsCourierTrackingNo || ""} onChange={e => sf("docsCourierTrackingNo", e.target.value)} placeholder="e.g. DHL 1234567890" /></div>
-                    <div><Lbl>Originals sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} max={localTodayISO()} /></div>
+                    <div><Lbl>Originals sent on</Lbl><Inp type="date" value={draft.docsCourierDate || ""} onChange={e => sf("docsCourierDate", e.target.value)} noFuture /></div>
                   </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
                     <SmallButton kind="green" onClick={addDoc}>+ Add document</SmallButton>
@@ -2202,7 +2202,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                       <div><Lbl>Type</Lbl><Inp value={d.type} onChange={e => updateDoc(i, "type", e.target.value)} /></div>
                       <div><Lbl>Ref {locked ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· {isBL ? "from leg" : "from clearance"}</span> : null}</Lbl><Inp value={refValue} onChange={e => updateDoc(i, "ref", e.target.value)} disabled={locked} title={isBL ? "Taken from the sea/rail leg's BL number" : (isExportDecl ? "Taken from the lot's export clearance (SAD/MRN) in Inventory" : "")} style={locked ? { background: "#F9FAFB", color: "#666" } : undefined} /></div>
                       <div><Lbl>State</Lbl><Sel value={d.status} onChange={e => updateDoc(i, "status", e.target.value)}>{stateOpts.map((s: string) => <option key={s} value={s}>{s}</option>)}</Sel></div>
-                      <div><Lbl>Received</Lbl><Inp type="date" value={d.date || ""} onChange={e => updateDoc(i, "date", e.target.value)} max={localTodayISO()} title="The date the signed original came back" /></div>
+                      <div><Lbl>Received</Lbl><Inp type="date" value={d.date || ""} onChange={e => updateDoc(i, "date", e.target.value)} noFuture title="The date the signed original came back" /></div>
                       {/* v6.47.0: link to the scan in Dropbox (or Drive/OneDrive). The file
                           itself can't live here — localStorage would fill up after a few scans. */}
                       <div>
@@ -2277,9 +2277,11 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
     return time ? `${d}, ${time}` : d;
   };
   // v6.99.7 (A-R9-12): the UNITS own places, dates and times — the leg's are only the fallback
-  const orderUnits = selectedLegs.flatMap((l: any) => providerUnitsForLeg(l, effectiveProviderId));
+  const orderUnits = selectedLegs.flatMap((l: any) => providerUnitsForLeg(l, effectiveProviderId, shipment));
   const firstUnit = orderUnits[0] || {}; const lastUnit = orderUnits[orderUnits.length - 1] || {};
-  const unitLoadingPlace = String(firstUnit.pickupText || "").trim(); const unitUnloadingPlace = String(lastUnit.deliveryText || "").trim();
+  // v6.99.39 (D-1): the order prints the place WITH its address — resolved from the unit's location id, the text as fallback
+  const unitLoadingPlace = placeForPrint(firstUnit.pickupLocationId, firstUnit.pickupText, contacts || []).line;
+  const unitUnloadingPlace = placeForPrint(lastUnit.deliveryLocationId, lastUnit.deliveryText, contacts || []).line;
   const loadingPlaceFinal = unitLoadingPlace || loadingPlace; const unloadingPlaceFinal = unitUnloadingPlace || unloadingPlace;
   const loadingDates = Array.from(new Set(orderUnits.map((u: any) => String(u.plannedLoadingDate || "").slice(0, 10)).filter(Boolean)));
   const loadingDateTime = loadingDates.length ? loadingDates.map(d => { const u = orderUnits.find((x: any) => String(x.plannedLoadingDate || "").slice(0, 10) === d); return withTime(d, u?.plannedLoadingTime); }).join(" / ") : withTime(firstLeg.plannedPickupDate, firstLeg.plannedPickupTime);
@@ -2296,7 +2298,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
   const orderCurrency = selectedCosts[0]?.currency || firstLeg.costCurrency || "PLN";
   const costLinesTotal = selectedCosts.reduce((sum, c) => sum + parseNum(c.amount), 0);
   const legCostTotal = selectedLegs.reduce((sum, l) => sum + parseNum(l.costAmount), 0);
-  const unitPriceTotal = selectedLegs.reduce((sum, l) => sum + providerUnitsForLeg(l, effectiveProviderId).reduce((u, unit) => u + parseNum(unit.costAmount || unit.unitPrice), 0), 0);
+  const unitPriceTotal = selectedLegs.reduce((sum, l) => sum + providerUnitsForLeg(l, effectiveProviderId, shipment).reduce((u, unit) => u + parseNum(unit.costAmount || unit.unitPrice), 0), 0);
   const agreedPriceTotal = unitPriceTotal > 0 ? unitPriceTotal : (costLinesTotal > 0 ? costLinesTotal : legCostTotal);
   const agreedPriceText = agreedPriceTotal > 0
     ? fmtMoney(agreedPriceTotal, orderCurrency)
@@ -2310,7 +2312,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
   // appears on it, OR (fallback) all shipment goods if legs don't carry explicit refs.
   const legGoodsRefs = new Set<string>();
   selectedLegs.forEach((leg: any) => {
-    providerUnitsForLeg(leg, effectiveProviderId).forEach((u: any) => { if (u.lotRef) legGoodsRefs.add(String(u.lotRef)); });
+    providerUnitsForLeg(leg, effectiveProviderId, shipment).forEach((u: any) => { if (u.lotRef) legGoodsRefs.add(String(u.lotRef)); });
     (leg.goodsRefs || []).forEach((r: any) => legGoodsRefs.add(String(r)));
   });
   // v6.34.5 (Problem A): if goods are assigned to legs (legNo), scope to the selected
@@ -2322,7 +2324,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
   }).filter(Boolean).map(String));
   const anyGoodsAssigned = (shipment.goods || []).some((g: any) => g.legNo != null && g.legNo !== "");
   // v6.99.8: the order carries what THIS carrier's units load — kg per goods row from the units' allocations (whole rows only when no unit has a load)
-  const providerLoadUnits = selectedLegs.flatMap((l: any) => providerUnitsForLeg(l, effectiveProviderId));
+  const providerLoadUnits = selectedLegs.flatMap((l: any) => providerUnitsForLeg(l, effectiveProviderId, shipment));
   const loadByRow: Record<string, number> = {};
   providerLoadUnits.forEach((u: any) => (u.load || []).forEach((a: any) => { loadByRow[String(a.goodsLineId)] = (loadByRow[String(a.goodsLineId)] || 0) + (parseNum(a.qtyKg, 0)); }));
   const hasLoads = Object.keys(loadByRow).length > 0;
@@ -2334,7 +2336,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
         ? (shipment.goods || []).filter((g: any) => legGoodsRefs.has(String(g.lotRef)) || legGoodsRefs.has(String(g.poRef)) || legGoodsRefs.has(String(g.soRef)))
         : (shipment.goods || [])));
   const units = selectedLegs.flatMap((leg, li) => {
-    const rows = providerUnitsForLeg(leg, effectiveProviderId);
+    const rows = providerUnitsForLeg(leg, effectiveProviderId, shipment);
     const legExtra = { legBL: leg.blNumber || "", legBooking: leg.bookingNumber || "", legShippingLine: leg.shippingLine || "" };
     if (!rows.length) return [{ ...blankTransportUnit(leg.mode), ...legExtra, legNo: li + 1, legMode: leg.mode, legStatus: leg.status }];
     return rows.map((u, ui) => ({ ...u, ...legExtra, legNo: li + 1, unitNo: ui + 1, legMode: leg.mode, legStatus: leg.status }));
@@ -2690,7 +2692,14 @@ function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null, onCom
           <div style={{ color: "#64748B" }}>{dates || "dates —"}</div>
           <div style={{ display: "flex", gap: 6 }}>
             {onCompose && <SmallButton onClick={() => onCompose(j.carrierId, j.legIndex)}>Order</SmallButton>}
-            {st?.sentAt ? <span style={{ fontSize: 10.5, fontWeight: 800, color: "#16A34A" }}>sent {st.sentAt}</span> : (onMarkSent && <SmallButton kind="green" onClick={() => onMarkSent(j.key)}>Mark sent</SmallButton>)}
+            {(() => {   // v6.99.39 (G-5, owner): the order names places and dates — it cannot be SENT until its units carry them
+              const gaps = (j.units || []).flatMap((u: any) => [!(u.pickupText || u.pickupLocationId) && "pickup place", !(u.deliveryText || u.deliveryLocationId) && "delivery place", !u.plannedLoadingDate && "loading date", !u.plannedDeliveryDate && "delivery date"].filter(Boolean));
+              const missing = Array.from(new Set(gaps)) as string[];
+              if (st?.sentAt) return <span style={{ fontSize: 10.5, fontWeight: 800, color: "#16A34A" }}>sent {st.sentAt}</span>;
+              if (!onMarkSent) return null;
+              if (missing.length) return <span title={`Complete on the units: ${missing.join(", ")}`} style={{ fontSize: 10.5, color: "#B45309", fontWeight: 700 }}>⚠ needs {missing.join(", ")}</span>;
+              return <SmallButton kind="green" onClick={() => onMarkSent(j.key)}>Mark sent</SmallButton>;
+            })()}
           </div>
         </div>;
       })}
@@ -2968,9 +2977,10 @@ export default function Shipments({
   setOrders: extSetOrders,
   onNavigate = () => {},
   onStartClaim = null,
+  initialSelectedNumber = "",
   invoices: extInvoices = [],
 }: any = {}) {
-  const { confirm: shConfirm, prompt: shPrompt, dialogNode: shDialogNode } = useConfirm(); // P2-6 + v6.85.0 (D10 date prompt)
+  const { confirm: shConfirm, prompt: shPrompt, alert: shAlert, dialogNode: shDialogNode } = useConfirm(); // P2-6 + v6.85.0 (D10 date prompt)
   // v6.45.0 (A): synchronous mirror of the shipments array for chain-safe updates.
   const shipmentsMirror = React.useRef(null);
   React.useEffect(() => { shipmentsMirror.current = shipments; });
@@ -3008,7 +3018,8 @@ export default function Shipments({
     const p = (loadPlans || []).find((x: any) => (x.shipmentRefs || []).includes(shipmentNumber));
     return p ? p.number : "";
   }, [loadPlans]);
-  const [editShipment, setEditShipment] = useState(null);
+  // v6.99.42: a shipment can be opened from another module ("Open" on the PO's supplier-truck box)
+  const [editShipment, setEditShipment] = useState<any>(() => (initialSelectedNumber ? (extShipments || []).find((x: any) => String(x.number) === String(initialSelectedNumber)) || null : null));
   const [printShipment, setPrintShipment] = useState(null);
   const [protocolShipment, setProtocolShipment] = useState<any>(null);
   const [emailShipment, setEmailShipment] = useState(null);
@@ -3227,6 +3238,13 @@ export default function Shipments({
   }
 
   async function quickStatus(sh, status) {
+    // v6.99.39 (G-6, owner): a sea / air / rail shipment cannot be LOADED without its booking — cut-off, POL, POD and the
+    // forwarder are what the containers, the BL and the sea freight line hang on.
+    if (String(status) === "Loaded" && ["sea", "multimodal", "air", "rail"].includes(String(sh.mode || "").toLowerCase())) {
+      const b = (sh.bookings || [])[0] || {};
+      const missing = [!b.number && "booking number", !b.cutOff && "cut-off", !b.pol && "POL", !b.pod && "POD", !b.forwarderId && "forwarder"].filter(Boolean) as string[];
+      if (missing.length) { await shAlert({ tone: "warn", title: "Booking incomplete", message: `Complete the booking before marking the shipment loaded: ${missing.join(", ")}.` }); return; }
+    }
     // v6.85.0 (D10, owner ruling): the actual date is entered ONCE, here, when the event
     // happens — default today, editable (backdate when the news arrives late) — and it
     // travels: unit events, header mirrors, SO planned-vs-actual, posting dates.

@@ -347,11 +347,8 @@ export function addFeederChecked(sh: any, containerId: any, truckId: any, kg?: a
 export function jobsByCarrierLeg(sh: any): Array<{ key: string; carrierId: any; legIndex: number; mode: string; units: any[]; kg: number; amount: number; currency: string }> {
   const jobs: Record<string, any> = {};
   (sh?.legs || []).forEach((leg: any, li: number) => (leg.vehicles || []).forEach((u: any) => {
-    const anyNamed = (leg.vehicles || []).some((x: any) => x.carrierId != null && x.carrierId !== "");
-    const seaLike = ["sea", "air", "rail"].includes(String(leg.mode || "").toLowerCase());
-    const bookingFwd = seaLike ? ((sh.bookings || [])[0]?.forwarderId ?? null) : null;
-    // v6.99.8: the unit names its carrier; a container's carrier is the booking's forwarder; leg/shipment ids only when nothing on the leg is named
-    const cid = (u.carrierId != null && u.carrierId !== "") ? u.carrierId : (bookingFwd ?? (anyNamed ? "" : (leg.carrierId ?? leg.forwarderId ?? "")));
+    const cid0 = carrierOfUnit(sh, leg, u);   // v6.99.39 (D-2): one answer, shared with the transport order
+    const cid = cid0 == null ? "" : cid0;
     // v6.99.15 (A-R11-8): an unnamed unit with a PRICE still produces its cost line (supplier blank, flagged) — a missing line was worse than a blank supplier
     const keyId = (cid === "" || cid == null) ? (num(u.costAmount ?? u.unitPrice) > 0 ? "__unassigned__" : null) : cid;
     if (keyId == null) return;
@@ -409,4 +406,17 @@ export function containerRecorder(container: any, sh: any): string {
   if (!fs.length) return S(container?.tempRecorderNo);
   const recs = fs.map(f => S(findUnit(sh, f.fromUnitId)?.tempRecorderNo)).filter(Boolean);
   return Array.from(new Set(recs)).join(", ") || S(container?.tempRecorderNo);
+}
+
+
+/** v6.99.39 (D-2, owner): who carries a unit. The unit's own carrier; on a sea / air / rail leg the booking's forwarder;
+ *  otherwise nobody. Used by the cost lines AND the transport order, so the two can never name different carriers. */
+export function carrierOfUnit(sh: any, leg: any, u: any): any | null {
+  if (u?.carrierId != null && u.carrierId !== "") return u.carrierId;
+  const seaLike = ["sea", "air", "rail"].includes(String(leg?.mode || "").toLowerCase());
+  if (seaLike) { const fwd = (sh?.bookings || [])[0]?.forwarderId; if (fwd != null && fwd !== "") return fwd; }
+  // legacy: a leg-level id only when NO unit on the leg names a carrier
+  const anyNamed = (leg?.vehicles || []).some((x: any) => x?.carrierId != null && x.carrierId !== "");
+  if (!anyNamed) { const legacy = leg?.carrierId ?? leg?.forwarderId; if (legacy != null && legacy !== "") return legacy; }
+  return null;
 }

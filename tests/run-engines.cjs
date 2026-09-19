@@ -3055,6 +3055,7 @@ const goodPO = () => ({
   supplier: { name: "Sadypol", id: 11 },
   buyIncoterm: "EXW",
   destinationText: "Grójec",
+  destinationLocationId: 501,   // v6.99.39 (G-1): a good PO names a REGISTERED place — the typed text alone no longer passes
   loadingDate: "2026-09-01",
   items: [{ product: "Apples", variety: "Gala", cnCode: "080810", size: "70-80", packaging: "13 kg wooden boxes", qty: 19422, unitPrice: 2.9 }],
 });
@@ -3066,6 +3067,8 @@ T("THE GATES: supplier, incoterm, named place — in that order", () => {
   assert.equal(POG.poTermsMissing({ ...goodPO(), supplier: null, supplierId: null }), "the supplier");
   assert.equal(POG.poTermsMissing({ ...goodPO(), buyIncoterm: "" }), "the purchase incoterm");
   assert.ok(POG.poTermsMissing({ ...goodPO(), destinationText: "", destinationLocationId: null }).includes("named place"));
+  // v6.99.39 (G-1, owner): a place typed as text but not picked from the registry is refused — it prints with its address
+  assert.ok(POG.poTermsMissing({ ...goodPO(), destinationLocationId: null }).includes("registered place"));
   // A supplier known only by id still counts — the name may be resolved live.
   assert.equal(POG.poTermsMissing({ ...goodPO(), supplier: null, supplierId: 11 }), null);
 });
@@ -3099,7 +3102,9 @@ T("warnings count the LINES affected, and ignore empty rows", () => {
 T("a warning is never a gate — an incomplete PO is still confirmable", () => {
   // The whole point of the split: an order the supplier is waiting for must not
   // stop for a CN code that can be added before the truck loads.
-  const thin = { supplier: { name: "Sadypol" }, buyIncoterm: "EXW", destinationText: "Grójec",
+  // v6.99.39 (G-1): the named place is a GATE (it prints with its address), so the thin order picks a registered one;
+  // everything else about it stays incomplete and must still confirm.
+  const thin = { supplier: { name: "Sadypol" }, buyIncoterm: "EXW", destinationText: "Grójec", destinationLocationId: 501,
     items: [{ product: "Apples", qty: 1000, unitPrice: 2 }] };
   assert.equal(POG.poTermsMissing(thin), null, "nothing blocks it");
   assert.ok(POG.poWarnings(thin).length >= 4, "but it is visibly incomplete");

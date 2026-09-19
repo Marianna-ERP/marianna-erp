@@ -1,4 +1,5 @@
 import { chooseDepartment, departmentBlockReason } from "./fakturowniaDepartments.domain";
+import { effectiveSoStatus } from "./statusOwnership.domain";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
 import { soInvoiceDueDate } from "./so.domain";
@@ -28,8 +29,8 @@ const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 function Card({ children, style }: any) { return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", ...style }}>{children}</div>; }
 function SectionTitle({ children, right }: any) { return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{children}</div>{right}</div>; }
 function Lbl({ children }: any) { return <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>{children}</label>; }
-function Inp({ value, onChange, type, placeholder, disabled, style }: any) {
-  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+function Inp({ value, onChange, type, placeholder, disabled, style, min, max, noFuture, title }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder} disabled={disabled} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: disabled ? "#F9FAFB" : "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   // v6.63.0 (D-09, M4): a controlled numeric input seeded with 0 rendered a zero
   // that could never be deleted (each keystroke re-parsed to a number). A stored
@@ -424,7 +425,13 @@ export default function Invoices(props: any) {
   // Delivered so a corrected invoice can be issued (M3 dead end).
   async function markStatus(inv: Invoice, status: PaymentStatus) {
     // v6.98.0 (IV-1, owner ruling): a cost invoice must name what it pays for before it leaves Draft.
-    if (status === "Issued" || status === "Sent") { const missing = requiredLinkMissing(inv); if (missing) { await invAlert({ tone: "warn", title: "Link required", message: missing }); return; } const fxm = fxMissing(inv.currency, inv.fxRate); if (fxm) { await invAlert({ tone: "warn", title: "FX rate missing", message: fxm }); return; } }
+    if (status === "Issued" || status === "Sent") { const missing = requiredLinkMissing(inv); if (missing) { await invAlert({ tone: "warn", title: "Link required", message: missing }); return; } const fxm = fxMissing(inv.currency, inv.fxRate); if (fxm) { await invAlert({ tone: "warn", title: "FX rate missing", message: fxm }); return; }
+      // v6.99.39 (G-9, owner): a SALES invoice is for goods that have LEFT — kilos still in the warehouse cannot be invoiced (R1 in reverse).
+      if (inv.kind === "SALES" && !inv.isProforma) {
+        const soRefs = (inv.links || []).filter((l: any) => l.type === "SO").map((l: any) => String(l.number));
+        const notLoaded = soRefs.filter(n => { const so = (orders || []).find((o: any) => String(o.number) === n); if (!so) return false; return !["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(so, shipments || []))); });
+        if (notLoaded.length) { await invAlert({ tone: "warn", title: "Goods not loaded", message: `${notLoaded.join(", ")} ${notLoaded.length > 1 ? "have" : "has"} not been loaded yet — a sales invoice covers goods that left the warehouse. Issue a pro-forma for an advance, or load the truck first.` }); return; }
+      } }
     const order = ["Draft", "Issued", "Sent"];
     if (order.includes(status)) {
       const from = order.indexOf(String(inv.paymentStatus));

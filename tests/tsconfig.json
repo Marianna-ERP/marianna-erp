@@ -71,6 +71,7 @@
     "../src/financePlus.domain.ts",
     "../src/counterparty.domain.ts",
     "../src/cnCodes.ts",
-    "../src/dashboard.domain.ts"
+    "../src/dashboard.domain.ts",
+    "../src/address.domain.ts"
   ]
 }

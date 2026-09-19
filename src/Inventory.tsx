@@ -463,8 +463,8 @@ function uniqStrings(arr) {
 // v6.32.0 (R7b-5): demo seed INIT_LOTS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED UI ATOMS ────────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max }: any) {
-  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={false} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max, min, noFuture, title }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={false} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} max={max} style={{ ...base, ...style }} />;
@@ -726,7 +726,7 @@ function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movem
             </div>
             <div>
               <Lbl>Date</Lbl>
-              <Inp value={date} onChange={e => setDate(e.target.value)} type="date" max={localTodayISO()} />
+              <Inp value={date} onChange={e => setDate(e.target.value)} type="date" noFuture />
             </div>
           </div>
 
@@ -866,7 +866,7 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
         <div style={{ padding: 20, display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
             <div><Lbl>When / context</Lbl><Sel value={context} onChange={e => setContext(e.target.value)}>{INSPECTION_CONTEXTS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}</Sel></div>
-            <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} /></div>
+            <div><Lbl>Date</Lbl><Inp type="date" value={date} onChange={e => setDate(e.target.value)} noFuture /></div>
           </div>
           <div><Lbl>Outcome</Lbl><Sel value={outcome} onChange={e => setOutcome(e.target.value)}>{INSPECTION_OUTCOMES.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}</Sel></div>
           {affectsStock && (
@@ -1149,7 +1149,7 @@ function SortingModal({ lot, onCancel, onConfirm }: any) {
             </div>
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Date</label>
-              <DateInput value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
+              <DateInput value={date} onChange={e => setDate(e.target.value)} noFuture style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
             </div>
           </div>
           <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Note (optional)</label>
@@ -1192,7 +1192,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div><label style={lblStyle}>Returned kg</label><input type="number" value={kg} onChange={e => setKg(e.target.value)} style={inpStyle} placeholder="e.g. 5" /></div>
-          <div><label style={lblStyle}>Return date</label><DateInput value={date} onChange={e => setDate(e.target.value)} max={localTodayISO()} style={inpStyle} /></div>
+          <div><label style={lblStyle}>Return date</label><DateInput value={date} onChange={e => setDate(e.target.value)} noFuture style={inpStyle} /></div>
           <div><label style={lblStyle}>From (client)</label><select value={fromId} onChange={e => setFromId(e.target.value)} style={inpStyle}><option value="">—</option>{locs.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
           <div><label style={lblStyle}>To (warehouse)</label><select value={toId} onChange={e => setToId(e.target.value)} style={inpStyle}><option value="">—</option>{ownWarehouses.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
           <div><label style={lblStyle}>Return transport cost</label><input type="number" value={cost} onChange={e => setCost(e.target.value)} style={inpStyle} placeholder="0" /></div>

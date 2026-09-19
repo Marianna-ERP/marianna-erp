@@ -1,4 +1,6 @@
 import { dataKey } from "./useLocalStoredState";
+import { formatAddress as _fmtAddr, parseAddress as _parseAddr } from "./address.domain";
+const formatAddressOneLine = (a: any) => _fmtAddr(a, { oneLine: true });
 // ─── SHARED LOCATIONS (v5.8 trunk, Option B consolidation) ──────────────────
 //
 // Single source of truth for all location lookups across PurchaseOrders,
@@ -32,6 +34,7 @@ export type LocationType =
 // Legacy single-word type strings used in v5.8 seed (OWN / SUPPLIER / PORT /
 // CLIENT / BROKER) are mapped to the richer taxonomy here.
 export interface Location {
+  addr?: { street?: string; postcode?: string; city?: string; country?: string; note?: string };   // v6.99.41 (ADDR-2): the four parts; `address` mirrors them until the DDL
   id: number;
   type: LocationType;
   legacyType: string;          // the original "OWN"/"PORT"/etc. — kept so existing UI lookups by legacy type still work
@@ -179,6 +182,7 @@ export function readCustomLocations(): Location[] {
         country: String(l.country || ""),
         address: l.address || undefined,
         custom: true,
+        addr: l.addr || undefined,   // v6.99.41 (ADDR-2): the parts survive the read, as the flag had to
         migratedFromSeed: !!l.migratedFromSeed,   // v6.99.29 (A-R19-4): the mapper used to drop this flag, so a migrated seed could never be told apart — or pruned
       } as Location & { custom: boolean; migratedFromSeed: boolean }));
   } catch (err) {
@@ -196,7 +200,7 @@ function writeCustomLocations(list: Location[]): void {
   }
 }
 
-export function addCustomLocation(input: { name: string; country: string; type: LocationType; address?: string }): Location {
+export function addCustomLocation(input: { name: string; country: string; type: LocationType; address?: string; addr?: any }): Location {
   const existing = readCustomLocations();
   const nextId = Math.max(CUSTOM_LOCATION_ID_BASE, ...existing.map(l => Number(l.id) || 0)) + 1;
   const loc: Location = {
@@ -216,7 +220,7 @@ export function removeCustomLocation(id: number): void {
 }
 
 // v6.36.0: edit an existing custom location (name / country / address / type).
-export function updateCustomLocation(id: number, patch: { name?: string; country?: string; address?: string; type?: LocationType }): void {
+export function updateCustomLocation(id: number, patch: { name?: string; country?: string; address?: string; addr?: any; type?: LocationType }): void {
   writeCustomLocations(readCustomLocations().map(l => Number(l.id) === Number(id)
     ? { ...l, ...patch, ...(patch.type ? { legacyType: legacyTypeFor(patch.type) } : {}) }
     : l));
@@ -438,9 +442,11 @@ export function contactAddresses(c: any): { address: string; index: number; site
   // v6.96.0 (IN-6): an address carries a PERSISTENT siteId once stamped (stampSiteIds); the
   // index-based id is only the first-time default, so re-ordering addresses never moves a lot.
   const list: { address: string; index: number; siteId?: any }[] = [];
-  if (c?.address) list.push({ address: String(c.address), index: 0, siteId: c?.siteId });
+  // v6.99.40 (A-ADDR): the structured address is the source; the legacy one-line text is the fallback.
+  const own = c?.addr && (c.addr.street || c.addr.city || c.addr.postcode) ? formatAddressOneLine(c.addr) : String(c?.address || "");
+  if (own) list.push({ address: own, index: 0, siteId: c?.siteId });
   (c?.extraAddresses || []).forEach((a: any, i: number) => {
-    const addr = typeof a === "string" ? a : (a?.address || "");
+    const addr = typeof a === "string" ? a : (a?.addr && (a.addr.street || a.addr.city) ? formatAddressOneLine(a.addr) : (a?.address || ""));
     if (String(addr).trim()) list.push({ address: String(addr), index: i + 1, siteId: typeof a === "object" ? a?.siteId : undefined });
   });
   if (!list.length) list.push({ address: "", index: 0, siteId: c?.siteId });
@@ -667,6 +673,20 @@ export function migrateReferencedSeeds(referencedIds: Iterable<any>): Location[]
 // ── v6.99.29 (A-R19-4, owner 15 Sept): a migrated demo seed that no document points at any more is removed.
 // The v6.86 migration copies a seed into the user's custom places so an old document keeps its address; it never
 // cleaned up afterwards, so a deleted document left its place behind for ever (this is why WH-01 Poznań survived).
+/** v6.99.41 (ADDR-3): split the one-line address of every custom place, once. Idempotent; the text stays. */
+export function migratePlaceAddresses(): number {
+  const list = readCustomLocations();
+  let changed = 0;
+  const next = list.map((p: any) => {
+    if (p?.addr && (p.addr.street || p.addr.city || p.addr.postcode)) return p;
+    if (!String(p?.address || "").trim()) return p;
+    const a = _parseAddr(p.address, p.country); changed++;
+    return { ...p, addr: { street: a.street, postcode: a.postcode, city: a.city, country: a.country || p.country }, addressNeedsCheck: a.needsCheck || undefined };
+  });
+  if (changed) writeCustomLocations(next);
+  return changed;
+}
+
 export function pruneOrphanMigratedSeeds(referencedIds: Iterable<any>): Location[] {
   const wanted = new Set(Array.from(referencedIds).map(String));
   const list = readCustomLocations();
@@ -674,4 +694,20 @@ export function pruneOrphanMigratedSeeds(referencedIds: Iterable<any>): Location
   const dropped = list.filter(l => !keep.includes(l));
   if (dropped.length) writeCustomLocations(keep);
   return dropped;
+}
+
+// ── v6.99.39 (D-1, owner 18 Sept): ONE resolver for how a place is PRINTED ──
+// Screens show a place's short name; documents need its address. The picker stores the id (and the name as a
+// readable fallback); every printed document resolves the id here. The text is used only when there is no id —
+// a legacy or typed value — so a registered place always prints with its address.
+export function placeForPrint(id: any, text: any, contacts: any[] = []): { name: string; address: string; country: string; line: string } {
+  const loc: any = (id !== null && id !== undefined && id !== "") ? locationById(id, contacts) : null;
+  if (loc) {
+    const parts = [loc.address, loc.city].filter(Boolean).map((s: any) => String(s).trim()).filter(Boolean);
+    const address = Array.from(new Set(parts)).join(", ");
+    const country = String(loc.country || "").trim();
+    return { name: String(loc.name || ""), address, country, line: [loc.name, address, country].filter(Boolean).join(" · ") };
+  }
+  const t = String(text || "").trim();
+  return { name: t, address: "", country: "", line: t };
 }

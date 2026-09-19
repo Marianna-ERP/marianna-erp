@@ -16,7 +16,7 @@ import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
-import { warehouseAddressLocations, unifiedLocations, locationById } from "./locations";
+import { warehouseAddressLocations, unifiedLocations, locationById, placeForPrint } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
 import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
@@ -29,6 +29,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { cnCodeForItem } from "./productCatalog";
 import { recordAudit } from "./audit";
+import { formatAddress, addressOf } from "./address.domain";
 let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -151,8 +152,8 @@ function suppliersFromContacts(contacts) {
 // v6.32.0 (R7b-5): demo seed INITIAL_ORDERS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED ATOMS ───────────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
-  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max, min, noFuture }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
@@ -218,6 +219,7 @@ function fmtMoney(n, cur = "PLN") {
 function fmtDate(d) { return d || "—"; }
 
 function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
+let CONTACTS_REF: any[] = [];   // v6.99.39 (D-1): the printed document resolves a place's address through the registry
 function destinationDisplay(order) {
   const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
   if (custom) return custom;
@@ -281,14 +283,14 @@ function PODoc({ order }: any) {
     { en: "Order date",         pl: "Data zamówienia",        value: formatDMY(order.orderDate) },
     { en: "Loading date",       pl: "Data załadunku",         value: formatDMY(order.loadingDate) },
     { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: formatDMY(order.expectedDeliveryDate) },
-    { en: "Destination",        pl: "Miejsce docelowe",       value: destinationDisplay(order) },
+    { en: "Destination",        pl: "Miejsce docelowe",       value: placeForPrint(order.destinationLocationId, order.destinationText, CONTACTS_REF || []).line || destinationDisplay(order) },   // v6.99.39 (D-1): with the address
     { en: "Purchase Incoterm",  pl: "Warunki zakupu Incoterms", value: order.buyIncoterm,      strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
   ];
   const supplierRows = [
     { en: "Name",      pl: "Nazwa",   value: order.supplier?.name || "—" },
     { en: "Country",   pl: "Kraj",    value: order.supplier?.country || "—" },
-    { en: "Address",   pl: "Adres",   value: order.supplier?.address || "—" },
+    { en: "Address",   pl: "Adres",   value: formatAddress(addressOf(order.supplier || {}), { oneLine: true }) || order.supplier?.address || "—" },   // v6.99.40 (ADDR-1)
     { en: "NIP / VAT", pl: "NIP / VAT", value: order.supplier?.nip || "—" },
     { en: "Contact",   pl: "Kontakt", value: order.supplier?.contact || "—" },
   ];
@@ -915,7 +917,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
               <div>
                 <Lbl>Order date</Lbl>
-                <Inp disabled={isLocked} value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" max={localTodayISO()} title="The date the PO was created/agreed with the supplier" />
+                <Inp disabled={isLocked} value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" noFuture title="The date the PO was created/agreed with the supplier" />
               </div>
               <div>
                 <Lbl>Loading date</Lbl>
@@ -1296,7 +1298,7 @@ function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: any) {
   );
 }
 
-function OrderDetail({ users = [], userName = "", order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -1405,19 +1407,27 @@ function OrderDetail({ users = [], userName = "", order, onBack, onEdit, onDelet
               {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
               {/* v6.99.36 (A-R25-6): SUPPLIER'S TRUCK — its own box under the lines, showing what was registered */}
               {["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status !== "Draft" && (() => {
-                const trucks = (computedShipments || []).filter((s: any) => s && s.arrangedBy === "SUPPLIER" && String(s.status) !== "Cancelled");
+                const trucks = supplierTrucks || [];   // v6.99.42 (hotfix): was filtering a list of NUMBERS for .arrangedBy — never matched, the box always read empty
                 return (
                   <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>
-                    <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 Register supplier's truck</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
+                    <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 {trucks.length ? "Register another truck" : "Register supplier's truck"}</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
                     {!trucks.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No truck registered yet. Register it when the supplier announces the plates and the ETA.</div>}
                     {trucks.map((s: any) => { const u = (s.legs || []).flatMap((l: any) => l.vehicles || [])[0] || {}; return (
-                      <div key={s.number} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 1fr 1fr 1fr 1fr", gap: 8, fontSize: 12, padding: "5px 0", borderTop: "1px solid #F1F5F9" }}>
-                        <div><b>{s.number}</b></div>
-                        <div>{u.truckPlate || "—"}{u.trailerPlate ? ` / ${u.trailerPlate}` : ""}</div>
-                        <div>{s.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef}</span> : "—"}</div>
-                        <div>ETA {u.eta || s.expectedDeliveryDate || "—"}</div>
-                        <div>{u.tempRecorderNo ? `recorder ${u.tempRecorderNo}` : "—"}</div>
-                        <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
+                      <div key={s.number} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr 1fr 1fr auto", gap: 8, fontSize: 12, alignItems: "center" }}>
+                          <div><b>{s.number}</b></div>
+                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
+                          <div>{s.supplierRef || u.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef || u.supplierRef}</span> : <span style={{ color: "#94A3B8" }}>no supplier ref</span>}</div>
+                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
+                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
+                          <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
+                          <div>{typeof onOpenShipment === "function" && <SmallButton onClick={() => onOpenShipment(s.number)}>Open</SmallButton>}</div>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#64748B", marginTop: 3 }}>
+                          {u.driverName ? `driver ${u.driverName}${u.driverPhone ? " · " + u.driverPhone : ""} · ` : ""}
+                          {(s.goods || []).length ? `carrying ${(s.goods || []).map((g: any) => `${g.lotRef || g.product} ${Math.round(Number(g.qtyKg) || 0).toLocaleString("pl-PL")} kg`).join(", ")}` : ""}
+                          {s.notes ? ` · ${s.notes}` : ""}
+                        </div>
                       </div>
                     ); })}
                   </Card>
@@ -1722,7 +1732,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = ""}: any = {}) {
+export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", onOpenShipment = null}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
@@ -1731,6 +1741,7 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
   const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const orders = extPOs ?? localOrders;
   const setOrders = extSetPOs ?? setLocalOrders;
+  CONTACTS_REF = extContacts || [];
   const suppliers = useMemo(() => suppliersFromContacts((extContacts || []).filter((c: any) => !c.archived)), [extContacts]); // v6.99.2 (CP-4)
   const lots = extLots || [];
   // v6.99.37: a PO can be opened directly — deep link, and the render smoke exercises the settlement card
@@ -2119,6 +2130,7 @@ ${blockNote}`.trim(),
             }));
           }}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
+          supplierTrucks={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled" && String(s.arrangedBy || "").toUpperCase() === "SUPPLIER")}   // v6.99.42 (hotfix): the box needs the shipment OBJECTS, not their numbers
           computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
           computedLots={(extLots || []).filter((l: any) => String(l.poRef) === String(selected.number)).map((l: any) => l.number)}
           computedInvoices={computedPOLinks(selected, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }).linkedInvoices}

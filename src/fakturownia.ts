@@ -5,6 +5,8 @@
 // Browser CORS may block direct calls on some accounts; every caller must
 // handle {ok:false, corsLikely:true} by falling back to the XLS/CSV import.
 
+import { addressOf } from "./address.domain";
+
 export interface FakturowniaConfig {
   subdomain: string;   // e.g. "marianna2"  → https://marianna2.fakturownia.pl
   apiToken: string;
@@ -137,6 +139,8 @@ export async function createInvoice(c: FakturowniaConfig, body: any): Promise<Fk
 
 // ── Tolerant mapping of a Fakturownia invoice JSON to the shapes the ERP uses ─
 export interface MappedInvoice {
+  buyerAddr?: { street?: string; postcode?: string; city?: string; country?: string };    // v6.99.41 (ADDR-4)
+  sellerAddr?: { street?: string; postcode?: string; city?: string; country?: string };
   fktId: any;
   number: string;
   kind: string;
@@ -178,6 +182,9 @@ export function mapInvoice(raw: any): MappedInvoice {
     sellerTaxNo: str(raw?.seller_tax_no),
     buyerName: str(raw?.buyer_name),
     buyerTaxNo: str(raw?.buyer_tax_no),
+    // v6.99.41 (ADDR-4): an imported invoice brings the buyer's address as parts — used when a party is created from it
+    buyerAddr: { street: str(raw?.buyer_street), postcode: str(raw?.buyer_post_code), city: str(raw?.buyer_city), country: str(raw?.buyer_country) },
+    sellerAddr: { street: str(raw?.seller_street), postcode: str(raw?.seller_post_code), city: str(raw?.seller_city), country: str(raw?.seller_country) },
     netTotal: num(raw?.price_net ?? raw?.net_price ?? raw?.total_price_net),
     grossTotal: gross,
     currency: str(raw?.currency || "PLN").toUpperCase(),
@@ -246,6 +253,14 @@ export function buildInvoicePayloadFromSO(so: any, shipments: any[] = []): any {
       issue_date: undefined,                // Fakturownia sets today
       buyer_name: so.client?.name || "",
       buyer_tax_no: so.client?.nip || so.client?.vatEuId || "",
+      // v6.99.41 (ADDR-4, owner): Fakturownia holds an address as four fields — we send ours as four,
+      // instead of flattening them into one string it would have to guess how to split again.
+      ...(() => { const a = addressOf(so.client || {}); return {
+        buyer_street: a.street || undefined,
+        buyer_post_code: a.postcode || undefined,
+        buyer_city: a.city || undefined,
+        buyer_country: a.country || so.client?.country || undefined,
+      }; })(),
       currency: so.currency || "PLN",
       description: descLines.join("\n"),
       positions,

@@ -8,6 +8,7 @@ import DateInput from "./DateInput";
 import React, { useState, useMemo, useRef } from "react";
 import { Lbl, useConfirm, ActionButton} from "./ui";
 import { nextId } from "./ids";
+import { parseAddress, formatAddress, shortAddress } from "./address.domain";
 import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
@@ -64,8 +65,8 @@ const SERVICE_COLORS: Record<string, { bg: string; color: string; icon: string }
 // v6.32.0 (R7b-5): demo seed INIT_COUNTERPARTIES moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED UI ATOMS (mirror FreshTradeERP.tsx) ─────────────────────────────
-function Inp({ value, onChange, type, placeholder, style, inputMode }: any) {
-  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={undefined} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+function Inp({ value, onChange, type, placeholder, style, inputMode, min, max, noFuture, title }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={undefined} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={placeholder} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <input value={value || ""} onChange={onChange} type={type || "text"} inputMode={inputMode} placeholder={placeholder} style={{ ...base, ...style }} />;
@@ -184,8 +185,23 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
       }))
     : [];
   // v6.10 (#8): a warehouse company can have more than one delivery address.
+  // v6.99.40 (A-ADDR): a site keeps its persistent siteId; only its parts change. A legacy string site is read through the parser.
+  // v6.99.40: the four parts live in `addr`; `country` stays the one country source and is mirrored into it.
+  const setAddr = (k: string, v: any) => setForm((f: any) => ({ ...f, addr: { ...(f.addr || {}), country: f.country || (f.addr || {}).country || "", [k]: v }, addressNeedsCheck: k === "street" ? undefined : f.addressNeedsCheck }));
+  const siteField = (a: any, k: string) => {
+    if (typeof a === "string") { const p = parseAddress(a, form.country); return k === "label" ? "" : (p as any)[k] || ""; }
+    if (k === "label") return a?.label || "";
+    if (a?.addr && (a.addr.street || a.addr.city || a.addr.postcode)) return a.addr[k] || "";
+    const p = parseAddress(a?.address, form.country); return (p as any)[k] || "";
+  };
+  const setSitePart = (i: number, k: string, v: any) => setForm((f: any) => ({ ...f, extraAddresses: (f.extraAddresses || []).map((a: any, idx: number) => {
+    if (idx !== i) return a;
+    const cur = typeof a === "string" ? { address: a, addr: parseAddress(a, f.country) } : { ...a, addr: { ...(a.addr || parseAddress(a?.address, f.country)) } };
+    if (k === "label") return { ...cur, label: v };
+    const addr = { ...(cur.addr || {}), country: f.country || (cur.addr || {}).country || "", [k]: v };
+    return { ...cur, addr, address: formatAddress(addr, { oneLine: true }) };   // the one-line text stays in step for legacy readers
+  }) }));
   const addExtraAddress = () => setForm(f => ({ ...f, extraAddresses: [...(f.extraAddresses || []), ""] }));
-  const setExtraAddress = (i, v) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).map((a, idx) => idx === i ? v : a) }));
   const removeExtraAddress = (i) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).filter((_, idx) => idx !== i) }));
   // v6.6: seasonal commission rates (consignment sales)
   const setCommissionRate = (i, k, v) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).map((r, idx) => idx === i ? { ...r, [k]: v } : r) }));
@@ -266,7 +282,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                   })}
                 </div>
               </div>
-              <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => sf("country", e.target.value)} title="v6.99.14: the list is edited in the Countries tab"><option value="">— country —</option><optgroup label="EU">{readCountries().filter(x => x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup><optgroup label="Other">{readCountries().filter(x => !x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup>{form.country && !readCountries().some(x => x.name === form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
+              <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, country: v, addr: { ...(f.addr || {}), country: v } })); }} title="v6.99.14: the list is edited in the Countries tab"><option value="">— country —</option><optgroup label="EU">{readCountries().filter(x => x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup><optgroup label="Other">{readCountries().filter(x => !x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup>{form.country && !readCountries().some(x => x.name === form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
               <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
               {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
               <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px" }}>
@@ -283,7 +299,17 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                   open receivables past the limit takes an explicit confirm. Blank = no limit. */}
               <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
               <div><Lbl>Payment terms (days)</Lbl><Inp value={form.paymentTermsDays ?? ""} onChange={e => sf("paymentTermsDays", e.target.value)} type="number" placeholder="e.g. 30" /></div>
-              <div style={{ gridColumn: "span 2" }}><Lbl>Address</Lbl><Inp value={form.address} onChange={e => sf("address", e.target.value)} placeholder="Street, City, Postcode" /></div>
+              {/* v6.99.40 (A-ADDR, owner): an address is four facts. They print as three lines on every document,
+                  map 1:1 to Fakturownia's fields, and let a city be filtered. The old one-line text is kept until the DDL. */}
+              <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: "2fr 0.8fr 1.2fr", gap: 8 }}>
+                <div><Lbl>Street and number</Lbl><Inp value={form.addr?.street ?? ""} onChange={e => setAddr("street", e.target.value)} placeholder="ul. Piękna 13" /></div>
+                <div><Lbl>Postcode</Lbl><Inp value={form.addr?.postcode ?? ""} onChange={e => setAddr("postcode", e.target.value)} placeholder="05-555" /></div>
+                <div><Lbl>City</Lbl><Inp value={form.addr?.city ?? ""} onChange={e => setAddr("city", e.target.value)} placeholder="Tarczyn" /></div>
+              </div>
+              <div style={{ gridColumn: "span 2" }}><Lbl>Address note <span style={{ color: "#AAA", fontWeight: 400 }}>· district, market, PO box — whatever the postcode grid does not hold</span></Lbl>
+                <Inp value={form.addr?.note ?? ""} onChange={e => setAddr("note", e.target.value)} placeholder="Central Fruits & Vegetable Market" />
+                {form.addressNeedsCheck && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 3 }}>⚠ this address came from one line and could not be split — check the parts above (the original read: {form.address})</div>}
+              </div>
               {/* v6.99.6 (A-R9-10): legacy "Default currency" / "Default payment terms" inputs removed — the Terms box above is the one source */}
             </div>
           </div>
@@ -358,8 +384,12 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               <div style={{ marginTop: 12 }}>
                 <Lbl>Additional delivery addresses <span style={{ color: "#AAA", fontWeight: 400 }}>(if this warehouse has more than one site we can send cargo to)</span></Lbl>
                 {(form.extraAddresses || []).map((a: any, i: number) => (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 34px", gap: 8, marginBottom: 6, alignItems: "center" }}>
-                    <Inp value={typeof a === "string" ? a : (a?.address || "")} onChange={e => setExtraAddress(i, e.target.value)} placeholder="Street, City, Postcode" />
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 2fr 0.8fr 1.2fr 34px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+                    {/* v6.99.40 (A-ADDR): a site is an address too — same four parts, same formatter on documents */}
+                    <Inp value={siteField(a, "label")} onChange={e => setSitePart(i, "label", e.target.value)} placeholder="site name (DC, cold store…)" />
+                    <Inp value={siteField(a, "street")} onChange={e => setSitePart(i, "street", e.target.value)} placeholder="street and number" />
+                    <Inp value={siteField(a, "postcode")} onChange={e => setSitePart(i, "postcode", e.target.value)} placeholder="postcode" />
+                    <Inp value={siteField(a, "city")} onChange={e => setSitePart(i, "city", e.target.value)} placeholder="city" />
                     <button type="button" onClick={() => removeExtraAddress(i)} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
                   </div>
                 ))}
@@ -1390,7 +1420,7 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
 // places nobody invoices us for. Edited here, read everywhere through the one LocationPicker.
 function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [] }: any) {
   const [, force] = useState(0);
-  const [form, setForm] = useState<any>({ name: "", country: "", type: "Port", address: "", unlocode: "" });
+  const [form, setForm] = useState<any>({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "" });
   const [editId, setEditId] = useState<any>(null);
   const KINDS: Array<[string, string]> = [["Port", "Port"], ["Airport", "Airport"], ["BorderCrossing", "Border crossing"], ["Customs", "Customs point"]];
   // v6.99.29 (A-R19-5, owner): EVERY place is listed here with its source — a stray legacy place (WH-01) used to be
@@ -1412,10 +1442,12 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const save = () => {
     if (!String(form.name).trim()) return;
-    if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: form.address, type: form.type });
-    else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: form.address });
+    const addr = { street: form.street || "", postcode: form.postcode || "", city: form.city || "", country: form.country || "" };
+    const oneLine = formatAddress(addr, { oneLine: true, withCountry: false });   // the legacy text mirrors the parts until the DDL
+    if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type });
+    else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: oneLine, addr });
     recordAudit({ module: "Counterparties", docType: "Place", docNumber: form.name, action: editId != null ? "status" : "created", summary: `${form.type} ${editId != null ? "updated" : "added"} in the Directory` });
-    setForm({ name: "", country: "", type: "Port", address: "", unlocode: "" }); setEditId(null); force(x => x + 1);
+    setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "" }); setEditId(null); force(x => x + 1);
     setTimeout(() => window.location.reload(), 150);   // the location registry is module-level; every picker re-reads on reload (as Settings did)
   };
   return (
@@ -1425,21 +1457,24 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
         <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!showAll} onChange={e => setShowAll(!e.target.checked)} /> ports, crossings &amp; customs only</label>
       </div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Places nobody invoices us for. A warehouse near a port (Silvertech, Koper) is a COUNTERPARTY with the flag "charged through our forwarder" — add it under Companies. Everything here appears in every location picker, alphabetically.</div>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1.2fr 2fr 1fr auto", gap: 8, alignItems: "end", marginBottom: 12 }}>
+      {/* v6.99.41 (ADDR-2, owner): a place has the same four-part address as a counterparty — one shape, one formatter on documents */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1.2fr 1.8fr 0.8fr 1.2fr auto", gap: 8, alignItems: "end", marginBottom: 12 }}>
         <div><Lbl>Name</Lbl><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Koper Port" style={inp} /></div>
         <div><Lbl>Kind</Lbl><select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inp}>{KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-        <div><Lbl>Country</Lbl><input value={form.country} onChange={e => setForm({ ...form, country: e.target.value })} placeholder="Slovenia" style={inp} /></div>
-        <div><Lbl>Address / terminal (optional)</Lbl><input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} style={inp} /></div>
+        <div><Lbl>Country</Lbl><select value={form.country || ""} onChange={e => setForm({ ...form, country: e.target.value })} style={inp}><option value="">— country —</option>{readCountries().map((x: any) => <option key={x.iso} value={x.name}>{x.name}</option>)}{form.country && !readCountries().some((x: any) => x.name === form.country) && <option value={form.country}>{form.country}</option>}</select></div>
+        <div><Lbl>Street / terminal</Lbl><input value={form.street ?? ""} onChange={e => setForm({ ...form, street: e.target.value })} placeholder="Vojkovo nabrežje 38" style={inp} /></div>
+        <div><Lbl>Postcode</Lbl><input value={form.postcode ?? ""} onChange={e => setForm({ ...form, postcode: e.target.value })} placeholder="6501" style={inp} /></div>
+        <div><Lbl>City</Lbl><input value={form.city ?? ""} onChange={e => setForm({ ...form, city: e.target.value })} placeholder="Koper" style={inp} /></div>
         <div><Lbl>UN/LOCODE</Lbl><input value={form.unlocode} onChange={e => setForm({ ...form, unlocode: e.target.value.toUpperCase() })} placeholder="SIKOP" style={inp} /></div>
         <button onClick={save} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "+ Add"}</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>NAME</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>SOURCE · USED BY</div><div /></div>
       {rows.map((l: any) => { const src = sourceOf(l); const used = usageOf(l.id); const mine = src === "added here" || src === "migrated (legacy)";
         return <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 12, padding: "5px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}>
-        <div><b>{l.name}</b></div><div>{l.type || l.legacyType}</div><div>{l.country || ""}</div><div style={{ color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.address || ""}</div>
+        <div><b>{l.name}</b></div><div>{l.type || l.legacyType}</div><div>{l.country || ""}</div><div style={{ color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.address || ""}>{l.address || shortAddress(l) || ""}</div>
         <div style={{ fontSize: 10.5, color: src === "migrated (legacy)" ? "#B45309" : "#64748B" }}>{src}{used ? ` · ${used} doc(s)` : ""}</div>
         <div style={{ display: "flex", gap: 6 }}>
-          {mine && <button onClick={() => { setEditId(l.id); setForm({ name: l.name, country: l.country || "", type: l.type || "Port", address: l.address || "", unlocode: l.unlocode || "" }); }} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button>}
+          {mine && <button onClick={() => { setEditId(l.id); { const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address, l.country); setForm({ name: l.name, country: l.country || a.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: l.unlocode || "" }); } }} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button>}
           {mine && <button onClick={() => { if (used > 0) { window.alert(`${l.name} is used by ${used} document(s) — it cannot be removed while they reference it.`); return; } if (window.confirm(`Remove ${l.name}?`)) { removeCustomLocation(Number(l.id)); setTimeout(() => window.location.reload(), 150); } }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button>}
           {src === "counterparty site" && <span style={{ fontSize: 10.5, color: "#94A3B8" }}>edited on its party</span>}
         </div>

@@ -25,10 +25,11 @@ import { defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import SOMarginCard from "./SOMarginCard";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
-import { locationById } from "./locations";
+import { locationById, placeForPrint } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { recordAudit } from "./audit";
+import { formatAddress, addressOf } from "./address.domain";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -104,6 +105,7 @@ let PO_REFS: any[] = [];   // Batch 0 (G1): no stub fallback — live props only
 // keep the raw arrays here for shippedKgByLine.
 let RAW_LOTS: any[] = [];
 let SHIPMENTS_REF: any[] = [];
+let CONTACTS_REF: any[] = [];   // v6.99.39 (D-1): the documents resolve a place's address through the registry
 // v6.61.0: packaging types, so a line priced per box can convert to kilos using
 // the same box weights the loading protocol already uses. Synced below.
 let PACKAGING_TYPES_REF: any[] = PACKAGING_SEED;
@@ -172,6 +174,10 @@ function destinationDisplay(order) {
   const loc = locById(order?.destinationLocationId);
   if (!loc) return "—";
   return `${loc.name}${loc.country ? `, ${loc.country}` : ""}`;
+}
+/** v6.99.39 (D-1): the DOCUMENT prints the place with its address — resolved from the id, the text only as a fallback. */
+function destinationForPrint(order: any): string {
+  return placeForPrint(order?.destinationLocationId, order?.destinationText || order?.destinationLocationText, CONTACTS_REF || []).line;
 }
 
 // ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
@@ -392,8 +398,8 @@ function computeLineAvailability(soItems, allOrders, currentOrderId) {
 }
 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max }: any) {
-  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} />; // v6.81.0 (D-52)
+function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max, min, noFuture }: any) {
+  if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
@@ -688,14 +694,14 @@ function SODoc({ order }: any) {
     { en: "Delivery date",      pl: "Data dostawy",           value: formatDMY(order.deliveryDate) },
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
-    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationLabel },
+    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationForPrint(order) || destinationLabel },   // v6.99.39 (D-1): with the address
     ...(order.importPermitNo ? [{ en: "Import permit no.", pl: "Nr pozwolenia importowego", value: order.importPermitNo, strong: true }] : []),
     ...(order.acidNo ? [{ en: "ACID no.", pl: "Nr ACID", value: order.acidNo, strong: true }] : []),
   ];
   const clientRows = [
     { en: "Name",      pl: "Nazwa",     value: order.client?.name    || "—" },
     { en: "Country",   pl: "Kraj",      value: order.client?.country || "—" },
-    { en: "Address",   pl: "Adres",     value: order.client?.address || "—" },
+    { en: "Address",   pl: "Adres",     value: formatAddress(addressOf(order.client || {}), { oneLine: true }) || order.client?.address || "—" },   // v6.99.40 (ADDR-1)
     { en: "NIP / VAT", pl: "NIP / VAT", value: order.client?.nip     || "—" },
     { en: "Contact",   pl: "Kontakt",   value: order.client?.contact || "—" },
   ];
@@ -1067,8 +1073,8 @@ function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfi
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div><Lbl>Invoice number</Lbl><Inp value={invoice.number} onChange={e => sf("number", e.target.value)} /></div>
               <div><Lbl>Type</Lbl><div style={{ padding: "8px 10px", background: "#DCFCE7", color: "#16A34A", borderRadius: 6, fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>SINV · Sales Invoice (↑ Receivable)</div></div>
-              <div><Lbl>Issue date</Lbl><Inp value={invoice.issueDate} onChange={e => sf("issueDate", e.target.value)} type="date" max={localTodayISO()} /></div>
-              <div><Lbl>Sale date</Lbl><Inp value={invoice.saleDate} onChange={e => sf("saleDate", e.target.value)} type="date" max={localTodayISO()} /></div>
+              <div><Lbl>Issue date</Lbl><Inp value={invoice.issueDate} onChange={e => sf("issueDate", e.target.value)} type="date" noFuture /></div>
+              <div><Lbl>Sale date</Lbl><Inp value={invoice.saleDate} onChange={e => sf("saleDate", e.target.value)} type="date" noFuture /></div>
               <div><Lbl>Due date</Lbl><Inp value={invoice.dueDate} onChange={e => sf("dueDate", e.target.value)} type="date" /></div>
               <div><Lbl>Payment method</Lbl>
                 <Sel value={invoice.paymentMethod} onChange={e => sf("paymentMethod", e.target.value)}>
@@ -2342,6 +2348,7 @@ export default function SalesOrders({
   if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots);
   RAW_LOTS = extInvLots || [];
   SHIPMENTS_REF = extShipments || [];
+  CONTACTS_REF = extContacts || [];
   PACKAGING_TYPES_REF = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED;
   if (extPOs)    PO_REFS = _adaptPOsFromModule(extPOs);
   // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields.

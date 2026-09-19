@@ -24,7 +24,7 @@ export default function LocationPicker({ value, onChange, contacts = [], kinds =
       <option value="">{placeholder}</option>
       {!current && value ? <option value="">(typed: {String(value)})</option> : null}
       <option value="__add__">＋ Not in the list? Add it in the Directory…</option>
-      {keys.map(k => <optgroup key={k} label={(pref.includes(k) ? "★ " : "") + (KIND_LABEL[k] || k)}>{groups[k].sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pl")).map((l: any) => <option key={String(l.id)} value={String(l.id)}>{l.name}{l.country ? ` · ${l.country}` : ""}</option>)}</optgroup>)}
+      {keys.map(k => <optgroup key={k} label={(pref.includes(k) ? "★ " : "") + (KIND_LABEL[k] || k)}>{groups[k].sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pl")).map((l: any) => <option key={String(l.id)} value={String(l.id)}>{l.name}{((l as any).addr?.city || (l as any).city) ? ` · ${(l as any).addr?.city || (l as any).city}` : ""}{l.country ? ` · ${l.country}` : ""}</option>)}</optgroup>)}
     </select>
   );
 }

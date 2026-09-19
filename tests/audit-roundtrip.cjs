@@ -1890,3 +1890,72 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.38 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.39 — the printed place, the carrier of a unit (D-1 / D-2) ══
+(function v69939(){
+  console.log("\n══ 58. v6.99.39: a place prints with its address; a container belongs to the booking's forwarder ══");
+  const M = B("shipmentModel.domain.js");
+  t("D-2: carrierOfUnit — the unit's carrier on the road, the booking's forwarder at sea, nobody when nothing is named", () => {
+    const sh = { bookings: [{ id: 1, forwarderId: 99 }], legs: [
+      { mode: "Road", vehicles: [{ id: 1, carrierId: 10 }, { id: 2 }] },
+      { mode: "Sea", vehicles: [{ id: 3, kind: "container" }] },
+    ] };
+    eq(String(M.carrierOfUnit(sh, sh.legs[0], sh.legs[0].vehicles[0])), "10");
+    eq(M.carrierOfUnit(sh, sh.legs[0], sh.legs[0].vehicles[1]), null, "a road unit with no carrier belongs to nobody — never to the forwarder");
+    eq(String(M.carrierOfUnit(sh, sh.legs[1], sh.legs[1].vehicles[0])), "99", "the container is the forwarder's");
+    eq(M.carrierOfUnit({ legs: [{ mode: "Sea", vehicles: [{ id: 3 }] }] }, { mode: "Sea", vehicles: [{ id: 3 }] }, { id: 3 }), null, "no booking → no carrier");
+  });
+  console.log("v6.99.39 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.40 — an address is four facts (A-ADDR) ══
+(function v69940(){
+  console.log("\n══ 59. v6.99.40: structured addresses — parse, format, migrate ══");
+  const A = B("address.domain.js");
+  t("ADDR-3: the Polish form splits on its postcode, the remainder becomes a note", () => {
+    const a = A.parseAddress("ul. Piękna, 13, 05-555 Tarczyn, Wola Przypkowska", "Poland");
+    eq(a.street, "ul. Piękna, 13"); eq(a.postcode, "05-555"); eq(a.city, "Tarczyn"); eq(a.note, "Wola Przypkowska"); eq(a.needsCheck, false);
+  });
+  t("ADDR-3: a foreign numeric postcode splits too", () => {
+    const a = A.parseAddress("Shkilna 3, 45043 Kovel district, villige Skulin", "Ukraine");
+    eq(a.postcode, "45043"); eq(a.city, "Kovel district"); eq(a.country, "Ukraine"); eq(a.needsCheck, false);
+  });
+  t("ADDR-3: an address with no postcode is KEPT WHOLE and flagged — a market address is still an address", () => {
+    const a = A.parseAddress("Central Fruits & Vegetable Market, AMMAN", "Jordan");
+    eq(a.street, "Central Fruits & Vegetable Market, AMMAN"); eq(a.needsCheck, true); eq(a.postcode, undefined);
+  });
+  t("ADDR-1: the document form is three lines, empty parts skipped", () => {
+    eq(A.formatAddress({ street: "ul. Piękna 13", postcode: "05-555", city: "Tarczyn", country: "Poland" }), "ul. Piękna 13\n05-555 Tarczyn\nPoland");
+    eq(A.formatAddress({ street: "Koper terminal", country: "Slovenia" }, { oneLine: true }), "Koper terminal, Slovenia");
+    eq(A.shortAddress({ city: "Tarczyn", country: "Poland" }), "Tarczyn, Poland");
+  });
+  t("ADDR-3: the migration is idempotent and never overwrites a structured address", () => {
+    const r1 = A.migrateAddressOn({ name: "X", address: "Wierzbiny, 2, 27-641 Obrazów", country: "Poland" });
+    ok(r1.changed); eq(r1.rec.addr.city, "Obrazów"); eq(r1.rec.address, "Wierzbiny, 2, 27-641 Obrazów", "the original text stays until the DDL");
+    ok(!A.migrateAddressOn(r1.rec).changed);
+  });
+  console.log("v6.99.40 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.41 — places and Fakturownia carry the address parts (ADDR-2 / ADDR-4) ══
+(function v69941(){
+  console.log("\n══ 60. v6.99.41: a place's address splits too; Fakturownia gets four fields ══");
+  const A = B("address.domain.js");
+  t("ADDR-2: a place's one-line address splits into the same four parts", () => {
+    const a = A.parseAddress("Vojkovo nabrežje 38, 6501 Koper", "Slovenia");
+    eq(a.street, "Vojkovo nabrežje 38"); eq(a.postcode, "6501"); eq(a.city, "Koper"); eq(a.country, "Slovenia");
+  });
+  t("ADDR-2: the one-line mirror written back omits the country (the place already has a country column)", () => {
+    eq(A.formatAddress({ street: "Vojkovo nabrežje 38", postcode: "6501", city: "Koper", country: "Slovenia" }, { oneLine: true, withCountry: false }), "Vojkovo nabrežje 38, 6501 Koper");
+  });
+  t("ADDR-4: addressOf() gives Fakturownia its four fields from either shape", () => {
+    const structured = A.addressOf({ addr: { street: "ul. Piękna 13", postcode: "05-555", city: "Tarczyn", country: "Poland" } });
+    eq(structured.postcode, "05-555"); eq(structured.city, "Tarczyn");
+    const legacy = A.addressOf({ address: "Czarnocin 4 B, 26-807 Radzanów", country: "Poland" });
+    eq(legacy.street, "Czarnocin 4 B"); eq(legacy.postcode, "26-807"); eq(legacy.city, "Radzanów");
+  });
+  console.log("v6.99.41 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

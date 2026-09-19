@@ -16,7 +16,16 @@ function dmyToIso(txt: string): string | null {
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
   return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
-export default function DateInput({ value, onChange, disabled, placeholder, style, title }: any) {
+// v6.99.39 (D-3, owner): the ONE date control. Every date in the system goes through it with the same rules —
+// dd/mm/yyyy, `noFuture` for actual dates, `min` for a document's anchor (a lot's receipt, an order's date).
+// Out of range is shown, not silently accepted.
+export default function DateInput({ value, onChange, disabled, placeholder, style, title, min, max, noFuture }: any) {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const hi = noFuture ? (max ? (max < todayISO ? max : todayISO) : todayISO) : max;
+  const v = String(value || "").slice(0, 10);
+  const tooEarly = !!(v && min && v < min); const tooLate = !!(v && hi && v > hi);
+  const warn = tooEarly ? `before ${fmt(min)}` : tooLate ? (noFuture && hi === todayISO ? "in the future" : `after ${fmt(hi)}`) : "";
+  function fmt(iso: string) { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso || ""); }
   const [txt, setTxt] = React.useState(isoToDmy(value));
   const [bad, setBad] = React.useState(false);
   React.useEffect(() => { setTxt(isoToDmy(value)); setBad(false); }, [value]);
@@ -27,14 +36,15 @@ export default function DateInput({ value, onChange, disabled, placeholder, styl
     const iso = dmyToIso(txt);
     if (iso) { setBad(false); if (iso !== value) emit(iso); } else setBad(true);
   };
-  const base: any = { width: "100%", border: `1px solid ${bad ? "#DC2626" : "#E5E7EB"}`, borderRadius: 6, padding: "8px 30px 8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", boxSizing: "border-box" };
+  const base: any = { width: "100%", border: `1px solid ${bad || warn ? "#DC2626" : "#E5E7EB"}`, borderRadius: 6, padding: "8px 30px 8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff", boxSizing: "border-box" };
   return (
     <div style={{ position: "relative", width: "100%", ...(style || {}) }} title={title}>
       <input value={txt} disabled={disabled} placeholder={placeholder || "dd/mm/yyyy"} inputMode="numeric"
         onChange={e => setTxt(e.target.value)} onBlur={commit} onKeyDown={e => { if (e.key === "Enter") commit(); }} style={base} />
-      <input ref={pickerRef} type="date" value={value || ""} disabled={disabled} onChange={e => emit(e.target.value)} tabIndex={-1}
+      <input ref={pickerRef} type="date" value={value || ""} min={min || undefined} max={hi || undefined} disabled={disabled} onChange={e => emit(e.target.value)} tabIndex={-1}
         style={{ position: "absolute", right: 0, top: 0, width: 28, height: "100%", opacity: 0, cursor: disabled ? "default" : "pointer" }} />
       <span onClick={() => !disabled && pickerRef.current?.showPicker?.()} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "#94A3B8", pointerEvents: "none" }}>📅</span>
+      {warn && <div style={{ fontSize: 10, color: "#DC2626", marginTop: 2 }}>date {warn}</div>}
     </div>
   );
 }
