@@ -1136,7 +1136,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
           <Card>
             <SectionTitle>NOTES</SectionTitle>
             <textarea disabled={isLocked} value={order.notes || ""} onChange={e => sf("notes", e.target.value)} rows={4} placeholder="Special instructions, packing requirements, labels…"
-              style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} />
+              style={{ width: "100%", border: "1.5px solid #F59E0B", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} />
           </Card>
         </div>
       </div>

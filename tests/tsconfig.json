@@ -13,7 +13,6 @@
   "files": [
     "../src/auditTrail.domain.ts",
     "../src/cancellation.domain.ts",
-    "../src/customs.domain.ts",
     "../src/claim.domain.ts",
     "../src/claims.domain.ts",
     "../src/consignment.ts",
@@ -72,6 +71,8 @@
     "../src/counterparty.domain.ts",
     "../src/cnCodes.ts",
     "../src/dashboard.domain.ts",
-    "../src/address.domain.ts"
+    "../src/address.domain.ts",
+    "../src/customsClearance.domain.ts",
+    "../src/customs.domain.ts"
   ]
 }

@@ -1959,3 +1959,31 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.41 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.44 — customs clearance from the agent's file (X-5/X-6) ══
+(function v69944(){
+  console.log("\n══ 61. v6.99.44: the CC529C release file fills the clearance line and is matched by plates ══");
+  const C = B("customsClearance.domain.js"); const fs = require("fs");
+  const xml = fs.readFileSync("/mnt/user-data/uploads/CC529C_26PL3310200028K7B6_1.xml", "utf8");
+  t("X-5: every fact is read from the owner's real release file", () => {
+    const r = C.parseCC529C(xml);
+    ok(r.ok); eq(r.mrn, "26PL3310200028K7B6"); eq(r.lrn, "26S00KMT0C"); eq(r.releasedOn, "2026-09-19"); eq(r.declaredOn, "2026-09-19");
+    eq(r.officeExport, "PL331020"); eq(r.officeExit, "SI006044"); eq(r.plates, "WGR52365/WGR2UU2");
+    eq(r.grossKg, 22500); eq(r.netKg, 19422); eq(r.packages, 1494); eq(r.cn, "08081080"); eq(r.invoiceRef, "FV2026/09/9"); eq(r.incoterm, "CFR"); eq(r.status, "Released");
+  });
+  t("X-6: the file is matched to the truck by plates (truck or trailer, spacing ignored) and cross-checked", () => {
+    const sh = { number: "SHP-1", governingSoRef: "SO-9", goods: [{ id: 1, cnCode: "08081080", qtyKg: 19422 }], legs: [{ mode: "Road", vehicles: [{ id: 11, truckPlate: "WGR 52365", trailerPlate: "WGR 2UU2", load: [{ goodsLineId: 1, qtyKg: 19422 }] }, { id: 12, truckPlate: "WGM 8811P" }] }] };
+    const hit = C.matchUnitByPlates(sh, "WGR52365/WGR2UU2"); eq(hit.id, 11);
+    eq(C.matchUnitByPlates(sh, "XX 0000"), null);
+    const r = C.parseCC529C(xml);
+    eq(C.crossCheckClearance(r, sh, hit, [{ number: "SO-9", sellIncoterm: "CFR", client: { name: "Al Baraka For Import & Export" } }], []).length, 0, "everything agrees → nothing to show");
+    const bad = C.crossCheckClearance(r, { ...sh, goods: [{ id: 1, cnCode: "07096010", qtyKg: 19422 }] }, { ...hit, load: [{ goodsLineId: 1, qtyKg: 18000 }] }, [{ number: "SO-9", sellIncoterm: "FOB", client: { name: "Al Baraka For Import & Export" } }], []);
+    eq(bad.length, 3, "kilos, CN and incoterm disagree");
+  });
+  t("X-1: one clearance line per unit, existing lines kept", () => {
+    const sh = { legs: [{ vehicles: [{ id: 11 }, { id: 12 }] }], customsUnits: [{ unitId: 11, mrn: "26PL…", status: "Released" }] };
+    const lines = C.clearanceLinesFor(sh); eq(lines.length, 2); eq(lines[0].mrn, "26PL…"); eq(lines[1].status, "Pending");
+  });
+  console.log("v6.99.44 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

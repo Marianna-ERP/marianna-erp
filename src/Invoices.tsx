@@ -860,7 +860,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
             </div>
           </Card>
 
-          <Card><SectionTitle>NOTES</SectionTitle><textarea value={form.notes || ""} onChange={(e: any) => sf("notes", e.target.value)} rows={3} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }} /></Card>
+          <Card><SectionTitle>NOTES</SectionTitle><textarea value={form.notes || ""} onChange={(e: any) => sf("notes", e.target.value)} rows={3} style={{ width: "100%", border: "1.5px solid #F59E0B", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical" }} /></Card>
         </div>
       </div>
     </div>

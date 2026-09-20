@@ -1587,10 +1587,15 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                 )}
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 14 }}>
               <div>
                 <Lbl>Order date</Lbl>
                 <Inp value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" title="The date the SO was created/agreed with the client" />
+              </div>
+              <div>
+                {/* v6.99.44 (H-10, owner): the day we load at OUR warehouse for this client — the shipment's expected loading reads it */}
+                <Lbl>Expected loading date <span style={{ color: "#AAA", fontWeight: 400 }}>· at our warehouse</span></Lbl>
+                <Inp type="date" value={order.expectedLoadingDate || ""} onChange={e => sf("expectedLoadingDate", e.target.value)} disabled={fullyLocked} />
               </div>
               <div>
                 <Lbl>Expected delivery date</Lbl>
@@ -1940,7 +1945,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
           {/* Notes */}
           <Card>
             <SectionTitle>NOTES</SectionTitle>
-            <textarea value={order.notes || ""} onChange={e => sf("notes", e.target.value)} rows={3} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", background: "#fff", resize: "vertical" }} placeholder="Special instructions, pallet labels, etc." />
+            <textarea value={order.notes || ""} onChange={e => sf("notes", e.target.value)} rows={3} style={{ width: "100%", border: "1.5px solid #F59E0B", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", background: "#fff", resize: "vertical" }} placeholder="Special instructions, pallet labels, etc." />
           </Card>
         </div>
       </div>

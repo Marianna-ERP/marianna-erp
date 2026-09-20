@@ -436,7 +436,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
             <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>NOTES</div>
             <textarea value={form.notes} onChange={e => sf("notes", e.target.value)} rows={3}
               placeholder="Payment preferences, certifications, special instructions…"
-              style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, outline: "none", fontFamily: "inherit", resize: "vertical", lineHeight: 1.6 }} />
+              style={{ width: "100%", border: "1.5px solid #F59E0B", borderRadius: 6, padding: "8px 10px", fontSize: 13, outline: "none", fontFamily: "inherit", resize: "vertical", lineHeight: 1.6 }} />
           </div>
         </div>
         <div style={{ padding: "14px 24px", borderTop: "1px solid #F3F4F6", display: "flex", justifyContent: "flex-end", gap: 10 }}>
