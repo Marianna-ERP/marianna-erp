@@ -110,6 +110,7 @@ const BUILTIN_ALL: Location[] = [
   L(202, "Airport", "PORT", "Frankfurt Cargo Airport", "Germany"),
 ];
 export const DEMO_SEEDS: Location[] = BUILTIN_ALL.filter(l => l.legacyType !== "PORT" && !l.aliasOf);
+export const LOCATIONS_ALL_BUILTIN: Location[] = BUILTIN_ALL;   // v6.99.45 (PL-3): the hidden view needs the whole list
 export const LOCATIONS: Location[] = BUILTIN_ALL.filter(l => l.legacyType === "PORT" || !!l.aliasOf);
 
 
@@ -239,7 +240,7 @@ export function readLocationOverrides(): Record<string, { name?: string; country
   try { const raw = window.localStorage.getItem(LOCATION_OVERRIDES_KEY); const p = raw ? JSON.parse(raw) : {}; return p && typeof p === "object" ? p : {}; }
   catch { return {}; }
 }
-export function writeLocationOverride(id: number, patch: { name?: string; country?: string; address?: string }): void {
+export function writeLocationOverride(id: number, patch: { name?: string; country?: string; address?: string; unlocode?: string; hidden?: boolean }): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   const all = readLocationOverrides();
   all[String(id)] = { ...(all[String(id)] || {}), ...patch };
@@ -406,7 +407,7 @@ export function applyLocationOverrides(list: Location[], overrides: Record<strin
     .map(l => {
       const o = (overrides || {})[String(l.id)];
       if (!o) return l;
-      return { ...l, ...(o.name ? { name: o.name } : {}), ...(o.country ? { country: o.country } : {}), ...(o.address ? { address: o.address } : {}) };
+      return { ...l, ...(o.name ? { name: o.name } : {}), ...(o.country ? { country: o.country } : {}), ...(o.unlocode ? { unlocode: o.unlocode } : {}), ...(o.address ? { address: o.address } : {}) };
     });
 }
 

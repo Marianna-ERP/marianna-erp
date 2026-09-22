@@ -9,7 +9,7 @@ import React, { useState, useMemo, useRef } from "react";
 import { Lbl, useConfirm, ActionButton} from "./ui";
 import { nextId } from "./ids";
 import { parseAddress, formatAddress, shortAddress } from "./address.domain";
-import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations } from "./locations";
+import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, readLocationOverrides, writeLocationOverride, LOCATIONS_ALL_BUILTIN } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -259,7 +259,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 12 }}>COMPANY</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div><Lbl>Primary type</Lbl><Sel value={form.type} onChange={e => sf("type", e.target.value)}>{COUNTERPARTY_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
+              <div><Lbl>Primary type</Lbl><Sel value={form.type} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, type: v, additionalTypes: (f.additionalTypes || []).filter((t: string) => t !== v) })); }} title="v6.99.45 (CP-10): one role, one place — the primary cannot also be a secondary">{COUNTERPARTY_TYPES.map(t => <option key={t}>{t}</option>)}</Sel></div>
               <div><Lbl>Company name</Lbl><Inp value={form.name} onChange={e => sf("name", e.target.value)} placeholder="e.g. FreshFarm ES" /></div>
               <div style={{ gridColumn: "span 2" }}>
                 <Lbl>Also acts as <span style={{ color: "#BBB", fontWeight: 400 }}>(optional — for counterparties wearing multiple hats)</span></Lbl>
@@ -282,23 +282,6 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                   })}
                 </div>
               </div>
-              <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, country: v, addr: { ...(f.addr || {}), country: v } })); }} title="v6.99.14: the list is edited in the Countries tab"><option value="">— country —</option><optgroup label="EU">{readCountries().filter(x => x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup><optgroup label="Other">{readCountries().filter(x => !x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup>{form.country && !readCountries().some(x => x.name === form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
-              <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
-              {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
-              <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px" }}>
-                <div style={{ gridColumn: "1 / -1", fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}>TERMS (inherited by documents)</div>
-                <div><Lbl>Payment days (from invoice)</Lbl><Inp type="number" value={form.terms?.paymentDays ?? form.paymentTermsDays ?? ""} onChange={e => { const v = parseFloat(e.target.value) || 0; sf("terms", { ...(form.terms || {}), paymentDays: v }); sf("paymentTermsDays", v); }} /></div>
-                <div><Lbl>Notice days (claims)</Lbl><Inp type="number" value={form.terms?.noticeDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), noticeDays: parseFloat(e.target.value) || 0 })} placeholder="legal default" /></div>
-                <div><Lbl>QC report days (producer)</Lbl><Inp type="number" value={form.terms?.qualityReportDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), qualityReportDays: parseFloat(e.target.value) || 0 })} /></div>
-                <div><Lbl>Default currency</Lbl><Sel value={form.terms?.defaultCurrency || form.defaultCurrency || "PLN"} onChange={e => sf("terms", { ...(form.terms || {}), defaultCurrency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
-                <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>
-                <label style={{ gridColumn: "1 / -1", fontSize: 11.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
-              </div>
-              {/* people are edited in the People tab (one list: `contacts`); v6.99.5 removed the duplicate editor */}
-              {/* v6.68.0 (F-3): credit control — confirming an SO that pushes this client's
-                  open receivables past the limit takes an explicit confirm. Blank = no limit. */}
-              <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
-              <div><Lbl>Payment terms (days)</Lbl><Inp value={form.paymentTermsDays ?? ""} onChange={e => sf("paymentTermsDays", e.target.value)} type="number" placeholder="e.g. 30" /></div>
               {/* v6.99.40 (A-ADDR, owner): an address is four facts. They print as three lines on every document,
                   map 1:1 to Fakturownia's fields, and let a city be filtered. The old one-line text is kept until the DDL. */}
               <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: "2fr 0.8fr 1.2fr", gap: 8 }}>
@@ -310,6 +293,22 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                 <Inp value={form.addr?.note ?? ""} onChange={e => setAddr("note", e.target.value)} placeholder="Central Fruits & Vegetable Market" />
                 {form.addressNeedsCheck && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 3 }}>⚠ this address came from one line and could not be split — check the parts above (the original read: {form.address})</div>}
               </div>
+              <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, country: v, addr: { ...(f.addr || {}), country: v } })); }} title="v6.99.14: the list is edited in the Countries tab"><option value="">— country —</option><optgroup label="EU">{readCountries().filter(x => x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup><optgroup label="Other">{readCountries().filter(x => !x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup>{form.country && !readCountries().some(x => x.name === form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
+              <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
+              {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
+              <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ gridColumn: "1 / -1", fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}>TERMS (inherited by documents)</div>
+                <div><Lbl>Payment terms (days) <span style={{ color: "#94A3B8", fontWeight: 400 }}>· from invoice</span></Lbl><Inp type="number" value={form.terms?.paymentDays ?? form.paymentTermsDays ?? ""} onChange={e => { const v = parseFloat(e.target.value) || 0; sf("terms", { ...(form.terms || {}), paymentDays: v }); sf("paymentTermsDays", v); }} /></div>
+              <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
+                <div><Lbl>Notice days (claims)</Lbl><Inp type="number" value={form.terms?.noticeDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), noticeDays: parseFloat(e.target.value) || 0 })} placeholder="legal default" /></div>
+                <div><Lbl>QC report days (producer)</Lbl><Inp type="number" value={form.terms?.qualityReportDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), qualityReportDays: parseFloat(e.target.value) || 0 })} /></div>
+                <div><Lbl>Default currency</Lbl><Sel value={form.terms?.defaultCurrency || form.defaultCurrency || "PLN"} onChange={e => sf("terms", { ...(form.terms || {}), defaultCurrency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
+                <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>
+                <label style={{ gridColumn: "1 / -1", fontSize: 11.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
+              </div>
+              {/* people are edited in the People tab (one list: `contacts`); v6.99.5 removed the duplicate editor */}
+              {/* v6.68.0 (F-3): credit control — confirming an SO that pushes this client's
+                  open receivables past the limit takes an explicit confirm. Blank = no limit. */}
               {/* v6.99.6 (A-R9-10): legacy "Default currency" / "Default payment terms" inputs removed — the Terms box above is the one source */}
             </div>
           </div>
@@ -1422,10 +1421,13 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
   const [, force] = useState(0);
   const [form, setForm] = useState<any>({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "" });
   const [editId, setEditId] = useState<any>(null);
-  const KINDS: Array<[string, string]> = [["Port", "Port"], ["Airport", "Airport"], ["BorderCrossing", "Border crossing"], ["Customs", "Customs point"]];
+  const KINDS: Array<[string, string]> = [["Port", "Port"], ["PortWarehouse", "Port warehouse / terminal"], ["Airport", "Airport"], ["BorderCrossing", "Border crossing"], ["Customs", "Customs point"], ["Other", "Other place"]];   // v6.99.45 (PL-1, owner)
   // v6.99.29 (A-R19-5, owner): EVERY place is listed here with its source — a stray legacy place (WH-01) used to be
   // visible in the pickers and removable nowhere. Counterparty sites are shown read-only; they are edited on their party.
   const [showAll, setShowAll] = useState(true);
+  const [showHidden, setShowHidden] = useState(false);   // v6.99.45 (PL-3)
+  const overrides = readLocationOverrides();
+  const hiddenIds = new Set(Object.keys(overrides).filter(k => (overrides as any)[k]?.hidden));
   const customIds = new Set(readCustomLocations().map((l: any) => String(l.id)));
   const siteIds = new Set(counterpartyLocations(counterparties || []).map((l: any) => String(l.id)));
   const sourceOf = (l: any) => siteIds.has(String(l.id)) ? "counterparty site" : (customIds.has(String(l.id)) ? ((readCustomLocations().find((x: any) => String(x.id) === String(l.id)) as any)?.migratedFromSeed ? "migrated (legacy)" : "added here") : "built-in");
@@ -1438,13 +1440,15 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
     return n;
   };
   const isPortKind = (l: any) => ["Port", "Airport", "BorderCrossing", "Customs"].includes(String(l.type)) || ["PORT", "CUSTOMS", "BORDER"].includes(String(l.legacyType));
-  const rows = unifiedLocations(counterparties || []).filter((l: any) => showAll || isPortKind(l)).sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pl"));
+  const hiddenRows: any[] = showHidden ? (LOCATIONS_ALL_BUILTIN || []).filter((l: any) => hiddenIds.has(String(l.id))).map((l: any) => ({ ...l, __hidden: true })) : [];
+  const rows = [...unifiedLocations(counterparties || []).filter((l: any) => showAll || isPortKind(l)), ...hiddenRows].sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pl"));
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const save = () => {
     if (!String(form.name).trim()) return;
     const addr = { street: form.street || "", postcode: form.postcode || "", city: form.city || "", country: form.country || "" };
     const oneLine = formatAddress(addr, { oneLine: true, withCountry: false });   // the legacy text mirrors the parts until the DDL
-    if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type });
+    if (editId != null && form.__builtin) { writeLocationOverride(Number(editId), { name: form.name, country: form.country, address: oneLine, unlocode: form.unlocode } as any); }   // v6.99.45 (PL-3): built-ins are edited through the override layer
+    else if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type });
     else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: oneLine, addr });
     recordAudit({ module: "Counterparties", docType: "Place", docNumber: form.name, action: editId != null ? "status" : "created", summary: `${form.type} ${editId != null ? "updated" : "added"} in the Directory` });
     setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "" }); setEditId(null); force(x => x + 1);
@@ -1455,6 +1459,7 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>📍 Places</div>
         <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!showAll} onChange={e => setShowAll(!e.target.checked)} /> ports, crossings &amp; customs only</label>
+        <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={showHidden} onChange={e => setShowHidden(e.target.checked)} /> show hidden</label>
       </div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Places nobody invoices us for. A warehouse near a port (Silvertech, Koper) is a COUNTERPARTY with the flag "charged through our forwarder" — add it under Companies. Everything here appears in every location picker, alphabetically.</div>
       {/* v6.99.41 (ADDR-2, owner): a place has the same four-part address as a counterparty — one shape, one formatter on documents */}
@@ -1465,7 +1470,7 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
         <div><Lbl>Street / terminal</Lbl><input value={form.street ?? ""} onChange={e => setForm({ ...form, street: e.target.value })} placeholder="Vojkovo nabrežje 38" style={inp} /></div>
         <div><Lbl>Postcode</Lbl><input value={form.postcode ?? ""} onChange={e => setForm({ ...form, postcode: e.target.value })} placeholder="6501" style={inp} /></div>
         <div><Lbl>City</Lbl><input value={form.city ?? ""} onChange={e => setForm({ ...form, city: e.target.value })} placeholder="Koper" style={inp} /></div>
-        <div><Lbl>UN/LOCODE</Lbl><input value={form.unlocode} onChange={e => setForm({ ...form, unlocode: e.target.value.toUpperCase() })} placeholder="SIKOP" style={inp} /></div>
+        <div style={{ display: form.type === "Port" ? undefined : "none" }}><Lbl>UN/LOCODE <span style={{ color: "#AAA", fontWeight: 400 }}>· optional, quoted on bookings</span></Lbl><input value={form.unlocode} onChange={e => setForm({ ...form, unlocode: e.target.value.toUpperCase() })} placeholder="SIKOP" style={inp} /></div>
         <button onClick={save} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "+ Add"}</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>NAME</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>SOURCE · USED BY</div><div /></div>
@@ -1474,7 +1479,9 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
         <div><b>{l.name}</b></div><div>{l.type || l.legacyType}</div><div>{l.country || ""}</div><div style={{ color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.address || ""}>{l.address || shortAddress(l) || ""}</div>
         <div style={{ fontSize: 10.5, color: src === "migrated (legacy)" ? "#B45309" : "#64748B" }}>{src}{used ? ` · ${used} doc(s)` : ""}</div>
         <div style={{ display: "flex", gap: 6 }}>
-          {mine && <button onClick={() => { setEditId(l.id); { const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address, l.country); setForm({ name: l.name, country: l.country || a.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: l.unlocode || "" }); } }} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button>}
+          {(mine || src === "built-in") && <button onClick={() => { setEditId(l.id); { const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address, l.country); setForm({ name: l.name, country: l.country || a.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: l.unlocode || "", __builtin: src === "built-in" }); } }} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button>}
+          {src === "built-in" && !(l as any).__hidden && <button title="v6.99.45 (PL-3): a built-in is HIDDEN, not deleted — documents that already reference it still resolve" onClick={() => { if (!window.confirm(`Hide ${l.name} from every picker?`)) return; writeLocationOverride(Number(l.id), { hidden: true } as any); setTimeout(() => window.location.reload(), 150); }} style={{ fontSize: 11, border: "1px solid #FDE68A", color: "#92400E", background: "#FFFBEB", borderRadius: 6, cursor: "pointer" }}>Hide</button>}
+          {(l as any).__hidden && <button onClick={() => { writeLocationOverride(Number(l.id), { hidden: false } as any); setTimeout(() => window.location.reload(), 150); }} style={{ fontSize: 11, border: "1px solid #BBF7D0", color: "#166534", background: "#F0FDF4", borderRadius: 6, cursor: "pointer" }}>Unhide</button>}
           {mine && <button onClick={() => { if (used > 0) { window.alert(`${l.name} is used by ${used} document(s) — it cannot be removed while they reference it.`); return; } if (window.confirm(`Remove ${l.name}?`)) { removeCustomLocation(Number(l.id)); setTimeout(() => window.location.reload(), 150); } }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button>}
           {src === "counterparty site" && <span style={{ fontSize: 10.5, color: "#94A3B8" }}>edited on its party</span>}
         </div>
@@ -1544,7 +1551,8 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   // ── filtered companies ─────────────────────────────────────────────────
   const filteredCompanies = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return counterparties.filter(c => {
+    // v6.99.45 (CP-14, owner): alphabetical — a party added today sits in its place, not at the bottom
+    return counterparties.slice().sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl", { sensitivity: "base" })).filter(c => {
       const matchType = filterType === "All" || c.type === filterType || (c.additionalTypes || []).includes(filterType);
       if (!matchType) return false;
       if (!q) return true;
@@ -1594,6 +1602,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     {
       const roles = Array.from(new Set([...(c.roles || []), c.type, ...(c.additionalTypes || [])].map(x => String(x || "").trim()).filter(Boolean)));
       c = { ...c, roles, type: c.type || roles[0] || "Client", additionalTypes: roles.filter(r => r !== (c.type || roles[0])) };
+      if (Array.isArray(c.contacts)) c = { ...c, people: c.contacts };   // v6.99.45 (CP-13)
     }
     // v6.3.0: duplicate guard — on a NEW record, or when an existing record's
     // name/tax-ID changed, check for matches (tax-ID strict, name fuzzy) and
@@ -1692,7 +1701,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       if (!nextContacts.some(p => p.isPrimary) && nextContacts.length > 0) {
         nextContacts = nextContacts.map((p, i) => i === 0 ? { ...p, isPrimary: true } : p);
       }
-      return { ...c, contacts: nextContacts };
+      return { ...c, contacts: nextContacts, people: nextContacts };   // v6.99.45 (CP-13): the mirror is written with the fact, not only healed on load
     }));
   }
   function deletePerson(counterpartyId, personId) {
@@ -1703,7 +1712,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       if (!nextContacts.some(p => p.isPrimary) && nextContacts.length > 0) {
         nextContacts[0] = { ...nextContacts[0], isPrimary: true };
       }
-      return { ...c, contacts: nextContacts };
+      return { ...c, contacts: nextContacts, people: nextContacts };
     }));
   }
   function setPrimary(counterpartyId, personId) {
@@ -1751,6 +1760,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       {guardNode}
       {modal && (
         <CounterpartyModal
+          key={modal === "new" ? "new" : String((modal as any)?.id ?? "edit")}   /* v6.99.45 (CP-13): a fresh form per record */
           counterparty={modal === "new" ? null : modal}
           contacts={counterparties}
           onSave={saveCounterparty}
