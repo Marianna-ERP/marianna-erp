@@ -127,7 +127,9 @@ export function getCounterpartiesByType(counterparties, type) {
   //  · the result is sorted by name (Polish collation): a counterparty added today belongs in its alphabetical place,
   //    not at the bottom of the list, which is what store order gave us.
   const hasRole = (c) => (Array.isArray(c.roles) && c.roles.length ? c.roles.includes(type) : false) || c.type === type || (c.additionalTypes || []).includes(type);
-  return counterparties.filter(hasRole).slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pl", { sensitivity: "base" })).map(c => {
+  // v6.99.48 (A-PO-12, owner): sort on a NORMALISED key — quotes, «», brackets and stray spaces no longer throw a name out of order
+  const sortKey = (c) => String(c?.name || "").replace(/^[\s"'«»„”“()[\]]+/, "").trim();
+  return counterparties.filter(hasRole).slice().sort((a, b) => sortKey(a).localeCompare(sortKey(b), "pl", { sensitivity: "base" })).map(c => {
     const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
     return {
       id: c.id,
@@ -1552,7 +1554,8 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   const filteredCompanies = useMemo(() => {
     const q = search.trim().toLowerCase();
     // v6.99.45 (CP-14, owner): alphabetical — a party added today sits in its place, not at the bottom
-    return counterparties.slice().sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "pl", { sensitivity: "base" })).filter(c => {
+    const sortKey = (x: any) => String(x?.name || "").replace(/^[\s"'«»„”“()[\]]+/, "").trim();   // v6.99.48 (A-PO-12): same key as the pickers
+    return counterparties.slice().sort((a: any, b: any) => sortKey(a).localeCompare(sortKey(b), "pl", { sensitivity: "base" })).filter(c => {
       const matchType = filterType === "All" || c.type === filterType || (c.additionalTypes || []).includes(filterType);
       if (!matchType) return false;
       if (!q) return true;

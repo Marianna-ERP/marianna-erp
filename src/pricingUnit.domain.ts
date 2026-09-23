@@ -142,8 +142,9 @@ export function documentTotals(items: any[], packagingTypes: any[] = [], fxRate:
     const kpb = num(it.kgPerBox) || kgPerBoxForLine(it, packagingTypes) || 0;
     const q = num(it.qty); const b = num(it.boxes) || (kpb > 0 && q > 0 ? Math.round(q / kpb) : 0);
     kg += unit === "box" && kpb > 0 && !(q > 0) ? b * kpb : q;
-    boxes += b;
-    pallets += num(it.pallets);
+    { const ecb = effectiveCounts(it, packagingTypes || []); boxes += String(it.pricingUnit || "kg") !== "kg" ? num(it.boxes) : num(ecb.boxes ?? (b)); }
+    // v6.99.47 (A-PO-14): the live total reads the effective counts (derived from the line's packaging unless overridden)
+    { const ec = effectiveCounts(it, packagingTypes || []); pallets += num(ec.pallets ?? it.pallets); }
     value += (unit === "box" ? b : q) * num(it.unitPrice);
   });
   const fx = num(fxRate) || 1;

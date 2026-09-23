@@ -16,7 +16,7 @@ import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
-import { warehouseAddressLocations, unifiedLocations, locationById, placeForPrint } from "./locations";
+import { warehouseAddressLocations, unifiedLocations, locationById, placeForPrint, counterpartyLocations } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
 import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
@@ -29,7 +29,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { cnCodeForItem } from "./productCatalog";
 import { recordAudit } from "./audit";
-import { formatAddress, addressOf } from "./address.domain";
+import { formatAddress, addressOf, liveParty } from "./address.domain";
 let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -290,7 +290,7 @@ function PODoc({ order }: any) {
   const supplierRows = [
     { en: "Name",      pl: "Nazwa",   value: order.supplier?.name || "—" },
     { en: "Country",   pl: "Kraj",    value: order.supplier?.country || "—" },
-    { en: "Address",   pl: "Adres",   value: formatAddress(addressOf(order.supplier || {}), { oneLine: true }) || order.supplier?.address || "—" },   // v6.99.40 (ADDR-1)
+    { en: "Address",   pl: "Adres",   value: formatAddress(addressOf(liveParty(order.supplier, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.supplier, CONTACTS_REF || [])?.address || "—" },   // v6.99.40 (ADDR-1)
     { en: "NIP / VAT", pl: "NIP / VAT", value: order.supplier?.nip || "—" },
     { en: "Contact",   pl: "Kontakt", value: order.supplier?.contact || "—" },
   ];
@@ -959,7 +959,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                       // EXW/FCA → supplier's address; DAP/DDP → our warehouse address; FOB/CFR/CIF → leave for a port pick.
                       const ic = String(inc).toUpperCase();
                       let patch: any = { ...o, buyIncoterm: inc, purchaseIncoterm: inc, handoverPoint: hp || o.handoverPoint };
-                      if (ic === "EXW" || ic === "FCA") { patch.destinationLocationId = null; patch.destinationText = o.supplier?.address || o.destinationText || ""; }
+                      if (ic === "EXW" || ic === "FCA") {
+                        // v6.99.48 (A-PO-13, owner): the named place defaults to the SUPPLIER'S OWN SITE (a registered place — it prints and it passes G-1), adjustable from the picker
+                        const sites = counterpartyLocations((CONTACTS_REF || []).filter((c: any) => String(c.id) === String(o.supplier?.id)));
+                        const site = sites[0] || null;
+                        patch.destinationLocationId = site ? site.id : null; patch.destinationText = site ? site.name : (o.supplier?.address || o.destinationText || "");
+                      }
                       else if (ic === "DAP" || ic === "DDP") { patch.destinationLocationId = null; patch.destinationText = (WAREHOUSE_ADDRESS || "") || o.destinationText || ""; }
                       else { patch.destinationText = o.destinationText || ""; } // ports: user picks from the pool
                       return patch;
@@ -1494,7 +1499,7 @@ function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShi
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginBottom: 4 }}>{order.supplier?.name}</div>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>{order.supplier?.country}</div>
                 {order.supplier?.nip && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>NIP / VAT</div><div style={{ fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.supplier.nip}</div></div>}
-                {order.supplier?.address && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Address</div><div style={{ fontSize: 12, color: "#444" }}>{order.supplier.address}</div></div>}
+                {liveParty(order.supplier, CONTACTS_REF || [])?.address && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Address</div><div style={{ fontSize: 12, color: "#444" }}>{formatAddress(addressOf(liveParty(order.supplier, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.supplier, CONTACTS_REF || [])?.address}</div></div>}
                 {order.supplier?.contact && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Contact</div><div style={{ fontSize: 12, color: "#444" }}>{order.supplier.contact}</div></div>}
                 {order.supplier?.email && <div><div style={{ fontSize: 10, color: "#888" }}>Email</div><a href={`mailto:${order.supplier.email}`} style={{ fontSize: 12, color: "#2563EB", textDecoration: "none" }}>{order.supplier.email}</a></div>}
               </Card>

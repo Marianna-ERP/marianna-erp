@@ -29,7 +29,7 @@ import { locationById, placeForPrint } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { recordAudit } from "./audit";
-import { formatAddress, addressOf } from "./address.domain";
+import { formatAddress, addressOf, liveParty } from "./address.domain";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -701,7 +701,7 @@ function SODoc({ order }: any) {
   const clientRows = [
     { en: "Name",      pl: "Nazwa",     value: order.client?.name    || "—" },
     { en: "Country",   pl: "Kraj",      value: order.client?.country || "—" },
-    { en: "Address",   pl: "Adres",     value: formatAddress(addressOf(order.client || {}), { oneLine: true }) || order.client?.address || "—" },   // v6.99.40 (ADDR-1)
+    { en: "Address",   pl: "Adres",     value: formatAddress(addressOf(liveParty(order.client, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.client, CONTACTS_REF || [])?.address || "—" },   // v6.99.40 (ADDR-1)
     { en: "NIP / VAT", pl: "NIP / VAT", value: order.client?.nip     || "—" },
     { en: "Contact",   pl: "Kontakt",   value: order.client?.contact || "—" },
   ];

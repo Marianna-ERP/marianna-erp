@@ -2014,3 +2014,26 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.46 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.47 — the document reads the LIVE party address; the totals read the effective counts ══
+(function v69947(){
+  console.log("\n══ 63. v6.99.47: a corrected address prints; a derived pallet count totals ══");
+  const A = B("address.domain.js"); const PU = B("pricingUnit.domain.js");
+  t("liveParty(): the PO's snapshot yields to the Directory's corrected address; name and NIP stay as agreed", () => {
+    const snap = { id: 7, name: "Vega-Pro Kft.", nip: "HU123", address: "OLD street 1, 6000 Kecskemet", country: "Hungary" };
+    const live = A.liveParty(snap, [{ id: 7, name: "Vega-Pro Kft. (renamed)", nip: "HU999", address: "Csongradi ut 5, 6000 Kecskemet", addr: { street: "Csongradi ut 5", postcode: "6000", city: "Kecskemet", country: "Hungary" }, country: "Hungary" }]);
+    eq(A.formatAddress(A.addressOf(live), { oneLine: true }), "Csongradi ut 5, 6000 Kecskemet, Hungary"); eq(live.name, "Vega-Pro Kft."); eq(live.nip, "HU123");
+    eq(A.liveParty(snap, []).address, "OLD street 1, 6000 Kecskemet", "a party that no longer exists keeps the snapshot");
+  });
+  t("A-PO-16: an addr holding only the country is not an address — the one-line text prints", () => {
+    const a = A.addressOf({ address: "ul. Piękna 13, 05-555 Tarczyn", addr: { country: "Poland" }, country: "Poland" });
+    eq(a.city, "Tarczyn"); eq(a.postcode, "05-555");
+  });
+  t("A-PO-14: the totals line counts DERIVED pallets before the order is saved", () => {
+    const types = [{ id: "c10", label: "Carton (10 kg)", capacityKg: 10, boxesPerPallet: 60 }];
+    const tt = PU.documentTotals([{ product: "Capsicum", qty: 11000, pricingUnit: "kg", packagingId: "c10", unitPrice: 1 }], types, 1);
+    eq(tt.boxes, 1100); eq(tt.pallets, 19);
+  });
+  console.log("v6.99.47 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

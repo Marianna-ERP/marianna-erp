@@ -704,10 +704,15 @@ export function pruneOrphanMigratedSeeds(referencedIds: Iterable<any>): Location
 export function placeForPrint(id: any, text: any, contacts: any[] = []): { name: string; address: string; country: string; line: string } {
   const loc: any = (id !== null && id !== undefined && id !== "") ? locationById(id, contacts) : null;
   if (loc) {
-    const parts = [loc.address, loc.city].filter(Boolean).map((s: any) => String(s).trim()).filter(Boolean);
-    const address = Array.from(new Set(parts)).join(", ");
-    const country = String(loc.country || "").trim();
-    return { name: String(loc.name || ""), address, country, line: [loc.name, address, country].filter(Boolean).join(" · ") };
+    // v6.99.48 (A-PO-15, owner): the structured address when the place has one; the one-line text otherwise — and the
+    // country is printed ONCE (a legacy one-line address often already ends with it).
+    const a: any = (loc as any).addr;
+    const country = String(loc.country || a?.country || "").trim();
+    let address = a && (a.street || a.postcode || a.city) ? [a.street, [a.postcode, a.city].filter(Boolean).join(" ")].filter(Boolean).map((s: any) => String(s).trim()).join(", ")
+      : Array.from(new Set([loc.address, (loc as any).city].filter(Boolean).map((s: any) => String(s).trim()).filter(Boolean))).join(", ");
+    const endsWithCountry = country && new RegExp(`(^|[,·\\s])${country.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i").test(address);
+    const line = [loc.name, address, endsWithCountry ? "" : country].filter(Boolean).join(" · ");
+    return { name: String(loc.name || ""), address, country, line };
   }
   const t = String(text || "").trim();
   return { name: t, address: "", country: "", line: t };

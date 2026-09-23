@@ -11,6 +11,7 @@ export interface Address { street?: string; postcode?: string; city?: string; co
 
 /** Is there anything in it? */
 export function hasAddress(a: any): boolean {
+  // v6.99.47 (A-PO-16): a country alone is not an address — the one-line text wins over an `addr` holding only the country
   return !!(a && (S(a.street) || S(a.postcode) || S(a.city) || S(a.note)));
 }
 
@@ -69,4 +70,18 @@ export function addressOf(rec: any): Address {
   if (rec?.addr && hasAddress(rec.addr)) return rec.addr as Address;
   const p = parseAddress(rec?.address, rec?.country);
   return { street: p.street, postcode: p.postcode, city: p.city, country: p.country, note: p.note };
+}
+
+/**
+ * v6.99.47 (owner 23 Sept): a document holds a SNAPSHOT of its party (id, name, nip, address…) taken when the party was
+ * picked. The party's address is the COUNTERPARTY's fact — when it is corrected in the Directory, every document must
+ * read the correction. So printing resolves the LIVE record by id and falls back to the snapshot only when the party
+ * no longer exists. Name and NIP stay from the snapshot: what was agreed is what was printed.
+ */
+export function liveParty(snapshot: any, contacts: any[]): any {
+  if (!snapshot) return snapshot;
+  const id = snapshot.id ?? snapshot.counterpartyId;
+  const live = id != null ? (contacts || []).find((c: any) => String(c.id) === String(id)) : null;
+  if (!live) return snapshot;
+  return { ...snapshot, address: live.address ?? snapshot.address, addr: live.addr ?? snapshot.addr, country: live.country || snapshot.country, nip: snapshot.nip || live.nip };
 }
