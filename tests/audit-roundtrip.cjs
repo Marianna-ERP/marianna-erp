@@ -2077,3 +2077,25 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.51 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.52 — the way out of a half-cleaned season ══
+(function v69952(){
+  console.log("\n══ 66. v6.99.52: retire last season's closed lots; bring selected POs across ══");
+  const I = B("integrityCheck.js"); const U = B("useLocalStoredState.js");
+  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_50_schema-v2_2026-09-23T14-11-42.json");
+  t("season cut-off: 0071/0072 qualify (received and shipped Oct 2025, no stock); an EXPECTED lot never does; a lot with stock never does", () => {
+    const closed = I.lotsClosedBefore(d.lots, d.orders, d.shipments, "2026-07-01");
+    ok(["LOT-2026-0071", "LOT-2026-0072"].every(n => closed.some(l => l.number === n)));
+    ok(!closed.some(l => (l.physicalKg || 0) > 0)); ok(!closed.some(l => !(l.movements || []).length && !(l.receivedKg || 0)), "expected lots are not history");
+    eq(I.lotsClosedBefore(d.lots, d.orders, d.shipments, "2025-01-01").length, 0, "before any movement → nothing qualifies");
+  });
+  t("bring across: appended, never overwritten; duplicates skipped; lots arrive expected with no history", () => {
+    const old = require("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json");
+    const r = U.appendDocuments({ pos: d.pos, lots: d.lots, orders: d.orders }, old, { poNumbers: ["PO-2026-0034", "PO-2026-0021"], withExpectedLots: true });
+    ok(r.added.includes("PO-2026-0034")); ok(r.skipped.some(s => s.startsWith("PO-2026-0021")));
+    eq(r.pos.length, d.pos.length + 1); const l = r.lots.find(x => x.number === "LOT-2026-0108"); eq(l.movements.length, 0); eq(l.physicalKg, 0); eq(l.status, "Expected");
+    eq(r.orders.length, d.orders.length, "nothing else touched");
+  });
+  console.log("v6.99.52 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

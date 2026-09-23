@@ -1,7 +1,7 @@
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
 import React, { useRef, useState } from "react";
-import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts } from "./useLocalStoredState";
+import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, readExportFile, appendDocuments, writeStore, readStore } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { fetchDepartments } from "./fakturownia";
 import { mapDepartments } from "./fakturowniaDepartments.domain";
@@ -13,6 +13,8 @@ import { CN_CODES } from "./cnCodes";
 import { nextId as mintId } from "./ids";
 import { renameCatalogItem } from "./productCatalog";
 import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
+import { recordAudit } from "./audit";
+import { lotsClosedBefore } from "./integrityCheck";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -63,6 +65,73 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
 // locations are fully editable; logistics points and counterparty warehouses are
 // listed read-only with a pointer to Parties. Changes reload the app so every
 // module that snapshots LOCATIONS at import picks them up (the documented pattern).
+// ── v6.99.52 (owner stuck, 23 Sept): two ways out of a half-cleaned season without starting over ──
+function SeasonToolsPanel({ refStores = {}, stConfirm, setMessage }: any) {
+  const [cutoff, setCutoff] = React.useState("2026-07-01");
+  const [file, setFile] = React.useState<any>(null);
+  const [picked, setPicked] = React.useState<Set<string>>(new Set());
+  const [withLots, setWithLots] = React.useState(true);
+  const lots = refStores.lots || [], orders = refStores.orders || [], shipments = refStores.shipments || [], pos = refStores.pos || [];
+  const closed = lotsClosedBefore(lots, orders, shipments, cutoff);
+  async function retireClosed() {
+    if (!closed.length) return;
+    const ok = await stConfirm({ tone: "danger", title: `Retire ${closed.length} closed lot(s) from before ${cutoff}?`, message: `No stock, every movement older than the cut-off, no live order or shipment references them:\n${closed.map((l: any) => l.number).join(", ")}\n\nThey are removed from the stock ledger (a backup is saved first). Their POs unlock.`, confirmLabel: "Retire them", cancelLabel: "Keep" });
+    if (!ok) return;
+    createBackup("Auto — before retiring closed lots"); const ids = new Set(closed.map((l: any) => l.id));
+    writeStore("lots", (readStore<any[]>("lots", []) || []).filter((l: any) => !ids.has(l.id)));
+    recordAudit({ module: "System", docType: "Season", docNumber: `CUTOFF-${cutoff}`, action: "deleted", summary: `${closed.length} closed lot(s) from before ${cutoff} retired: ${closed.map((l: any) => l.number).join(", ")}` });
+    setMessage({ kind: "info", text: `${closed.length} closed lot(s) retired. Reloading…` }); setTimeout(() => window.location.reload(), 900);
+  }
+  function onFile(f: any) { if (!f) return; const rd = new FileReader(); rd.onload = () => { const r = readExportFile(String(rd.result || "")); if (!r.ok) { setMessage({ kind: "error", text: r.error || "Could not read the file." }); return; } setFile({ name: f.name, data: r.data }); setPicked(new Set()); }; rd.readAsText(f); }
+  async function appendPicked() {
+    if (!file || !picked.size) return;
+    const res = appendDocuments({ pos: readStore<any[]>("pos", []), lots: readStore<any[]>("lots", []), orders: readStore<any[]>("orders", []) }, file.data, { poNumbers: Array.from(picked), withExpectedLots: withLots });
+    const ok = await stConfirm({ tone: "info", title: `Bring ${res.added.length} document(s) across from ${file.name}?`, message: `Added: ${res.added.join(", ") || "—"}${res.skipped.length ? `\nSkipped (already here): ${res.skipped.join(", ")}` : ""}\n\nNothing already in the system is changed. A backup is saved first.`, confirmLabel: "Bring them across", cancelLabel: "Cancel" });
+    if (!ok) return;
+    createBackup("Auto — before importing selected documents");
+    writeStore("pos", res.pos); writeStore("lots", res.lots); writeStore("orders", res.orders);
+    recordAudit({ module: "System", docType: "Import", docNumber: file.name, action: "created", summary: `Selected documents brought across: ${res.added.join(", ")}` });
+    setMessage({ kind: "info", text: `${res.added.length} document(s) brought across. Reloading…` }); setTimeout(() => window.location.reload(), 900);
+  }
+  const srcPOs: any[] = file ? (file.data.pos || []) : [];
+  const havePO = new Set(pos.map((p: any) => String(p.number)));
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <SectionTitle>SEASON TOOLS</SectionTitle>
+      <div style={{ display: "grid", gap: 14 }}>
+        <div style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 8, padding: "10px 12px" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#92400E" }}>Retire last season's closed lots</div>
+          <div style={{ fontSize: 11.5, color: "#64748B", margin: "3px 0 8px" }}>A lot with no stock whose every movement is older than the cut-off, and that no live order or shipment references, is history. The delete guard refuses them one by one on purpose; this retires them in one audited step and unlocks their POs.</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
+            <div><Lbl>Season cut-off</Lbl><input type="date" value={cutoff} onChange={e => setCutoff(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }} /></div>
+            <div style={{ fontSize: 12 }}>{closed.length ? <><b>{closed.length}</b> lot(s) qualify: {closed.slice(0, 6).map((l: any) => l.number).join(", ")}{closed.length > 6 ? "…" : ""}</> : "nothing qualifies at this date"}</div>
+            <Button onClick={retireClosed} variant="danger" disabled={!closed.length}>Retire {closed.length || ""} closed lot(s)</Button>
+          </div>
+        </div>
+        <div style={{ border: "1px solid #BFDBFE", background: "#EFF6FF", borderRadius: 8, padding: "10px 12px" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#1E40AF" }}>Bring selected POs across from an old export</div>
+          <div style={{ fontSize: 11.5, color: "#64748B", margin: "3px 0 8px" }}>Pick the purchase orders you still need from an old file. They are APPENDED — nothing here is overwritten; numbers that already exist are skipped. Their lots come across as expected (no history, no stock).</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12, border: "1px dashed #1E40AF", color: "#1E40AF", borderRadius: 7, padding: "6px 10px", cursor: "pointer" }}>⬇ choose the old export (.json)<input type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => onFile(e.target.files?.[0])} /></label>
+            {file && <span style={{ fontSize: 11.5, color: "#475569" }}>{file.name} · {srcPOs.length} PO(s) in the file</span>}
+            {file && <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={withLots} onChange={e => setWithLots(e.target.checked)} /> with their expected lots</label>}
+          </div>
+          {file && srcPOs.length > 0 && (
+            <div style={{ marginTop: 8, maxHeight: 220, overflow: "auto", border: "1px solid #E5E7EB", borderRadius: 7, background: "#fff" }}>
+              {srcPOs.map((p: any) => { const exists = havePO.has(String(p.number)); return (
+                <label key={p.number} style={{ display: "grid", gridTemplateColumns: "24px 130px 1fr 90px 100px", gap: 8, alignItems: "center", padding: "4px 8px", borderBottom: "1px solid #F1F5F9", fontSize: 12, opacity: exists ? 0.5 : 1 }}>
+                  <input type="checkbox" disabled={exists} checked={picked.has(String(p.number))} onChange={e => { const n = new Set(picked); if (e.target.checked) n.add(String(p.number)); else n.delete(String(p.number)); setPicked(n); }} />
+                  <b>{p.number}</b><span>{p.supplier?.name || ""}</span><span>{p.status}</span><span style={{ color: "#94A3B8" }}>{exists ? "already here" : (p.orderDate || "")}</span>
+                </label>); })}
+            </div>
+          )}
+          {file && <div style={{ marginTop: 8 }}><Button onClick={appendPicked} disabled={!picked.size}>Bring {picked.size || ""} PO(s) across</Button></div>}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function LocationsPanel({ refStores = {} }: any) {
   const { confirm: lpConfirm, alert: lpAlert, dialogNode: lpNode } = useConfirm(); // P2-6
   const [q, setQ] = React.useState("");
@@ -977,6 +1046,7 @@ export default function Settings({
         {/* v6.86.0 (owner ruling): "Repair inventory records" retired — a one-time August repair, already applied and
             covered by tests. The routine (healRound651) stays in the migration toolkit for the Supabase import. */}
 
+        <SeasonToolsPanel refStores={refStores} stConfirm={stConfirm} setMessage={setMessage} />
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>
           <SectionTitle>RESET</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>

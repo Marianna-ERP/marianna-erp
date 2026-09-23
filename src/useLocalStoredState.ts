@@ -52,6 +52,8 @@ export const storageHealth: { failing: boolean; lastError: string; failedKey: st
 };
 function notifyHealth() { storageHealth.listeners.forEach(fn => { try { fn(); } catch {} }); }
 
+export function writeStore<T>(name: string, value: T): void { writeToStorage(name, value); }
+export function readStore<T>(name: string, fallback: T): T { return readFromStorage(name, fallback); }
 function writeToStorage<T>(name: string, value: T): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
@@ -351,4 +353,43 @@ export function clearAllData(opts: { autoBackup?: boolean } = {}): BackupMeta | 
     }
   }
   return backup;
+}
+
+// ── v6.99.52 (owner stuck, 23 Sept): IMPORT SELECTED DOCUMENTS from an export — append, never overwrite ──
+// The whole-snapshot import replaces everything; when a fresh season already holds re-entered documents, what is
+// needed is to bring a few POs (with their expected lots, no history) across from the old file. Numbers that already
+// exist are skipped and reported; nothing else in the current data is touched.
+export function readExportFile(jsonString: string): { ok: boolean; error?: string; data?: any } {
+  let parsed: any;
+  try { parsed = JSON.parse(jsonString); } catch (err) { return { ok: false, error: "File is not valid JSON." }; }
+  if (!parsed || typeof parsed !== "object" || !parsed._meta || parsed._meta.app !== "marianna-erp") return { ok: false, error: "Not a MARIANNA ERP export." };
+  return { ok: true, data: parsed };
+}
+export function appendDocuments(current: { pos: any[]; lots: any[]; orders: any[] }, source: any, pick: { poNumbers?: string[]; soNumbers?: string[]; withExpectedLots?: boolean }): { pos: any[]; lots: any[]; orders: any[]; added: string[]; skipped: string[] } {
+  const added: string[] = [], skipped: string[] = [];
+  const havePO = new Set((current.pos || []).map((p: any) => String(p.number)));
+  const haveSO = new Set((current.orders || []).map((o: any) => String(o.number)));
+  const haveLot = new Set((current.lots || []).map((l: any) => String(l.number)));
+  const pos = [...(current.pos || [])], lots = [...(current.lots || [])], orders = [...(current.orders || [])];
+  (pick.poNumbers || []).forEach(n => {
+    const po = (source.pos || []).find((p: any) => String(p.number) === String(n));
+    if (!po) return;
+    if (havePO.has(String(n))) { skipped.push(`${n} (already exists)`); return; }
+    pos.push(po); havePO.add(String(n)); added.push(n);
+    if (pick.withExpectedLots) {
+      (source.lots || []).filter((l: any) => String(l.poRef) === String(n)).forEach((l: any) => {
+        if (haveLot.has(String(l.number))) { skipped.push(`${l.number} (already exists)`); return; }
+        // history stays in the old file: the lot comes across EXPECTED, with no movements and no stock
+        lots.push({ ...l, status: (Number(l.expectedKg) || 0) > 0 ? (String(l.status).includes("Direct") ? "Direct Expected" : "Expected") : l.status, movements: [], receivedKg: 0, physicalKg: 0, damagedKg: 0, wasteKg: 0, claimedKg: 0, costs: [], sortingJobs: [], grades: undefined });
+        haveLot.add(String(l.number)); added.push(l.number);
+      });
+    }
+  });
+  (pick.soNumbers || []).forEach(n => {
+    const so = (source.orders || []).find((o: any) => String(o.number) === String(n));
+    if (!so) return;
+    if (haveSO.has(String(n))) { skipped.push(`${n} (already exists)`); return; }
+    orders.push(so); haveSO.add(String(n)); added.push(n);
+  });
+  return { pos, lots, orders, added, skipped };
 }
