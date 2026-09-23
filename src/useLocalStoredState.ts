@@ -286,7 +286,7 @@ export function restoreBackup(id: string): { ok: boolean; error?: string; loaded
   return importAllData(json, { autoBackup: false });
 }
 
-export function importAllData(jsonString: string, opts: { autoBackup?: boolean } = {}): { ok: boolean; error?: string; loaded?: string[]; backup?: BackupMeta | null } {
+export function importAllData(jsonString: string, opts: { autoBackup?: boolean } = {}): { ok: boolean; error?: string; loaded?: string[]; cleared?: string[]; backup?: BackupMeta | null } {
   let parsed: any;
   try {
     parsed = JSON.parse(jsonString);
@@ -306,13 +306,38 @@ export function importAllData(jsonString: string, opts: { autoBackup?: boolean }
   let backup: BackupMeta | null = null;
   if (opts.autoBackup !== false) backup = createBackup("Auto — before import");
   const loaded: string[] = [];
+  const cleared: string[] = [];
   for (const key of DATA_KEYS) {
     if (parsed[key] !== undefined && parsed[key] !== null) {
       writeToStorage(key, parsed[key]);
       loaded.push(key);
+    } else if (TRANSACTIONAL_KEYS.includes(key)) {
+      // v6.99.51 (A-FS-3, owner): a file is a WHOLE snapshot. A transactional store absent from the file used to be LEFT AS IT WAS,
+      // silently mixing two generations of data — lots from one export pointing at POs from another (the 40 orphan lots).
+      // Now the absent store is cleared with the import; master stores (contacts, places, catalogue…) are kept and reported.
+      try { const had = window.localStorage.getItem(storageKey(key)); if (had) { window.localStorage.removeItem(storageKey(key)); cleared.push(key); } } catch {}
     }
   }
-  return { ok: true, loaded, backup };
+  return { ok: true, loaded, cleared, backup };
+}
+
+// ── v6.99.51 (A-FS-1, owner 23 Sept): START A FRESH SEASON — the master data stays, everything transactional goes TOGETHER ──
+// The only wipe was "clear ALL data" (contacts included), so the season was reset by deleting documents one by one,
+// which left lots, invoices and claims pointing at documents that no longer existed. One action, one moment, nothing dependent survives.
+export const MASTER_KEYS = ["contacts", "customLocations", "logisticsPoints", "productCatalog", "packagingTypes", "users", "fxSettings", "company", "numbering", "bankAccounts", "defectCatalogue", "defectTolerances", "budgets"];
+export const TRANSACTIONAL_KEYS = DATA_KEYS.filter(k => !MASTER_KEYS.includes(k));
+export function transactionalCounts(): Array<{ key: string; count: number }> {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  return TRANSACTIONAL_KEYS.map(key => { let count = 0; try { const raw = window.localStorage.getItem(storageKey(key)); const v = raw ? JSON.parse(raw) : null; count = Array.isArray(v) ? v.length : (v && typeof v === "object" ? Object.keys(v).length : 0); } catch { count = 0; } return { key, count }; }).filter(x => x.count > 0);
+}
+export function startFreshSeason(opts: { autoBackup?: boolean; resetNumbering?: boolean } = {}): BackupMeta | null {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  const backup = opts.autoBackup !== false ? createBackup("Auto — before starting a fresh season") : null;
+  for (const key of TRANSACTIONAL_KEYS) { try { window.localStorage.removeItem(storageKey(key)); } catch (err) { console.warn(`[localStorage] Could not clear "${key}":`, err); } }
+  // the report register and the audit log are transactional too, but they live under their own keys
+  for (const extra of ["reportRegister", "traceRegister"]) { try { window.localStorage.removeItem(storageKey(extra)); } catch {} }
+  if (opts.resetNumbering) { try { window.localStorage.removeItem(storageKey("numbering")); } catch {} }
+  return backup;
 }
 
 export function clearAllData(opts: { autoBackup?: boolean } = {}): BackupMeta | null {

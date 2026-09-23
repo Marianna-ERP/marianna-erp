@@ -2059,3 +2059,21 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.50 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.51 — the fresh season's leftovers (A-FS) ══
+(function v69951(){
+  console.log("\n══ 65. v6.99.51: orphan lots and dangling links are found precisely; master vs transactional stores ══");
+  const I = B("integrityCheck.js"); const U = B("useLocalStoredState.js");
+  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_50_schema-v2_2026-09-23T14-11-42.json");
+  t("A-FS-2: on the owner's 23 Sept file — 40 orphan lots (no PO, no stock), 7 invoices and dangling claim subjects", () => {
+    const ol = I.orphanLotsToRemove(d.lots, d.pos); eq(ol.length, 40); ok(ol.every(l => !(l.physicalKg > 0)), "never a lot with stock");
+    const dl = I.danglingLinks(d.invoices, d.claims, d.pos, d.orders, d.shipments); eq(dl.invoices.length, 7); ok(dl.claims.length >= 1);
+    ok(!ol.some(l => l.number === "LOT-2026-0071"), "PO-0021 exists, so its lots are not orphans — they are the owner's to delete (they were received last season)");
+  });
+  t("A-FS-1: master stores are kept, transactional stores go — the two lists partition DATA_KEYS", () => {
+    const all = new Set(U.DATA_KEYS); ok(U.MASTER_KEYS.every(k => all.has(k))); eq(U.MASTER_KEYS.length + U.TRANSACTIONAL_KEYS.length, U.DATA_KEYS.length);
+    ok(U.MASTER_KEYS.includes("contacts") && U.MASTER_KEYS.includes("packagingTypes") && U.TRANSACTIONAL_KEYS.includes("lots") && U.TRANSACTIONAL_KEYS.includes("invoices"));
+  });
+  console.log("v6.99.51 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

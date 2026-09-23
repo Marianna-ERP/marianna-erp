@@ -687,3 +687,17 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
 
   return { issues, counts, okay: counts.error === 0 };
 }
+
+// ── v6.99.51 (A-FS-2, owner 23 Sept): two REPAIRS the badge can apply — each says what it will touch, and is audited by the caller ──
+/** Lots whose PO no longer exists AND that hold no stock (nothing to lose): the leftovers of a season reset done by hand. */
+export function orphanLotsToRemove(lots: any[], pos: any[]): any[] {
+  const poNums = new Set((pos || []).map((p: any) => String(p.number)));
+  return (lots || []).filter((l: any) => l && l.poRef && !poNums.has(String(l.poRef)) && !((Number(l.physicalKg) || 0) > 0) && !(l.movements || []).some((m: any) => m && !m.voided && (m.type === "IN") && (Number(m.qtyKg) || 0) > 0 && (Number(l.physicalKg) || 0) > 0));
+}
+/** Invoice and claim links that point at documents that no longer exist. */
+export function danglingLinks(invoices: any[], claims: any[], pos: any[], orders: any[], shipments: any[]): { invoices: Array<{ id: any; number: string; links: any[] }>; claims: Array<{ id: any; number: string; subjects: any[] }> } {
+  const have = { PO: new Set((pos || []).map((p: any) => String(p.number))), SO: new Set((orders || []).map((o: any) => String(o.number))), Shipment: new Set((shipments || []).map((s: any) => String(s.number))) };
+  const inv = (invoices || []).map((i: any) => ({ id: i.id, number: String(i.number || ""), links: (i.links || []).filter((l: any) => have[l.type as keyof typeof have] && !have[l.type as keyof typeof have].has(String(l.number))) })).filter(x => x.links.length);
+  const cl = (claims || []).map((c: any) => ({ id: c.id, number: String(c.number || ""), subjects: (c.subjects || []).filter((s: any) => { const k = String(s.kind || s.type || "").toUpperCase(); const t = k === "SHIPMENT" || k === "SHP" ? "Shipment" : k === "PO" ? "PO" : k === "SO" ? "SO" : null; return t && !have[t as keyof typeof have].has(String(s.ref)); }) })).filter(x => x.subjects.length);
+  return { invoices: inv, claims: cl };
+}

@@ -1,7 +1,7 @@
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
 import React, { useRef, useState } from "react";
-import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage } from "./useLocalStoredState";
+import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { fetchDepartments } from "./fakturownia";
 import { mapDepartments } from "./fakturowniaDepartments.domain";
@@ -662,8 +662,9 @@ export default function Settings({
       }
       refreshBackups();
       const loadedDesc = (outcome.loaded || []).join(", ") || "no recognized data";
+      const clearedNote = (outcome.cleared || []).length ? ` Stores absent from the file were cleared so no stale documents survive: ${(outcome.cleared || []).join(", ")}.` : "";
       const backupNote = outcome.backup ? " A backup of your previous data was saved (Settings → Local backups)." : "";
-      setMessage({ kind: "success", text: `Imported: ${loadedDesc}.${backupNote} Reloading…` });
+      setMessage({ kind: "success", text: `Imported: ${loadedDesc}.${clearedNote}${backupNote} Reloading…` });
       setTimeout(() => { window.location.reload(); }, 1400);
     };
     reader.onerror = () => setMessage({ kind: "error", text: "Could not read the file." });
@@ -692,6 +693,20 @@ export default function Settings({
 
 
 
+  // v6.99.51 (A-FS-1, owner): keep the master data, clear the season's documents together
+  async function handleFreshSeason() {
+    const counts = transactionalCounts();
+    const list = counts.map(c => `${c.key}: ${c.count}`).join(" · ") || "nothing to clear";
+    const confirmed = await stConfirm({ tone: "danger", title: "Start a fresh season?",
+      message: `KEEPS: counterparties, places, countries, packaging, product catalogue, users, company, FX settings, bank accounts.\nCLEARS, all together: ${list}.\nA backup is saved first.`,
+      confirmLabel: "Start the fresh season", cancelLabel: "Keep everything" });
+    if (!confirmed) return;
+    const resetNo = await stConfirm({ tone: "info", title: "Reset the numbering?", message: "Start PO / SO / SHP / LOT numbers again from 0001 for the new season? (Choose No to continue the sequence.)", confirmLabel: "Yes, restart at 0001", cancelLabel: "No, continue" });
+    const backup = startFreshSeason({ resetNumbering: !!resetNo });
+    refreshBackups();
+    setMessage({ kind: "info", text: `Fresh season started${backup ? " (a backup was saved first)" : ""} — master data kept. Reloading…` });
+    setTimeout(() => window.location.reload(), 1000);
+  }
   async function handleReset() {
     const confirmed = await stConfirm({
       tone: "danger",
@@ -967,6 +982,7 @@ export default function Settings({
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
             Erase everything you've entered and return the system to a completely empty state. Use this if you've made test data unusable and want to start fresh. A backup is saved automatically first (see Local backups).
           </div>
+          <Button onClick={handleFreshSeason} variant="danger" title="v6.99.51: keeps the master data, clears every document of the season together">🌱 Start a fresh season (keep master data)</Button>
           <Button onClick={handleReset} variant="danger">⚠ Start fresh — erase ALL data</Button>
         </Card>
 

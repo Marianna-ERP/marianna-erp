@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { checkIntegrity, IntegrityInputs, IntegrityIssue } from "./integrityCheck";
+import { orphanLotsToRemove, danglingLinks, checkIntegrity, IntegrityInputs, IntegrityIssue } from "./integrityCheck";
 
 // A small always-visible badge that runs the pure integrity checker over current
 // app state and summarises problems. Click to open a panel listing each issue.
@@ -8,7 +8,7 @@ import { checkIntegrity, IntegrityInputs, IntegrityIssue } from "./integrityChec
 const SEV_COLOR: Record<string, string> = { error: "#DC2626", warning: "#D97706", info: "#64748B" };
 const SEV_BG: Record<string, string> = { error: "#FEF2F2", warning: "#FFF7ED", info: "#F1F5F9" };
 
-export default function IntegrityBadge({ data, onNavigate }: { data: IntegrityInputs; onNavigate?: (m: string) => void }) {
+export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: IntegrityInputs; onNavigate?: (m: string) => void; onRepair?: (kind: "orphanLots" | "danglingLinks") => void }) {
   const [open, setOpen] = useState(false);
   const result = useMemo(() => checkIntegrity(data), [data]);
   const { counts, issues } = result;
@@ -56,6 +56,14 @@ export default function IntegrityBadge({ data, onNavigate }: { data: IntegrityIn
             background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12,
             boxShadow: "0 16px 48px rgba(0,0,0,0.18)",
           }}>
+            {/* v6.99.51 (A-FS-2, owner): repairs for the leftovers of a season reset done by hand */}
+            {onRepair && (() => { const ol = orphanLotsToRemove((data as any).lots || [], (data as any).pos || []); const dl = danglingLinks((data as any).invoices || [], (data as any).claims || [], (data as any).pos || [], (data as any).orders || [], (data as any).shipments || []);
+              if (!ol.length && !dl.invoices.length && !dl.claims.length) return null;
+              return <div style={{ padding: "10px 14px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A", display: "grid", gap: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#92400E" }}>REPAIRS — leftovers of documents deleted by hand</div>
+                {ol.length > 0 && <button onClick={() => onRepair("orphanLots")} style={{ textAlign: "left", fontSize: 11.5, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🧹 Remove {ol.length} orphan lot(s) — their PO no longer exists and they hold no stock: {ol.slice(0, 4).map((l: any) => l.number).join(", ")}{ol.length > 4 ? "…" : ""}</button>}
+                {(dl.invoices.length > 0 || dl.claims.length > 0) && <button onClick={() => onRepair("danglingLinks")} style={{ textAlign: "left", fontSize: 11.5, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🔗 Unlink {dl.invoices.length} invoice(s) and {dl.claims.length} claim(s) from documents that no longer exist</button>}
+              </div>; })()}
             <div style={{ padding: "12px 16px", borderBottom: "1px solid #F3F4F6", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong style={{ fontSize: 13 }}>Data integrity</strong>
               <span style={{ fontSize: 11, color: "#888" }}>
