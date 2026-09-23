@@ -2037,3 +2037,25 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.47 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.50 — the packing list may add a size; shipments re-derive (TO-2) ══
+(function v69950(){
+  console.log("\n══ 64. v6.99.50: the producer's packing list — final kilos, a new size, a zeroed line — and the shipment follows ══");
+  const SO = B("so.domain.js"); const SH = B("shipments.domain.js");
+  const po = { number: "PO-9", currency: "EUR", items: [{ id: 1, product: "Apples", variety: "Gala", size: "65-70", quality: "I", qty: 1, quantityStatus: "ESTIMATED", unitPrice: 0.9, packaging: "Carton (13 kg)" }] };
+  t("TO-2: final kilos on the existing line, a 60-65 line ADDED at its own price, both FINAL", () => {
+    const fin = SO.applyPackingResult(po, [{ lineId: 1, qty: 17472 }, { newLine: { product: "Apples", variety: "Gala", size: "60-65", quality: "I", qty: 1950, unitPrice: 0.8, packaging: "Carton (13 kg)" } }], "2026-09-23");
+    eq(fin.items.length, 2); eq(fin.items[0].qty, 17472); eq(fin.items[0].quantityStatus, "FINAL");
+    eq(fin.items[1].size, "60-65"); eq(fin.items[1].qty, 1950); eq(fin.items[1].unitPrice, 0.8); eq(fin.items[1].quantityStatus, "FINAL");
+    eq(fin.items.reduce((s, it) => s + it.qty, 0), 19422, "the truck total is what it is");
+  });
+  t("TO-2: a shipment not yet loaded re-derives its goods rows — the changed row's allocation is dropped, the new size appears", () => {
+    const fin = SO.applyPackingResult(po, [{ lineId: 1, qty: 17472 }, { newLine: { product: "Apples", variety: "Gala", size: "60-65", quality: "I", qty: 1950, unitPrice: 0.8 } }], "2026-09-23");
+    let id = 500; const sh = { number: "SHP-1", status: "Booked", poRefs: ["PO-9"], goods: [{ id: 10, poRef: "PO-9", poLineId: "1", product: "Apples", size: "65-70", quality: "I", qtyKg: 1 }], legs: [{ vehicles: [{ id: 1, load: [{ goodsLineId: 10, qtyKg: 1 }] }] }] };
+    const out = SH.syncGoodsFromPO(sh, fin, [], { nextId: () => ++id });
+    eq(out.goods.length, 2); eq(out.goods[0].qtyKg, 17472); eq(out.goods[1].size, "60-65"); eq(out.goods[1].qtyKg, 1950);
+    eq(out.legs[0].vehicles[0].load.length, 0, "the stale 1 kg allocation is dropped so it re-derives");
+  });
+  console.log("v6.99.50 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

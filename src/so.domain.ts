@@ -102,7 +102,7 @@ export function lockRate(so: any, todayISO: string): any {
 
 // ── PO-10: ESTIMATED quantities on a confirmed PO; the packing result makes them FINAL ──
 export function isEstimatedLine(line: any): boolean { return String(line?.quantityStatus || "FINAL").toUpperCase() === "ESTIMATED"; }
-export interface PackingResultRow { lineId: any; qty?: any; boxes?: any; }
+export interface PackingResultRow { lineId?: any; qty?: any; boxes?: any; newLine?: any; }   // v6.99.50 (TO-2): a row without lineId and with newLine ADDS a line
 /** Apply the producer's packing result: quantities become FINAL; lines not mentioned keep their estimate but are marked FINAL too (the result is complete). */
 export function applyPackingResult(po: any, rows: PackingResultRow[], todayISO: string): any {
   const items = (po.items || []).map((it: any, i: number) => {
@@ -111,7 +111,11 @@ export function applyPackingResult(po: any, rows: PackingResultRow[], todayISO: 
     if (row) { if (row.qty !== undefined && row.qty !== "") n.qty = num(row.qty); if (row.boxes !== undefined && row.boxes !== "") n.boxes = num(row.boxes); }
     return n;
   });
-  return { ...po, items, packingResultAt: todayISO };
+  // v6.99.50 (TO-2, owner): the producer's packing list may bring a SIZE the order did not have — two pallets of 60-65 at their
+  // own price — or drop a line. New lines arrive FINAL; a line set to 0 kg is kept at 0 (it shows what was ordered and not loaded).
+  const added = (rows || []).filter(r => (r.lineId === undefined || r.lineId === null || r.lineId === "") && r.newLine && num(r.newLine.qty) > 0)
+    .map((r, k) => { const base = items[0] || {}; return { ...base, ...r.newLine, id: r.newLine.id ?? `pk-${todayISO}-${k + 1}`, qty: num(r.newLine.qty), quantityStatus: "FINAL", estimatedQty: 0, addedByPackingResult: true }; });
+  return { ...po, items: [...items, ...added], packingResultAt: todayISO };
 }
 export interface SOAdjustment { soNumber: string; lineIndex: number; product: string; soldKg: number; finalKg: number; overKg: number; }
 /** Sales lines that the FINAL quantities can no longer cover — proposed, never applied silently. */

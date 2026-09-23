@@ -529,3 +529,31 @@ export function autoFillSingleUnitKg(sh: any): any {
   });
   return changed ? { ...sh, legs } : sh;
 }
+
+// ── v6.99.50 (TO-2, owner): a shipment not yet loaded RE-DERIVES its goods rows from the PO's final lines ──
+// Existing rows (matched by PO line) take the final kilos; a size the packing list added becomes a new row; a line set to
+// 0 leaves a 0 kg row (what was ordered and not loaded stays visible). Units' load[] entries for changed rows are dropped
+// so the allocation re-derives — never rewritten silently.
+export function syncGoodsFromPO(sh: any, po: any, lots: any[], deps: { nextId: () => any }): any {
+  if (!sh || !po) return sh;
+  const norm2 = (v: any) => String(v ?? "").trim().toLowerCase();
+  const items = po.items || [];
+  const goods = (sh.goods || []).slice();
+  const changed = new Set<string>();
+  items.forEach((it: any, i: number) => {
+    const lineId = String(it.id ?? i + 1);
+    const idx = goods.findIndex((g: any) => String(g.poRef) === String(po.number) && (String(g.poLineId ?? "") === lineId || (!g.poLineId && norm2(g.product) === norm2(it.product) && norm2(g.size) === norm2(it.size) && norm2(g.quality) === norm2(it.quality))));
+    if (idx >= 0) {
+      const g = goods[idx];
+      if (Math.abs(num(g.qtyKg) - num(it.qty)) > 0.5 || norm2(g.size) !== norm2(it.size)) { changed.add(String(g.id)); }
+      goods[idx] = { ...g, poLineId: lineId, qtyKg: num(it.qty), size: it.size, quality: it.quality, variety: it.variety || g.variety, packaging: it.packaging || g.packaging, packagingId: it.packagingId ?? g.packagingId, cnCode: it.cnCode || g.cnCode, pallets: num(it.pallets) || g.pallets || 0 };
+    } else if (num(it.qty) > 0) {
+      const lot = (lots || []).find(l => l.poRef === po.number && norm2(l.product) === norm2(it.product) && norm2(l.size || "") === norm2(it.size || "")) || null;
+      goods.push({ id: deps.nextId(), poRef: po.number, poLineId: lineId, soRef: "", lotRef: lot?.number || "", product: it.product, variety: it.variety || "", cnCode: it.cnCode || "",
+        origin: it.origin, quality: it.quality, size: it.size, packaging: it.packaging, packagingId: it.packagingId, qtyKg: num(it.qty), pallets: num(it.pallets) || 0,
+        description: `${it.product || "Goods"}${it.variety ? " " + it.variety : ""} ${it.size || ""} ${it.packaging || ""}`.trim(), addedByPackingResult: true });
+    }
+  });
+  const legs = (sh.legs || []).map((l: any) => ({ ...l, vehicles: (l.vehicles || []).map((u: any) => ({ ...u, load: (u.load || []).filter((a: any) => !changed.has(String(a.goodsLineId))) })) }));
+  return { ...sh, goods, legs };
+}

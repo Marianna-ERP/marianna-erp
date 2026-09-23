@@ -2348,7 +2348,7 @@ function FieldPrint({ en, pl, value }: any) {
 }
 
 
-function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders = [], customTerms = "" }: any) {
+function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders = [], customTerms = "", pos = [], packagingTypes = [] }: any) {
   const docNo = shipment.transportOrderNo || shipment.number;
   const effectiveProviderId = providerId || shipment.carrierId || shipment.forwarderId;
   const provider: any = providerById(effectiveProviderId, contacts) || {};
@@ -2402,8 +2402,8 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
   const tempText = shipment.temperatureMinC || shipment.temperatureMaxC ? `${shipment.temperatureMinC ?? ""}/${shipment.temperatureMaxC ?? ""}°C - continuous reefer / agregat ciagly` : "TBA";
   // v6.4.0: SO refs backfilled live — goods rows created before the SO link have
   // empty soRef, so fall back to the shipment's derived SO links.
-  const derivedSORefs = shipmentSORefs(shipment, orders);
-  const soFallback = derivedSORefs.join(", ");
+  // v6.99.50 (TO-3): document refs are no longer printed per cargo line (the carrier's block is per truck)
+  // v6.99.50 (TO-3): soFallback no longer needed — the carrier's cargo block prints per truck, not per document line
   // Goods scoped to the selected legs: a leg carries goods whose lotRef/poRef/soRef
   // appears on it, OR (fallback) all shipment goods if legs don't carry explicit refs.
   const legGoodsRefs = new Set<string>();
@@ -2530,31 +2530,38 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
         <FieldPrint en={`Agreed price for this ${providerRole.toLowerCase()} order`} pl="Uzgodniony fracht dla tego zlecenia" value={agreedPriceText} />
       </div>
 
+      {/* v6.99.50 (TO-3, owner): the CARRIER plans by pallets and gross weight (road limits), not by size — per truck, derived from the
+          goods and the packaging (kg/box, boxes/pallet, box tare, pallet tare in Settings). ≈ while the PO line is still ESTIMATED.
+          Varieties and net kilos per line belong on the loading protocol and the CMR, not here. */}
       <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Cargo / Ladunek</div>
       <table style={{ marginTop: 3, borderCollapse: "collapse", width: "100%" }}>
-        <thead><tr>{["Product / Produkt", "Origin / Pochodzenie", "Packaging / Opakowanie", "Kg netto / Net", "Kg brutto / Gross", "Pallets / Palety", "PO/SO/Lot"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left" }}>{h}</th>)}</tr></thead>
-        <tbody>{scopedGoods.map((g, i) => <tr key={i}>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3, fontWeight: 700 }}>{g.product}{g.variety ? " — " + g.variety : ""}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.origin || "-"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{g.packaging || "-"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{g.grossKg ? fmtNum(g.grossKg) : "-"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{g.pallets || "-"}</td>
-          <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{[g.poRef, g.soRef || soFallback, g.lotRef].filter(Boolean).join(" / ") || "-"}</td>
-        </tr>)}
-        {/* v6.34.5: net + gross totals for THIS carrier's cargo (transport order needs both). */}
-        {(() => {
-          const netT = scopedGoods.reduce((s: number, g: any) => s + parseNum(g.qtyKg), 0);
-          const grossT = scopedGoods.reduce((s: number, g: any) => s + (parseNum(g.grossKg) || 0), 0);
-          return (
-            <tr style={{ fontWeight: 800, background: "#F3F4F6" }}>
-              <td style={{ border: "1px solid #D1D5DB", padding: 3 }} colSpan={3}>Total / Razem</td>
-              <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{fmtNum(netT)}</td>
-              <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{grossT ? fmtNum(grossT) : "-"}</td>
-              <td style={{ border: "1px solid #D1D5DB", padding: 3 }} colSpan={2}></td>
-            </tr>
-          );
-        })()}
+        <thead><tr>{["Transport unit / Jednostka", "Product / Produkt", "Pallets / Palety", "Kg brutto / Gross (up to)", "Temperature / Temp."].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F3F4F6", textAlign: "left" }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {(() => {
+            const est = (g: any) => { const po = (pos || []).find((pp: any) => String(pp.number) === String(g.poRef)); const line = po ? (po.items || []).find((it: any, k: number) => String(it.id ?? k + 1) === String(g.poLineId)) || (po.items || []).find((it: any) => String(it.product) === String(g.product) && String(it.size || "") === String(g.size || "")) : null; return line ? String(line.quantityStatus || "FINAL").toUpperCase() === "ESTIMATED" : false; };
+            const rowsFor = (u: any) => {
+              const loads = (u.load || []);
+              const rows = loads.length ? loads.map((a: any) => ({ g: scopedGoods.find((g: any) => String(g.id) === String(a.goodsLineId)) || (shipment.goods || []).find((g: any) => String(g.id) === String(a.goodsLineId)), kg: parseNum(a.qtyKg) })).filter((r: any) => r.g) : scopedGoods.map((g: any) => ({ g, kg: parseNum(g.qtyKg) }));
+              let pallets = 0, gross = 0, anyEst = false; const products = new Set<string>();
+              rows.forEach(({ g, kg }: any) => { const gr = grossForGoodsLine({ ...g, qtyKg: kg, boxes: undefined, pallets: undefined }, packagingTypes || []); pallets += gr.pallets || 0; gross += gr.grossKg || kg; if (est(g)) anyEst = true; products.add(`${g.product}${g.packaging ? ", " + g.packaging : ""}`); });
+              return { pallets, gross, anyEst, product: Array.from(products).join(" · ") || "—" };
+            };
+            const units = orderUnits.length ? orderUnits : [{ truckPlate: "", containerNo: "" }];
+            const tot = { pallets: 0, gross: 0, anyEst: false };
+            const trs = units.map((u: any, k: number) => { const r = rowsFor(u); tot.pallets += r.pallets; tot.gross += r.gross; tot.anyEst = tot.anyEst || r.anyEst; return (
+              <tr key={k}>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, fontWeight: 700 }}>{u.truckPlate || u.containerNo || `unit ${k + 1}`}{u.trailerPlate ? ` / ${u.trailerPlate}` : ""}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{r.product}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{r.anyEst ? "≈ " : ""}{r.pallets || "—"}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{r.anyEst ? "≈ " : ""}{r.gross ? fmtNum(Math.round(r.gross)) : "—"}</td>
+                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{tempText || "—"}</td>
+              </tr>); });
+            return <>
+              {trs}
+              {units.length > 1 && <tr style={{ fontWeight: 800, background: "#F3F4F6" }}><td style={{ border: "1px solid #D1D5DB", padding: 3 }} colSpan={2}>Total / Razem</td><td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{tot.anyEst ? "≈ " : ""}{tot.pallets}</td><td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{tot.anyEst ? "≈ " : ""}{fmtNum(Math.round(tot.gross))}</td><td style={{ border: "1px solid #D1D5DB", padding: 3 }} /></tr>}
+              <tr><td colSpan={5} style={{ padding: "4px 3px", fontSize: 9.5, color: "#555", border: "none" }}>{tot.anyEst ? "≈ estimated — quantities not yet final with the producer. " : ""}Final weights per transport unit are stated on the loading protocol and the CMR. / Ostateczne wagi na protokole załadunku i CMR.</td></tr>
+            </>;
+          })()}
         </tbody>
       </table>
 
@@ -2583,7 +2590,7 @@ function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders
   );
 }
 
-function TransportOrderPrintModal({ shipment, contacts, orders = [], onSaveTerms = () => {}, onClose, onMarkSent, onEmail }: any) {
+function TransportOrderPrintModal({ shipment, contacts, orders = [], onSaveTerms = () => {}, onClose, onMarkSent, onEmail, pos = [], packagingTypes = [] }: any) {
   const providerIds = providerIdsForShipment(shipment);
   const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
   // Which legs go on this order. Default: the legs belonging to the chosen provider.
@@ -2630,14 +2637,14 @@ function TransportOrderPrintModal({ shipment, contacts, orders = [], onSaveTerms
       )}
       <div style={{ padding: 22, background: "#ECECEC" }}>
         <div id="transport-order-print" style={{ width: "190mm", margin: "0 auto", background: "#fff", boxShadow: "0 3px 16px rgba(0,0,0,0.18)" }}>
-          <TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} legIds={legIds} orders={orders} customTerms={termsText} />
+          <TransportOrderDocument pos={pos} packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} providerId={providerId} legIds={legIds} orders={orders} customTerms={termsText} />
         </div>
       </div>
     </div>
   </div>;
 }
 
-function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, onMarkSent }: any) {
+function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, onMarkSent, pos = [], packagingTypes = [] }: any) {
   const providerIds = providerIdsForShipment(shipment);
   const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
   const provider: any = providerById(providerId, contacts) || {};
@@ -2678,7 +2685,7 @@ function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, on
         <div><Lbl>Provider</Lbl><Sel value={providerId} onChange={e => setProviderId(e.target.value)}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel></div><div><Lbl>TO</Lbl><Inp value={recipient || "(no email — set it on this carrier in Contacts, or reselect the carrier above)"} disabled style={{ background: "#F9FAFB", color: recipient ? "#111" : "#B45309" }} /></div>
         <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
         <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
-        <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument shipment={shipment} contacts={contacts} providerId={providerId} legIds={providerLegList.map((l: any) => String(l.id))} orders={orders} customTerms={shipment.customOrderTerms || ""} /></div></div>
+        <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument pos={pos} packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} providerId={providerId} legIds={providerLegList.map((l: any) => String(l.id))} orders={orders} customTerms={shipment.customOrderTerms || ""} /></div></div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", borderTop: "1px solid #F3F4F6", paddingTop: 14 }}>
           <SmallButton onClick={onClose}>Cancel</SmallButton>
           <SmallButton onClick={() => printHtmlNode("transport-order-email-doc", `${shipment.number} — ${(providerById(providerId, contacts) || {}).name || providerId}`)} kind="blue">① Save PDF</SmallButton>
@@ -2769,13 +2776,35 @@ function DocumentRegisterCard({ shipment, protocols = [] }: any) {
 
 
 // ── v6.93.0 (A-R8-19): TRANSPORT ORDERS — one per CARRIER × LEG, each with its own Mark sent ──
-function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null, onCompose = null }: any) {
+
+// ── v6.99.50 (TO-4, owner): what the carrier was told when the order was sent — pallets and gross per shipment, derived — so a
+// later final weight can be compared with it. Stored WITH the send record (a fact of the send, not a second quantity).
+function sentCargoSnapshot(sh: any, types: any[]): { pallets: number; grossKg: number } {
+  let pallets = 0, grossKg = 0;
+  (sh?.goods || []).forEach((g: any) => { const gr = grossForGoodsLine({ ...g, boxes: undefined, pallets: undefined }, types || []); pallets += gr.pallets || 0; grossKg += gr.grossKg || parseNum(g.qtyKg); });
+  return { pallets, grossKg: Math.round(grossKg) };
+}
+function cargoVariance(sh: any, types: any[]): { told: { pallets: number; grossKg: number } | null; now: { pallets: number; grossKg: number }; overKg: number } | null {
+  const sends = Object.values(sh?.transportOrders || {}) as any[];
+  const told = sends.map(s => s?.told).filter(Boolean).sort((a: any, b: any) => 0)[0] || null;
+  if (!told) return null;
+  const now = sentCargoSnapshot(sh, types);
+  return { told, now, overKg: now.grossKg - told.grossKg };
+}
+
+function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null, onCompose = null, packagingTypes = [] }: any) {
+  const variance = cargoVariance(shipment, packagingTypes || []);
   const jobs = jobsByCarrierLeg(shipment);
   if (!jobs.length) return null;
   const name = (id: any) => ((contacts || []).find((c: any) => String(c.id) === String(id)) || {}).name || "(carrier not set)";
   const sent = shipment.transportOrders || {};
   return (
     <Card>
+      {variance && Math.abs(variance.overKg) > 50 && (
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: variance.overKg > 0 ? "#92400E" : "#166534", background: variance.overKg > 0 ? "#FFFBEB" : "#F0FDF4", border: `1px solid ${variance.overKg > 0 ? "#FDE68A" : "#BBF7D0"}`, borderRadius: 7, padding: "6px 9px", marginBottom: 8 }}>
+          ⚠ The carrier was told ≈ {variance.told.pallets} pallets · {variance.told.grossKg.toLocaleString("pl-PL")} kg gross — the goods now derive {variance.now.pallets} pallets · {variance.now.grossKg.toLocaleString("pl-PL")} kg ({variance.overKg > 0 ? "+" : ""}{variance.overKg.toLocaleString("pl-PL")} kg). {variance.overKg > 0 ? "Call the carrier before loading day; re-send the order as an amendment." : "Under what was booked — no action needed."}
+        </div>
+      )}
       <SectionTitle>Transport orders — one per carrier per leg</SectionTitle>
       {jobs.map((j: any) => {
         const st = sent[j.key];
@@ -2790,6 +2819,8 @@ function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null, onCom
             {onCompose && <SmallButton onClick={() => onCompose(j.carrierId, j.legIndex)}>Order</SmallButton>}
             {(() => {   // v6.99.39 (G-5, owner): the order names places and dates — it cannot be SENT until its units carry them
               const gaps = (j.units || []).flatMap((u: any) => [!(u.pickupText || u.pickupLocationId) && "pickup place", !(u.deliveryText || u.deliveryLocationId) && "delivery place", !u.plannedLoadingDate && "loading date", !u.plannedDeliveryDate && "delivery date"].filter(Boolean));
+              // v6.99.50 (TO-5, owner): the carrier needs pallets and gross weight — derivable from an ESTIMATE with a packaging; without that the order says nothing about the load
+              { const g0 = (shipment.goods || []); const anyKg = g0.some((g: any) => parseNum(g.qtyKg) > 0); const anyPk = g0.some((g: any) => grossForGoodsLine(g, packagingTypes || []).pallets > 0); if (!anyKg) gaps.push("quantities (even estimated)"); else if (!anyPk) gaps.push("a packaging on the goods (pallets and gross derive from it)"); }
               const missing = Array.from(new Set(gaps)) as string[];
               if (st?.sentAt) return <span style={{ fontSize: 10.5, fontWeight: 800, color: "#16A34A" }}>sent {st.sentAt}</span>;
               if (!onMarkSent) return null;
@@ -2803,7 +2834,7 @@ function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null, onCom
   );
 }
 
-function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim, onStuffing = null, onDevanning = null, onMarkTOSent = null }: any) {
+function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], packagingTypes = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim, onStuffing = null, onDevanning = null, onMarkTOSent = null }: any) {
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
   const cancelledRefs = cancelledDocSet(pos, orders); // v6.35.1: strike cancelled PO/SO refs
   const missingDocs = (shipment.documents || []).filter(d => ["Required", "Missing"].includes(d.status));
@@ -2893,7 +2924,7 @@ function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], 
           </div>
         </div>; })}
       </Card>
-      <TransportOrdersCard shipment={shipment} contacts={contacts} onMarkSent={onMarkTOSent} onCompose={onEmail ? (cid: any, li: number) => onEmail(cid, li) : null} />
+      <TransportOrdersCard packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} onMarkSent={onMarkTOSent} onCompose={onEmail ? (cid: any, li: number) => onEmail(cid, li) : null} />
       {onStuffing && <ForwarderReports shipment={shipment} orders={orders} onStuffing={onStuffing} onDevanning={onDevanning} />}
       <DocumentRegisterCard shipment={shipment} protocols={protocolsForShipment(shipment)} />
       <Card>
@@ -3605,8 +3636,8 @@ export default function Shipments({
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail shipment={selected} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
-            onMarkTOSent={(key: string) => { updateShipment(selected.id, (s: any) => ({ ...s, transportOrders: { ...(s.transportOrders || {}), [key]: { sentAt: todayISO() } }, confirmationStatus: "Sent", confirmationSentAt: s.confirmationSentAt || todayISO() })); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "status", summary: `Transport order ${key} marked sent` }); }}
+          {selected ? <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
+            onMarkTOSent={(key: string) => { updateShipment(selected.id, (s: any) => ({ ...s, transportOrders: { ...(s.transportOrders || {}), [key]: { sentAt: todayISO(), told: sentCargoSnapshot(s, packagingTypes || []) } }, confirmationStatus: "Sent", confirmationSentAt: s.confirmationSentAt || todayISO() })); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "status", summary: `Transport order ${key} marked sent` }); }}
             onStuffing={(rows: any[]) => { updateShipment(selected.id, (s: any) => applyStuffingReport(s, rows, { nextId })); setToast(`${selected.number}: ${rows.length} container(s) created from the forwarder's report.`); }}
             onDevanning={(rows: any[]) => {
               const byC: Record<string, any> = {};
@@ -3653,7 +3684,7 @@ export default function Shipments({
       }}
       onClose={() => setProtocolShipment(null)}
     />}
-    {printShipment && <TransportOrderPrintModal shipment={printShipment} contacts={contacts} orders={orders} onSaveTerms={(text) => saveOrderTerms(printShipment, text)} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} onEmail={() => { const sh = printShipment; setPrintShipment(null); setEmailShipment(sh); }} />}
-    {emailShipment && <TransportOrderEmailModal shipment={emailShipment} contacts={contacts} orders={orders} onClose={() => setEmailShipment(null)} onMarkSent={() => markConfirmationSent(emailShipment)} />}
+    {printShipment && <TransportOrderPrintModal pos={pos} packagingTypes={packagingTypes} shipment={printShipment} contacts={contacts} orders={orders} onSaveTerms={(text) => saveOrderTerms(printShipment, text)} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} onEmail={() => { const sh = printShipment; setPrintShipment(null); setEmailShipment(sh); }} />}
+    {emailShipment && <TransportOrderEmailModal pos={pos} packagingTypes={packagingTypes} shipment={emailShipment} contacts={contacts} orders={orders} onClose={() => setEmailShipment(null)} onMarkSent={() => markConfirmationSent(emailShipment)} />}
   </div>;
 }

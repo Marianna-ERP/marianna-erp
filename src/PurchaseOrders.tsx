@@ -30,6 +30,7 @@ import { ItemVarietyPicker } from "./ProductPicker";
 import { cnCodeForItem } from "./productCatalog";
 import { recordAudit } from "./audit";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
+import { syncGoodsFromPO } from "./shipments.domain";
 let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -1272,6 +1273,52 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
 
 
 // ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
+// ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
+// have (at its own price), a line not loaded (0). Allowed on a Confirmed PO with a shipment, as long as nothing was received
+// or shipped: securing the truck must not freeze the order. The shipment's goods rows re-derive; the truck total is what it is.
+function PackingResultWindow({ order, onClose, onConfirm }: any) {
+  const [rows, setRows] = React.useState<any[]>(() => (order.items || []).map((it: any, i: number) => ({ lineId: it.id ?? i + 1, it, qty: isEstimatedLine(it) ? "" : String(it.qty ?? "") })));
+  const [added, setAdded] = React.useState<any[]>([]);
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const total = rows.reduce((s, r) => s + (parseFloat(String(r.qty).replace(",", ".")) || (String(r.qty).trim() === "" ? (parseFloat(r.it.qty) || 0) : 0)), 0) + added.reduce((s, a) => s + (parseFloat(String(a.qty).replace(",", ".")) || 0), 0);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "50px 16px", overflow: "auto" }}>
+      <div style={{ background: "#fff", borderRadius: 12, width: "min(900px, 100%)", border: "2px solid #7C3AED", overflow: "hidden" }}>
+        <div style={{ background: "#F5F3FF", borderBottom: "1px solid #DDD6FE", padding: "10px 16px" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#6D28D9" }}>📦 Producer's packing list · {order.number}</div>
+          <div style={{ fontSize: 11.5, color: "#64748B" }}>the final kilos per line — blank keeps the estimate · 0 = not loaded · a size the order did not have is added below at its own price</div>
+        </div>
+        <div style={{ padding: "12px 16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>LINE</div><div>SIZE</div><div>CLASS</div><div>ESTIMATED / ORDERED</div><div>FINAL KG</div></div>
+          {rows.map((r, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F1F5F9" }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700 }}>{r.it.product}{r.it.variety ? ` — ${r.it.variety}` : ""}</div><div style={{ fontSize: 12 }}>{r.it.size || "—"}</div><div style={{ fontSize: 12 }}>{r.it.quality || "—"}</div>
+            <div style={{ fontSize: 12 }}>{Math.round(parseFloat(r.it.qty) || 0).toLocaleString("pl-PL")} kg {isEstimatedLine(r.it) ? <span style={{ color: "#B45309" }}>≈ estimated</span> : <span style={{ color: "#94A3B8" }}>final</span>}</div>
+            <input type="number" value={r.qty} onChange={e => setRows(rows.map((x, k) => k === i ? { ...x, qty: e.target.value } : x))} placeholder={isEstimatedLine(r.it) ? "final kg" : String(r.it.qty)} style={inp} />
+          </div>)}
+          <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>SIZES NOT ON THE ORDER — loaded anyway</div>
+          {added.map((a, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.8fr 0.8fr 1fr 1fr 34px", gap: 8, alignItems: "center", padding: "4px 0" }}>
+            <input value={a.variety} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, variety: e.target.value } : x))} placeholder="variety" style={inp} />
+            <input value={a.size} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, size: e.target.value } : x))} placeholder="size 60-65" style={inp} />
+            <input value={a.quality} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, quality: e.target.value } : x))} placeholder="class" style={inp} />
+            <input type="number" value={a.qty} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, qty: e.target.value } : x))} placeholder="kg" style={inp} />
+            <input type="number" value={a.unitPrice} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, unitPrice: e.target.value } : x))} placeholder={`price / kg (${order.currency || "PLN"})`} style={inp} />
+            <div style={{ fontSize: 11, color: "#64748B" }}>{(order.items || [])[0]?.packaging || ""}</div>
+            <button onClick={() => setAdded(added.filter((_, k) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 30, cursor: "pointer" }}>✕</button>
+          </div>)}
+          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { product: b.product || "", variety: b.variety || "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", packaging: b.packaging, packagingId: b.packagingId, cnCode: b.cnCode, origin: b.origin, pricingUnit: b.pricingUnit || "kg" }]); }}
+            style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add a size that was loaded</button>
+          <div style={{ marginTop: 12, fontSize: 13, fontWeight: 800 }}>Truck total: {Math.round(total).toLocaleString("pl-PL")} kg</div>
+        </div>
+        <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <SmallButton onClick={onClose}>Cancel</SmallButton>
+          <button onClick={() => onConfirm([...rows.map(r => ({ lineId: r.lineId, qty: String(r.qty).trim() === "" ? undefined : parseFloat(String(r.qty).replace(",", ".")) })), ...added.filter(a => parseFloat(a.qty) > 0).map(a => ({ newLine: { ...a, qty: parseFloat(String(a.qty).replace(",", ".")), unitPrice: parseFloat(String(a.unitPrice).replace(",", ".")) || 0 } }))])}
+            style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#6D28D9", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Quantities are final</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: any) {
   const [f, setF] = React.useState<any>({ plate: "", trailer: "", driver: "", supplierRef: "", eta: "", recorder: "", note: "" });
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
@@ -1765,7 +1812,8 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
   const [selected, setSelected] = useState<any>(openDirectPO);
   const [form, setForm] = useState(null);
   const [printOrder, setPrintOrder] = useState(null);
-  const [truckWindow, setTruckWindow] = useState(false);   // v6.99.36 (A-R25-6): the supplier truck is registered in one window
+  const [truckWindow, setTruckWindow] = useState(false);
+  const [packingWindow, setPackingWindow] = useState(false);   // v6.99.50 (TO-2)   // v6.99.36 (A-R25-6): the supplier truck is registered in one window
   const [emailOrder, setEmailOrder] = useState(null);
 
   // filters
@@ -2092,6 +2140,16 @@ ${blockNote}`.trim(),
         {poDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
+        {packingWindow && selected && <PackingResultWindow order={selected} onClose={() => setPackingWindow(false)} onConfirm={async (rows: any[]) => {
+          const fin = applyPackingResult(selected, rows, localTodayISO());
+          const adj = proposeSOAdjustments(fin, extSOs || []);
+          extSetPOs((prev: any[]) => (prev || []).map((p: any) => p.id === selected.id ? fin : p));
+          // v6.99.50 (TO-2): the shipments not yet loaded re-derive their goods rows from the final lines
+          if (typeof extSetShipments === "function") extSetShipments((prev: any[]) => (prev || []).map((sh: any) => (sh && (sh.poRefs || []).includes(selected.number) && ["Draft", "Booked"].includes(String(sh.status))) ? syncGoodsFromPO(sh, fin, extLots || [], { nextId }) : sh));
+          recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "status", summary: `Packing list entered — quantities FINAL${rows.some((r: any) => r.newLine) ? ", " + rows.filter((r: any) => r.newLine).length + " size(s) added" : ""}${adj.length ? "; " + adj.length + " sale(s) to adjust" : ""}` });
+          setPackingWindow(false);
+          await uiAlert({ tone: adj.length ? "warn" : "info", title: adj.length ? "Quantities final — sales to adjust" : "Quantities final", message: adj.length ? adj.map((a: any) => `${a.soNumber}: ${a.product} sold ${a.soldKg} kg, final ${a.finalKg} kg (${a.overKg} kg over)`).join("\n") : "The shipments not yet loaded now carry the final lines." });
+        }} />}
         {truckWindow && selected && <SupplierTruckWindow order={selected} lots={extLots} onClose={() => setTruckWindow(false)} onConfirm={(f: any) => {
           const etaISO = String(f.eta || "").slice(0, 10);
           let created: any = null;
@@ -2112,21 +2170,7 @@ ${blockNote}`.trim(),
             ? (extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))
             : [] /* v6.80.0 (D-42): EXW/FCA/FOB/CIF goods arrive on OUR shipment — the receipt is posted there */}
           ctxOrders={extSOs}
-          onPackingResult={async () => {
-            // one prompt per estimated line: the producer's final kilos (blank = keep the estimate)
-            const rows: any[] = [];
-            for (const [i, it] of (selected.items || []).entries()) {
-              if (!isEstimatedLine(it)) continue;
-              const v = await uiPrompt({ title: `Packing result — ${it.product || "line"} ${it.size || ""} ${it.quality || ""}`.trim(), message: `Estimated ${Math.round(parseFloat(String(it.qty)) || 0).toLocaleString("pl-PL")} kg. Final kilos packed by the producer (blank = keep):`, defaultValue: String(Math.round(parseFloat(String(it.qty)) || 0)), confirmLabel: "Next" });
-              if (v === null) return;
-              rows.push({ lineId: it.id ?? i + 1, qty: String(v).trim() === "" ? undefined : parseFloat(String(v).replace(",", ".")) });
-            }
-            const fin = applyPackingResult(selected, rows, localTodayISO());
-            const adj = proposeSOAdjustments(fin, extSOs || []);
-            extSetPOs((prev: any[]) => (prev || []).map((p: any) => p.id === selected.id ? fin : p));
-            recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "status", summary: `Packing result entered — quantities FINAL${adj.length ? `; ${adj.length} sales line(s) exceed the final kilos` : ""}` });
-            await uiAlert({ tone: adj.length ? "warn" : "info", title: adj.length ? "Quantities final — sales to adjust" : "Quantities final", message: adj.length ? adj.map((a: any) => `${a.soNumber} · ${a.product}: sold ${a.soldKg.toLocaleString("pl-PL")} kg, final allows ${a.finalKg.toLocaleString("pl-PL")} kg (−${a.overKg.toLocaleString("pl-PL")})`).join("\n") + "\n\nNothing was changed on the sales orders — adjust the lines above and confirm them." : "Every sale is covered by the final quantities. Expected lots re-sync from the PO lines." });
-          }}
+          onPackingResult={() => setPackingWindow(true)}   // v6.99.50 (TO-2): one window instead of a chain of prompts
           settlement={{ lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, setInvoices: extSetInvoices }}
           onRegisterTruck={typeof extSetShipments === "function" ? () => setTruckWindow(true) : null}
           onReceiveLot={async (l: any) => {
