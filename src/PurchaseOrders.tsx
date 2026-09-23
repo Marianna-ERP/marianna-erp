@@ -3,7 +3,7 @@ import QualityReportDoc from "./QualityReportDoc";
 import { lastReportNumber, issueReportNumber } from "./reportNumbers";
 import { readCountries } from "./Contacts";
 import LocationPicker from "./LocationPicker";
-import { documentTotals, totalsLine } from "./pricingUnit.domain";
+import { documentTotals, totalsLine, effectiveCounts } from "./pricingUnit.domain";
 import { exportRowsToXlsx, stamp as xlsStamp, exportVegaProSalesReport } from "./exportXlsx";
 import { PAGE_MAX, SmallButton } from "./ui";
 import DateInput from "./DateInput";
@@ -1119,8 +1119,18 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
                     <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PO_PACKAGING_TYPES || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="po-packaging-types" />
                       <datalist id="po-packaging-types">{(PO_PACKAGING_TYPES || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist></div>
-                    <div><Lbl>Boxes{String(it.pricingUnit || "kg") === "kg" ? " (derived)" : ""}</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" /></div>
-                    <div><Lbl>Pallets</Lbl><Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 24" /></div>
+                    {/* v6.99.46 (A-PO-11, owner): boxes and pallets derive from the LINE'S packaging (never the product default);
+                        a typed figure is a manual override, marked and reversible with ↺; the override survives re-derivation. */}
+                    {(() => { const ec = effectiveCounts(it, PO_PACKAGING_TYPES || []); const isBoxUnit = String(it.pricingUnit || "kg") !== "kg"; return <>
+                    <div><Lbl>Boxes{isBoxUnit ? "" : (ec.boxesManual ? <span style={{ color: "#B45309" }}> (manual) <button onClick={() => si(i, "boxesManual", null)} title="back to the derived figure" style={{ border: "none", background: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, padding: 0 }}>↺</button></span> : (ec.derived.hasPackaging ? " (derived)" : ""))}</Lbl>
+                      {isBoxUnit
+                        ? <Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" />
+                        : <Inp type="number" value={ec.boxes ?? ""} onChange={e => si(i, "boxesManual", e.target.value)} placeholder={ec.derived.hasPackaging ? "e.g. 1500" : "choose a packaging"} title={ec.derived.hasPackaging ? `${ec.derived.kgPerBox} kg per box` : "the packaging decides the box count — pick it first"} style={ec.boxesManual ? { borderColor: "#F59E0B" } : {}} />}
+                    </div>
+                    <div><Lbl>Pallets{ec.palletsManual ? <span style={{ color: "#B45309" }}> (manual) <button onClick={() => si(i, "palletsManual", null)} title="back to the derived figure" style={{ border: "none", background: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, padding: 0 }}>↺</button></span> : (ec.derived.pallets != null ? " (derived)" : "")}</Lbl>
+                      <Inp type="number" value={ec.pallets ?? ""} onChange={e => si(i, "palletsManual", e.target.value)} placeholder={ec.derived.boxesPerPallet > 0 ? "e.g. 24" : (ec.derived.hasPackaging ? "boxes per pallet not set" : "choose a packaging")} title={ec.derived.boxesPerPallet > 0 ? `${ec.derived.boxesPerPallet} boxes per pallet` : ""} style={ec.palletsManual ? { borderColor: "#F59E0B" } : {}} />
+                    </div>
+                    </>; })()}
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode ?? ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 0808 10" title="Customs tariff code for this item — carried to the SO and shipment" /></div>
                     <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} title="Delete this line" disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #DC2626", borderRadius: 6, background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 800, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
@@ -1847,6 +1857,9 @@ ${blockNote}`.trim(),
 
   // mutations
   async function saveOrder(o) {
+    // v6.99.46 (A-PO-11): the stored boxes / pallets ARE the effective counts (derived from the line's packaging unless
+    // overridden), so every reader downstream — totals, shipments, protocol, invoices — sees one figure.
+    o = { ...o, items: (o.items || []).map((it: any) => { const ec = effectiveCounts(it, PO_PACKAGING_TYPES || []); const isBoxUnit = String(it.pricingUnit || "kg") !== "kg"; return { ...it, boxes: isBoxUnit ? it.boxes : (ec.boxes ?? it.boxes ?? null), pallets: ec.pallets ?? it.pallets ?? null }; }) };
     // Batch 6b: hard confirm-gate — no PO past Draft without its terms.
     const termsMissing = poTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {

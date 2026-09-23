@@ -153,3 +153,31 @@ export function totalsLine(t: { kg: number; boxes: number; pallets: number; valu
   const f = (n: number) => n.toLocaleString("pl-PL");
   return `${t.lines} line(s) · ${f(t.kg)} kg · ${f(t.boxes)} boxes · ${f(t.pallets)} pallets · ${t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${currency}${String(currency).toUpperCase() !== "PLN" ? ` (≈ ${t.valuePLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN)` : ""}`;
 }
+
+// ── v6.99.46 (A-PO-11, owner 22 Sept): boxes and pallets derive from the LINE'S CHOSEN PACKAGING — never from the
+// product's default — and a typed figure is a MANUAL OVERRIDE that survives re-derivation. ──
+/** The packaging the line actually chose (id or label); null when none was chosen. No product-default guess. */
+export function chosenPackaging(line: any, types: PackagingType[]): PackagingType | null {
+  return findPackaging(types, line?.packagingId) || findPackaging(types, line?.packaging) || null;
+}
+export interface DerivedCounts { boxes: number | null; pallets: number | null; kgPerBox: number; boxesPerPallet: number; hasPackaging: boolean; }
+/** What the line's packaging says the counts should be. `null` where nothing can be derived yet. */
+export function derivedCounts(line: any, types: PackagingType[]): DerivedCounts {
+  const pk = chosenPackaging(line, types);
+  const kgPerBox = pk ? num((pk as any).capacityKg) : 0;
+  const boxesPerPallet = pk ? num((pk as any).boxesPerPallet) : 0;
+  const unit = String(line?.pricingUnit || "kg").toLowerCase();
+  const qty = num(line?.qty);
+  let boxes: number | null = null;
+  if (unit === "box" || unit === "boxes") boxes = Math.round(num(line?.boxes)) || null;
+  else if (kgPerBox > 0 && qty > 0) boxes = Math.round(qty / kgPerBox);
+  const pallets = boxes && boxesPerPallet > 0 ? Math.ceil(boxes / boxesPerPallet) : null;
+  return { boxes, pallets, kgPerBox, boxesPerPallet, hasPackaging: !!pk };
+}
+/** The figure to SHOW: the manual override when the user typed one, else the derived one. */
+export function effectiveCounts(line: any, types: PackagingType[]): { boxes: number | null; pallets: number | null; boxesManual: boolean; palletsManual: boolean; derived: DerivedCounts } {
+  const d = derivedCounts(line, types);
+  const bm = line?.boxesManual !== undefined && line?.boxesManual !== null && line?.boxesManual !== "";
+  const pm = line?.palletsManual !== undefined && line?.palletsManual !== null && line?.palletsManual !== "";
+  return { boxes: bm ? Math.round(num(line.boxesManual)) : d.boxes, pallets: pm ? Math.round(num(line.palletsManual)) : d.pallets, boxesManual: bm, palletsManual: pm, derived: d };
+}

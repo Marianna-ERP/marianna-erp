@@ -1987,3 +1987,30 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.44 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.46 — counts from the LINE's packaging, manual override kept (A-PO-11) ══
+(function v69946(){
+  console.log("\n══ 62. v6.99.46: boxes and pallets follow the chosen packaging; a typed figure is an override ══");
+  const PU = B("pricingUnit.domain.js");
+  const types = [
+    { id: "c5", label: "Carton (5kg)", capacityKg: 5, boxesPerPallet: 110, appliesTo: ["Capsicum"], isDefault: true },
+    { id: "c10", label: "Carton (10 kg)", capacityKg: 10, boxesPerPallet: 60, appliesTo: ["Capsicum"] },
+  ];
+  t("no packaging chosen → nothing derived (the product default is NOT used)", () => {
+    const d = PU.derivedCounts({ product: "Capsicum", qty: 11000, pricingUnit: "kg" }, types);
+    eq(d.hasPackaging, false); eq(d.boxes, null); eq(d.pallets, null);
+  });
+  t("the 10 kg carton chosen → 1 100 boxes and 19 pallets, not the default 5 kg carton's 2 200", () => {
+    const d = PU.derivedCounts({ product: "Capsicum", qty: 11000, pricingUnit: "kg", packagingId: "c10" }, types);
+    eq(d.boxes, 1100); eq(d.pallets, 19); eq(d.kgPerBox, 10);
+    eq(PU.derivedCounts({ product: "Capsicum", qty: 11000, pricingUnit: "kg", packaging: "Carton (5kg)" }, types).boxes, 2200, "chosen by label works too");
+  });
+  t("a typed figure is a manual override that survives a quantity change; clearing it returns to the derived one", () => {
+    const line = { product: "Capsicum", qty: 11000, pricingUnit: "kg", packagingId: "c10", boxesManual: 1090, palletsManual: "" };
+    const e1 = PU.effectiveCounts(line, types); eq(e1.boxes, 1090); eq(e1.boxesManual, true); eq(e1.pallets, 19); eq(e1.palletsManual, false);
+    const e2 = PU.effectiveCounts({ ...line, qty: 12000 }, types); eq(e2.boxes, 1090, "the override holds when the quantity moves");
+    const e3 = PU.effectiveCounts({ ...line, boxesManual: null }, types); eq(e3.boxes, 1100, "↺ returns to the derived figure");
+  });
+  console.log("v6.99.46 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

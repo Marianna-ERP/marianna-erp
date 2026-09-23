@@ -15,7 +15,7 @@ import { localTodayISO as domainToday } from "./dates";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { PACKAGING_SEED } from "./packaging.domain";
 import { deriveSoStatus, statusContradiction, isPhysicalStatus, effectiveSoStatus, isShippedOrLater, soRank } from "./statusOwnership.domain";
-import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines, documentTotals, totalsLine } from "./pricingUnit.domain";
+import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, quantityLabel, unresolvedBoxLines, documentTotals, totalsLine, effectiveCounts } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
 import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
@@ -1921,11 +1921,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       <Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PACKAGING_TYPES_REF || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="so-packaging-types" title="v6.88.0: pick from Settings → Packaging types so gross weight, pallet table and kg/box derive exactly" />
                       <datalist id="so-packaging-types">{(PACKAGING_TYPES_REF || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist>
                     </div>
-                    <div><Lbl>Boxes{pricingUnitOf(it) === "kg" ? " (derived)" : ""}</Lbl><Inp type="number" value={pricingUnitOf(it) === "kg" ? (() => { const k = kgPerBoxForLine(it, PACKAGING_TYPES_REF); return k > 0 && Number(it.qty) > 0 ? Math.round(Number(it.qty) / k) : (it.boxes ?? ""); })() : (it.boxes ?? "")}   /* v6.99.38 (A-R26-1): the packaging decides the conversion — the same resolver the Σ line uses */ onChange={e => si(i, "boxes", e.target.value)} disabled={fullyLocked || pricingUnitOf(it) === "kg"} title="v6.99.26: derived from the kilos and the packaging when the line is priced per kg" /></div>
-                    <div>
-                      <Lbl>Pallets (for this sale)</Lbl>
-                      <Inp type="number" value={it.pallets ?? ""} onChange={e => si(i, "pallets", e.target.value)} placeholder="e.g. 12" disabled={fullyLocked} />
+                    {/* v6.99.46 (A-PO-11, owner): the same rule as the PO — counts from the line's packaging, manual override marked and reversible */}
+                    {(() => { const ec = effectiveCounts(it, PACKAGING_TYPES_REF || []); const isBoxUnit = pricingUnitOf(it) !== "kg"; return <>
+                    <div><Lbl>Boxes{isBoxUnit ? "" : (ec.boxesManual ? <span style={{ color: "#B45309" }}> (manual) <button onClick={() => si(i, "boxesManual", null)} title="back to the derived figure" style={{ border: "none", background: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, padding: 0 }}>↺</button></span> : (ec.derived.hasPackaging ? " (derived)" : ""))}</Lbl>
+                      {isBoxUnit
+                        ? <Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} disabled={fullyLocked} />
+                        : <Inp type="number" value={ec.boxes ?? ""} onChange={e => si(i, "boxesManual", e.target.value)} disabled={fullyLocked} placeholder={ec.derived.hasPackaging ? "" : "choose a packaging"} title={ec.derived.hasPackaging ? `${ec.derived.kgPerBox} kg per box` : "the packaging decides the box count — pick it first"} style={ec.boxesManual ? { borderColor: "#F59E0B" } : {}} />}
                     </div>
+                    <div><Lbl>Pallets{ec.palletsManual ? <span style={{ color: "#B45309" }}> (manual) <button onClick={() => si(i, "palletsManual", null)} title="back to the derived figure" style={{ border: "none", background: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, padding: 0 }}>↺</button></span> : (ec.derived.pallets != null ? " (derived)" : "")}</Lbl>
+                      <Inp type="number" value={ec.pallets ?? ""} onChange={e => si(i, "palletsManual", e.target.value)} disabled={fullyLocked} placeholder={ec.derived.boxesPerPallet > 0 ? "e.g. 12" : (ec.derived.hasPackaging ? "boxes per pallet not set" : "choose a packaging")} title={ec.derived.boxesPerPallet > 0 ? `${ec.derived.boxesPerPallet} boxes per pallet` : ""} style={ec.palletsManual ? { borderColor: "#F59E0B" } : {}} />
+                    </div>
+                    </>; })()}
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode || ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 08081080" title="Customs nomenclature code — printed on the SO and used on the Fakturownia invoice. Inherited from the PO when the line is sourced from one." disabled={!!(it.sourceType && it.sourceRef)} /></div>
                     <div style={{ minWidth: 96 }}><Lbl>Line total</Lbl><div style={{ padding: "8px 2px", fontSize: 12, fontWeight: 700, color: "#111", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }} title={lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
                     <button onClick={() => removeItem(i)} disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #FECACA", borderRadius: 6, background: "#fff", color: "#DC2626", fontSize: 11, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
@@ -2509,6 +2515,9 @@ export default function SalesOrders({
   }
 
   async function saveOrder(o) {
+    // v6.99.46 (A-PO-11): the stored boxes / pallets ARE the effective counts (derived from the line's packaging unless
+    // overridden), so every reader downstream — totals, shipments, protocol, invoices — sees one figure.
+    o = { ...o, items: (o.items || []).map((it: any) => { const ec = effectiveCounts(it, PACKAGING_TYPES_REF || []); const isBoxUnit = String(it.pricingUnit || "kg") !== "kg"; return { ...it, boxes: isBoxUnit ? it.boxes : (ec.boxes ?? it.boxes ?? null), pallets: ec.pallets ?? it.pallets ?? null }; }) };
     // v6.65.0 (D-18): kilos are the single stored quantity (v6.61 ruling), so a
     // box-priced line must land in storage with its derived kg in `qty` and its
     // box weight in `kgPerBox` — every engine (reservations, margin, settlement,
