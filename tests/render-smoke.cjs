@@ -7,14 +7,30 @@ global.window = dom.window; global.document = dom.window.document; global.naviga
 global.localStorage = dom.window.localStorage; global.sessionStorage = dom.window.sessionStorage; global.CustomEvent = dom.window.CustomEvent; global.HTMLElement = dom.window.HTMLElement;
 global.fetch = async () => ({ ok: false });
 require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "commonjs", jsx: "react-jsx", esModuleInterop: true, target: "es2019" } });
-const React = require("react"); const { renderToStaticMarkup } = require("react-dom/server");
+const React = require("react"); const { renderToStaticMarkup: _rsm } = require("react-dom/server");
+// v6.99.59 (A-CB-2): every rendered screen is scanned for a dropdown that SHOWS a choice nobody made — no option selected
+// and a first option that is not blank (a browser then displays that first option as if chosen).
+const silentSelects = [];
+function scanSelects(html, where) {
+  const re = /<select\b[^>]*>([\s\S]*?)<\/select>/g; let m;
+  while ((m = re.exec(html))) {
+    const inner = m[1]; if (!/<option/.test(inner)) continue;
+    if (/<option[^>]*selected=""/.test(inner)) continue;
+    const first = inner.match(/<option([^>]*)>([^<]*)</); if (!first) continue;
+    const v = (first[1].match(/value="([^"]*)"/) || [null, first[2]])[1];
+    if (String(v).trim() === "") continue;
+    silentSelects.push(`${where}: first option "${String(first[2]).slice(0, 40)}"`);
+  }
+}
+let _where = "screen";
+const renderToStaticMarkup = (el) => { const html = _rsm(el); try { scanSelects(html, _where); } catch (e) {} return html; };
 const file = process.argv[2] || fs.readdirSync("/mnt/user-data/uploads").filter(f => /^marianna-erp_.*\.json$/.test(f)).map(f => "/mnt/user-data/uploads/" + f).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
 const d = JSON.parse(fs.readFileSync(file, "utf8"));
 // seed the browser stores the modules read directly
 try { localStorage.setItem("marianna-erp:v2:customLocations", JSON.stringify(d.customLocations || [])); } catch {}
 const noop = () => {}; const S = (k, v) => [d[k] || v || [], noop];
 let passed = 0, failed = 0;
-const render = (name, el) => { try { const html = renderToStaticMarkup(el); if (!html || html.length < 50) throw new Error("empty render"); passed++; console.log("  ✓", name, `(${html.length} chars)`); } catch (e) { failed++; console.log("  ✗", name, "—", (e && e.message || String(e)).split("\n")[0].slice(0, 160)); } };
+const render = (name, el) => { _where = name; try { const html = renderToStaticMarkup(el); if (!html || html.length < 50) throw new Error("empty render"); passed++; console.log("  ✓", name, `(${html.length} chars)`); } catch (e) { failed++; console.log("  ✗", name, "—", (e && e.message || String(e)).split("\n")[0].slice(0, 160)); } };
 const common = { contacts: d.contacts, setContacts: noop, pos: d.pos, setPOs: noop, orders: d.orders, setOrders: noop, lots: d.lots, setLots: noop, shipments: d.shipments, setShipments: noop, invoices: d.invoices, setInvoices: noop, claims: d.claims || [], setClaims: noop, financeNotes: d.financeNotes || [], setFinanceNotes: noop, inspections: d.inspections || [], setInspections: noop, stockCounts: d.stockCounts || [], setStockCounts: noop, poSettlements: d.poSettlements || [], setPoSettlements: noop, defectCatalogue: d.defectCatalogue || [], packagingTypes: d.packagingTypes || [], productCatalog: d.productCatalog || [], users: d.users || [], userName: "", closedPeriods: d.closedPeriods || [], warehouseInvoices: d.warehouseInvoices || [], operationalCosts: d.operationalCosts || [], advancePayments: d.advancePayments || [], bankAccounts: d.bankAccounts || [], budgets: d.budgets || [], settledRefs: [], loadPlans: d.loadPlans || [], creditNotes: d.creditNotes || [] };
 console.log("RENDER SMOKE against", path.basename(file));
 const mods = [["Dashboard", "./src/Dashboard"], ["Contacts", "./src/Contacts"], ["PurchaseOrders", "./src/PurchaseOrders"], ["SalesOrders", "./src/SalesOrders"], ["Inventory", "./src/Inventory"], ["Shipments", "./src/Shipments"], ["Claims", "./src/Claims"], ["Invoices", "./src/Invoices"], ["Finance", "./src/Finance"], ["Settings", "./src/Settings"]];
@@ -64,6 +80,27 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ok = html.includes(sup.number) && (!plate || html.includes(plate)) && !html.includes("No truck registered yet");
     if (ok) { passed++; console.log("  \u2713 supplier-truck box shows the registered truck (" + sup.number + ")"); } else { failed++; console.log("  \u2717 supplier-truck box does not show " + sup.number); }
   } catch (e) { failed++; console.log("  \u2717 supplier-truck box —", (e.message || "").slice(0, 120)); } } }
+// v6.99.60 (A-SO-1/2): a Confirmed SO without price or quantity is held; a sourced line's origin/size/class are the source's
+{ try { const SOmod = require(path.resolve("./src/SalesOrders"));
+    const d5 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const base = (d5.orders || []).find((o) => (o.items || []).some((it) => it.sourceType === "PO" && it.sourceRef)) || d5.orders[0];
+    const so = { ...base, number: "SO-TEST-PRICE", status: "Confirmed", items: (base.items || []).map((it, i) => i === 0 ? { ...it, unitPrice: "" } : it) };
+    _where = "SO form " + so.number;
+    const html = renderToStaticMarkup(React.createElement(SOmod.default, { orders: [...d5.orders, so], setOrders: () => {}, contacts: d5.contacts, lots: d5.lots, pos: d5.pos, shipments: d5.shipments, initialSelectedNumber: so.number, initialView: "form" }));
+    const held = html.includes("without quantity or sell price"); const fromSrc = /Class<span[^>]*> · from (PO|stock)/.test(html) || html.includes(" · from PO</span>");
+    if (held && fromSrc) { passed++; console.log("  \u2713 SO confirm needs price and quantity; sourced lines show 'from PO/stock'"); } else { failed++; console.log("  \u2717 SO confirm needs price — held:" + held + " fromSource:" + fromSrc); }
+  } catch (e) { failed++; console.log("  \u2717 SO confirm needs price —", (e.message || "").slice(0, 120)); } }
+// v6.99.59 (A-OW/SU/BK/CU): the shipment editor — Close button, Header → Booking → Units, booking on one line, ports still shown
+{ try { const ShMod = require(path.resolve("./src/Shipments"));
+    const d4 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const sh = (d4.shipments || []).find((s) => String(s.mode || "").toLowerCase() === "multimodal" && (s.legs || []).length > 1) || d4.shipments[0];
+    _where = "shipment editor " + sh.number;
+    const html = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: d4.shipments, setShipments: () => {}, contacts: d4.contacts, lots: d4.lots, orders: d4.orders, pos: d4.pos, initialSelectedNumber: sh.number }));
+    const iB = html.indexOf("Booking (sea"), iU = html.indexOf("Loading place");
+    const checks = { close: />Close</.test(html), bookingBeforeUnits: iB > 0 && iU > iB, forwarderInBookingLine: html.indexOf(">Forwarder<") > iB, portsShown: html.includes(">POL") && html.includes("Shipping line"), noBareUnitWord: !/>unit<\/div>/.test(html) };
+    const bad = Object.entries(checks).filter(([k, v]) => !v).map(([k]) => k);
+    if (!bad.length) { passed++; console.log("  \u2713 shipment editor layout: Close · Header → Booking → Units · booking line · ports shown"); } else { failed++; console.log("  \u2717 shipment editor layout — " + bad.join(", ")); }
+  } catch (e) { failed++; console.log("  \u2717 shipment editor layout —", (e.message || "").slice(0, 120)); } }
 // v6.99.57 (A-PK-1): the packing-list window renders with its "Add additional items" button
 { try { const POmod = require(path.resolve("./src/PurchaseOrders"));
     const d3 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
@@ -79,4 +116,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ok = html.includes("Weekly board") && html.includes("Purchase Price") && html.includes("PLATES") && (html.match(/<tr/g) || []).length > 3 && (html.match(/week \d+/g) || []).length >= 3;
     if (ok) { passed++; console.log("  \u2713 weekly board renders her columns and the trucks (" + (html.match(/<tr/g) || []).length + " rows)"); } else { failed++; console.log("  \u2717 weekly board did not render"); }
   } catch (e) { failed++; console.log("  \u2717 weekly board —", (e.message || "").slice(0, 120)); } }
+{ const uniq = Array.from(new Set(silentSelects));
+  if (!uniq.length) { passed++; console.log("  \u2713 no dropdown shows a choice nobody made"); }
+  else { failed++; console.log("  \u2717 dropdowns showing an unchosen first option (" + uniq.length + "):"); uniq.slice(0, 30).forEach(s => console.log("      " + s)); } }
 console.log(`RENDER SMOKE: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);

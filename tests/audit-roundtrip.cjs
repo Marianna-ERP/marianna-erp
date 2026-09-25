@@ -2208,3 +2208,16 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.57 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.59 — the shipment editor comments (OW/SU/BK/CU/CB) ══
+(function v69959(){
+  console.log("\n══ 71. v6.99.59: one truck → one container can be ticked before saving (SU-1) ══");
+  const M = B("shipmentModel.domain.js"); const SD = B("shipments.domain.js");
+  t("SU-1: a lone truck carries all the goods LIVE — the container can take it before Save", () => {
+    const sh = { goods: [{ id: 1, qtyKg: 19422 }], legs: [{ mode: "Road", vehicles: [{ id: 31 }] }, { mode: "Sea", vehicles: [{ id: 41 }] }] };
+    eq(M.truckRemainingForFeeding(sh, 31, 41), 0, "the raw draft reads 0 — the old behaviour");
+    ok(M.truckRemainingForFeeding(SD.autoFillSingleUnitKg(sh), 31, 41) >= 19422, "with the lone-truck rule applied live it is free to feed the container");
+  });
+  console.log("v6.99.59 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

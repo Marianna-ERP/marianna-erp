@@ -278,6 +278,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     )}
                     {r.tag === "WAREHOUSE" && (
                       <select style={{ ...inp, width: "100%" }} value={r.warehouseId || ""} onChange={(e: any) => upd(r.key, { warehouseId: e.target.value })}>
+                        <option value="">— choose the warehouse —</option>{/* v6.99.59 (A-CB-2) */}
                         {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
                       </select>
                     )}

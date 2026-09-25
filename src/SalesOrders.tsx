@@ -1183,8 +1183,17 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   const removeItem = (i) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
   const setClient = (name) => {
     const c = clients.find(c => c.name === name);
+    // v6.99.59 (A-OW-1, owner): the party's TERMS (payment basis + days, default currency) come with it — the picker's list holds only
+    // the party's identity, so they are read from the live counterparty by id. The SO keeps them as the terms agreed for this sale.
+    const live: any = c ? (contacts || []).find((x: any) => String(x.id) === String(c.id)) : null;
+    const tr: any = (live && live.terms) || {};
     setOrder(o => {
       const next: any = { ...o, client: c || null };
+      if (live) {
+        if (tr.paymentBasis) next.paymentBasis = tr.paymentBasis;
+        if (tr.paymentDays !== undefined && tr.paymentDays !== null && tr.paymentDays !== "") next.paymentDays = tr.paymentDays;
+        const cur = tr.defaultCurrency || live.defaultCurrency; if (cur) next.currency = cur;
+      }
       // v6.10 (#15): the delivery destination defaults to the client's own
       // registered address, unless the user has switched to an "Other" address.
       if ((o.destinationMode || ((o.destinationLocationId || o.destinationText) ? "other" : "client")) === "client") {
@@ -1303,7 +1312,16 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
   const hasDuplicateSources = Object.keys(dupSourceGroups).length > 0;
 
   // Single combined flag for any rule blocking the current status
-  const isBlocked = sourcingBlock || poReadinessBlock || availabilityBlock;
+  // v6.99.60 (A-SO-1, owner): a sale is not confirmed without what it sells and at what price. A line the producer's packing list
+  // added to an already confirmed SO at "price to agree" is exempt from the PRICE here — the sales invoice waits for it (v6.99.56).
+  const priceQtyGaps = (order.items || []).map((it: any, i: number) => { const miss: string[] = [];
+    if (!(parseFloat(it.qty) > 0 || parseFloat(it.boxes) > 0)) miss.push("quantity");
+    if (!(parseFloat(it.unitPrice) > 0) && !it.priceToAgree) miss.push("sell price");
+    return miss.length ? `line ${i + 1}${it.product ? ` (${[it.product, it.variety, it.size].filter(Boolean).join(" ")})` : ""}: ${miss.join(" and ")}` : null; }).filter(Boolean) as string[];
+  const priceQtyBlock = priceQtyGaps.length > 0 && nonDraftStatuses.includes(order.status);
+  const isBlocked = sourcingBlock || poReadinessBlock || availabilityBlock || priceQtyBlock;
+  // v6.99.60: the leave-guard lives HERE, where the blocks are known — "Save and continue" never saves what the Save button would refuse
+  useUnsavedGuard({ id: "so-form", label: order?.number ? `Sales order ${order.number}` : "the new sales order", draft: order, save: () => { if (!isBlocked) onSave(order); } });
 
   // PO-ETA-vs-SO-delivery warning: if any line sourced from a PO has ETA after this SO's deliveryDate, surface it
   const deliveryWarnings = [];
@@ -1392,6 +1410,12 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
             <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>Sell to a client — goods come from stock or pre-sold from a PO</div>
           </div>
 
+          {priceQtyBlock && (
+            <div style={{ padding: "12px 16px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#991B1B" }}>Cannot save as {order.status} — {priceQtyGaps.length} line{priceQtyGaps.length === 1 ? "" : "s"} without quantity or sell price</div>
+              <div style={{ fontSize: 11.5, color: "#991B1B", marginTop: 4, lineHeight: 1.5 }}>{priceQtyGaps.join(" · ")}. Keep it as Draft until they are known.</div>
+            </div>
+          )}
           {sourcingBlock && (
             <div style={{ padding: "12px 16px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, marginBottom: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
               <div style={{ fontSize: 20 }}>🚫</div>
@@ -1895,9 +1919,9 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                         ? <div style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F9FAFB", color: "#374151", minHeight: 18 }} title="Inherited from the linked source — clear the source link to change the product">{it.product || "—"}{it.variety ? ` — ${it.variety}` : ""}</div>
                         : <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />}
                     </div>
-                    <div><Lbl>Origin</Lbl><Sel value={it.origin || ""} onChange={e => si(i, "origin", e.target.value)} disabled={fullyLocked} title="v6.99.26 (owner): country of origin — the list is the Directory's Countries tab"><option value="">— country —</option>{readCountries().map((c: any) => <option key={c.iso} value={c.name}>{c.name}</option>)}{it.origin && !readCountries().some((c: any) => c.name === it.origin) && <option value={it.origin}>{it.origin}</option>}</Sel></div>
-                    <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked} /></div>
-                    <div><Lbl>Class</Lbl><Sel value={it.grade || it.quality || "I"} disabled={fullyLocked} title="v6.99.27 (one source): the class sold — the same fact the sorting produces. Availability is checked against this class in the source lot." onChange={e => { const v = e.target.value; si(i, "grade", v); si(i, "quality", v); }}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
+                    <div><Lbl>Origin{it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl><Sel value={it.origin || ""} onChange={e => si(i, "origin", e.target.value)} disabled={fullyLocked || !!(it.sourceType && it.sourceRef)} title="v6.99.26 (owner): country of origin — the list is the Directory's Countries tab"><option value="">— country —</option>{readCountries().map((c: any) => <option key={c.iso} value={c.name}>{c.name}</option>)}{it.origin && !readCountries().some((c: any) => c.name === it.origin) && <option value={it.origin}>{it.origin}</option>}</Sel></div>
+                    <div><Lbl>Size{it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" disabled={fullyLocked || !!(it.sourceType && it.sourceRef)} /></div>
+                    <div><Lbl>Class{it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl><Sel value={it.grade || it.quality || "I"} disabled={fullyLocked || !!(it.sourceType && it.sourceRef)} title="v6.99.27 (one source): the class sold — the same fact the sorting produces. Availability is checked against this class in the source lot." onChange={e => { const v = e.target.value; si(i, "grade", v); si(i, "quality", v); }}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
                     {/* v6.99.35 (P0): the quantity follows the pricing unit. My v6.99.26 reorder kept only the BOXES branch,
                         so a line priced per kg had no kilo field at all — the order could not be completed. */}
                     {pricingUnitOf(it) === "box" ? (
@@ -2381,7 +2405,6 @@ export default function SalesOrders({ archive = null,
   const [view, setView] = useState(openDirect ? (initialView || "detail") : "list"); // list | form | detail
   const [selected, setSelected] = useState<any>(openDirect);
   const [form, setForm] = useState<any>(openDirect && initialView === "form" ? { ...openDirect } : null);
-  useUnsavedGuard({ id: "so-form", label: form?.number ? `Sales order ${form.number}` : "the new sales order", draft: form, active: view === "form" && !!form, save: () => saveOrder(form) });   // v6.99.58 (A-US)
   const [printOrder, setPrintOrder] = useState(null);
   const [emailOrder, setEmailOrder] = useState(null);
   const [invoiceOrder, setInvoiceOrder] = useState(null); // SO being invoiced via the modal
