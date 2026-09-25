@@ -167,6 +167,17 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
         }
       });
     });
+    // v6.99.54: an EXPECTED lot that matches none of its PO's lines is not this PO's lot (a re-used number, an edited line)
+    {
+      const po = (pos || []).find((p: any) => String(p.number) === String(lot.poRef));
+      if (po && !((Number(lot.physicalKg) || 0) > 0) && !(lot.movements || []).some((m: any) => m && !m.voided)) {
+        const norm = (v: any) => String(v ?? "").trim().toLowerCase();
+        const lines = po.items || [];
+        const byId = lot.poLineId != null && lines.some((it: any, i: number) => String(it.id ?? i + 1) === String(lot.poLineId) && norm(it.product) === norm(lot.product));
+        const byFacts = lines.some((it: any) => norm(it.product) === norm(lot.product) && norm(it.size || "") === norm(lot.size || "") && norm(it.variety || "") === norm(lot.variety || ""));
+        if (!byId && !byFacts) add("warning", "EXPECTED_LOT_MISMATCH", "Inventory", lot.number, `Expected lot ${lot.product} ${lot.size || ""} matches no line of ${po.number} — a line was changed or the number was re-used. Delete this expected lot or fix the PO line.`);
+      }
+    }
     // v6.99.38 (A-R26-2): an act dated before the receipt corrupts the replay — the waste is taken from an empty lot.
     {
       const rec = lotReceiptDate(lot);
@@ -700,24 +711,4 @@ export function danglingLinks(invoices: any[], claims: any[], pos: any[], orders
   const inv = (invoices || []).map((i: any) => ({ id: i.id, number: String(i.number || ""), links: (i.links || []).filter((l: any) => have[l.type as keyof typeof have] && !have[l.type as keyof typeof have].has(String(l.number))) })).filter(x => x.links.length);
   const cl = (claims || []).map((c: any) => ({ id: c.id, number: String(c.number || ""), subjects: (c.subjects || []).filter((s: any) => { const k = String(s.kind || s.type || "").toUpperCase(); const t = k === "SHIPMENT" || k === "SHP" ? "Shipment" : k === "PO" ? "PO" : k === "SO" ? "SO" : null; return t && !have[t as keyof typeof have].has(String(s.ref)); }) })).filter(x => x.subjects.length);
   return { invoices: inv, claims: cl };
-}
-
-// ── v6.99.52 (owner stuck, 23 Sept): SEASON CUT-OFF — lots that are pure history from before a date ──
-// A lot with NO stock whose every movement is dated before the cut-off, and which no live sales order or shipment still
-// references, is last season's record. The delete guard rightly refuses it one by one (real history); this is the controlled
-// path to retire that history in one audited step so a fresh season is not haunted by it.
-export function lotsClosedBefore(lots: any[], orders: any[], shipments: any[], cutoffISO: string): any[] {
-  const cut = String(cutoffISO || "").slice(0, 10);
-  if (!cut) return [];
-  const liveSO = new Set<string>(); (orders || []).forEach((o: any) => { if (!o || ["Cancelled"].includes(String(o.status))) return; (o.items || []).forEach((it: any) => { if (it?.sourceType === "STOCK" && it.sourceRef) liveSO.add(String(it.sourceRef)); }); });
-  const liveSH = new Set<string>(); (shipments || []).forEach((s: any) => { if (!s || String(s.status) === "Cancelled") return; (s.lotRefs || []).forEach((r: any) => liveSH.add(String(r))); (s.goods || []).forEach((g: any) => { if (g?.lotRef) liveSH.add(String(g.lotRef)); }); });
-  return (lots || []).filter((l: any) => {
-    if (!l) return false;
-    if ((Number(l.physicalKg) || 0) > 0) return false;
-    const mv = (l.movements || []).filter((m: any) => m && !m.voided);
-    if (!mv.length && !(Number(l.receivedKg) || 0)) return false;   // an EXPECTED lot is not history — leave it
-    if (!mv.every((m: any) => String(m.date || "").slice(0, 10) < cut)) return false;
-    if (liveSO.has(String(l.number)) || liveSH.has(String(l.number))) return false;
-    return true;
-  });
 }

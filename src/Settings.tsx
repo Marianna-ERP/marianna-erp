@@ -1,7 +1,7 @@
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
 import React, { useRef, useState } from "react";
-import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, readExportFile, appendDocuments, writeStore, readStore } from "./useLocalStoredState";
+import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { fetchDepartments } from "./fakturownia";
 import { mapDepartments } from "./fakturowniaDepartments.domain";
@@ -13,8 +13,9 @@ import { CN_CODES } from "./cnCodes";
 import { nextId as mintId } from "./ids";
 import { renameCatalogItem } from "./productCatalog";
 import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
+import { DEFAULT_SEASON, seasonsPresent, currentSeason, docSeason, sliceSeason, removeSeason, appendArchive, STORE_KIND } from "./season.domain";
 import { recordAudit } from "./audit";
-import { lotsClosedBefore } from "./integrityCheck";
+import { localTodayISO } from "./dates";
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -65,69 +66,75 @@ function Button({ onClick, children, variant = "default", disabled = false, styl
 // locations are fully editable; logistics points and counterparty warehouses are
 // listed read-only with a pointer to Parties. Changes reload the app so every
 // module that snapshots LOCATIONS at import picks them up (the documented pattern).
-// ── v6.99.52 (owner stuck, 23 Sept): two ways out of a half-cleaned season without starting over ──
-function SeasonToolsPanel({ refStores = {}, stConfirm, setMessage }: any) {
-  const [cutoff, setCutoff] = React.useState("2026-07-01");
-  const [file, setFile] = React.useState<any>(null);
-  const [picked, setPicked] = React.useState<Set<string>>(new Set());
-  const [withLots, setWithLots] = React.useState(true);
-  const lots = refStores.lots || [], orders = refStores.orders || [], shipments = refStores.shipments || [], pos = refStores.pos || [];
-  const closed = lotsClosedBefore(lots, orders, shipments, cutoff);
-  async function retireClosed() {
-    if (!closed.length) return;
-    const ok = await stConfirm({ tone: "danger", title: `Retire ${closed.length} closed lot(s) from before ${cutoff}?`, message: `No stock, every movement older than the cut-off, no live order or shipment references them:\n${closed.map((l: any) => l.number).join(", ")}\n\nThey are removed from the stock ledger (a backup is saved first). Their POs unlock.`, confirmLabel: "Retire them", cancelLabel: "Keep" });
+// v6.99.54 (owner, cleanup): the Season tools of v6.99.52/53 (cut-off retirement · bring POs across · rebuild expected lots) were
+// removed — the season model is ARCHIVE, not wipe-and-re-enter (see season.domain.ts). Their detector lives on as an integrity rule.
+
+// ── v6.99.54 (AR-1 · AR-3 · AR-5, owner ruling 23 Sept): SEASONS — close, export, remove, re-import. Nothing is deleted at season end. ──
+function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archivedSeasons = [], setArchivedSeasons, stConfirm, setMessage }: any) {
+  const st = seasonSettings || DEFAULT_SEASON;
+  const data: any = { pos: refStores.pos || [], orders: refStores.orders || [], shipments: refStores.shipments || [], lots: refStores.lots || [], invoices: readStoreValue("invoices"), claims: readStoreValue("claims"), poSettlements: readStoreValue("poSettlements"), inspections: readStoreValue("inspections"), stockCounts: readStoreValue("stockCounts"), financeNotes: readStoreValue("financeNotes"), creditNotes: readStoreValue("creditNotes"), warehouseInvoices: readStoreValue("warehouseInvoices"), operationalCosts: readStoreValue("operationalCosts") };
+  const present = seasonsPresent(data, st);
+  const today = localTodayISO(); const cur = currentSeason(today, st);
+  const liveLots = (season: string) => (data.lots || []).filter((l: any) => (Number(l.physicalKg) || 0) > 0 && docSeason("lot", l, st, { pos: data.pos }) === season).length;
+  async function closeSeason(season: string) {
+    const ok = await stConfirm({ tone: "warn", title: `Close season ${season}?`, message: `Its documents are TAGGED archived and leave the day-to-day screens ("include archived" shows them). Nothing is deleted. ${liveLots(season) ? liveLots(season) + " lot(s) of that season still hold kilos — they stay live as this season's stock." : ""}`, confirmLabel: "Close the season", cancelLabel: "Keep it open" });
     if (!ok) return;
-    createBackup("Auto — before retiring closed lots"); const ids = new Set(closed.map((l: any) => l.id));
-    writeStore("lots", (readStore<any[]>("lots", []) || []).filter((l: any) => !ids.has(l.id)));
-    recordAudit({ module: "System", docType: "Season", docNumber: `CUTOFF-${cutoff}`, action: "deleted", summary: `${closed.length} closed lot(s) from before ${cutoff} retired: ${closed.map((l: any) => l.number).join(", ")}` });
-    setMessage({ kind: "info", text: `${closed.length} closed lot(s) retired. Reloading…` }); setTimeout(() => window.location.reload(), 900);
+    setArchivedSeasons((prev: string[]) => Array.from(new Set([...(prev || []), season])));
+    recordAudit({ module: "System", docType: "Season", docNumber: season, action: "status", summary: `Season ${season} closed — documents archived (tagged, not deleted)` });
+    setMessage({ kind: "info", text: `Season ${season} closed. Its documents are archived.` });
   }
-  function onFile(f: any) { if (!f) return; const rd = new FileReader(); rd.onload = () => { const r = readExportFile(String(rd.result || "")); if (!r.ok) { setMessage({ kind: "error", text: r.error || "Could not read the file." }); return; } setFile({ name: f.name, data: r.data }); setPicked(new Set()); }; rd.readAsText(f); }
-  async function appendPicked() {
-    if (!file || !picked.size) return;
-    const res = appendDocuments({ pos: readStore<any[]>("pos", []), lots: readStore<any[]>("lots", []), orders: readStore<any[]>("orders", []) }, file.data, { poNumbers: Array.from(picked), withExpectedLots: withLots });
-    const ok = await stConfirm({ tone: "info", title: `Bring ${res.added.length} document(s) across from ${file.name}?`, message: `Added: ${res.added.join(", ") || "—"}${res.skipped.length ? `\nSkipped (already here): ${res.skipped.join(", ")}` : ""}\n\nNothing already in the system is changed. A backup is saved first.`, confirmLabel: "Bring them across", cancelLabel: "Cancel" });
+  function reopen(season: string) { setArchivedSeasons((prev: string[]) => (prev || []).filter(s => s !== season)); recordAudit({ module: "System", docType: "Season", docNumber: season, action: "status", summary: `Season ${season} re-opened` }); }
+  function exportSeason(season: string) {
+    const fileObj = sliceSeason({ ...data, ...Object.fromEntries(MASTER_KEYS.map(k => [k, readStoreValue(k)])) }, season, st, MASTER_KEYS, { app: "marianna-erp", version: STORAGE_VERSION, exportedBy: "Settings → Seasons" });
+    const blob = new Blob([JSON.stringify(fileObj)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `marianna-archive_${season.replace("/", "-")}_${today}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+    recordAudit({ module: "System", docType: "Season", docNumber: season, action: "exported", summary: `Season ${season} exported to its own archive file` });
+  }
+  async function removeExported(season: string) {
+    const ok = await stConfirm({ tone: "danger", title: `Remove season ${season} from this browser?`, message: "Only after you have EXPORTED it and kept the file. The archived documents of that season leave this browser (a backup is saved first); lots with kilos stay. Import the archive file to read them again.", confirmLabel: "Remove from this browser", cancelLabel: "Keep" });
     if (!ok) return;
-    createBackup("Auto — before importing selected documents");
-    writeStore("pos", res.pos); writeStore("lots", res.lots); writeStore("orders", res.orders);
-    recordAudit({ module: "System", docType: "Import", docNumber: file.name, action: "created", summary: `Selected documents brought across: ${res.added.join(", ")}` });
-    setMessage({ kind: "info", text: `${res.added.length} document(s) brought across. Reloading…` }); setTimeout(() => window.location.reload(), 900);
+    createBackup(`Auto — before removing season ${season}`);
+    const all: any = {}; Object.keys(STORE_KIND).forEach(k => { all[k] = readStoreValue(k); }); all.pos = readStoreValue("pos");
+    const r = removeSeason(all, season, st);
+    Object.entries(r.data).forEach(([k, v]) => { if (Object.keys(STORE_KIND).includes(k)) writeStoreValue(k, v); });
+    recordAudit({ module: "System", docType: "Season", docNumber: season, action: "deleted", summary: `Season ${season} removed from this browser after export: ${Object.entries(r.removed).map(([k, n]) => `${k} ${n}`).join(", ")}` });
+    setMessage({ kind: "info", text: `Season ${season} removed from this browser. Reloading…` }); setTimeout(() => window.location.reload(), 900);
   }
-  const srcPOs: any[] = file ? (file.data.pos || []) : [];
-  const havePO = new Set(pos.map((p: any) => String(p.number)));
+  function importArchive(f: any) { if (!f) return; const rd = new FileReader(); rd.onload = async () => {
+    let parsed: any; try { parsed = JSON.parse(String(rd.result || "")); } catch { setMessage({ kind: "error", text: "Not a valid file." }); return; }
+    if (!parsed?._meta || parsed._meta.app !== "marianna-erp") { setMessage({ kind: "error", text: "Not a MARIANNA archive file." }); return; }
+    const cur: any = {}; Object.keys(STORE_KIND).forEach(k => { cur[k] = readStoreValue(k); }); cur.archivedSeasons = archivedSeasons;
+    const r = appendArchive(cur, parsed);
+    const ok = await stConfirm({ tone: "info", title: `Import archive ${r.seasons.join(", ") || ""}?`, message: `Appended (hidden as archived): ${Object.entries(r.added).map(([k, n]) => `${k} ${n}`).join(", ") || "nothing new"}${r.skipped ? ` · ${r.skipped} already here` : ""}. Nothing live is changed.`, confirmLabel: "Import", cancelLabel: "Cancel" });
+    if (!ok) return;
+    createBackup("Auto — before importing an archive");
+    Object.entries(r.data).forEach(([k, v]) => { if (Object.keys(STORE_KIND).includes(k)) writeStoreValue(k, v); });
+    setArchivedSeasons(() => r.data.archivedSeasons || archivedSeasons);
+    recordAudit({ module: "System", docType: "Season", docNumber: r.seasons.join(",") || f.name, action: "created", summary: `Archive imported: ${Object.entries(r.added).map(([k, n]) => `${k} ${n}`).join(", ")}` });
+    setMessage({ kind: "info", text: "Archive imported. Reloading…" }); setTimeout(() => window.location.reload(), 900);
+  }; rd.readAsText(f); }
   return (
     <Card style={{ marginBottom: 16 }}>
-      <SectionTitle>SEASON TOOLS</SectionTitle>
-      <div style={{ display: "grid", gap: 14 }}>
-        <div style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 8, padding: "10px 12px" }}>
-          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#92400E" }}>Retire last season's closed lots</div>
-          <div style={{ fontSize: 11.5, color: "#64748B", margin: "3px 0 8px" }}>A lot with no stock whose every movement is older than the cut-off, and that no live order or shipment references, is history. The delete guard refuses them one by one on purpose; this retires them in one audited step and unlocks their POs.</div>
-          <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
-            <div><Lbl>Season cut-off</Lbl><input type="date" value={cutoff} onChange={e => setCutoff(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }} /></div>
-            <div style={{ fontSize: 12 }}>{closed.length ? <><b>{closed.length}</b> lot(s) qualify: {closed.slice(0, 6).map((l: any) => l.number).join(", ")}{closed.length > 6 ? "…" : ""}</> : "nothing qualifies at this date"}</div>
-            <Button onClick={retireClosed} variant="danger" disabled={!closed.length}>Retire {closed.length || ""} closed lot(s)</Button>
-          </div>
-        </div>
-        <div style={{ border: "1px solid #BFDBFE", background: "#EFF6FF", borderRadius: 8, padding: "10px 12px" }}>
-          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#1E40AF" }}>Bring selected POs across from an old export</div>
-          <div style={{ fontSize: 11.5, color: "#64748B", margin: "3px 0 8px" }}>Pick the purchase orders you still need from an old file. They are APPENDED — nothing here is overwritten; numbers that already exist are skipped. Their lots come across as expected (no history, no stock).</div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <label style={{ fontSize: 12, border: "1px dashed #1E40AF", color: "#1E40AF", borderRadius: 7, padding: "6px 10px", cursor: "pointer" }}>⬇ choose the old export (.json)<input type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => onFile(e.target.files?.[0])} /></label>
-            {file && <span style={{ fontSize: 11.5, color: "#475569" }}>{file.name} · {srcPOs.length} PO(s) in the file</span>}
-            {file && <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={withLots} onChange={e => setWithLots(e.target.checked)} /> with their expected lots</label>}
-          </div>
-          {file && srcPOs.length > 0 && (
-            <div style={{ marginTop: 8, maxHeight: 220, overflow: "auto", border: "1px solid #E5E7EB", borderRadius: 7, background: "#fff" }}>
-              {srcPOs.map((p: any) => { const exists = havePO.has(String(p.number)); return (
-                <label key={p.number} style={{ display: "grid", gridTemplateColumns: "24px 130px 1fr 90px 100px", gap: 8, alignItems: "center", padding: "4px 8px", borderBottom: "1px solid #F1F5F9", fontSize: 12, opacity: exists ? 0.5 : 1 }}>
-                  <input type="checkbox" disabled={exists} checked={picked.has(String(p.number))} onChange={e => { const n = new Set(picked); if (e.target.checked) n.add(String(p.number)); else n.delete(String(p.number)); setPicked(n); }} />
-                  <b>{p.number}</b><span>{p.supplier?.name || ""}</span><span>{p.status}</span><span style={{ color: "#94A3B8" }}>{exists ? "already here" : (p.orderDate || "")}</span>
-                </label>); })}
-            </div>
-          )}
-          {file && <div style={{ marginTop: 8 }}><Button onClick={appendPicked} disabled={!picked.size}>Bring {picked.size || ""} PO(s) across</Button></div>}
-        </div>
+      <SectionTitle>SEASONS</SectionTitle>
+      <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 10 }}>Numbers continue across seasons. A closed season is <b>archived</b> — its documents leave the day-to-day screens but stay in the file; export it to its own file to keep the system light, re-import it whenever an old claim or recall needs it. A lot that still holds kilos never archives.</div>
+      <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginBottom: 10 }}>
+        <div><Lbl>Season starts on</Lbl><div style={{ display: "flex", gap: 6 }}><input type="number" min={1} max={31} value={st.startDay} onChange={e => setSeasonSettings && setSeasonSettings({ ...st, startDay: Math.max(1, Math.min(31, parseInt(e.target.value) || 1)) })} style={{ width: 56, border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }} /><select value={st.startMonth} onChange={e => setSeasonSettings && setSeasonSettings({ ...st, startMonth: parseInt(e.target.value) })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }}>{["January","February","March","April","May","June","July","August","September","October","November","December"].map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select></div></div>
+        <div style={{ fontSize: 12 }}>Current season: <b>{cur}</b></div>
+        <label style={{ fontSize: 12, border: "1px dashed #1E40AF", color: "#1E40AF", borderRadius: 7, padding: "6px 10px", cursor: "pointer", marginLeft: "auto" }}>⬆ import an archive file<input type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => importArchive(e.target.files?.[0])} /></label>
       </div>
+      <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>SEASON</div><div>DOCUMENTS</div><div>STATE</div><div /></div>
+      {present.map(({ season, count }) => { const closed = (archivedSeasons || []).includes(season); return (
+        <div key={season} style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr auto", gap: 8, alignItems: "center", padding: "6px 0", borderTop: "1px solid #F1F5F9", fontSize: 12.5 }}>
+          <div style={{ fontWeight: 800 }}>{season}{season === cur ? <span style={{ color: "#16A34A", fontSize: 10.5 }}> · current</span> : null}</div>
+          <div>{count} document(s){liveLots(season) ? ` · ${liveLots(season)} lot(s) with kilos stay live` : ""}</div>
+          <div style={{ color: closed ? "#92400E" : "#16A34A", fontWeight: 700 }}>{closed ? "archived" : "open"}</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {!closed && season !== cur && <SmallButton onClick={() => closeSeason(season)}>Close season</SmallButton>}
+            {closed && <SmallButton onClick={() => exportSeason(season)}>⬇ Export</SmallButton>}
+            {closed && <SmallButton kind="danger" onClick={() => removeExported(season)}>Remove from browser</SmallButton>}
+            {closed && <SmallButton onClick={() => reopen(season)}>Re-open</SmallButton>}
+          </div>
+        </div>); })}
+      {!present.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No documents yet.</div>}
     </Card>
   );
 }
@@ -586,6 +593,10 @@ export default function Settings({
   setCompany = null,
   numbering = {},
   setNumbering = null,
+  seasonSettings = null,
+  setSeasonSettings = null,
+  archivedSeasons = [],
+  setArchivedSeasons = null,
 }: {
   reloadFromStorage: () => void;
   refStores?: any;
@@ -606,6 +617,10 @@ export default function Settings({
   setCompany?: any;
   numbering?: any;
   setNumbering?: any;
+  seasonSettings?: any;
+  setSeasonSettings?: any;
+  archivedSeasons?: string[];
+  setArchivedSeasons?: any;
 }) {
   const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
   const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
@@ -766,9 +781,9 @@ export default function Settings({
   async function handleFreshSeason() {
     const counts = transactionalCounts();
     const list = counts.map(c => `${c.key}: ${c.count}`).join(" · ") || "nothing to clear";
-    const confirmed = await stConfirm({ tone: "danger", title: "Start a fresh season?",
+    const confirmed = await stConfirm({ tone: "danger", title: "Wipe every document, keep the master data?",
       message: `KEEPS: counterparties, places, countries, packaging, product catalogue, users, company, FX settings, bank accounts.\nCLEARS, all together: ${list}.\nA backup is saved first.`,
-      confirmLabel: "Start the fresh season", cancelLabel: "Keep everything" });
+      confirmLabel: "Wipe the documents", cancelLabel: "Keep everything" });
     if (!confirmed) return;
     const resetNo = await stConfirm({ tone: "info", title: "Reset the numbering?", message: "Start PO / SO / SHP / LOT numbers again from 0001 for the new season? (Choose No to continue the sequence.)", confirmLabel: "Yes, restart at 0001", cancelLabel: "No, continue" });
     const backup = startFreshSeason({ resetNumbering: !!resetNo });
@@ -1046,13 +1061,13 @@ export default function Settings({
         {/* v6.86.0 (owner ruling): "Repair inventory records" retired — a one-time August repair, already applied and
             covered by tests. The routine (healRound651) stays in the migration toolkit for the Supabase import. */}
 
-        <SeasonToolsPanel refStores={refStores} stConfirm={stConfirm} setMessage={setMessage} />
+        <SeasonsPanel refStores={refStores} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} stConfirm={stConfirm} setMessage={setMessage} />
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>
           <SectionTitle>RESET</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
             Erase everything you've entered and return the system to a completely empty state. Use this if you've made test data unusable and want to start fresh. A backup is saved automatically first (see Local backups).
           </div>
-          <Button onClick={handleFreshSeason} variant="danger" title="v6.99.51: keeps the master data, clears every document of the season together">🌱 Start a fresh season (keep master data)</Button>
+          <Button onClick={handleFreshSeason} variant="danger" title="v6.99.51: keeps the master data, clears every document of the season together">⚠ Emergency: wipe all documents (keep master data)</Button>
           <Button onClick={handleReset} variant="danger">⚠ Start fresh — erase ALL data</Button>
         </Card>
 

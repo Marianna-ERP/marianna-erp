@@ -42,6 +42,7 @@ import { syncOverheadOpCosts } from "./operationalCosts";
 import { normaliseStoredSoStatus } from "./statusOwnership.domain";
 import { canOpenModule } from "./permissions.domain";
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
+import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 
 // Batch 5: migrate older-version stored data forward BEFORE any hook reads it
 // (module scope — runs before the App component's hooks read the stores).
@@ -223,6 +224,15 @@ export default function App() {
   // v6.99.0 (FN-1): closed months with their frozen snapshot; (FN-7) reference FX rates as a setting.
   const [closedPeriods, setClosedPeriods] = useLocalStoredState("closedPeriods", []);
   const [fxSettings, setFxSettings] = useLocalStoredState("fxSettings", {});
+  // v6.99.54 (AR-1…4, owner): the season model — numbers continue, closed seasons are ARCHIVED (tagged, hidden, exportable)
+  const [archivedSeasons, setArchivedSeasons] = useLocalStoredState<string[]>("archivedSeasons", []);
+  const [seasonSettings, setSeasonSettings] = useLocalStoredState<any>("seasonSettings", DEFAULT_SEASON);
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const archive = useMemo(() => ({ archivedSeasons, includeArchived, settings: seasonSettings || DEFAULT_SEASON, pos }), [archivedSeasons, includeArchived, seasonSettings, pos]);
+  const live = useMemo(() => {   // the Dashboard, the badge and the reports read the current season unless asked otherwise
+    const f = (store: string, arr: any[]) => includeArchived ? arr : (arr || []).filter((d: any) => !isArchived(STORE_KIND[store], d, archivedSeasons, seasonSettings || DEFAULT_SEASON, { pos }));
+    return { pos: f("pos", pos), orders: f("orders", orders), shipments: f("shipments", shipments), lots: f("lots", lots), invoices: f("invoices", invoices), claims: f("claims", claims) };
+  }, [pos, orders, shipments, lots, invoices, claims, archivedSeasons, includeArchived, seasonSettings]);
   // v6.99.31 (owner): the quality tolerances per product and category (Unacceptable is always 0).
   // v6.99.3 (SE-1/SE-3): company identity and numbering prefixes as settings.
   const [company, setCompany] = useLocalStoredState("company", {});
@@ -514,9 +524,9 @@ export default function App() {
   function renderActive() {
     switch (activeModule) {
       case "dashboard":
-        return <Dashboard pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={setActiveModule}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={userName} integrityIssues={integrityIssuesForDashboard} />;
+        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={setActiveModule}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={userName} integrityIssues={integrityIssuesForDashboard} />;
       case "claims":
-        return <Claims claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
+        return <Claims archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
@@ -524,21 +534,22 @@ export default function App() {
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName}  lots={lots} />;
       case "pos":
-        return <PurchaseOrders pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} setInvoices={setInvoices}  users={users} userName={userName}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); setActiveModule("shipments"); }} />;
+        return <PurchaseOrders archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} setInvoices={setInvoices}  users={users} userName={userName}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); setActiveModule("shipments"); }} />;
       case "lots":
-        return <Inventory lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
+        return <Inventory archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
       case "orders":
-        return <SalesOrders orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
+        return <SalesOrders archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
-        return <Shipments shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber} />;
+        return <Shipments archive={archive} shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
-        return <Invoices invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
+        return <Invoices archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
       case "settings":
-        return <Settings reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
+        return <Settings seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
       default:
         return null;
     }
   }
+
 
   // v6.99.4 (DA-7): the Dashboard's integrity tile reads the same check as the badge.
   const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog } as any).issues, // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -547,8 +558,11 @@ export default function App() {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
       <TopNav active={activeModule} onNav={setActiveModule} canOpen={(k: string) => canOpenModule(users, userName, k === "loadPlans" ? "loadplans" : k)} rightSlot={
+        <><label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
+          <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}
+        </label>
         <IntegrityBadge
-          data={{ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog }}
+          data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog }}
           onNavigate={setActiveModule}
           onRepair={(kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
             if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !window.confirm(`Remove ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock.`)) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).filter((l: any) => !ids.has(l.id))); recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) removed: ${ol.map((l: any) => l.number).join(", ")}` }); }
@@ -559,7 +573,7 @@ export default function App() {
               setClaims((prev: any[]) => (prev || []).map((c: any) => badC.has(String(c.id)) ? { ...c, subjects: (c.subjects || []).filter((s: any) => !badC.get(String(c.id))!.has(s.kind + ":" + s.ref)) } : c));
               recordAudit({ module: "System", docType: "Repair", docNumber: "DANGLING-LINKS", action: "updated", summary: `${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) unlinked from deleted documents` }); }
           }}
-        />
+        /></>
       } />
       {storageHealthState.failing && (
         <div style={{ background: "#FEF2F2", borderBottom: "2px solid #DC2626", padding: "10px 18px", display: "flex", alignItems: "center", gap: 10 }}>

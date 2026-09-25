@@ -2078,24 +2078,73 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   if (failed) process.exit(1);
 })();
 
-// ══ v6.99.52 — the way out of a half-cleaned season ══
-(function v69952(){
-  console.log("\n══ 66. v6.99.52: retire last season's closed lots; bring selected POs across ══");
-  const I = B("integrityCheck.js"); const U = B("useLocalStoredState.js");
-  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_50_schema-v2_2026-09-23T14-11-42.json");
-  t("season cut-off: 0071/0072 qualify (received and shipped Oct 2025, no stock); an EXPECTED lot never does; a lot with stock never does", () => {
-    const closed = I.lotsClosedBefore(d.lots, d.orders, d.shipments, "2026-07-01");
-    ok(["LOT-2026-0071", "LOT-2026-0072"].every(n => closed.some(l => l.number === n)));
-    ok(!closed.some(l => (l.physicalKg || 0) > 0)); ok(!closed.some(l => !(l.movements || []).length && !(l.receivedKg || 0)), "expected lots are not history");
-    eq(I.lotsClosedBefore(d.lots, d.orders, d.shipments, "2025-01-01").length, 0, "before any movement → nothing qualifies");
+// ══ v6.99.54 — the stale-expected-lot detector lives on as an integrity WARNING ══
+(function v69954(){
+  console.log("\n══ 66. v6.99.54: an expected lot matching none of its PO's lines is flagged, never silently kept ══");
+  const I = B("integrityCheck.js");
+  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_52_schema-v2_2026-09-23T16-04-33.json");
+  t("the 16:04 file: last season's apple lots under this season's capsicum POs are flagged EXPECTED_LOT_MISMATCH", () => {
+    const r = I.checkIntegrity({ contacts: d.contacts, pos: d.pos, lots: d.lots, orders: d.orders, shipments: d.shipments, warehouseInvoices: [], operationalCosts: [], creditNotes: [], invoices: d.invoices || [], financeNotes: [], claims: d.claims || [], loadPlans: [], advancePayments: [], bankAccounts: [], productCatalog: [] });
+    const mm = r.issues.filter(i => i.code === "EXPECTED_LOT_MISMATCH");
+    ok(mm.length >= 60, "dozens flagged: " + mm.length); ok(mm.some(i => i.entity === "LOT-2026-0001"));
+    ok(!mm.some(i => ["LOT-2026-0119", "LOT-2026-0120", "LOT-2026-0121"].includes(i.entity)), "PO-0021's own lots are not flagged");
   });
-  t("bring across: appended, never overwritten; duplicates skipped; lots arrive expected with no history", () => {
-    const old = require("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json");
-    const r = U.appendDocuments({ pos: d.pos, lots: d.lots, orders: d.orders }, old, { poNumbers: ["PO-2026-0034", "PO-2026-0021"], withExpectedLots: true });
-    ok(r.added.includes("PO-2026-0034")); ok(r.skipped.some(s => s.startsWith("PO-2026-0021")));
-    eq(r.pos.length, d.pos.length + 1); const l = r.lots.find(x => x.number === "LOT-2026-0108"); eq(l.movements.length, 0); eq(l.physicalKg, 0); eq(l.status, "Expected");
-    eq(r.orders.length, d.orders.length, "nothing else touched");
+  console.log("v6.99.54 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.54 — the season archive (AR-1…7) ══
+(function v69954b(){
+  console.log("\n══ 67. v6.99.54: seasons — derived, closed by tag, sliced to a file, removed, re-appended ══");
+  const Z = B("season.domain.js"); const st = Z.DEFAULT_SEASON;
+  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_52_schema-v2_2026-09-23T16-04-33.json");
+  const data = { pos: d.pos, orders: d.orders, shipments: d.shipments, lots: d.lots, invoices: d.invoices || [], claims: d.claims || [], poSettlements: [], inspections: d.inspections || [], stockCounts: [], financeNotes: [], creditNotes: [], warehouseInvoices: [], operationalCosts: [] };
+  t("AR-1: the season of a date follows the 1 July boundary; the two seasons in the owner's file are found", () => {
+    eq(Z.seasonOf("2025-10-30"), "2025/26"); eq(Z.seasonOf("2026-06-30"), "2025/26"); eq(Z.seasonOf("2026-07-01"), "2026/27");
+    const p = Z.seasonsPresent(data, st); ok(p.some(x => x.season === "2026/27") && p.some(x => x.season === "2025/26"));
   });
-  console.log("v6.99.52 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  t("AR-3: closing 2025/26 archives its documents but never a lot with kilos", () => {
+    const lotWithKg = { number: "L", poRef: "PO-2026-0001", physicalKg: 500, movements: [{ type: "IN", date: "2025-11-02", qtyKg: 500 }] };
+    ok(!Z.isArchived("lot", lotWithKg, ["2025/26"], st, { pos: d.pos }), "stock is stock, whenever it was bought");
+    const oldLot = { number: "L2", poRef: "PO-2026-0001", physicalKg: 0, movements: [{ type: "IN", date: "2025-11-02", qtyKg: 500 }, { type: "SHIP_OUT", date: "2025-11-05", qtyKg: 500 }] };
+    ok(Z.isArchived("lot", oldLot, ["2025/26"], st, { pos: d.pos })); ok(!Z.isArchived("lot", oldLot, [], st, { pos: d.pos }), "nothing archived while no season is closed");
+  });
+  t("AR-5: slice → remove → append is lossless and keeps the season hidden", () => {
+    const master = ["contacts"]; const file = Z.sliceSeason({ ...data, contacts: d.contacts }, "2025/26", st, master, { app: "marianna-erp", version: 2 });
+    eq(file._meta.archiveSeason, "2025/26"); eq(file.contacts.length, d.contacts.length); ok(file.lots.length > 0 && file.lots.every(l => Z.isArchived("lot", l, ["2025/26"], st, { pos: d.pos })));
+    const r = Z.removeSeason(data, "2025/26", st); eq(r.data.lots.length, data.lots.length - file.lots.length);
+    const back = Z.appendArchive({ ...r.data, archivedSeasons: ["2025/26"] }, file); eq(back.data.lots.length, data.lots.length); eq(back.skipped, 0); ok(back.data.archivedSeasons.includes("2025/26"));
+    const again = Z.appendArchive(back.data, file); ok(again.skipped > 0, "a second import adds nothing");
+  });
+  console.log("v6.99.54 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.55 — the weekly board (BD-1…6) ══
+(function v69955(){
+  console.log("\n══ 68. v6.99.55: her workbook parses; rows match trucks; the board reads the modules ══");
+  const Bd = B("board.domain.js"); const XLSX = require("xlsx");
+  const wb = XLSX.readFile("/mnt/user-data/uploads/Shipments_season_2026_2027.xlsx", { cellDates: true });
+  let all = []; wb.SheetNames.forEach(n => { const m = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }); all = all.concat(Bd.parseHerSheet(n, m)); });
+  t("BD-4: her five week tabs parse into 21 truck rows with her 26 columns mapped (the two 'Price' columns told apart)", () => {
+    eq(all.length, 21); ok(all.some(r => r.cells.truckPrice) && all.some(r => r.cells.containerPrice), "truck price and container price both read");
+    eq(all[0].cells.supplier, "Grójecki Owoc"); eq(all[0].cells.acid, "4156951551024010017");
+  });
+  t("BD-1/BD-2: the board builds one row per road unit from the 17 Sept file, grouped by week, with readiness per step", () => {
+    const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json");
+    const rows = Bd.boardRows({ shipments: d.shipments, pos: d.pos, orders: d.orders, lots: d.lots, invoices: d.invoices || [], contacts: d.contacts, inspections: d.inspections || [], locName: (id, t) => String(t || "") });
+    ok(rows.length >= 30, "rows: " + rows.length); ok(rows.every(r => r.cells && r.week && r.ready));
+    const wk = new Set(rows.map(r => r.week.key)); ok(wk.size >= 3, "several weeks: " + wk.size);
+    ok(rows.some(r => r.ready.steps[3]), "some trucks are arranged (step 3)");
+  });
+  t("BD-4: matching — the TRUCK plate is exact, a shared trailer only probable, a stranger unmatched", () => {
+    const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json");
+    const rows = Bd.boardRows({ shipments: d.shipments, pos: d.pos, orders: d.orders, lots: d.lots, invoices: d.invoices || [], contacts: d.contacts, inspections: d.inspections || [], locName: (id, t) => String(t || "") });
+    const w37r5 = all.find(r => r.sheet === "week 37" && r.rowNo === 5); const m = Bd.matchImportedRow(w37r5, rows);
+    ok(m && m.confidence === "probable", "W8LEON2 with the trailer WPI19693 → probable, not exact");
+    const exact = all.map(r => Bd.matchImportedRow(r, rows)).filter(x => x && x.confidence === "exact"); ok(exact.length >= 3, "exact matches: " + exact.length);
+    eq(Bd.matchImportedRow({ sheet: "x", rowNo: 1, cells: { plates: "ZZ 99999/ZZ 88888", supplier: "Nobody" } }, rows), null);
+  });
+  console.log("v6.99.55 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();

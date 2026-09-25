@@ -24,6 +24,7 @@ import { computeLotWarehouseCharges } from "./warehouseCharges";
 import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
 import { computeLotSettlement, currentCommissionPct, currentCommissionRate, commissionPctForSales, settlementCostComponents } from "./consignment";
 import { recordAudit } from "./audit";
+import { isArchived, DEFAULT_SEASON } from "./season.domain";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 
@@ -2173,7 +2174,7 @@ function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMoveme
 // v6.79.0 (W-2): the legacy lot-side Claim Request Form was retired — claims are
 // one document type with one numbering scheme in the Claims module (D-13).
 
-export default function Inventory({ initialSelectedNumber = "", lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [] }: any = {}) {
+export default function Inventory({ archive = null, initialSelectedNumber = "", lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [] }: any = {}) {
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode } = useConfirm(); // Batch 2 (P2-6) + v6.89.0 prompt
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
@@ -2212,11 +2213,14 @@ export default function Inventory({ initialSelectedNumber = "", lots: extLots, s
   const totalDamagedKg = lots.reduce((s, l) => s + (l.damagedKg || 0), 0);
 
   // ── filtered ────────────────────────────────────────────────────────
+  // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
+  const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("lot", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     // "In our possession" = anything that hasn't physically left us yet
     const inPossessionStatuses = new Set(["Expected", "In Transit", "Customs", "In Stock"]);
     const base = lots.filter(l => {
+      if (!archiveShow(l)) return false;   // v6.99.54 (AR-4)
       const loc = locById(l.locationId);
       if (filterStatus === "inPossession" && !inPossessionStatuses.has(l.status)) return false;
       if (filterStatus !== "all" && filterStatus !== "inPossession" && l.status !== filterStatus) return false;

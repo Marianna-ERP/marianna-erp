@@ -64,4 +64,11 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ok = html.includes(sup.number) && (!plate || html.includes(plate)) && !html.includes("No truck registered yet");
     if (ok) { passed++; console.log("  \u2713 supplier-truck box shows the registered truck (" + sup.number + ")"); } else { failed++; console.log("  \u2717 supplier-truck box does not show " + sup.number); }
   } catch (e) { failed++; console.log("  \u2717 supplier-truck box —", (e.message || "").slice(0, 120)); } } }
+// v6.99.55 (BD-1): the weekly board renders one row per truck on real data
+{ try { const Board = require(path.resolve("./src/ShipmentBoard")).default;
+    const d2 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const html = renderToStaticMarkup(React.createElement(Board, { shipments: d2.shipments, setShipments: () => {}, pos: d2.pos, setPOs: () => {}, orders: d2.orders, setOrders: () => {}, lots: d2.lots, invoices: d2.invoices || [], contacts: d2.contacts, inspections: d2.inspections || [] }));
+    const ok = html.includes("Weekly board") && html.includes("Purchase Price") && html.includes("PLATES") && (html.match(/<tr/g) || []).length > 3 && (html.match(/week \d+/g) || []).length >= 3;
+    if (ok) { passed++; console.log("  \u2713 weekly board renders her columns and the trucks (" + (html.match(/<tr/g) || []).length + " rows)"); } else { failed++; console.log("  \u2717 weekly board did not render"); }
+  } catch (e) { failed++; console.log("  \u2717 weekly board —", (e.message || "").slice(0, 120)); } }
 console.log(`RENDER SMOKE: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);

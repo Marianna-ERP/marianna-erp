@@ -22,6 +22,7 @@ import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice } from 
 import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
+import { isArchived, DEFAULT_SEASON } from "./season.domain";
 
 const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 
@@ -315,6 +316,9 @@ export default function Invoices(props: any) {
   // Invoices only READS them at push time. One owner per fact.
 
   const { confirm: invConfirm, alert: invAlert, prompt: invPrompt, dialogNode: invNode } = useConfirm(); // P2-6
+  const archive = (props as any).archive || null;   // v6.99.54 (AR-4)
+  // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
+  const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("invoice", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
     setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null, setOrders = null, closedPeriods = [] } = props;
   const [showImport, setShowImport] = useState(false); // v6.39.0
@@ -350,7 +354,7 @@ export default function Invoices(props: any) {
   const payOpen = invoices.filter((i: Invoice) => invoiceDirection(i) === "payable" && i.paymentStatus !== "Paid" && i.paymentStatus !== "Cancelled").reduce((s: number, i: Invoice) => s + (i.grossPLN - i.paidAmount * (i.fxRate || 1)), 0);
   const overdue = invoices.filter((i: Invoice) => { if (i.paymentStatus === "Paid" || i.paymentStatus === "Cancelled") return false; const d = daysUntil(i.dueDate); return d !== null && d < 0; }).length;
 
-  const filtered = invoices.filter((i: Invoice) =>
+  const filtered = invoices.filter((i: Invoice) => archiveShow(i) &&   /* v6.99.54 (AR-4) */
     (!search || i.number.toLowerCase().includes(search.toLowerCase()) || (i.counterparty?.name || "").toLowerCase().includes(search.toLowerCase()) || i.links.some(l => l.number.toLowerCase().includes(search.toLowerCase()))) &&
     (fDir === "All" || invoiceDirection(i) === fDir) &&
     (fStatus === "All" || i.paymentStatus === fStatus)

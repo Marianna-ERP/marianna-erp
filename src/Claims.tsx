@@ -17,6 +17,7 @@ import {
 } from "./claims.domain";
 import { localTodayISO } from "./dates";
 import { nextId } from "./ids";
+import { isArchived, DEFAULT_SEASON } from "./season.domain";
 
 // ─── v6.48.0  CLAIMS MODULE (Phase 1: the register) ──────────────────────────
 // Claims are now documents in their own right rather than rows hidden inside a
@@ -101,7 +102,7 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
   );
 }
 
-export default function Claims({ claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], setInvoices = null, inspections = [], claimSeed = null, onClaimSeedConsumed = null }: any) {
+export default function Claims({ archive = null, claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], setInvoices = null, inspections = [], claimSeed = null, onClaimSeedConsumed = null }: any) {
   // v6.54.0: "a cancelled document never happened, so there are no claims on it".
   const cancelledRefs = cancelledDocSet(shipments, orders, pos);
   // Resolve a claim subject ref to the actual document, whichever module owns it.
@@ -122,9 +123,12 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
   const today = localTodayISO();
   const summary = useMemo(() => claimsSummary(claims, today), [claims, today]);
 
+  // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
+  const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("claim", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return (claims || []).filter((c: any) => {
+      if (!archiveShow(c)) return false;   // v6.99.54 (AR-4)
       if (dirFilter !== "All" && c.direction !== dirFilter) return false;
       if (openOnly && !isClaimOpen(c)) return false;
       if (!needle) return true;
@@ -132,7 +136,8 @@ export default function Claims({ claims = [], setClaims, contacts = [], lots = [
         ...(c.subjects || []).map((s: any) => s.ref)].filter(Boolean).join(" ").toLowerCase();
       return hay.includes(needle);
     }).sort((a: any, b: any) => String(b.number).localeCompare(String(a.number)));
-  }, [claims, q, dirFilter, openOnly]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claims, q, dirFilter, openOnly, archive]);
 
   const selected = (claims || []).find((c: any) => String(c.id) === String(selectedId)) || null;
 

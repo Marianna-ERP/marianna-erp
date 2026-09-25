@@ -31,6 +31,7 @@ import { cnCodeForItem } from "./productCatalog";
 import { recordAudit } from "./audit";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { syncGoodsFromPO } from "./shipments.domain";
+import { isArchived, DEFAULT_SEASON } from "./season.domain";
 let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -1794,7 +1795,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", onOpenShipment = null}: any = {}) {
+export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", onOpenShipment = null}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
@@ -1857,9 +1858,12 @@ export default function PurchaseOrders({ pos: extPOs, setPOs: extSetPOs, contact
   }).length;
 
   // filtered
+  // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
+  const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("po", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return orders.filter(o => {
+      if (!archiveShow(o)) return false;   // v6.99.54 (AR-4)
       if (filterStatus === "Active" && !activeStatuses.has(o.status)) return false;
       if (filterStatus !== "All" && filterStatus !== "Active" && o.status !== filterStatus) return false;
       if (filterSupplier !== "All" && o.supplier?.name !== filterSupplier) return false;

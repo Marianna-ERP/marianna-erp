@@ -30,6 +30,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { recordAudit } from "./audit";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
+import { isArchived, DEFAULT_SEASON } from "./season.domain";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -2285,7 +2286,7 @@ function CollectionModal({ so, onClose, onSave }: any) {
   );
 }
 
-export default function SalesOrders({
+export default function SalesOrders({ archive = null,
   claims: extClaims = [],
   setClaims: extSetClaims = null,
   orders: extOrders, setOrders: extSetOrders,
@@ -2397,6 +2398,8 @@ export default function SalesOrders({
   }
 
   // Product suggestions, same pattern as PO
+  // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
+  const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("so", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const productSuggestions = useMemo((): string[] => {
     const seed: string[] = ["Golden Delicious", "Red Bell Pepper", "Yellow Bell Pepper", "Green Bell Pepper", "Papryka Kapia", "Tomato Round", "Tomato Cherry", "Carrot", "Cucumber", "Courgette", "Onion Yellow", "Potato", "Garlic", "Cauliflower", "Broccoli", "Lettuce Iceberg", "Cabbage"];
     const fromOrders: string[] = orders
@@ -2424,7 +2427,7 @@ export default function SalesOrders({
   }).length;
 
   // Filter
-  const filtered = orders.filter(o =>
+  const filtered = orders.filter(o => archiveShow(o) &&   /* v6.99.54 (AR-4) */
     (!search || o.number.toLowerCase().includes(search.toLowerCase()) || (o.client?.name || "").toLowerCase().includes(search.toLowerCase()) || o.items.some(it => (it.product || "").toLowerCase().includes(search.toLowerCase()) || (it.sourceRef || "").toLowerCase().includes(search.toLowerCase()))) &&
     (filterStatus === "All" || o.status === filterStatus) &&
     (filterClient === "All" || o.client?.name === filterClient)

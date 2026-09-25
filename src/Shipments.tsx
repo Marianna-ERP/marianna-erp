@@ -28,6 +28,8 @@ import { unifiedLocations, locationById, placeForPrint } from "./locations";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { clearanceLinesFor, parseCC529C, matchUnitByPlates, crossCheckClearance } from "./customsClearance.domain";
+import { isArchived, DEFAULT_SEASON } from "./season.domain";
+import ShipmentBoard from "./ShipmentBoard";
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
 let CONTACTS_REF: any[] = [];
 /** v6.99.7 (A-R9-11): the most a goods row may carry = its source line's kg minus what OTHER live shipments already carry of that line. */
@@ -3086,7 +3088,7 @@ function ChecklistLine({ ok, label, warnText = "" }: any) {
   return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F1F5F9" }}><div style={{ fontSize: 12, color: "#444" }}>{label}</div><div style={{ fontSize: 11, fontWeight: 800, color: ok ? "#16A34A" : "#D97706" }}>{ok ? "OK" : (warnText || "Open")}</div></div>;
 }
 
-export default function Shipments({
+export default function Shipments({ archive = null,
   shipments: extShipments,
   loadPlans = [],
   setLoadPlans = null,
@@ -3106,6 +3108,7 @@ export default function Shipments({
   onStartClaim = null,
   initialSelectedNumber = "",
   invoices: extInvoices = [],
+  inspections: extInspections = [],   // v6.99.55 (BD-1): the board reads the inspection header for step 4
 }: any = {}) {
   const { confirm: shConfirm, prompt: shPrompt, alert: shAlert, dialogNode: shDialogNode } = useConfirm(); // P2-6 + v6.85.0 (D10 date prompt)
   // v6.45.0 (A): synchronous mirror of the shipments array for chain-safe updates.
@@ -3132,6 +3135,7 @@ export default function Shipments({
   const contacts = React.useMemo(() => extContacts || [], [extContacts]);
 
   const [selectedId, setSelectedId] = useState((shipments[0] || {}).id || null);
+  const [boardView, setBoardView] = useState(false);   // v6.99.55 (BD-1): list · detail · BOARD
   const [query, setQuery] = useState("");
   const [modeFilter, setModeFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("Open");
@@ -3153,9 +3157,12 @@ export default function Shipments({
   const [toast, setToast] = useState("");
 
   const sorted = useMemo(() => [...shipments].sort((a, b) => statusRank(a.status) - statusRank(b.status) || String(b.loadingDate || "").localeCompare(String(a.loadingDate || ""))), [shipments]);
+  // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
+  const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("shipment", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const filtered = useMemo(() => {
     const q = norm(query);
     return sorted.filter(s => {
+      if (!archiveShow(s)) return false;   // v6.99.54 (AR-4)
       if (modeFilter !== "All" && s.mode !== modeFilter) return false;
       if (statusFilter === "Open" && ["Closed", "Cancelled"].includes(s.status)) return false;
       if (statusFilter !== "All" && statusFilter !== "Open" && s.status !== statusFilter) return false;
@@ -3163,7 +3170,8 @@ export default function Shipments({
       const hay = [s.number, s.transportOrderNo, s.status, s.mode, s.purpose, ...(s.poRefs || []), ...(s.soRefs || []), ...(s.lotRefs || []), providerName(s.carrierId || s.forwarderId, contacts), ...(s.goods || []).map(g => g.product)].join(" ").toLowerCase();
       return hay.includes(q);
     });
-  }, [sorted, query, modeFilter, statusFilter, contacts]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sorted, query, modeFilter, statusFilter, contacts, archive]);
   const selected = shipments.find(s => s.id === selectedId) || filtered[0] || shipments[0] || null;
 
   // v6.58.0 one-time reconcile: shipments that reached Loaded/Arrived before
@@ -3591,7 +3599,13 @@ export default function Shipments({
       <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
           {/* v6.83.0 (owner ruling): the same header as PO / SO / Inventory — title, no paragraph. */}
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Shipments</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Shipments</div>
+            {/* v6.99.55 (BD-1, owner): the dispatcher's weekly board — her sheet as a view over the modules */}
+            <div style={{ display: "inline-flex", border: "1px solid #CBD5E1", borderRadius: 8, overflow: "hidden" }}>
+              {[["list", "List & detail"], ["board", "Weekly board"]].map(([k, l]) => <button key={k} onClick={() => setBoardView(k === "board")} style={{ padding: "4px 10px", border: "none", fontSize: 11.5, fontWeight: 800, cursor: "pointer", background: (k === "board") === boardView ? "#0F172A" : "#fff", color: (k === "board") === boardView ? "#fff" : "#475569" }}>{l}</button>)}
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`shipments_${xlsStamp()}`, filtered, [{ key: "number", label: "Shipment" }, { key: "purpose", label: "Purpose" }, { key: "arrangedBy", label: "Arranged by" }, { key: "mode", label: "Mode" }, { key: "status", label: "Status" }, { key: "poRefs", label: "POs", fmt: (v: any) => (v || []).join(", ") }, { key: "soRefs", label: "SOs", fmt: (v: any) => (v || []).join(", ") }, { key: "legs", label: "Units", fmt: (v: any) => (v || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => `${u.truckPlate || u.containerNumber || "unit"} ${Math.round(Number(u.qtyKg) || 0)} kg${u.loadedAt ? " loaded " + u.loadedAt : ""}`)).join(" | ") }, { key: "actualLoadingDate", label: "Loaded" }, { key: "actualDeliveryDate", label: "Delivered" }, { key: "costs", label: "Costs PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.amountPLN) || 0), 0) }, { key: "billingStatus", label: "Billing" }], "Shipments")} title="v6.99.0: exports the rows as filtered">⬇ Excel</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
@@ -3615,6 +3629,8 @@ export default function Shipments({
         </div>
       </div>
     </div>
+    {boardView && <ShipmentBoard shipments={shipments} setShipments={setShipments} pos={pos} setPOs={extSetPOs} orders={orders} setOrders={extSetOrders} lots={lots} invoices={extInvoices || []} contacts={contacts} inspections={extInspections || []} onOpenShipment={(n: string) => { const hit = shipments.find((x: any) => x.number === n); if (hit) { setBoardView(false); setSelectedId(hit.id); } }} />}
+    <div style={{ display: boardView ? "none" : "contents" }}>
 
     {toast && <div style={{ maxWidth: PAGE_MAX, margin: "12px auto 0", width: "calc(100% - 56px)", background: "#F0FDF4", border: "1px solid #BBF7D0", color: "#166534", borderRadius: 9, padding: "9px 12px", fontSize: 12, display: "flex", justifyContent: "space-between" }}><span>{toast}</span><button onClick={() => setToast("")} style={{ border: "none", background: "transparent", cursor: "pointer", color: "#166534", fontWeight: 800 }}>x</button></div>}
 
@@ -3686,5 +3702,6 @@ export default function Shipments({
     />}
     {printShipment && <TransportOrderPrintModal pos={pos} packagingTypes={packagingTypes} shipment={printShipment} contacts={contacts} orders={orders} onSaveTerms={(text) => saveOrderTerms(printShipment, text)} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} onEmail={() => { const sh = printShipment; setPrintShipment(null); setEmailShipment(sh); }} />}
     {emailShipment && <TransportOrderEmailModal pos={pos} packagingTypes={packagingTypes} shipment={emailShipment} contacts={contacts} orders={orders} onClose={() => setEmailShipment(null)} onMarkSent={() => markConfirmationSent(emailShipment)} />}
+    </div>
   </div>;
 }
