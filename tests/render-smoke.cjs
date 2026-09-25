@@ -64,6 +64,14 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ok = html.includes(sup.number) && (!plate || html.includes(plate)) && !html.includes("No truck registered yet");
     if (ok) { passed++; console.log("  \u2713 supplier-truck box shows the registered truck (" + sup.number + ")"); } else { failed++; console.log("  \u2717 supplier-truck box does not show " + sup.number); }
   } catch (e) { failed++; console.log("  \u2717 supplier-truck box —", (e.message || "").slice(0, 120)); } } }
+// v6.99.57 (A-PK-1): the packing-list window renders with its "Add additional items" button
+{ try { const POmod = require(path.resolve("./src/PurchaseOrders"));
+    const d3 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const po = (d3.pos || []).find((p) => p.status === "Confirmed");
+    const html = renderToStaticMarkup(React.createElement(POmod.default, { pos: d3.pos, setPOs: () => {}, contacts: d3.contacts, lots: d3.lots, setLots: () => {}, orders: d3.orders, setOrders: () => {}, shipments: d3.shipments, setShipments: () => {}, initialSelectedNumber: po.number, initialAction: "packing" }));
+    const ok = html.includes("Add additional items") && html.includes("Producer") && !html.includes("Add a size that was loaded");
+    if (ok) { passed++; console.log("  \u2713 packing-list window opens with 'Add additional items'"); } else { failed++; console.log("  \u2717 packing-list window did not render as expected"); }
+  } catch (e) { failed++; console.log("  \u2717 packing-list window —", (e.message || "").slice(0, 120)); } }
 // v6.99.55 (BD-1): the weekly board renders one row per truck on real data
 { try { const Board = require(path.resolve("./src/ShipmentBoard")).default;
     const d2 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));

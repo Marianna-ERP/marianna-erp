@@ -1,3 +1,4 @@
+import { useUnsavedGuard } from "./unsaved";
 import { useConfirm, SmallButton } from "./ui";
 import { allocateInvoiceCostsToLots } from "./costAllocation";
 import { recordAudit } from "./audit";
@@ -757,6 +758,7 @@ export default function Finance({
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
+  useUnsavedGuard({ id: "cost-form", label: form?.description ? `Cost entry "${form.description}"` : "the operational cost entry", draft: form, active: tab === "costs", save: () => saveCost(), resetKey: (operationalCosts || []).length });   // v6.99.58 (A-US)
   // v6.10: filters + hover-preview for the Operational Cost Entries register.
   const [costPeriodFilter, setCostPeriodFilter] = useState<string>("all");
   const [costSupplierFilter, setCostSupplierFilter] = useState<string>("all");

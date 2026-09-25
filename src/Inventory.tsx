@@ -25,6 +25,7 @@ import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tra
 import { computeLotSettlement, currentCommissionPct, currentCommissionRate, commissionPctForSales, settlementCostComponents } from "./consignment";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
+import { useUnsavedGuard } from "./unsaved";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 
@@ -1386,7 +1387,8 @@ function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setIn
 }
 
 // ── v6.99.32: the three windows of Quality & Handling (A-QH-1/3/5/6/8) ──
-function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save", confirmText = "", children, extra = null }: any) {
+function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save", confirmText = "", children, extra = null, draft = undefined }: any) {
+  useUnsavedGuard({ id: "qh-window", label: `${String(title || "").trim()} — ${subtitle || ""}`, draft, active: draft !== undefined, save: () => onSave() });   // v6.99.58 (A-US)
   // v6.99.34 (A-R24-5, owner): the confirmation belongs to THIS window — the application-wide dialog appeared detached from it.
   const [asking, setAsking] = React.useState(false);
   return (
@@ -1427,7 +1429,7 @@ function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
   const setCheck = (i: number, k: string, val: any) => set("externalChecks", checks.map((c, j) => j === i ? { ...c, [k]: val } : c));
   const setTol = (categoryName: string, val: any) => set("tolerances", { ...(ins.tolerances || {}), [categoryName]: parseFloat(val) || 0 });
   return (
-    <QhWindow title="🔬 Quality inspection" subtitle={`${lot.number} · ${lot.product}${lot.variety ? " — " + lot.variety : ""}`} colour="#0E7490" onClose={onClose} onSave={() => onSave(ins)} saveLabel="Save report">
+    <QhWindow draft={ins} title="🔬 Quality inspection" subtitle={`${lot.number} · ${lot.product}${lot.variety ? " — " + lot.variety : ""}`} colour="#0E7490" onClose={onClose} onSave={() => onSave(ins)} saveLabel="Save report">
       <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>HEADER</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
         <QhField label="Date of inspection" hint={beforeReceiptWarning(lot, ins.date) || undefined}><DateInput value={ins.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>
@@ -1504,7 +1506,7 @@ function SortingWindow({ f, setF, lot, inspections = [], contacts = [], onClose,
   const remaining = r0(num(f.kgIn) - placed);
   const follows = inspections.find((x: any) => String(x.id) === String(f.followsInspection));
   return (
-    <QhWindow title="⚖ Sorting job" subtitle={`${lot.number} · splits what the inspection said to sort`} colour="#7C3AED" onClose={onClose}
+    <QhWindow draft={f} title="⚖ Sorting job" subtitle={`${lot.number} · splits what the inspection said to sort`} colour="#7C3AED" onClose={onClose}
       onSave={onSave} saveLabel="Post sorting"
       confirmText={`Post this sorting: ${num(f.kgIn).toLocaleString("pl-PL")} kg → class I ${num(f.classIKg).toLocaleString("pl-PL")} · class II ${num(f.classIIKg).toLocaleString("pl-PL")} · waste ${num(f.wasteKg).toLocaleString("pl-PL")}${follows ? "" : " (no inspection referenced)"}?`}>
       {!inspections.length && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>No quality inspection on this lot yet — sorting normally follows one. You can still post it.</div>}
@@ -1538,7 +1540,7 @@ function CountWindow({ f, setF, lot, onClose, onSave }: any) {
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const setRow = (grade: string, k: string, v: any) => set("entries", { ...(f.entries || {}), [grade || "-"]: { ...((f.entries || {})[grade || "-"] || {}), [k]: v } });
   return (
-    <QhWindow title="📋 Stock count" subtitle={`${lot.number} · what is physically on the floor`} colour="#B45309" onClose={onClose} onSave={onSave} saveLabel="Save count & adjust"
+    <QhWindow draft={f} title="📋 Stock count" subtitle={`${lot.number} · what is physically on the floor`} colour="#B45309" onClose={onClose} onSave={onSave} saveLabel="Save count & adjust"
       confirmText="Save this count? Differences beyond 1 kg are posted as reasoned adjustments on their class.">
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
         <QhField label="Date counted" hint={beforeReceiptWarning(lot, f.date) || undefined}><DateInput value={f.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>

@@ -2192,3 +2192,19 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.56 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.57 — additional items at loading (A-PK-1…3) ══
+(function v69957(){
+  console.log("\n══ 70. v6.99.57: an additional item is what was chosen — only origin and unit come from the order ══");
+  const SO = B("so.domain.js");
+  const po = { number: "PO-9", currency: "EUR", items: [{ id: 1, product: "Apples", variety: "Gala", size: "65-70", quality: "I", origin: "Poland", pricingUnit: "kg", qty: 18000, quantityStatus: "ESTIMATED", unitPrice: 0.9, cnCode: "08081080", packaging: "Carton (13 kg)", packagingId: "c13", coloration: "red", boxesManual: 1300, palletsManual: 17 }] };
+  t("PK-2: a different item takes ITS CN code and none of line 1's manual overrides, coloration or packaging", () => {
+    const fin = SO.applyPackingResult(po, [{ lineId: 1, qty: 17472 }, { newLine: { id: "pk-a", product: "Pears", variety: "Conference", size: "60-65", quality: "II", qty: 1200, unitPrice: 0.7, coloration: "", packaging: "Carton (10 kg)", packagingId: "c10", cnCode: "08083090" } }], "2026-09-25");
+    const n = fin.items[1];
+    eq(n.product, "Pears"); eq(n.cnCode, "08083090"); eq(n.quality, "II"); eq(n.packagingId, "c10"); eq(n.coloration, "");
+    eq(n.boxesManual, undefined); eq(n.palletsManual, undefined, "no inherited overrides");
+    eq(n.origin, "Poland"); eq(n.pricingUnit, "kg", "origin and unit from the order"); eq(n.quantityStatus, "FINAL");
+  });
+  console.log("v6.99.57 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

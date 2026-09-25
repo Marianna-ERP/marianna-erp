@@ -32,6 +32,7 @@ import { recordAudit } from "./audit";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { syncGoodsFromPO } from "./shipments.domain";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
+import { useUnsavedGuard } from "./unsaved";
 let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
@@ -1277,7 +1278,7 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
 // ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
 // have (at its own price), a line not loaded (0). Allowed on a Confirmed PO with a shipment, as long as nothing was received
 // or shipped: securing the truck must not freeze the order. The shipment's goods rows re-derive; the truck total is what it is.
-function PackingResultWindow({ order, onClose, onConfirm, preview = null }: any) {
+function PackingResultWindow({ order, onClose, onConfirm, preview = null, catalog = [], setCatalog = null, packagingTypes = [] }: any) {
   const [rows, setRows] = React.useState<any[]>(() => (order.items || []).map((it: any, i: number) => ({ lineId: it.id ?? i + 1, it, qty: isEstimatedLine(it) ? "" : String(it.qty ?? "") })));
   const [added, setAdded] = React.useState<any[]>([]);
   const [choice, setChoice] = React.useState<Record<string, string>>({});
@@ -1290,7 +1291,7 @@ function PackingResultWindow({ order, onClose, onConfirm, preview = null }: any)
       <div style={{ background: "#fff", borderRadius: 12, width: "min(900px, 100%)", border: "2px solid #7C3AED", overflow: "hidden" }}>
         <div style={{ background: "#F5F3FF", borderBottom: "1px solid #DDD6FE", padding: "10px 16px" }}>
           <div style={{ fontSize: 14, fontWeight: 800, color: "#6D28D9" }}>📦 Producer's packing list · {order.number}</div>
-          <div style={{ fontSize: 11.5, color: "#64748B" }}>the final kilos per line — blank keeps the estimate · 0 = not loaded · a size the order did not have is added below at its own price</div>
+          <div style={{ fontSize: 11.5, color: "#64748B" }}>the final kilos per line — blank keeps the estimate · 0 = not loaded · anything loaded that the order did not have is added below as an additional item</div>
         </div>
         <div style={{ padding: "12px 16px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>LINE</div><div>SIZE</div><div>CLASS</div><div>ESTIMATED / ORDERED</div><div>FINAL KG</div></div>
@@ -1299,18 +1300,27 @@ function PackingResultWindow({ order, onClose, onConfirm, preview = null }: any)
             <div style={{ fontSize: 12 }}>{Math.round(parseFloat(r.it.qty) || 0).toLocaleString("pl-PL")} kg {isEstimatedLine(r.it) ? <span style={{ color: "#B45309" }}>≈ estimated</span> : <span style={{ color: "#94A3B8" }}>final</span>}</div>
             <input type="number" value={r.qty} onChange={e => setRows(rows.map((x, k) => k === i ? { ...x, qty: e.target.value } : x))} placeholder={isEstimatedLine(r.it) ? "final kg" : String(r.it.qty)} style={inp} />
           </div>)}
-          <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>SIZES NOT ON THE ORDER — loaded anyway</div>
-          {added.map((a, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.8fr 0.8fr 1fr 1fr 34px", gap: 8, alignItems: "center", padding: "4px 0" }}>
-            <input value={a.variety} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, variety: e.target.value } : x))} placeholder="variety" style={inp} />
-            <input value={a.size} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, size: e.target.value } : x))} placeholder="size 60-65" style={inp} />
-            <input value={a.quality} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, quality: e.target.value } : x))} placeholder="class" style={inp} />
-            <input type="number" value={a.qty} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, qty: e.target.value } : x))} placeholder="kg" style={inp} />
-            <input type="number" value={a.unitPrice} onChange={e => setAdded(added.map((x, k) => k === i ? { ...x, unitPrice: e.target.value } : x))} placeholder={`price / kg (${order.currency || "PLN"})`} style={inp} />
-            <div style={{ fontSize: 11, color: "#64748B" }}>{(order.items || [])[0]?.packaging || ""}</div>
-            <button onClick={() => setAdded(added.filter((_, k) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 30, cursor: "pointer" }}>✕</button>
-          </div>)}
-          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${Date.now()}-${added.length + 1}`, product: b.product || "", variety: b.variety || "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", packaging: b.packaging, packagingId: b.packagingId, cnCode: b.cnCode, origin: b.origin, pricingUnit: b.pricingUnit || "kg" }]); }}
-            style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add a size that was loaded</button>
+          <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>ADDITIONAL ITEMS — loaded, not on the order</div>
+          {/* v6.99.57 (A-PK-1, owner): the PO line's own editors — item/variety from the catalogue, size, quality, quantity, price, coloration, packaging.
+              Origin and unit come from the order; the quantity is FINAL (it is what is loaded); CN code, boxes and pallets derive. */}
+          <datalist id="pk-sizes">{Array.from(new Set((order.items || []).map((x: any) => String(x.size || "")).filter(Boolean))).map((v: any) => <option key={v} value={v} />)}</datalist>
+          <datalist id="pk-colorations">{Array.from(new Set((order.items || []).map((x: any) => String(x.coloration || "")).filter(Boolean))).map((v: any) => <option key={v} value={v} />)}</datalist>
+          {added.map((a, i) => { const set = (patch: any) => setAdded(added.map((x, k) => k === i ? { ...x, ...patch } : x)); return (
+            <div key={a.id || i} style={{ border: "1px solid #EDE9FE", borderRadius: 8, padding: "8px", marginBottom: 6, background: "#FFFFFF" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 2fr) 0.8fr 0.7fr 0.8fr 0.8fr 1fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
+                <div><Lbl>Item / Variety</Lbl><ItemVarietyPicker catalog={catalog} setCatalog={setCatalog || (() => {})} item={a.product || ""} variety={a.variety || ""} onItem={(v: string) => set({ product: v, variety: "", cnCode: cnCodeForItem(catalog, v) || "" })} onVariety={(v: string) => set({ variety: v })} /></div>
+                <div><Lbl>Size</Lbl><input list="pk-sizes" value={a.size} onChange={e => set({ size: e.target.value })} placeholder="60-65" style={inp} /></div>
+                <div><Lbl>Quality</Lbl><select value={a.quality || "I"} onChange={e => set({ quality: e.target.value })} style={inp}>{QUALITY_GRADES.map(g => <option key={g}>{g}</option>)}</select></div>
+                <div><Lbl>Quantity ({a.pricingUnit || "kg"})</Lbl><input type="number" value={a.qty} onChange={e => set({ qty: e.target.value })} placeholder="final" style={inp} /></div>
+                <div><Lbl>Unit price ({order.currency || "PLN"})</Lbl><input type="number" value={a.unitPrice} onChange={e => set({ unitPrice: e.target.value })} style={inp} /></div>
+                <div><Lbl>Coloration</Lbl><input list="pk-colorations" value={a.coloration || ""} onChange={e => set({ coloration: e.target.value })} style={inp} /></div>
+                <div><Lbl>Packaging</Lbl><select value={a.packagingId ?? ""} onChange={e => { const pk = (packagingTypes || []).find((t: any) => String(t.id) === e.target.value); set({ packagingId: pk ? pk.id : null, packaging: pk ? pk.label : "" }); }} style={inp}><option value="">— choose —</option>{(packagingTypes || []).map((t: any) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div>
+                <button onClick={() => setAdded(added.filter((_, k) => k !== i))} title="remove this item" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 32, cursor: "pointer" }}>✕</button>
+              </div>
+              <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 4 }}>taken from the order: origin <b>{a.origin || "—"}</b> · unit <b>{a.pricingUnit || "kg"}</b> · quantity <b>final</b>{a.cnCode ? <> · CN <b>{a.cnCode}</b></> : null} · boxes and pallets derive from the packaging</div>
+            </div>); })}
+          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${Date.now()}-${added.length + 1}`, product: b.product || "", variety: "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", coloration: "", packaging: "", packagingId: null, cnCode: cnCodeForItem(catalog, b.product) || "", origin: b.origin || "", pricingUnit: b.pricingUnit || "kg" }]); }}
+            style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add additional items</button>
           <div style={{ marginTop: 12, fontSize: 13, fontWeight: 800 }}>Truck total: {Math.round(total).toLocaleString("pl-PL")} kg</div>
           {/* v6.99.56 (A-PL-2, owner): what follows — the sale is what was loaded, so it takes the final kilos; a new size joins it at a price to agree */}
           {preview && (() => { const pv = preview(payload(), { choice, prices }); return (
@@ -1321,7 +1331,7 @@ function PackingResultWindow({ order, onClose, onConfirm, preview = null }: any)
               {pv.questions.map((q: any) => <div key={q.key} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}><span style={{ color: "#92400E", fontWeight: 700 }}>? {q.label}</span>
                 <select value={choice[q.key] || ""} onChange={e => setChoice({ ...choice, [q.key]: e.target.value })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }}><option value="">— choose —</option>{q.options.map((o: string) => <option key={o}>{o}</option>)}</select></div>)}
               {added.filter(a => parseFloat(a.qty) > 0).map((a: any) => <div key={a.id} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
-                <span>Sales price for {a.size || "the new size"} <span style={{ color: "#94A3B8" }}>(blank = to agree — the sales invoice waits for it)</span></span>
+                <span>Sales price for {[a.product, a.variety, a.size].filter(Boolean).join(" ") || "the additional item"} <span style={{ color: "#94A3B8" }}>(blank = to agree — the sales invoice waits for it)</span></span>
                 <input type="number" value={prices[a.id] ?? ""} onChange={e => setPrices({ ...prices, [a.id]: e.target.value })} placeholder="price / kg" style={{ width: 110, border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }} /></div>)}
             </div>); })()}
         </div>
@@ -1827,6 +1837,7 @@ export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: ex
   const [view, setView] = useState(openDirectPO ? "detail" : "list");
   const [selected, setSelected] = useState<any>(openDirectPO);
   const [form, setForm] = useState(null);
+  useUnsavedGuard({ id: "po-form", label: (form as any)?.number ? `Purchase order ${(form as any).number}` : "the new purchase order", draft: form, active: view === "form" && !!form, save: () => saveOrder(form) });   // v6.99.58 (A-US)
   const [printOrder, setPrintOrder] = useState(null);
   const [truckWindow, setTruckWindow] = useState(false);
   const [packingWindow, setPackingWindow] = useState(!!openDirectPO && initialAction === "packing");   // v6.99.50 (TO-2) · v6.99.56 (A-PL-5): opened directly from a refused Mark-loaded   // v6.99.36 (A-R25-6): the supplier truck is registered in one window
@@ -2166,7 +2177,7 @@ ${blockNote}`.trim(),
           // v6.99.56 (A-PL-1 · PL-2, owner): the packing list moves the PO, its expected lots, the sales that sell it, and the shipments not yet loaded — together
           const deps = { buildLots: (o: any, ls: any[]) => buildExpectedLotsFromPO(o, ls), syncShipment: (sh: any, o: any, ls: any[]) => syncGoodsFromPO(sh, o, ls, { nextId }), counts: (line: any) => effectiveCounts(line, PO_PACKAGING_TYPES || []), nextId };
           const ctx = { orders: extSOs || [], lots: extLots || [], shipments: extShipments || [], todayISO: localTodayISO() };
-          return <PackingResultWindow order={selected} onClose={() => setPackingWindow(false)} preview={(rows: any[], answers: any) => planPackingResult(selected, rows, ctx, deps, answers)} onConfirm={async (rows: any[], answers: any) => {
+          return <PackingResultWindow order={selected} catalog={productCatalog} setCatalog={setProductCatalog} packagingTypes={PO_PACKAGING_TYPES || []} onClose={() => setPackingWindow(false)} preview={(rows: any[], answers: any) => planPackingResult(selected, rows, ctx, deps, answers)} onConfirm={async (rows: any[], answers: any) => {
             const pl = planPackingResult(selected, rows, ctx, deps, answers);
             if (pl.questions.length) { await uiAlert({ tone: "warn", title: "One more answer needed", message: pl.questions.map((q: any) => q.label).join("\n") }); return; }
             extSetPOs((prev: any[]) => (prev || []).map((p: any) => p.id === selected.id ? pl.po : p));

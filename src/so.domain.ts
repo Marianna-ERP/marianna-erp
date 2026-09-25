@@ -114,7 +114,15 @@ export function applyPackingResult(po: any, rows: PackingResultRow[], todayISO: 
   // v6.99.50 (TO-2, owner): the producer's packing list may bring a SIZE the order did not have — two pallets of 60-65 at their
   // own price — or drop a line. New lines arrive FINAL; a line set to 0 kg is kept at 0 (it shows what was ordered and not loaded).
   const added = (rows || []).filter(r => (r.lineId === undefined || r.lineId === null || r.lineId === "") && r.newLine && num(r.newLine.qty) > 0)
-    .map((r, k) => { const base = items[0] || {}; return { ...base, ...r.newLine, id: r.newLine.id ?? `pk-${todayISO}-${k + 1}`, qty: num(r.newLine.qty), quantityStatus: "FINAL", estimatedQty: 0, addedByPackingResult: true }; });
+    .map((r, k) => {
+      // v6.99.57 (A-PK-2, owner): an additional item is built from what was CHOSEN, not by copying line 1 — copying carried line 1's
+      // CN code and its manual box/pallet overrides into a different item. Only origin and pricing unit are taken from the order.
+      const base: any = items[0] || {}; const nl: any = r.newLine || {};
+      return { id: nl.id ?? `pk-${todayISO}-${k + 1}`, product: nl.product || base.product || "", variety: nl.variety || "", size: nl.size || "", quality: nl.quality || base.quality || "I",
+        coloration: nl.coloration || "", packaging: nl.packaging || "", packagingId: nl.packagingId ?? null, cnCode: nl.cnCode || "",
+        origin: base.origin ?? nl.origin ?? "", pricingUnit: base.pricingUnit || nl.pricingUnit || "kg",
+        qty: num(nl.qty), unitPrice: num(nl.unitPrice), quantityStatus: "FINAL", estimatedQty: 0, addedByPackingResult: true };
+    });
   return { ...po, items: [...items, ...added], packingResultAt: todayISO };
 }
 export interface SOAdjustment { soNumber: string; lineIndex: number; product: string; soldKg: number; finalKg: number; overKg: number; }

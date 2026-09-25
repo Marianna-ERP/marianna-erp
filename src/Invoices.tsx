@@ -23,6 +23,7 @@ import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCost
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
+import { useUnsavedGuard } from "./unsaved";
 
 const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
 
@@ -341,7 +342,9 @@ export default function Invoices(props: any) {
   const [view, setView] = useState<"list" | "form" | "detail" | "note">("list");
   const [selId, setSelId] = useState<number | null>(null);
   const [form, setForm] = useState<any>(null);
+  useUnsavedGuard({ id: "invoice-form", label: form?.number ? `Invoice ${form.number}` : "the new invoice", draft: form, active: view === "form" && !!form, save: () => saveForm() });   // v6.99.58 (A-US)
   const [noteForm, setNoteForm] = useState<any>(null);
+  useUnsavedGuard({ id: "note-form", label: noteForm?.number ? `Note ${noteForm.number}` : "the new credit / debit note", draft: noteForm, active: view === "note" && !!noteForm, save: () => saveNote() });   // v6.99.58 (A-US)
   const [search, setSearch] = useState("");
   const [fDir, setFDir] = useState<"All" | "receivable" | "payable">("All");
   const [fStatus, setFStatus] = useState<string>("All");

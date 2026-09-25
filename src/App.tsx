@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useRef, useEffect, useState, useMemo } from "react";
 import { checkIntegrity } from "./integrityCheck";
 import Dashboard from "./Dashboard";
 import Contacts from "./Contacts";
@@ -43,6 +43,7 @@ import { normaliseStoredSoStatus } from "./statusOwnership.domain";
 import { canOpenModule } from "./permissions.domain";
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
+import { dirtyEntries, saveAndCheck } from "./unsaved";
 
 // Batch 5: migrate older-version stored data forward BEFORE any hook reads it
 // (module scope — runs before the App component's hooks read the stores).
@@ -412,7 +413,8 @@ export default function App() {
   }, []);
 
   // v6.99.11: pickers may ask to open the Directory ("＋ Add it in the Directory…") — never free text.
-  useEffect(() => { const h = (e: any) => { setActiveModule("contacts"); try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); } catch {} }; window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
+  const navigateRef = useRef<(m: string) => void>(() => {});   // v6.99.58 (A-US-2)
+  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); } catch {} }; window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
   // v6.99.9: shipments healed once — unit kg mirrors in step with the derived figure; stale zero-amount leg-freight lines removed.
   useEffect(() => { setShipments((prev: any[]) => { let changed = false; const next = (prev || []).map((s: any) => { const r = healShipmentModel(s); if (r.changed) changed = true; return r.sh; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -493,6 +495,18 @@ export default function App() {
   }, [creditNotes]);
 
   const [activeModule, setActiveModule] = useState("dashboard");
+  // v6.99.58 (A-US-2, owner): every way of leaving a module passes here. An open editor with unsaved changes is named, and
+  // the choice is Save and continue (the editor's own Save — gates apply; refused = stay) · Leave without saving · Stay.
+  const [leaveAsk, setLeaveAsk] = useState<{ target: string; labels: string[]; canSave: boolean; saving?: boolean; refused?: boolean } | null>(null);
+  const navigate = (target: string) => {
+    if (target === activeModule) return;
+    const d = dirtyEntries();
+    if (!d.length) { setActiveModule(target); return; }
+    setLeaveAsk({ target, labels: d.map(e => e.label), canSave: d.every(e => typeof e.save === "function") });
+  };
+  navigateRef.current = navigate;
+  // US-3: closing or reloading the tab while something is unsaved → the browser's own "leave site?" prompt
+  useEffect(() => { const h = (e: any) => { if (dirtyEntries().length) { e.preventDefault(); e.returnValue = ""; return ""; } }; window.addEventListener("beforeunload", h); return () => window.removeEventListener("beforeunload", h); }, []);
   const [openShipmentNumber, setOpenShipmentNumber] = useState("");   // v6.99.42: cross-module hand-off (PO → its supplier truck)
   const [openPO, setOpenPO] = useState<{ number: string; action: string }>({ number: "", action: "" });   // v6.99.56 (A-PL-5): shipment → the PO's packing list
   useEffect(() => { if (activeModule !== "pos" && openPO.number) setOpenPO({ number: "", action: "" }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -501,7 +515,7 @@ export default function App() {
   // here with a pre-filled seed, so every claim is a numbered document in the
   // Claims module from birth.
   const [claimSeed, setClaimSeed] = useState<any>(null);
-  const startClaim = (seed: any) => { setClaimSeed(seed); setActiveModule("claims"); };
+  const startClaim = (seed: any) => { setClaimSeed(seed); navigate("claims"); };
   // One-time reminder for testers to export/back up their data (localStorage only).
   const [backupReminderDismissed, setBackupReminderDismissed] = useLocalStoredState("backupReminderDismissed", false);
   const storageHealthState = useStorageHealth(); // Batch 5: surface failed writes
@@ -526,7 +540,7 @@ export default function App() {
   function renderActive() {
     switch (activeModule) {
       case "dashboard":
-        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={setActiveModule}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={userName} integrityIssues={integrityIssuesForDashboard} />;
+        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={userName} integrityIssues={integrityIssuesForDashboard} />;
       case "claims":
         return <Claims archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
       case "audit":
@@ -536,13 +550,13 @@ export default function App() {
       case "contacts":
         return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName}  lots={lots} />;
       case "pos":
-        return <PurchaseOrders key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} setInvoices={setInvoices}  users={users} userName={userName}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); setActiveModule("shipments"); }} />;
+        return <PurchaseOrders key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} setInvoices={setInvoices}  users={users} userName={userName}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
       case "lots":
         return <Inventory archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
       case "orders":
         return <SalesOrders archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
-        return <Shipments onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); setActiveModule("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={setActiveModule} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
+        return <Shipments onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
         return <Invoices archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
       case "settings":
@@ -559,13 +573,30 @@ export default function App() {
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
-      <TopNav active={activeModule} onNav={setActiveModule} canOpen={(k: string) => canOpenModule(users, userName, k === "loadPlans" ? "loadplans" : k)} rightSlot={
+      {leaveAsk && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 12, width: "min(520px, 100%)", border: "2px solid #D97706", overflow: "hidden" }}>
+            <div style={{ background: "#FFFBEB", borderBottom: "1px solid #FDE68A", padding: "12px 16px", fontSize: 14, fontWeight: 800, color: "#92400E" }}>Unsaved changes</div>
+            <div style={{ padding: "12px 16px", fontSize: 13, color: "#334155" }}>
+              {leaveAsk.labels.map((l, i) => <div key={i} style={{ fontWeight: 700 }}>• {l}</div>)}
+              <div style={{ marginTop: 8, color: "#64748B" }}>has changes that are not saved. Leaving now loses them.</div>
+              {leaveAsk.refused && <div style={{ marginTop: 8, color: "#B91C1C", fontWeight: 700 }}>The save did not go through — the form is still open with your changes. Fix what it asked for, or leave without saving.</div>}
+            </div>
+            <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button onClick={() => setLeaveAsk(null)} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Stay</button>
+              <button onClick={() => { const t = leaveAsk.target; setLeaveAsk(null); setActiveModule(t); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Leave without saving</button>
+              {leaveAsk.canSave && <button disabled={leaveAsk.saving} onClick={async () => { const t = leaveAsk.target; setLeaveAsk({ ...leaveAsk, saving: true, refused: false }); const ok = await saveAndCheck(dirtyEntries()); if (ok) { setLeaveAsk(null); setActiveModule(t); } else setLeaveAsk(prev => prev ? { ...prev, saving: false, refused: true } : prev); }} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{leaveAsk.saving ? "Saving…" : "Save and continue"}</button>}
+            </div>
+          </div>
+        </div>
+      )}
+      <TopNav active={activeModule} onNav={navigate} canOpen={(k: string) => canOpenModule(users, userName, k === "loadPlans" ? "loadplans" : k)} rightSlot={
         <><label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
           <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}
         </label>
         <IntegrityBadge
           data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog }}
-          onNavigate={setActiveModule}
+          onNavigate={navigate}
           onRepair={(kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
             if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !window.confirm(`Remove ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock.`)) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).filter((l: any) => !ids.has(l.id))); recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) removed: ${ol.map((l: any) => l.number).join(", ")}` }); }
             if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n || !window.confirm(`Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?`)) return;
@@ -592,7 +623,7 @@ export default function App() {
           <span style={{ flex: 1, lineHeight: 1.45 }}>
             <strong>Test build — your data lives only in this browser.</strong> It survives refreshes and updates here, but is lost if you switch browser/device, use a private window, or clear browsing data. Back it up regularly via <strong>Settings → Export all data</strong>, and send that file with any bug report.
           </span>
-          <button onClick={() => { setActiveModule("settings"); }} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#92400E", fontSize: 11.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>Open Settings</button>
+          <button onClick={() => { navigate("settings"); }} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#92400E", fontSize: 11.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>Open Settings</button>
           <button onClick={() => setBackupReminderDismissed(true)} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "transparent", color: "#92400E", fontSize: 16, cursor: "pointer", lineHeight: 1 }} title="Dismiss">×</button>
         </div>
       )}

@@ -31,6 +31,7 @@ import { ItemVarietyPicker } from "./ProductPicker";
 import { recordAudit } from "./audit";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
+import { useUnsavedGuard } from "./unsaved";
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 const COMPANY = {
@@ -2380,6 +2381,7 @@ export default function SalesOrders({ archive = null,
   const [view, setView] = useState(openDirect ? (initialView || "detail") : "list"); // list | form | detail
   const [selected, setSelected] = useState<any>(openDirect);
   const [form, setForm] = useState<any>(openDirect && initialView === "form" ? { ...openDirect } : null);
+  useUnsavedGuard({ id: "so-form", label: form?.number ? `Sales order ${form.number}` : "the new sales order", draft: form, active: view === "form" && !!form, save: () => saveOrder(form) });   // v6.99.58 (A-US)
   const [printOrder, setPrintOrder] = useState(null);
   const [emailOrder, setEmailOrder] = useState(null);
   const [invoiceOrder, setInvoiceOrder] = useState(null); // SO being invoiced via the modal

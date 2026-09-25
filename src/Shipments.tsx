@@ -1,3 +1,4 @@
+import { useUnsavedGuard } from "./unsaved";
 import React, { useMemo, useState } from "react";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
@@ -1488,6 +1489,16 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
     d.customs = normalizeCustoms(d.customs || d.customsClearance); // BP-27 string→object migration on open
     return d;
   });
+  // v6.99.58 (A-US): the Save button and the leave-guard call the SAME function — so every warning and gate still applies
+  function saveShipmentDraft() {
+          // v6.99.44 (L-6, owner): a unit with no price or no carrier is named before saving — a warning, never a block (the price can arrive after the booking)
+          if (draft.arrangedBy !== "SUPPLIER") {
+            const gaps = (draft.legs || []).flatMap((l: any, li: number) => (l.vehicles || []).map((u: any, ui: number) => { const miss = [!(parseNum(u.costAmount) > 0) && "no price", (carrierOfUnit(draft, l, u) == null) && "no carrier"].filter(Boolean); return miss.length ? `leg ${li + 1} · ${u.truckPlate || u.containerNo || "unit " + (ui + 1)}: ${miss.join(", ")}` : null; })).filter(Boolean);
+            if (gaps.length && !window.confirm("Some units are incomplete:\n" + gaps.join("\n") + "\n\nSave anyway?")) return;
+          }
+          onSave(costLinesByCarrierLegApply(syncCustomsCostLine(autoAllocate(autoFillSingleUnitKg(draft), 0))));
+  }
+  useUnsavedGuard({ id: "shipment-editor", label: `Shipment ${draft?.number || ""}`.trim(), draft, save: () => saveShipmentDraft() });
   const [govChange, setGovChange] = useState(false);   // v6.99.44 (H-6)
   // v6.93.0: roadProviders no longer used — carriers live on the units (A-R8-4/9)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -2327,13 +2338,7 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
       </div>
       <div style={{ padding: "14px 22px", borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
         <SmallButton onClick={onCancel}>Cancel</SmallButton>
-        <SmallButton kind="dark" onClick={() => {
-          // v6.99.44 (L-6, owner): a unit with no price or no carrier is named before saving — a warning, never a block (the price can arrive after the booking)
-          if (draft.arrangedBy !== "SUPPLIER") {
-            const gaps = (draft.legs || []).flatMap((l: any, li: number) => (l.vehicles || []).map((u: any, ui: number) => { const miss = [!(parseNum(u.costAmount) > 0) && "no price", (carrierOfUnit(draft, l, u) == null) && "no carrier"].filter(Boolean); return miss.length ? `leg ${li + 1} · ${u.truckPlate || u.containerNo || "unit " + (ui + 1)}: ${miss.join(", ")}` : null; })).filter(Boolean);
-            if (gaps.length && !window.confirm("Some units are incomplete:\n" + gaps.join("\n") + "\n\nSave anyway?")) return;
-          }
-          onSave(costLinesByCarrierLegApply(syncCustomsCostLine(autoAllocate(autoFillSingleUnitKg(draft), 0)))); }}>Save changes</SmallButton>
+        <SmallButton kind="dark" onClick={() => saveShipmentDraft()}>Save changes</SmallButton>
       </div>
     </div>
   </div>;

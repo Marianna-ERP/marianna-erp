@@ -1,6 +1,6 @@
 {
   "name": "freshtrade-erp",
-  "version": "6.99.56",
+  "version": "6.99.58",
   "private": true,
   "dependencies": {
     "@types/react": "^18.2.0",
@@ -19,7 +19,7 @@
     "verify": "tsc --noEmit && CI=true react-scripts build",
     "test:engines": "tsc -p tests/tsconfig.json && node tests/run-engines.cjs",
     "test:matrix": "tsc -p tests/tsconfig.json && node tests/phase3-matrix.cjs",
-    "test:all": "node tests/run-engines.cjs && node tests/audit-roundtrip.cjs && node tests/phase3-matrix.cjs && node tests/render-smoke.cjs && node tests/ledger-drift.cjs",
+    "test:all": "node tests/run-engines.cjs && node tests/audit-roundtrip.cjs && node tests/phase3-matrix.cjs && node tests/render-smoke.cjs && node tests/ledger-drift.cjs && node tests/unsaved-guard.cjs",
     "test:render": "node tests/render-smoke.cjs",
     "test:ledger": "node tests/ledger-drift.cjs"
   },

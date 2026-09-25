@@ -13,6 +13,7 @@ import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLoca
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
+import { useUnsavedGuard } from "./unsaved";
 
 // v6.81.0 (D-57): commission tiers PER TRUCK — text ⇄ bands.
 function bandsToText(b: any[]): string { return (b || []).map((x: any) => `${x.fromPLN ?? 0}-${x.toPLN ?? ""}:${x.pct ?? ""}`).join("; "); }
@@ -164,6 +165,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
   const defaultFinance = { bankName: "", accountNumber: "", swift: "" };
   const blank = { type: "Client", additionalTypes: [], name: "", country: "", address: "", nip: "", vatEuId: "", defaultCurrency: "PLN", paymentTerms: "30 days from invoice date", paymentTermsOther: "", services: [], finance: defaultFinance, notes: "" };
   const [form, setForm] = useState(counterparty ? { additionalTypes: [], services: [], paymentTermsOther: "", ...counterparty, finance: { ...defaultFinance, ...(counterparty.finance || {}) } } : { ...blank, id: null });
+  useUnsavedGuard({ id: "counterparty-form", label: form?.name ? `Party ${form.name}` : "the new party", draft: form, save: () => handleSave() });   // v6.99.58 (A-US)
   const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const sff = (k, v) => setForm(f => ({ ...f, finance: { ...(f.finance || {}), [k]: v } }));
   // v6.10 (#6): keep the RAW typed text in the tariff fields while editing so
@@ -456,6 +458,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
 function PersonEditor({ person, onSave, onCancel }: any) {
   const blank = { name: "", role: "Buyer", email: "", phone: "", isPrimary: false, notes: "" };
   const [form, setForm] = useState(person ? { ...person } : { ...blank, id: null });
+  useUnsavedGuard({ id: "person-form-" + String(person?.id ?? "new"), label: form?.name ? `Contact person ${form.name}` : "the new contact person", draft: form, save: () => { if (form.name) onSave(form); } });   // v6.99.58 (A-US)
   const sf = (k, v) => setForm(f => ({ ...f, [k]: v }));
   return (
     <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 10, padding: 12, marginBottom: 10 }}>
