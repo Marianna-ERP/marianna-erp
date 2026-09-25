@@ -132,3 +132,77 @@ export function proposeSOAdjustments(po: any, orders: any[]): SOAdjustment[] {
   });
   return out;
 }
+
+// ── v6.99.56 (A-PL-1 · PL-2, owner 25 Sept): WHAT THE PRODUCER'S PACKING LIST MOVES — in one plan ──
+// The packing list is what was actually loaded, so it moves four places together: the PO lines (final), the PO's expected
+// lots (the same builder used at confirmation), the SO lines that sell those PO lines (they ARE what was loaded for that
+// sale), and the goods rows of every shipment not yet loaded. A size the producer added is appended to the sale with a
+// blank price marked "price to agree". The only questions asked are the ones the data cannot answer: which SO takes a
+// difference when one PO line feeds several SOs, and which SO takes a new size when the PO feeds several.
+export interface PackingPlan { po: any; lots: any[]; orders: any[]; shipments: any[]; soChanges: string[]; questions: Array<{ key: string; label: string; options: string[] }>; unpriced: string[]; }
+export function planPackingResult(
+  po: any, rows: PackingResultRow[],
+  ctx: { orders: any[]; lots: any[]; shipments: any[]; todayISO: string },
+  deps: { buildLots: (po: any, lots: any[]) => { newLots: any[]; lotPatches: any[]; lotRefs: string[] }; syncShipment: (sh: any, po: any, lots: any[]) => any; counts?: (line: any) => { boxes: any; pallets: any }; nextId?: () => any },
+  answers: { choice?: Record<string, string>; prices?: Record<string, any> } = {}
+): PackingPlan {
+  const norm = (v: any) => String(v ?? "").trim().toLowerCase();
+  const fin0 = applyPackingResult(po, rows, ctx.todayISO);
+  // 1) the PO's expected lots — the builder of the confirmation, nothing else
+  const plan = deps.buildLots(fin0, ctx.lots || []);
+  const lots = [...(ctx.lots || []).map((l: any) => { const pt = (plan.lotPatches || []).find((x: any) => x.number === l.number); return pt ? { ...l, ...pt.patch } : l; }), ...(plan.newLots || [])];
+  const fin = { ...fin0, lotRefs: plan.lotRefs || fin0.lotRefs };
+  const lineId = (it: any, i: number) => String(it?.id ?? i + 1);
+  const poLots = new Map<string, any>(lots.filter((l: any) => String(l.poRef) === String(po.number)).map((l: any) => [String(l.number), l]));
+  const byFacts = (it: any) => { const k = (fin.items || []).findIndex((x: any) => norm(x.product) === norm(it.product) && norm(x.size || "") === norm(it.size || "")); return k >= 0 ? lineId(fin.items[k], k) : ""; };
+  // 2) which SO lines sell which PO line
+  const orders = (ctx.orders || []).map((o: any) => ({ ...o, items: (o.items || []).map((it: any) => ({ ...it })) }));
+  const byLine = new Map<string, Array<{ o: any; idx: number }>>();
+  orders.forEach((o: any) => { if (!o || String(o.status) === "Cancelled") return; (o.items || []).forEach((it: any, idx: number) => {
+    let pl = "";
+    if (it.sourceType === "PO" && String(it.sourceRef) === String(po.number)) pl = it.sourceLineId != null ? String(it.sourceLineId) : byFacts(it);
+    else if (it.sourceType === "STOCK" && poLots.has(String(it.sourceRef))) { const l = poLots.get(String(it.sourceRef)); pl = l?.poLineId != null ? String(l.poLineId) : byFacts(it); }
+    if (!pl) return; if (!byLine.has(pl)) byLine.set(pl, []); byLine.get(pl)!.push({ o, idx });
+  }); });
+  const soChanges: string[] = [], questions: PackingPlan["questions"] = [], unpriced: string[] = [];
+  const recount = (it: any) => deps.counts ? { ...it, ...(() => { const c = deps.counts!(it); return { boxes: c.boxes ?? it.boxes, pallets: c.pallets ?? it.pallets }; })() } : it;
+  const choice = answers.choice || {}, prices = answers.prices || {};
+  // 3) existing lines: the sale takes the final kilos
+  (fin.items || []).forEach((it: any, i: number) => {
+    if (it.addedByPackingResult) return;
+    const id = lineId(it, i); const L = byLine.get(id) || []; const finalKg = num(it.qty);
+    if (L.length === 1) { const { o, idx } = L[0]; const was = num(o.items[idx].qty); if (Math.abs(was - finalKg) > 0.5) { o.items[idx] = recount({ ...o.items[idx], qty: finalKg }); soChanges.push(`${o.number}: ${it.product} ${it.size || ""} ${Math.round(was).toLocaleString("pl-PL")} → ${Math.round(finalKg).toLocaleString("pl-PL")} kg`); } }
+    else if (L.length > 1) {
+      const sum = L.reduce((s, x) => s + num(x.o.items[x.idx].qty), 0); const diff = finalKg - sum;
+      if (Math.abs(diff) > 0.5) { const key = `line:${id}`; const opts = Array.from(new Set(L.map(x => String(x.o.number))));
+        const pick = choice[key]; if (!pick) { questions.push({ key, label: `${it.product} ${it.size || ""}: ${diff > 0 ? "+" : ""}${Math.round(diff).toLocaleString("pl-PL")} kg — which sale takes the difference?`, options: opts }); return; }
+        const x = L.find(y => String(y.o.number) === pick)!; const was = num(x.o.items[x.idx].qty); const now = Math.max(0, was + diff);
+        x.o.items[x.idx] = recount({ ...x.o.items[x.idx], qty: now }); soChanges.push(`${pick}: ${it.product} ${it.size || ""} ${Math.round(was).toLocaleString("pl-PL")} → ${Math.round(now).toLocaleString("pl-PL")} kg`); }
+    }
+  });
+  // 4) a size the producer added: appended to the sale, price to agree
+  const salesOfPO = Array.from(new Set(Array.from(byLine.values()).flat().map(x => String(x.o.number))));
+  const appendedFor = new Map<string, string>();
+  (fin.items || []).forEach((it: any, i: number) => {
+    if (!it.addedByPackingResult) return;
+    const id = lineId(it, i); let target = salesOfPO.length === 1 ? salesOfPO[0] : (choice[`new:${id}`] || "");
+    if (!salesOfPO.length) { soChanges.push(`${it.product} ${it.size || ""} ${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg — no sale linked to ${po.number}: stays in stock`); return; }
+    if (!target) { questions.push({ key: `new:${id}`, label: `New size ${it.product} ${it.size || ""} (${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg) — which sale was it loaded for?`, options: salesOfPO }); return; }
+    const o = orders.find((x: any) => String(x.number) === target); if (!o) return;
+    const price = num(prices[id]);
+    o.items.push(recount({ id: deps.nextId ? deps.nextId() : `so-${ctx.todayISO}-${id}`, product: it.product, variety: it.variety || "", size: it.size || "", quality: it.quality || "I", grade: it.quality || "I", qty: num(it.qty),
+      pricingUnit: it.pricingUnit || "kg", packaging: it.packaging, packagingId: it.packagingId, cnCode: it.cnCode || "", origin: it.origin || "", sourceType: "PO", sourceRef: po.number, sourceLineId: it.id ?? i + 1,
+      unitPrice: price > 0 ? price : null, priceToAgree: !(price > 0), addedByPackingResult: true }));
+    appendedFor.set(id, target);
+    soChanges.push(`${target}: + ${it.product} ${it.size || ""} ${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg${price > 0 ? ` at ${price}` : " — price to agree"}`);
+    if (!(price > 0)) unpriced.push(`${target} · ${it.product} ${it.size || ""}`);
+  });
+  // 5) shipments not yet loaded re-derive; a new size's row carries its sale
+  const shipments = (ctx.shipments || []).map((sh: any) => {
+    if (!sh || !(sh.poRefs || []).includes(po.number) || !["Draft", "Booked"].includes(String(sh.status))) return sh;
+    const s2 = deps.syncShipment(sh, fin, lots);
+    const carries = (so: string) => String(s2.governingSoRef || "") === so || (s2.soRefs || []).includes(so);
+    return { ...s2, goods: (s2.goods || []).map((g: any) => { const so = appendedFor.get(String(g.poLineId)); return g.addedByPackingResult && !g.soRef && so && carries(so) ? { ...g, soRef: so } : g; }) };
+  });
+  return { po: fin, lots, orders, shipments, soChanges, questions, unpriced };
+}

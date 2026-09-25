@@ -1913,7 +1913,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], c
                       <option value="kg">kg</option>
                       <option value="box">box</option>
                     </Sel></div>
-                    <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}</Lbl><Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
+                    <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}{it.priceToAgree && !(parseFloat(it.unitPrice) > 0) ? <span style={{ color: "#DC2626", fontWeight: 800 }}> · price to agree</span> : null}</Lbl><Inp type="number" value={it.unitPrice ?? ""} style={it.priceToAgree && !(parseFloat(it.unitPrice) > 0) ? { borderColor: "#DC2626", background: "#FEF2F2" } : undefined} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 0.8fr 0.8fr 1fr 1.1fr 38px", gap: 8, alignItems: "end", marginTop: 8 }}>
                     <div><Lbl>Coloration</Lbl><Inp value={it.coloration ?? ""} onChange={e => si(i, "coloration", e.target.value)} disabled={fullyLocked} placeholder="from the PO line" title="v6.99.26 (owner): copied from the purchase line when the source is picked; editable" /></div>

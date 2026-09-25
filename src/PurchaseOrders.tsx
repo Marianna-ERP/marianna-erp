@@ -20,7 +20,7 @@ import { warehouseAddressLocations, unifiedLocations, locationById, placeForPrin
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
 import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
-import { isEstimatedLine, applyPackingResult, proposeSOAdjustments } from "./so.domain";
+import { isEstimatedLine, planPackingResult } from "./so.domain";
 import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
@@ -1277,9 +1277,12 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
 // ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
 // have (at its own price), a line not loaded (0). Allowed on a Confirmed PO with a shipment, as long as nothing was received
 // or shipped: securing the truck must not freeze the order. The shipment's goods rows re-derive; the truck total is what it is.
-function PackingResultWindow({ order, onClose, onConfirm }: any) {
+function PackingResultWindow({ order, onClose, onConfirm, preview = null }: any) {
   const [rows, setRows] = React.useState<any[]>(() => (order.items || []).map((it: any, i: number) => ({ lineId: it.id ?? i + 1, it, qty: isEstimatedLine(it) ? "" : String(it.qty ?? "") })));
   const [added, setAdded] = React.useState<any[]>([]);
+  const [choice, setChoice] = React.useState<Record<string, string>>({});
+  const [prices, setPrices] = React.useState<Record<string, any>>({});
+  const payload = () => [...rows.map(r => ({ lineId: r.lineId, qty: String(r.qty).trim() === "" ? undefined : parseFloat(String(r.qty).replace(",", ".")) })), ...added.filter(a => parseFloat(a.qty) > 0).map(a => ({ newLine: { ...a, qty: parseFloat(String(a.qty).replace(",", ".")), unitPrice: parseFloat(String(a.unitPrice).replace(",", ".")) || 0 } }))];
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const total = rows.reduce((s, r) => s + (parseFloat(String(r.qty).replace(",", ".")) || (String(r.qty).trim() === "" ? (parseFloat(r.it.qty) || 0) : 0)), 0) + added.reduce((s, a) => s + (parseFloat(String(a.qty).replace(",", ".")) || 0), 0);
   return (
@@ -1306,13 +1309,25 @@ function PackingResultWindow({ order, onClose, onConfirm }: any) {
             <div style={{ fontSize: 11, color: "#64748B" }}>{(order.items || [])[0]?.packaging || ""}</div>
             <button onClick={() => setAdded(added.filter((_, k) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 30, cursor: "pointer" }}>✕</button>
           </div>)}
-          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { product: b.product || "", variety: b.variety || "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", packaging: b.packaging, packagingId: b.packagingId, cnCode: b.cnCode, origin: b.origin, pricingUnit: b.pricingUnit || "kg" }]); }}
+          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${Date.now()}-${added.length + 1}`, product: b.product || "", variety: b.variety || "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", packaging: b.packaging, packagingId: b.packagingId, cnCode: b.cnCode, origin: b.origin, pricingUnit: b.pricingUnit || "kg" }]); }}
             style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add a size that was loaded</button>
           <div style={{ marginTop: 12, fontSize: 13, fontWeight: 800 }}>Truck total: {Math.round(total).toLocaleString("pl-PL")} kg</div>
+          {/* v6.99.56 (A-PL-2, owner): what follows — the sale is what was loaded, so it takes the final kilos; a new size joins it at a price to agree */}
+          {preview && (() => { const pv = preview(payload(), { choice, prices }); return (
+            <div style={{ marginTop: 12, border: "1px solid #DDD6FE", borderRadius: 8, padding: "8px 10px", background: "#FAF5FF" }}>
+              <div style={{ fontSize: 10.5, fontWeight: 800, color: "#6D28D9", marginBottom: 4 }}>WHAT FOLLOWS</div>
+              <div style={{ fontSize: 11.5, color: "#475569" }}>Expected lots rebuilt from the final lines · shipments not yet loaded re-derive their goods.</div>
+              {pv.soChanges.map((s: string, i: number) => <div key={i} style={{ fontSize: 12, marginTop: 3 }}>• {s}</div>)}
+              {pv.questions.map((q: any) => <div key={q.key} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}><span style={{ color: "#92400E", fontWeight: 700 }}>? {q.label}</span>
+                <select value={choice[q.key] || ""} onChange={e => setChoice({ ...choice, [q.key]: e.target.value })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }}><option value="">— choose —</option>{q.options.map((o: string) => <option key={o}>{o}</option>)}</select></div>)}
+              {added.filter(a => parseFloat(a.qty) > 0).map((a: any) => <div key={a.id} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
+                <span>Sales price for {a.size || "the new size"} <span style={{ color: "#94A3B8" }}>(blank = to agree — the sales invoice waits for it)</span></span>
+                <input type="number" value={prices[a.id] ?? ""} onChange={e => setPrices({ ...prices, [a.id]: e.target.value })} placeholder="price / kg" style={{ width: 110, border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }} /></div>)}
+            </div>); })()}
         </div>
         <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <SmallButton onClick={onClose}>Cancel</SmallButton>
-          <button onClick={() => onConfirm([...rows.map(r => ({ lineId: r.lineId, qty: String(r.qty).trim() === "" ? undefined : parseFloat(String(r.qty).replace(",", ".")) })), ...added.filter(a => parseFloat(a.qty) > 0).map(a => ({ newLine: { ...a, qty: parseFloat(String(a.qty).replace(",", ".")), unitPrice: parseFloat(String(a.unitPrice).replace(",", ".")) || 0 } }))])}
+          <button onClick={() => onConfirm(payload(), { choice, prices })}
             style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#6D28D9", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Quantities are final</button>
         </div>
       </div>
@@ -1661,7 +1676,7 @@ function nextLotSerial(existingLots, year, offset = 1) {
 
 
 
-function buildExpectedLotsFromPO(order, existingLots = []) {
+export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.56: exported so the packing-list plan is tested with the real builder
   const year = lotNumberYear(order);
   const fx = parseFloat(order.fxRate) || 1;
   const existingForPO = (existingLots || []).filter(l => l.poRef === order.number);
@@ -1795,7 +1810,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", onOpenShipment = null}: any = {}) {
+export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
@@ -1814,12 +1829,13 @@ export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: ex
   const [form, setForm] = useState(null);
   const [printOrder, setPrintOrder] = useState(null);
   const [truckWindow, setTruckWindow] = useState(false);
-  const [packingWindow, setPackingWindow] = useState(false);   // v6.99.50 (TO-2)   // v6.99.36 (A-R25-6): the supplier truck is registered in one window
+  const [packingWindow, setPackingWindow] = useState(!!openDirectPO && initialAction === "packing");   // v6.99.50 (TO-2) · v6.99.56 (A-PL-5): opened directly from a refused Mark-loaded   // v6.99.36 (A-R25-6): the supplier truck is registered in one window
   const [emailOrder, setEmailOrder] = useState(null);
 
   // filters
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
+  const [estOnly, setEstOnly] = useState(false);   // v6.99.56 (A-PL-4): POs still carrying an estimated line
   const [filterSupplier, setFilterSupplier] = useState("All");
 
   // KPIs
@@ -1864,6 +1880,7 @@ export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: ex
     const q = search.trim().toLowerCase();
     return orders.filter(o => {
       if (!archiveShow(o)) return false;   // v6.99.54 (AR-4)
+      if (estOnly && !((o.items || []).some((it: any) => isEstimatedLine(it)) && o.status !== "Cancelled")) return false;   // v6.99.56 (A-PL-4)
       if (filterStatus === "Active" && !activeStatuses.has(o.status)) return false;
       if (filterStatus !== "All" && filterStatus !== "Active" && o.status !== filterStatus) return false;
       if (filterSupplier !== "All" && o.supplier?.name !== filterSupplier) return false;
@@ -1874,7 +1891,8 @@ export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: ex
       return true;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, search, filterStatus, filterSupplier]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, search, filterStatus, filterSupplier, estOnly, archive]);
 
   function reflectCancelledPOInInventory(po: any) {
     if (!extSetLots || !po?.number) return;
@@ -2144,16 +2162,21 @@ ${blockNote}`.trim(),
         {poDialogNode}
         {printOrder && <PrintModal order={printOrder} onClose={() => setPrintOrder(null)} />}
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
-        {packingWindow && selected && <PackingResultWindow order={selected} onClose={() => setPackingWindow(false)} onConfirm={async (rows: any[]) => {
-          const fin = applyPackingResult(selected, rows, localTodayISO());
-          const adj = proposeSOAdjustments(fin, extSOs || []);
-          extSetPOs((prev: any[]) => (prev || []).map((p: any) => p.id === selected.id ? fin : p));
-          // v6.99.50 (TO-2): the shipments not yet loaded re-derive their goods rows from the final lines
-          if (typeof extSetShipments === "function") extSetShipments((prev: any[]) => (prev || []).map((sh: any) => (sh && (sh.poRefs || []).includes(selected.number) && ["Draft", "Booked"].includes(String(sh.status))) ? syncGoodsFromPO(sh, fin, extLots || [], { nextId }) : sh));
-          recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "status", summary: `Packing list entered — quantities FINAL${rows.some((r: any) => r.newLine) ? ", " + rows.filter((r: any) => r.newLine).length + " size(s) added" : ""}${adj.length ? "; " + adj.length + " sale(s) to adjust" : ""}` });
-          setPackingWindow(false);
-          await uiAlert({ tone: adj.length ? "warn" : "info", title: adj.length ? "Quantities final — sales to adjust" : "Quantities final", message: adj.length ? adj.map((a: any) => `${a.soNumber}: ${a.product} sold ${a.soldKg} kg, final ${a.finalKg} kg (${a.overKg} kg over)`).join("\n") : "The shipments not yet loaded now carry the final lines." });
-        }} />}
+        {packingWindow && selected && (() => {
+          // v6.99.56 (A-PL-1 · PL-2, owner): the packing list moves the PO, its expected lots, the sales that sell it, and the shipments not yet loaded — together
+          const deps = { buildLots: (o: any, ls: any[]) => buildExpectedLotsFromPO(o, ls), syncShipment: (sh: any, o: any, ls: any[]) => syncGoodsFromPO(sh, o, ls, { nextId }), counts: (line: any) => effectiveCounts(line, PO_PACKAGING_TYPES || []), nextId };
+          const ctx = { orders: extSOs || [], lots: extLots || [], shipments: extShipments || [], todayISO: localTodayISO() };
+          return <PackingResultWindow order={selected} onClose={() => setPackingWindow(false)} preview={(rows: any[], answers: any) => planPackingResult(selected, rows, ctx, deps, answers)} onConfirm={async (rows: any[], answers: any) => {
+            const pl = planPackingResult(selected, rows, ctx, deps, answers);
+            if (pl.questions.length) { await uiAlert({ tone: "warn", title: "One more answer needed", message: pl.questions.map((q: any) => q.label).join("\n") }); return; }
+            extSetPOs((prev: any[]) => (prev || []).map((p: any) => p.id === selected.id ? pl.po : p));
+            if (extSetLots) extSetLots(pl.lots);
+            if (extSetSOs) extSetSOs(pl.orders);
+            if (typeof extSetShipments === "function") extSetShipments(pl.shipments);
+            recordAudit({ module: "Purchase orders", docType: "PO", docNumber: selected.number, action: "status", summary: `Producer's packing list — quantities FINAL; ${pl.soChanges.length} sale change(s)${pl.unpriced.length ? `; price to agree: ${pl.unpriced.join(", ")}` : ""}` });
+            setPackingWindow(false);
+            await uiAlert({ tone: pl.unpriced.length ? "warn" : "info", title: "Quantities final", message: [...pl.soChanges, pl.unpriced.length ? `Price to agree before invoicing: ${pl.unpriced.join(", ")}` : ""].filter(Boolean).join("\n") || "The lots and the shipments not yet loaded follow the final lines." });
+          }} />; })()}
         {truckWindow && selected && <SupplierTruckWindow order={selected} lots={extLots} onClose={() => setTruckWindow(false)} onConfirm={(f: any) => {
           const etaISO = String(f.eta || "").slice(0, 10);
           let created: any = null;
@@ -2271,6 +2294,9 @@ ${blockNote}`.trim(),
         {/* Filters — compact single row of dropdowns */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PO#, supplier, product…" style={{ flex: "1 1 240px", minWidth: 200, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          {(() => { const n = (orders || []).filter((o: any) => o.status !== "Cancelled" && (o.items || []).some((it: any) => isEstimatedLine(it)) && archiveShow(o)).length; return (
+            <button onClick={() => setEstOnly(!estOnly)} title="v6.99.56 (A-PL-4): POs whose quantities are still estimated — close them with the producer's packing list"
+              style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${estOnly ? "#B45309" : "#FDE68A"}`, background: estOnly ? "#B45309" : "#FFFBEB", color: estOnly ? "#fff" : "#92400E", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>≈ Estimated only ({n})</button>); })()}
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             <option value="Active">Active</option>
             <option value="All">All statuses</option>
@@ -2312,7 +2338,7 @@ ${blockNote}`.trim(),
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
               >
                 <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}{o.status !== "Cancelled" && (o.items || []).some((it: any) => isEstimatedLine(it)) ? <span title="quantities still estimated — enter the producer's packing list" style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#92400E", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: "0 6px", fontFamily: "inherit" }}>≈ estimated</span> : null}</div>
                   <div style={{ marginTop: 3 }}><VarianceBadge variance={o.variance} /></div>
                 </div>
                 <div>

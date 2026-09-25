@@ -2148,3 +2148,47 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.55 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.56 — the packing list moves PO, lots, sale and shipment together (A-PL-1…6) ══
+(function v69956(){
+  console.log("\n══ 69. v6.99.56: estimate → final — lots, sale and shipment agree line by line ══");
+  let PO, SO, SH, PU, MD;
+  try { const {JSDOM} = require("jsdom"); const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://m.local/" });
+    global.window = dom.window; global.document = dom.window.document; try { global.localStorage = dom.window.localStorage; } catch (e) {}
+    require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "commonjs", jsx: "react-jsx", esModuleInterop: true, target: "es2019" } });
+    const p = require("path"); PO = require(p.resolve("./src/PurchaseOrders")); SO = require(p.resolve("./src/so.domain")); SH = require(p.resolve("./src/shipments.domain")); PU = require(p.resolve("./src/pricingUnit.domain")); MD = require(p.resolve("./src/shipmentModel.domain"));
+  } catch (e) { console.log("  (skipped — " + (e.message || "").slice(0, 80) + ")"); return; }
+  const types = [{ id: "c13", label: "Carton (13 kg)", capacityKg: 13, boxesPerPallet: 80, tareKg: 1.4, palletTareKg: 25 }];
+  const po = { number: "PO-2026-0090", status: "Confirmed", currency: "EUR", orderDate: "2026-09-25", supplier: { id: 1, name: "Grójecki Owoc", country: "Poland" }, items: [{ id: 1, product: "Apples", variety: "Gala", size: "65-70", quality: "I", qty: 20000, quantityStatus: "ESTIMATED", unitPrice: 0.9, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" }] };
+  const lots = PO.buildExpectedLotsFromPO(po, []).newLots;
+  const so = { id: 5, number: "SO-2026-0090", status: "Confirmed", items: [{ id: 51, product: "Apples", variety: "Gala", size: "65-70", grade: "I", quality: "I", qty: 20000, sourceType: "PO", sourceRef: po.number, sourceLineId: 1, unitPrice: 1.4, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" }] };
+  const sh = { id: 7, number: "SHP-2026-0090", status: "Booked", poRefs: [po.number], soRefs: [so.number], governingSoRef: so.number, goods: [{ id: 21, poRef: po.number, poLineId: "1", soRef: so.number, lotRef: lots[0].number, product: "Apples", size: "65-70", quality: "I", qtyKg: 20000 }], legs: [{ mode: "Road", vehicles: [{ id: 31, load: [{ goodsLineId: 21, qtyKg: 20000 }] }] }, { mode: "Sea", vehicles: [{ id: 41, containerNo: "MSCU1" }] }] };
+  let n = 1000; const deps = { buildLots: (o, ls) => PO.buildExpectedLotsFromPO(o, ls), syncShipment: (s, o, ls) => SH.syncGoodsFromPO(s, o, ls, { nextId: () => ++n }), counts: l => PU.effectiveCounts(l, types), nextId: () => ++n };
+  const rows = [{ lineId: 1, qty: 17472 }, { newLine: { id: "pk-1", product: "Apples", variety: "Gala", size: "60-65", quality: "I", qty: 1950, unitPrice: 0.8, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" } }];
+  const ctx = { orders: [so], lots, shipments: [sh], todayISO: "2026-09-25" };
+  t("PL-1: the expected lots follow the final lines — 65-70 → 17 472, a lot created for 60-65", () => {
+    const pl = SO.planPackingResult(po, rows, ctx, deps, {});
+    eq(pl.lots.length, 2); eq(pl.lots.find(l => l.size === "65-70").expectedKg, 17472); eq(pl.lots.find(l => l.size === "60-65").expectedKg, 1950);
+  });
+  t("PL-2: the sale IS what was loaded — its line takes 17 472; the new size joins it at a price to agree; boxes re-derive", () => {
+    const pl = SO.planPackingResult(po, rows, ctx, deps, {}); const it = pl.orders[0].items;
+    eq(it[0].qty, 17472); eq(it[0].boxes, 1344); eq(it[1].size, "60-65"); eq(it[1].qty, 1950); eq(it[1].unitPrice, null); ok(it[1].priceToAgree); eq(pl.unpriced.length, 1); eq(pl.questions.length, 0);
+    eq(SO.planPackingResult(po, rows, ctx, deps, { prices: { "pk-1": 1.2 } }).orders[0].items[1].unitPrice, 1.2);
+  });
+  t("PL-2: the shipment not yet loaded carries both rows, each with its lot and its sale", () => {
+    const g = SO.planPackingResult(po, rows, ctx, deps, {}).shipments[0].goods;
+    ok(g.every(r => r.lotRef && r.soRef === "SO-2026-0090")); eq(g.reduce((s, r) => s + r.qtyKg, 0), 19422);
+  });
+  t("PL-2: when one PO line feeds two sales, the plan asks which sale takes the difference instead of guessing", () => {
+    const a = { ...so, items: [{ ...so.items[0], qty: 15000 }] }, b = { ...so, id: 6, number: "SO-2026-0091", items: [{ ...so.items[0], id: 61, qty: 5000 }] };
+    const pl = SO.planPackingResult(po, rows, { ...ctx, orders: [a, b] }, deps, {}); eq(pl.questions.length, 2);
+    const ok2 = SO.planPackingResult(po, rows, { ...ctx, orders: [a, b] }, deps, { choice: { "line:1": "SO-2026-0091", "new:pk-1": "SO-2026-0090" } });
+    eq(ok2.questions.length, 0); eq(ok2.orders[1].items[0].qty, 2472, "5 000 − 2 528"); eq(ok2.orders[0].items[0].qty, 15000);
+  });
+  t("PL-3: a LOADED shipment is left alone", () => { const pl = SO.planPackingResult(po, rows, { ...ctx, shipments: [{ ...sh, status: "Loaded" }] }, deps, {}); eq(pl.shipments[0].goods[0].qtyKg, 20000); });
+  t("PL-6: stamping 'loaded' per leg-1 unit leaves the container without the truck's date", () => {
+    const x = MD.stampEvent(sh, 31, "loaded", "2026-09-26"); eq(x.legs[0].vehicles[0].loadedAt, "2026-09-26"); eq(x.legs[1].vehicles[0].loadedAt, undefined);
+  });
+  console.log("v6.99.56 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

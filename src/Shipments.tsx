@@ -30,6 +30,7 @@ import { recordAudit } from "./audit";
 import { clearanceLinesFor, parseCC529C, matchUnitByPlates, crossCheckClearance } from "./customsClearance.domain";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import ShipmentBoard from "./ShipmentBoard";
+import { isEstimatedLine } from "./so.domain";
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
 let CONTACTS_REF: any[] = [];
 /** v6.99.7 (A-R9-11): the most a goods row may carry = its source line's kg minus what OTHER live shipments already carry of that line. */
@@ -3105,6 +3106,7 @@ export default function Shipments({ archive = null,
   orders: extOrders,
   setOrders: extSetOrders,
   onNavigate = () => {},
+  onOpenPacking = null,   // v6.99.56 (A-PL-5)
   onStartClaim = null,
   initialSelectedNumber = "",
   invoices: extInvoices = [],
@@ -3385,6 +3387,14 @@ export default function Shipments({ archive = null,
     // v6.99.49 (X-4, owner): with several trucks, every goods row must be fully spread across them before the shipment is LOADED —
     // the protocol and the CMR print what each truck carries, and an unallocated remainder prints nowhere.
     if (String(status) === "Loaded") {
+      // v6.99.56 (A-PL-5, owner): what is loaded is posted to stock — never an estimate. The producer's packing list comes first.
+      { const n2 = (v: any) => String(v ?? "").trim().toLowerCase();
+        const estPOs = Array.from(new Set((sh.goods || []).map((g: any) => { const po = (pos || []).find((p: any) => String(p.number) === String(g.poRef)); if (!po) return ""; const line = (po.items || []).find((it: any, i: number) => String(it.id ?? i + 1) === String(g.poLineId)) || (po.items || []).find((it: any) => n2(it.product) === n2(g.product) && n2(it.size || "") === n2(g.size || "")); return line && isEstimatedLine(line) ? String(po.number) : ""; }).filter(Boolean))) as string[];
+        if (estPOs.length) {
+          const go = await shConfirm({ tone: "warn", title: "Quantities still estimated", message: `${estPOs.join(", ")} still ${estPOs.length > 1 ? "carry" : "carries"} estimated quantities. Enter the producer's packing list first — the shipment, the sale and the lots follow it, and then the truck can be marked loaded.`, confirmLabel: onOpenPacking ? `Open the packing list of ${estPOs[0]}` : "OK", cancelLabel: "Not now" });
+          if (go && typeof onOpenPacking === "function") onOpenPacking(estPOs[0]);
+          return;
+        } }
       const trucks = ((sh.legs || [])[0]?.vehicles || []);
       if (trucks.length > 1) {
         const gaps = (sh.goods || []).map((g: any) => { const alloc = trucks.reduce((s: number, u: any) => s + parseNum(((u.load || []).find((x: any) => String(x.goodsLineId) === String(g.id)) || {}).qtyKg), 0); const un = Math.round(parseNum(g.qtyKg) - alloc); return Math.abs(un) > 1 ? `${g.product || "row"}: ${un > 0 ? un + " kg not on any truck" : Math.abs(un) + " kg over-allocated"}` : null; }).filter(Boolean) as string[];
@@ -3410,8 +3420,11 @@ export default function Shipments({ archive = null,
       const planned = (sh.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(status === "Loaded" ? (u.plannedLoadingDate || "") : (u.plannedDeliveryDate || "")).slice(0, 10))).filter(Boolean);
       if (planned.length && !planned.includes(iso)) { const dd = Math.round((new Date(iso).getTime() - new Date(planned[0]).getTime()) / 86400000); const okDate = await shConfirm({ tone: "warn", title: `${status} on a different date`, message: `Planned ${planned.join(", ")}, actual ${iso} (${dd > 0 ? dd + " day(s) late" : Math.abs(dd) + " day(s) early"}). Record it anyway?`, confirmLabel: "Yes, record" }); if (!okDate) return; }
       const kind = status === "Loaded" ? "loaded" : (String(sh.purpose || "").toUpperCase() === "INBOUND" && ["sea", "multimodal"].includes(String(sh.mode || "").toLowerCase()) ? "discharged" : "delivered");
-      updateShipment(sh.id, (s: any) => stampEvent(s, null, kind as any, iso));
-      sh = stampEvent(sh, null, kind as any, iso);
+      // v6.99.56 (A-PL-6): "Loaded" = the goods leave the origin — the leg-1 units. A container on the sea leg is stuffed, sails and
+      // discharges on its own events; it must not inherit the truck's loading day.
+      const stampLoaded = (x: any) => { if (kind !== "loaded") return stampEvent(x, null, kind as any, iso); const ids = (((x.legs || [])[0] || {}).vehicles || []).map((u: any) => u.id); return ids.length ? ids.reduce((acc: any, id: any) => stampEvent(acc, id, "loaded", iso), x) : x; };
+      updateShipment(sh.id, (s: any) => stampLoaded(s));
+      sh = stampLoaded(sh);
     }
     // v6.78.0 THE ONE GATE. Since v6.58.0 these statuses POST INVENTORY. A
     // shipment with no goods posts nothing and still reports the movement as

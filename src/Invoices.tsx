@@ -434,6 +434,9 @@ export default function Invoices(props: any) {
       if (inv.kind === "SALES" && !inv.isProforma) {
         const soRefs = (inv.links || []).filter((l: any) => l.type === "SO").map((l: any) => String(l.number));
         const notLoaded = soRefs.filter(n => { const so = (orders || []).find((o: any) => String(o.number) === n); if (!so) return false; return !["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(so, shipments || []))); });
+        // v6.99.56 (A-PL-2, owner): a size the producer added joins the sale at a price to agree — no invoice until it is agreed
+        const unpriced = soRefs.flatMap(n => { const so = (orders || []).find((o: any) => String(o.number) === n); return so ? (so.items || []).filter((it: any) => !(parseFloat(it.unitPrice) > 0)).map((it: any) => `${n} · ${it.product || ""} ${it.size || ""}`.trim()) : []; });
+        if (unpriced.length) { await invAlert({ tone: "warn", title: "Price to agree", message: `Agree the sales price first on: ${unpriced.join(", ")}` }); return; }
         if (notLoaded.length) { await invAlert({ tone: "warn", title: "Goods not loaded", message: `${notLoaded.join(", ")} ${notLoaded.length > 1 ? "have" : "has"} not been loaded yet — a sales invoice covers goods that left the warehouse. Issue a pro-forma for an advance, or load the truck first.` }); return; }
       } }
     const order = ["Draft", "Issued", "Sent"];
