@@ -80,6 +80,29 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ok = html.includes(sup.number) && (!plate || html.includes(plate)) && !html.includes("No truck registered yet");
     if (ok) { passed++; console.log("  \u2713 supplier-truck box shows the registered truck (" + sup.number + ")"); } else { failed++; console.log("  \u2717 supplier-truck box does not show " + sup.number); }
   } catch (e) { failed++; console.log("  \u2717 supplier-truck box —", (e.message || "").slice(0, 120)); } } }
+// v6.99.64 (A-HD-1): EVERY module in the navigation shows the one header — the list is read from App.tsx's own switch,
+// so a module added later is checked automatically (the v6.99.61 pass missed the audit trail because it used a hand-made list).
+{ try {
+    const appSrc = fs.readFileSync(path.resolve("./src/App.tsx"), "utf8");
+    const keys = Array.from(appSrc.matchAll(/case "([a-z]+)":\s*\n?\s*(?:\/\/[^\n]*\n\s*)*return <([A-Z][A-Za-z]+)/g)).map(m => [m[1], m[2]]);
+    const d8 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const props = { pos: d8.pos, setPOs: () => {}, orders: d8.orders, setOrders: () => {}, lots: d8.lots, setLots: () => {}, contacts: d8.contacts, setContacts: () => {}, shipments: d8.shipments, setShipments: () => {}, invoices: d8.invoices || [], setInvoices: () => {}, claims: d8.claims || [], setClaims: () => {}, auditLog: [], operationalCosts: [], setOperationalCosts: () => {}, users: [], userName: "", reloadFromStorage: () => {} };
+    const files = { Dashboard: "Dashboard", Claims: "Claims", AuditTrail: "AuditTrail", Finance: "Finance", Contacts: "Contacts", PurchaseOrders: "PurchaseOrders", Inventory: "Inventory", SalesOrders: "SalesOrders", Shipments: "Shipments", Invoices: "Invoices", Settings: "Settings" };
+    const bad = []; let n = 0;
+    for (const [key, comp] of keys) {
+      const file = files[comp]; if (!file) { bad.push(key + " → " + comp + " (unknown component — add it to this check)"); continue; }
+      _where = "module " + key; let html = "";
+      try { const mod = require(path.resolve("./src/" + file)); html = renderToStaticMarkup(React.createElement(mod.default || mod[comp], props)); } catch (e) { bad.push(key + " (render: " + (e.message || "").slice(0, 50) + ")"); continue; }
+      n++;
+      const shared = html.includes('data-module-header="1"'); const reference = /background:#fff;border-bottom:1px solid #EBEBEB;padding:0 28px;height:52px/.test(html.replace(/\s/g, "").replace(/border-bottom:1pxsolid#EBEBEB/g, "border-bottom:1px solid #EBEBEB").replace(/padding:028px/g, "padding:0 28px")) || /height:52px/.test(html);
+      if (!shared && !reference) bad.push(key + " has its own header");
+      { const at = html.indexOf('data-module-header="1"') >= 0 ? html.indexOf('data-module-header="1"') : html.search(/height:52px/);   // the TITLE inside the header bar only
+        const bar = at >= 0 ? html.slice(at, at + 900) : ""; const m = bar.match(/font-size:(\d+)px;font-weight:(700|800)/);
+        if (!m || m[1] !== "16") bad.push(key + " title is " + (m ? m[1] + " px" : "missing")); }
+    }
+    if (keys.length < 10) bad.push("only " + keys.length + " modules found in App.tsx — the reader needs fixing");
+    if (!bad.length) { passed++; console.log("  \u2713 every module in the navigation (" + n + ") shows the one header"); } else { failed++; console.log("  \u2717 module headers — " + bad.join("; ")); }
+  } catch (e) { failed++; console.log("  \u2717 module headers —", (e.message || "").slice(0, 120)); } }
 // v6.99.63 (A-SH): the planning sheet renders her imported tabs with the owner's columns, and no colour index
 { try { const PS = require(path.resolve("./src/PlanningSheet")).default; const Sh = require(path.resolve("./src/sheet.domain")); const Bd = require(path.resolve("./src/board.domain")); const XLSX = require("xlsx");
     const wb = XLSX.readFile("/mnt/user-data/uploads/Shipments_season_2026_2027.xlsx", { cellDates: true });

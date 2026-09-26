@@ -1807,8 +1807,8 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       )}
 
       {/* Topbar */}
-      <div style={{ height: 56, background: "#fff", borderBottom: "1px solid #EBEBEB", display: "flex", alignItems: "center", padding: "0 28px", gap: 14, flexShrink: 0 }}>
-        <span style={{ fontSize: 17, fontWeight: 700, color: "#111", flex: 1 }}>Contacts</span>
+      <div data-module-header="1" style={{ height: 52, background: "#fff", borderBottom: "1px solid #EBEBEB", display: "flex", alignItems: "center", padding: "0 28px", gap: 14, flexShrink: 0 }}>   {/* v6.99.64 (A-HD-1): 52 px like the other modules (was 56) */}
+        <span style={{ fontSize: 16, fontWeight: 700, color: "#111", flex: 1 }}>Counterparties</span>{/* v6.99.64 (A-HD-1): 16 px and the name the navigation uses (was "Contacts", 17 px) */}
         {/* View toggle */}
         <div style={{ display: "flex", background: "#F3F4F6", borderRadius: 8, padding: 2 }}>
           {[

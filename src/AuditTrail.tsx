@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { PAGE_MAX } from "./ui";
+import { ModulePage } from "./ui";
 import { filterAudit } from "./auditTrail.domain";
 
 // v6.40.0 — the AUDIT view: a read-only logbook of business events. Passive by
@@ -22,12 +22,7 @@ export default function AuditTrail({ auditLog = [] }: any) {
     : a === "imported" || a === "allocated" ? "#7C3AED" : a === "claim" ? "#B45309" : "#64748B";
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, background: "#fff" };
   return (
-    <div style={{ padding: 24, maxWidth: PAGE_MAX, margin: "0 auto" }}>
-      <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 2 }}>Audit trail</div>
-      <div style={{ fontSize: 12, color: "#64748B", marginBottom: 14 }}>
-        Who did what, when — a passive logbook of business events (created / status / cancelled / allocated / imported / movements / claims).
-        It records only; all error alerts and guards work exactly as before. Oldest entries roll off past {(5000).toLocaleString("pl-PL")} events.
-      </div>
+    <ModulePage title="Audit trail" right={<span title="A passive logbook of business events (created · status · cancelled · allocated · imported · movements · claims). It records only; every alert and guard works as before. The oldest entries roll off past 5 000 events." style={{ fontSize: 11.5, color: "#94A3B8", cursor: "help" }}>{(auditLog || []).length.toLocaleString("pl-PL")} event(s) · records only ⓘ</span>}>   {/* v6.99.64 (A-HD-1): the module the header pass missed */}
       <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         <input style={{ ...inp, flex: "1 1 240px", maxWidth: 340 }} value={q} onChange={e => setQ(e.target.value)} placeholder="Search document, user, text…" />
         <select style={inp} value={mod} onChange={e => setMod(e.target.value)}>{MODULES.map(m => <option key={m}>{m}</option>)}</select>
@@ -49,6 +44,6 @@ export default function AuditTrail({ auditLog = [] }: any) {
         ))}
         {rows.length === 0 && <div style={{ padding: 22, textAlign: "center", color: "#AAA", fontSize: 12.5 }}>No events yet — they appear here as you work (create, change status, cancel, allocate, import…).</div>}
       </div>
-    </div>
+    </ModulePage>
   );
 }
