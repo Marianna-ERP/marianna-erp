@@ -1158,7 +1158,10 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
   // v6.55.0: the ONLY reason creation is blocked is a missing source reference.
   // The over-shipping guard is gone — a PO is consumed by sales orders, not by
   // movements, so no count of shipments can tell you a PO is used up.
-  const blockCreate = needsRef;
+  // v6.99.66 (A-SA-1, owner): a DRAFT sale may start a shipment (the buyer can still change), but its lines must be sourced — the truck
+  // needs to know where it loads, and the producer's packing list needs the link to update the sale
+  const draftUnsourced = sourceType === "SO" && selectedSO && selectedSO.status === "Draft" ? (selectedSO.items || []).filter((it: any) => !(it.sourceType && it.sourceRef)).length : 0;
+  const blockCreate = needsRef || draftUnsourced > 0;
   // v6.16 (#4): the PO loading date starts the whole shipment and the SO delivery
   // date ends it. Prefill the header Expected loading / delivery dates from those
   // when the reference changes (in-between dates are set per leg later).
@@ -1249,7 +1252,8 @@ function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel,
           <SectionTitle>Source</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "160px 1fr 160px 160px", gap: 12 }}>
             <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(""); }}><option value="PO">From PO</option><option value="SO">From SO</option>{/* v6.99.43 (M-2, owner): Manual retired — a transfer between our warehouses is a movement, a return to the producer is the lot's Return action */}</Sel></div>
-            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{[...(pos || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{[...(orders || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((o: any) => o.status !== "Draft" && o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
+            {draftUnsourced > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 11.5, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px" }}>{(selectedSO as any)?.number} is a draft with {draftUnsourced} unsourced line{draftUnsourced > 1 ? "s" : ""} — source them from the PO first (the truck needs to know where it loads).</div>}
+            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{[...(pos || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{[...(orders || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((o: any) => o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}{o.status === "Draft" ? " — draft (the client may still change)" : ""}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
             <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => setForm(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             {/* v6.92.0 (A-R8-7): the freight currency belongs to the unit price, not to the shipment. */}
           </div>
@@ -1820,6 +1824,14 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
               </div>
               )}
             </div>}
+            {/* v6.99.66 (A-SA-3, owner): the delivery place was copied from the sale at creation — if the sale's destination changed
+                (a new client on a draft SO), say so; never rewrite the trucks and containers silently */}
+            {(() => { const so = (orders || []).find((o: any) => String(o.number) === String(draft.governingSoRef || (draft.soRefs || [])[0])); const dest = so?.destinationLocationId;
+              const legs = draft.legs || []; const last = legs[legs.length - 1]; const units = (last?.vehicles || []).filter((u: any) => u.deliveryLocationId != null && u.deliveryLocationId !== "");
+              const off = dest != null && dest !== "" ? units.filter((u: any) => String(u.deliveryLocationId) !== String(dest)) : [];
+              if (!off.length) return null;
+              const name = (id: any) => placeForPrint(id, "", contacts || []).name || String(id);
+              return <div style={{ gridColumn: "1 / -1", fontSize: 11.5, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 8px" }}>⚠ {so.number} now delivers to {name(dest)} — {off.length} unit{off.length > 1 ? "s" : ""} on the last leg still deliver{off.length > 1 ? "" : "s"} to {Array.from(new Set(off.map((u: any) => name(u.deliveryLocationId)))).join(", ")}. Check the units if the client changed.</div>; })()}
             {/* v6.99.44 (H-11, owner): expected dates flow DOCUMENT → shipment (the units' planned dates refine them); actual dates flow shipment → document. Never the other way. */}
             {(() => {
               const govSO = (orders || []).find((o: any) => o.number === draft.governingSoRef) || (orders || []).find((o: any) => (draft.soRefs || []).includes(o.number)) || null;
@@ -3450,6 +3462,10 @@ export default function Shipments({ archive = null,
     // v6.99.49 (X-4, owner): with several trucks, every goods row must be fully spread across them before the shipment is LOADED —
     // the protocol and the CMR print what each truck carries, and an unallocated remainder prints nowhere.
     if (String(status) === "Loaded") {
+      // v6.99.66 (A-SA-2, owner): the customs invoice needs a CONFIRMED sale — the last decision moment is loading day
+      { const refs = Array.from(new Set([String(sh.governingSoRef || ""), ...shipmentSORefs(sh, orders)].filter(Boolean)));
+        const drafts = refs.filter(n => String(((orders || []).find((o: any) => String(o.number) === n) || {}).status) === "Draft");
+        if (drafts.length) { await shAlert({ tone: "warn", title: "The sale is still a draft", message: `Confirm ${drafts.join(", ")} first — the customs invoice needs a confirmed sale. The client can still change while it is a draft.` }); return; } }
       // v6.99.56 (A-PL-5, owner): what is loaded is posted to stock — never an estimate. The producer's packing list comes first.
       { const n2 = (v: any) => String(v ?? "").trim().toLowerCase();
         const estPOs = Array.from(new Set((sh.goods || []).map((g: any) => { const po = (pos || []).find((p: any) => String(p.number) === String(g.poRef)); if (!po) return ""; const line = (po.items || []).find((it: any, i: number) => String(it.id ?? i + 1) === String(g.poLineId)) || (po.items || []).find((it: any) => n2(it.product) === n2(g.product) && n2(it.size || "") === n2(g.size || "")); return line && isEstimatedLine(line) ? String(po.number) : ""; }).filter(Boolean))) as string[];

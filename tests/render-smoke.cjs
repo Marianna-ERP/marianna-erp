@@ -151,7 +151,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const d3 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
     const po = (d3.pos || []).find((p) => p.status === "Confirmed");
     const html = renderToStaticMarkup(React.createElement(POmod.default, { pos: d3.pos, setPOs: () => {}, contacts: d3.contacts, lots: d3.lots, setLots: () => {}, orders: d3.orders, setOrders: () => {}, shipments: d3.shipments, setShipments: () => {}, initialSelectedNumber: po.number, initialAction: "packing" }));
-    const ok = html.includes("Add additional items") && html.includes("Producer") && !html.includes("Add a size that was loaded");
+    const ok = html.includes("Add additional items") && html.includes("Producer") && html.includes("BOXES LOADED") && !html.includes("Add a size that was loaded");
     if (ok) { passed++; console.log("  \u2713 packing-list window opens with 'Add additional items'"); } else { failed++; console.log("  \u2717 packing-list window did not render as expected"); }
   } catch (e) { failed++; console.log("  \u2717 packing-list window —", (e.message || "").slice(0, 120)); } }
 // v6.99.55 (BD-1): the weekly board renders one row per truck on real data

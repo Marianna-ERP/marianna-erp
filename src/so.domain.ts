@@ -155,7 +155,19 @@ export function planPackingResult(
   answers: { choice?: Record<string, string>; prices?: Record<string, any> } = {}
 ): PackingPlan {
   const norm = (v: any) => String(v ?? "").trim().toLowerCase();
-  const fin0 = applyPackingResult(po, rows, ctx.todayISO);
+  const fin00 = applyPackingResult(po, rows, ctx.todayISO);
+  // v6.99.65 (A-PK-4, owner): the PO lines' BOXES follow the final kilos — re-derived from the packaging on every line whose
+  // kilos changed; a box count typed on the ESTIMATE no longer applies; a count typed in the window (the producer's packing
+  // list states the boxes loaded) becomes the line's manual count. (The plan recounted the SO lines only — mine.)
+  const origQty = new Map<string, number>((po.items || []).map((it: any, i: number) => [String(it.id ?? i + 1), num(it.qty)]));
+  const typedBoxes = new Map<string, number>((rows || []).filter((r: any) => r.lineId !== undefined && r.lineId !== null && r.boxes !== undefined && r.boxes !== "" && r.boxes !== null).map((r: any) => [String(r.lineId), num(r.boxes)]));
+  const fin0 = { ...fin00, items: (fin00.items || []).map((it: any, i: number) => {
+    const id = String(it.id ?? i + 1); const changed = it.addedByPackingResult || typedBoxes.has(id) || Math.abs(num(it.qty) - (origQty.get(id) ?? num(it.qty))) > 0.5;
+    if (!changed) return it;
+    let n: any = { ...it }; delete n.boxesManual; delete n.palletsManual;
+    if (typedBoxes.has(id)) n.boxesManual = typedBoxes.get(id);
+    if (deps.counts) { const c = deps.counts(n); n = { ...n, boxes: String(n.pricingUnit || "kg") !== "kg" ? n.boxes : (c.boxes ?? n.boxes), pallets: c.pallets ?? n.pallets }; }
+    return n; }) };
   // 1) the PO's expected lots — the builder of the confirmation, nothing else
   const plan = deps.buildLots(fin0, ctx.lots || []);
   const lots = [...(ctx.lots || []).map((l: any) => { const pt = (plan.lotPatches || []).find((x: any) => x.number === l.number); return pt ? { ...l, ...pt.patch } : l; }), ...(plan.newLots || [])];

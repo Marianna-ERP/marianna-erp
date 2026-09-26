@@ -2270,3 +2270,27 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.63 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.65 — the packing list: boxes follow the final kilos (A-PK-4) ══
+(function v69965(){
+  console.log("\n══ 74. v6.99.65: the PO lines' boxes follow the final kilos; the producer's count wins when typed ══");
+  let PO, SO, SH, PU;
+  try { const {JSDOM} = require("jsdom"); const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://m.local/" }); global.window = dom.window; global.document = dom.window.document;
+    require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "commonjs", jsx: "react-jsx", esModuleInterop: true, target: "es2019" } });
+    const p = require("path"); PO = require(p.resolve("./src/PurchaseOrders")); SO = require(p.resolve("./src/so.domain")); SH = require(p.resolve("./src/shipments.domain")); PU = require(p.resolve("./src/pricingUnit.domain"));
+  } catch (e) { console.log("  (skipped — " + (e.message || "").slice(0, 80) + ")"); return; }
+  const types = [{ id: "c13", label: "Carton (13 kg)", capacityKg: 13, boxesPerPallet: 80 }];
+  const po = { number: "PO-T4", status: "Confirmed", items: [{ id: 1, product: "Apples", size: "65-70", qty: 20000, quantityStatus: "ESTIMATED", packagingId: "c13", pricingUnit: "kg", boxes: 1538, boxesManual: 1500 }] };
+  let n = 1; const deps = { buildLots: (o, ls) => PO.buildExpectedLotsFromPO(o, ls), syncShipment: (s, o, ls) => SH.syncGoodsFromPO(s, o, ls, { nextId: () => ++n }), counts: l => PU.effectiveCounts(l, types), nextId: () => ++n };
+  const ctx = { orders: [], lots: [], shipments: [], todayISO: "2026-09-25" };
+  t("final 17 472 kg in 13 kg cartons → 1 344 boxes; the manual count typed on the estimate (1 500) no longer applies", () => {
+    const it = SO.planPackingResult(po, [{ lineId: 1, qty: 17472 }], ctx, deps, {}).po.items[0];
+    eq(it.boxes, 1344); eq(it.boxesManual, undefined); eq(it.pallets, 17);
+  });
+  t("the producer's count typed in the window becomes the line's box count", () => {
+    const it = SO.planPackingResult(po, [{ lineId: 1, qty: 17472, boxes: 1350 }], ctx, deps, {}).po.items[0];
+    eq(it.boxes, 1350); eq(it.boxesManual, 1350);
+  });
+  console.log("v6.99.65 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
