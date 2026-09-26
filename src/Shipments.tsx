@@ -1,8 +1,9 @@
+import { ModuleHeader } from "./ui";
 import { useUnsavedGuard, dirtyEntries } from "./unsaved";
 import React, { useMemo, useState } from "react";
 import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
-import { PAGE_MAX } from "./ui";
+
 import DateInput from "./DateInput";
 import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
 import { postShipmentToLots, derivePurpose, appendSourceGoods, nextShipmentAction, canonicalStatus, normalizeCustoms, syncLegFreightCostLines, legFreightSource, findLotForSOLine } from "./shipments.domain";
@@ -15,7 +16,7 @@ import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain
 import { lotStockCheck } from "./receipts.domain";
 import { shipmentPostBlockReason, shipmentWarnings, newestFirst } from "./moduleGuards.domain";
 import { carriedRefs, overShipReport, derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
-import { containerRecorder, setFxFallback, jobsByCarrierLeg, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, costLinesByCarrierLeg, carrierOfUnit } from "./shipmentModel.domain";
+import { containerRecorder, setFxFallback, jobsByCarrierLeg, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, applyStuffingReport, spawnFromDevanning, cutOffWarnings, stuffingViolations, stampEvent, documentRegister, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, costLinesByCarrierLeg, carrierOfUnit, followBookingDates } from "./shipmentModel.domain";
 import { CUSTOMS_PLACES, CUSTOMS_PARTIES, readCustoms, customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import LoadPlans from "./LoadPlans";
 
@@ -30,7 +31,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { clearanceLinesFor, parseCC529C, matchUnitByPlates, crossCheckClearance } from "./customsClearance.domain";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
-import ShipmentBoard from "./ShipmentBoard";
+import PlanningSheet from "./PlanningSheet";   // v6.99.63 — ShipmentBoard (the live view) kept in the repository for the later connection
 import { isEstimatedLine } from "./so.domain";
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
 let CONTACTS_REF: any[] = [];
@@ -1857,7 +1858,10 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
           // v6.85.0 (D5, owner ruling): the BOOKING exists before any container number does —
           // booking no., cut-off, ETD, ETA, POL/POD, containers planned. Vessel/voyage optional.
           const b = (draft.bookings || [])[0] || null;
-          const sb = (k: string, v: any) => setDraft((d: any) => { const cur = (d.bookings || [])[0] || blankBooking(nextId()); return { ...d, bookings: [{ ...cur, [k]: v }, ...((d.bookings || []).slice(1))] }; });
+          const sb = (k: string, v: any) => setDraft((d: any) => { const cur = (d.bookings || [])[0] || blankBooking(nextId());
+            let legs = d.legs;
+            if (k === "etd" || k === "eta") legs = followBookingDates(d.legs, k as any, cur[k], v);   // v6.99.62 (A-SE-1, owner)
+            return { ...d, legs, bookings: [{ ...cur, [k]: v }, ...((d.bookings || []).slice(1))] }; });
           return (
             <Card>
               <SectionTitle>Booking (sea / air / rail) — one place for the booking</SectionTitle>
@@ -2000,9 +2004,9 @@ function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
                   {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
                   <div style={{ gridColumn: "1 / 4" }}><Lbl>Loading place{(() => { const pr = unitProposals(draft); return (pr.loadId != null && String(u.pickupLocationId) === String(pr.loadId)) ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {pr.from}</span> : null; })()}</Lbl><LocationPicker value={u.pickupLocationId ?? u.pickupText ?? ""} contacts={contacts} placeholder={leg.fromCustom || leg.fromText || "— pickup location —"} onChange={(r: any) => { updateVehicle(i, ui, "pickupLocationId", r.id); updateVehicle(i, ui, "pickupText", r.name); }} title="v6.99.10: one location list — printed on the transport order" /></div>
-                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected loading date</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingDate", e.target.value)} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
+                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected loading date{uMode !== "Road" && (draft.bookings || [])[0]?.etd ? (u.loadDateManual && String(u.plannedLoadingDate || "") !== String((draft.bookings || [])[0].etd) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETD {formatDMY((draft.bookings || [])[0].etd)} <button onClick={() => { updateVehicle(i, ui, "plannedLoadingDate", (draft.bookings || [])[0].etd); updateVehicle(i, ui, "loadDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedLoadingDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "loadDateManual", true); }} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
                   <div style={{ gridColumn: "1 / 4" }}><Lbl>Delivery place{(() => { const pr = unitProposals(draft); return (pr.delId != null && String(u.deliveryLocationId) === String(pr.delId)) ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {pr.from}</span> : null; })()}</Lbl><LocationPicker value={u.deliveryLocationId ?? u.deliveryText ?? ""} contacts={contacts} placeholder={leg.toCustom || leg.toText || "— delivery location —"} onChange={(r: any) => { updateVehicle(i, ui, "deliveryLocationId", r.id); updateVehicle(i, ui, "deliveryText", r.name); }} /></div>
-                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected delivery date</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryDate", e.target.value)} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
+                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected delivery date{uMode !== "Road" && (draft.bookings || [])[0]?.eta ? (u.deliveryDateManual && String(u.plannedDeliveryDate || "") !== String((draft.bookings || [])[0].eta) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETA {formatDMY((draft.bookings || [])[0].eta)} <button onClick={() => { updateVehicle(i, ui, "plannedDeliveryDate", (draft.bookings || [])[0].eta); updateVehicle(i, ui, "deliveryDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedDeliveryDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "deliveryDateManual", true); }} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
                 </div>
                 {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
@@ -3160,7 +3164,8 @@ export default function Shipments({ archive = null,
   onStartClaim = null,
   initialSelectedNumber = "",
   invoices: extInvoices = [],
-  inspections: extInspections = [],   // v6.99.55 (BD-1): the board reads the inspection header for step 4
+  inspections: extInspections = [],
+  planningSheets = [], setPlanningSheets = null, planningSheetLog = [], setPlanningSheetLog = null, productCatalog: productCatalogProp = [], userName: userNameProp = "",   // v6.99.63   // v6.99.55 (BD-1): the board reads the inspection header for step 4
 }: any = {}) {
   const { confirm: shConfirm, prompt: shPrompt, alert: shAlert, dialogNode: shDialogNode } = useConfirm(); // P2-6 + v6.85.0 (D10 date prompt)
   // v6.45.0 (A): synchronous mirror of the shipments array for chain-safe updates.
@@ -3666,19 +3671,14 @@ export default function Shipments({ archive = null,
 
   return <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#FAFAFA" }}>
     {shDialogNode}
-    <div style={{ padding: "22px 28px 12px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>
-      <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
-          {/* v6.83.0 (owner ruling): the same header as PO / SO / Inventory — title, no paragraph. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Shipments</div>
-            {/* v6.99.55 (BD-1, owner): the dispatcher's weekly board — her sheet as a view over the modules */}
+    <ModuleHeader title="Shipments" right={<>
             <div style={{ display: "inline-flex", border: "1px solid #CBD5E1", borderRadius: 8, overflow: "hidden" }}>
               {[["list", "List & detail"], ["board", "Weekly board"]].map(([k, l]) => <button key={k} onClick={() => setBoardView(k === "board")} style={{ padding: "4px 10px", border: "none", fontSize: 11.5, fontWeight: 800, cursor: "pointer", background: (k === "board") === boardView ? "#0F172A" : "#fff", color: (k === "board") === boardView ? "#fff" : "#475569" }}>{l}</button>)}
             </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`shipments_${xlsStamp()}`, filtered, [{ key: "number", label: "Shipment" }, { key: "purpose", label: "Purpose" }, { key: "arrangedBy", label: "Arranged by" }, { key: "mode", label: "Mode" }, { key: "status", label: "Status" }, { key: "poRefs", label: "POs", fmt: (v: any) => (v || []).join(", ") }, { key: "soRefs", label: "SOs", fmt: (v: any) => (v || []).join(", ") }, { key: "legs", label: "Units", fmt: (v: any) => (v || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => `${u.truckPlate || u.containerNumber || "unit"} ${Math.round(Number(u.qtyKg) || 0)} kg${u.loadedAt ? " loaded " + u.loadedAt : ""}`)).join(" | ") }, { key: "actualLoadingDate", label: "Loaded" }, { key: "actualDeliveryDate", label: "Delivered" }, { key: "costs", label: "Costs PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.amountPLN) || 0), 0) }, { key: "billingStatus", label: "Billing" }], "Shipments")} title="v6.99.0: exports the rows as filtered">⬇ Excel</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
-        </div>
+      <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`shipments_${xlsStamp()}`, filtered, [{ key: "number", label: "Shipment" }, { key: "purpose", label: "Purpose" }, { key: "arrangedBy", label: "Arranged by" }, { key: "mode", label: "Mode" }, { key: "status", label: "Status" }, { key: "poRefs", label: "POs", fmt: (v: any) => (v || []).join(", ") }, { key: "soRefs", label: "SOs", fmt: (v: any) => (v || []).join(", ") }, { key: "legs", label: "Units", fmt: (v: any) => (v || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => `${u.truckPlate || u.containerNumber || "unit"} ${Math.round(Number(u.qtyKg) || 0)} kg${u.loadedAt ? " loaded " + u.loadedAt : ""}`)).join(" | ") }, { key: "actualLoadingDate", label: "Loaded" }, { key: "actualDeliveryDate", label: "Delivered" }, { key: "costs", label: "Costs PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.amountPLN) || 0), 0) }, { key: "billingStatus", label: "Billing" }], "Shipments")} title="v6.99.0: exports the rows as filtered">⬇ Excel</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
+    </>} />   {/* v6.99.61 (A-HD-1) */}
+    <div style={{ padding: "16px 28px 10px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>   {/* v6.99.61 (A-HD-2): full width, no cap */}
+      <div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
           <Kpi label="OPEN SHIPMENTS" value={kpis.open} sub="not closed / not cancelled" />
           <Kpi label="IN TRANSIT" value={kpis.inTransit} sub="loaded, in transit or arrived" />
@@ -3700,10 +3700,10 @@ export default function Shipments({ archive = null,
         </div>
       </div>
     </div>
-    {boardView && <ShipmentBoard shipments={shipments} setShipments={setShipments} pos={pos} setPOs={extSetPOs} orders={orders} setOrders={extSetOrders} lots={lots} invoices={extInvoices || []} contacts={contacts} inspections={extInspections || []} onOpenShipment={(n: string) => { const hit = shipments.find((x: any) => x.number === n); if (hit) { setBoardView(false); setSelectedId(hit.id); } }} />}
+    {boardView && <PlanningSheet tabs={planningSheets || []} setTabs={setPlanningSheets || (() => {})} log={planningSheetLog || []} setLog={setPlanningSheetLog || (() => {})} contacts={contacts} catalog={productCatalogProp || []} orders={orders} invoices={extInvoices || []} userName={userNameProp || ""} />}   {/* v6.99.63 (A-SH): the free planning sheet */}
     <div style={{ display: boardView ? "none" : "contents" }}>
 
-    {toast && <div style={{ maxWidth: PAGE_MAX, margin: "12px auto 0", width: "calc(100% - 56px)", background: "#F0FDF4", border: "1px solid #BBF7D0", color: "#166534", borderRadius: 9, padding: "9px 12px", fontSize: 12, display: "flex", justifyContent: "space-between" }}><span>{toast}</span><button onClick={() => setToast("")} style={{ border: "none", background: "transparent", cursor: "pointer", color: "#166534", fontWeight: 800 }}>x</button></div>}
+    {toast && <div style={{ margin: "12px 28px 0", background: "#F0FDF4", border: "1px solid #BBF7D0", color: "#166534", borderRadius: 9, padding: "9px 12px", fontSize: 12, display: "flex", justifyContent: "space-between" }}><span>{toast}</span><button onClick={() => setToast("")} style={{ border: "none", background: "transparent", cursor: "pointer", color: "#166534", fontWeight: 800 }}>x</button></div>}
 
     {tab === "plans" && setLoadPlans && (
       <LoadPlans loadPlans={loadPlans} setLoadPlans={setLoadPlans} shipments={shipments} contacts={contacts}
@@ -3712,7 +3712,7 @@ export default function Shipments({ archive = null,
     )}
 
     <div style={{ flex: 1, overflow: "hidden", padding: "16px 28px 24px", display: tab === "shipments" ? "block" : "none" }}>
-      <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", height: "100%", display: "grid", gridTemplateColumns: "390px 1fr", gap: 16 }}>
+      <div style={{ height: "100%", display: "grid", gridTemplateColumns: "390px 1fr", gap: 16 }}>
         <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "grid", gap: 10 }}>
             <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />

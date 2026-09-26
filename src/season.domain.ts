@@ -21,7 +21,7 @@ export function seasonOf(dateISO: any, st: SeasonSettings = DEFAULT_SEASON): str
 }
 export function currentSeason(todayISO: string, st: SeasonSettings = DEFAULT_SEASON): string { return seasonOf(todayISO, st); }
 
-export type DocKind = "po" | "so" | "shipment" | "lot" | "invoice" | "claim" | "settlement" | "inspection" | "count" | "note" | "warehouseInvoice" | "cost";
+export type DocKind = "po" | "so" | "shipment" | "lot" | "invoice" | "claim" | "settlement" | "inspection" | "count" | "note" | "warehouseInvoice" | "cost" | "sheet";
 
 /** The date that decides a document's season. One rule per kind, documented here and nowhere else. */
 export function docDate(kind: DocKind, doc: any, ctx: { pos?: any[] } = {}): string {
@@ -39,6 +39,7 @@ export function docDate(kind: DocKind, doc: any, ctx: { pos?: any[] } = {}): str
     case "note": return S(doc.date || doc.issueDate || doc.createdAt);
     case "warehouseInvoice": return S(doc.issueDate || doc.date || doc.createdAt);
     case "cost": return S(doc.date || doc.createdAt);
+    case "sheet": return S(doc.createdAt);   // v6.99.63 (SH-9): a planning tab belongs to the season it was opened in
   }
   return "";
 }
@@ -52,7 +53,7 @@ export function isArchived(kind: DocKind, doc: any, archivedSeasons: string[], s
   return !!s && archivedSeasons.includes(s);
 }
 
-export const STORE_KIND: Record<string, DocKind> = { pos: "po", orders: "so", shipments: "shipment", lots: "lot", invoices: "invoice", claims: "claim", poSettlements: "settlement", inspections: "inspection", stockCounts: "count", financeNotes: "note", creditNotes: "note", warehouseInvoices: "warehouseInvoice", operationalCosts: "cost" };
+export const STORE_KIND: Record<string, DocKind> = { pos: "po", orders: "so", shipments: "shipment", lots: "lot", invoices: "invoice", claims: "claim", poSettlements: "settlement", inspections: "inspection", stockCounts: "count", financeNotes: "note", creditNotes: "note", warehouseInvoices: "warehouseInvoice", operationalCosts: "cost", planningSheets: "sheet" };
 
 /** Which seasons exist in the data, with document counts. */
 export function seasonsPresent(data: Record<string, any[]>, st: SeasonSettings): Array<{ season: string; count: number }> {

@@ -2221,3 +2221,52 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.59 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.62 — the containers follow the booked vessel (A-SE-1) ══
+(function v69962(){
+  console.log("\n══ 72. v6.99.62: booking ETD/ETA move the following containers; a hand-typed date stays ══");
+  const M = B("shipmentModel.domain.js");
+  const legs = [{ mode: "Road", vehicles: [{ id: 1, plannedLoadingDate: "2026-10-01" }] }, { mode: "Sea", vehicles: [{ id: 2 }, { id: 3, plannedLoadingDate: "2026-10-09" }, { id: 4, plannedLoadingDate: "2026-10-05", loadDateManual: true }] }];
+  t("a first ETD fills the empty containers; a container that already held the old date follows; the truck is untouched", () => {
+    const a = M.followBookingDates(legs, "etd", "2026-10-09", "2026-10-12");
+    eq(a[0].vehicles[0].plannedLoadingDate, "2026-10-01"); eq(a[1].vehicles[0].plannedLoadingDate, "2026-10-12"); eq(a[1].vehicles[1].plannedLoadingDate, "2026-10-12");
+  });
+  t("a container dated by hand keeps its date when the vessel is rolled", () => {
+    const a = M.followBookingDates(legs, "etd", "2026-10-09", "2026-10-15"); eq(a[1].vehicles[2].plannedLoadingDate, "2026-10-05");
+  });
+  t("ETA feeds the expected delivery date the same way", () => {
+    const a = M.followBookingDates([{ mode: "Sea", vehicles: [{ id: 9 }] }], "eta", "", "2026-10-24"); eq(a[0].vehicles[0].plannedDeliveryDate, "2026-10-24");
+  });
+  console.log("v6.99.62 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.63 — the free planning sheet (A-SH-1…13) ══
+(function v69963(){
+  console.log("\n══ 73. v6.99.63: her workbook imports as it is; a block pasted from Excel fills right and down; the study reads the log ══");
+  const Sh = B("sheet.domain.js"); const Bd = B("board.domain.js"); const XLSX = require("xlsx");
+  const wb = XLSX.readFile("/mnt/user-data/uploads/Shipments_season_2026_2027.xlsx", { cellDates: true });
+  const tabs = wb.SheetNames.map(n => Sh.importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }), Bd.HER_HEADERS, "2026-09-25T10:00:00Z"));
+  t("SH-8: five week tabs, 21 rows, as they are; ETD–ETA split into two dates", () => {
+    eq(tabs.length, 5); eq(tabs.reduce((s, t) => s + t.rows.length, 0), 21);
+    const r = tabs.flatMap(t => t.rows).find(r => r.cells.etd); ok(/^\d{4}-\d{2}-\d{2}$/.test(r.cells.etd), "ETD as a date: " + r.cells.etd); ok(r.cells.eta, "ETA kept");
+    ok(tabs.flatMap(t => t.rows).some(r => r.cells.supplier === "Grójecki Owoc"));
+  });
+  t("SH-5: a 2×3 block pasted from Excel fills right and down and adds the missing row; a frozen row is never overwritten", () => {
+    const rows = [{ id: "a", createdAt: "x", cells: {} }, { id: "b", createdAt: "x", frozen: true, cells: { client: "Keep" } }];
+    const res = Sh.pasteGrid(rows, { row: 0, col: 3 }, Sh.parseClipboard("Al Baraka\tSO-1\tfoil\nX\tY\tZ\nNew\tSO-2\tbox"), "now", 2026);
+    eq(res.rows.length, 3); eq(res.rows[0].cells.client, "Al Baraka"); eq(res.rows[0].cells.so, "SO-1"); eq(res.rows[0].cells.packaging, "foil");
+    eq(res.rows[1].cells.client, "Keep", "frozen row untouched"); eq(res.rows[2].cells.client, "New");
+  });
+  t("dates typed the way she types them become dates; anything else stays as typed", () => {
+    eq(Sh.toISODate("13/09", 2026), "2026-09-13"); eq(Sh.toISODate("13.09.2026"), "2026-09-13"); eq(Sh.toISODate("13-09-26"), "2026-09-13"); eq(Sh.toISODate("asap"), null);
+  });
+  t("SH-12: the study counts fills, changes after the first fill, and anything changed after freezing", () => {
+    const tab = { id: "t", name: "w", order: 1, createdAt: "2026-09-01", rows: [{ id: "r1", createdAt: "2026-09-01", cells: { plates: "WGR1", loadingDate: "2026-09-20" } }] };
+    const log = [{ at: "2026-09-10T08:00:00Z", who: "a", tab: "t", row: "r1", col: "plates", action: "cell" }, { at: "2026-09-18T08:00:00Z", who: "a", tab: "t", row: "r1", col: "plates", action: "cell" }, { at: "2026-09-19T08:00:00Z", who: "a", tab: "t", row: "r1", action: "freeze" }, { at: "2026-09-19T09:00:00Z", who: "a", tab: "t", row: "r1", col: "plates", action: "cell" }];
+    const u = Sh.sheetUsage([tab], log).find(x => x.key === "plates");
+    eq(u.filledPct, 100); eq(u.medianDaysBeforeLoading, 10); eq(u.avgChangesAfterFirst, 2); eq(u.changedAfterFreeze, 1);
+  });
+  console.log("v6.99.63 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

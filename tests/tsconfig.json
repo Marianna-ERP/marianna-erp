@@ -75,6 +75,7 @@
     "../src/customsClearance.domain.ts",
     "../src/customs.domain.ts",
     "../src/season.domain.ts",
-    "../src/board.domain.ts"
+    "../src/board.domain.ts",
+    "../src/sheet.domain.ts"
   ]
 }

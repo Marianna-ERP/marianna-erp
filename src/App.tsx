@@ -227,6 +227,8 @@ export default function App() {
   const [fxSettings, setFxSettings] = useLocalStoredState("fxSettings", {});
   // v6.99.54 (AR-1…4, owner): the season model — numbers continue, closed seasons are ARCHIVED (tagged, hidden, exportable)
   const [archivedSeasons, setArchivedSeasons] = useLocalStoredState<string[]>("archivedSeasons", []);
+  const [planningSheets, setPlanningSheets] = useLocalStoredState<any[]>("planningSheets", []);         // v6.99.63 (SH-1)
+  const [planningSheetLog, setPlanningSheetLog] = useLocalStoredState<any[]>("planningSheetLog", []);   // v6.99.63 (SH-11)
   const [seasonSettings, setSeasonSettings] = useLocalStoredState<any>("seasonSettings", DEFAULT_SEASON);
   const [includeArchived, setIncludeArchived] = useState(false);
   const archive = useMemo(() => ({ archivedSeasons, includeArchived, settings: seasonSettings || DEFAULT_SEASON, pos }), [archivedSeasons, includeArchived, seasonSettings, pos]);
@@ -556,7 +558,7 @@ export default function App() {
       case "orders":
         return <SalesOrders archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
-        return <Shipments onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
+        return <Shipments planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={productCatalog} userName={userName} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
         return <Invoices archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
       case "settings":

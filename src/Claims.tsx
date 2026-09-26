@@ -1,3 +1,4 @@
+import { ModuleHeader } from "./ui";
 import React, { useState, useMemo } from "react";
 import { recordAudit } from "./audit";
 import { inspectionCandidates, evidenceCandidates, attachEvidence, qcReportWarning, defectFromInspection, offsetNoteAgainstInvoice, claimMoneyLabel } from "./claimsPlus.domain";
@@ -274,14 +275,10 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
     <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#FAFAFA" }}>
       {dialogNode}
 
-      <div style={{ padding: "22px 28px 12px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: "-0.01em" }}>Claims</div>
-          <div style={{ fontSize: 12, color: "#64748B" }}>
-            {summary.total} total · {summary.open} open · recovery {eur(summary.openRecoveryEUR)} · concession {eur(summary.openConcessionEUR)}
-          </div>
-          <div style={{ flex: 1 }} />
-          <ActionButton action="create" label="Add new claim" onClick={addClaim} />
+      <ModuleHeader title="Claims" right={<ActionButton action="create" label="Add new claim" onClick={addClaim} />} />   {/* v6.99.61 (A-HD-1) */}
+      <div style={{ padding: "12px 28px 12px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>
+        <div style={{ fontSize: 12, color: "#64748B", marginBottom: 8 }}>
+          {summary.total} total · {summary.open} open · recovery {eur(summary.openRecoveryEUR)} · concession {eur(summary.openConcessionEUR)}
         </div>
 
         {(summary.overdue.length > 0 || summary.noEvidence.length > 0) && (

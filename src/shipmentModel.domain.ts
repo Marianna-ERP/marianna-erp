@@ -420,3 +420,15 @@ export function carrierOfUnit(sh: any, leg: any, u: any): any | null {
   if (!anyNamed) { const legacy = leg?.carrierId ?? leg?.forwarderId; if (legacy != null && legacy !== "") return legacy; }
   return null;
 }
+
+// ── v6.99.62 (A-SE-1, owner 25 Sept): the containers sail on the booked vessel ──
+// When the booking's ETD / ETA changes, every sea/air/rail unit that FOLLOWS the booking takes the new date: a unit follows when
+// its date was never typed by hand (no manual flag) and is empty or still equal to the booking's previous date. A unit dated by
+// hand keeps its date — the screen shows the difference and offers ↺ back to the booking.
+export function followBookingDates(legs: any[], key: "etd" | "eta", prevValue: any, newValue: any): any[] {
+  const field = key === "etd" ? "plannedLoadingDate" : "plannedDeliveryDate";
+  const flag = key === "etd" ? "loadDateManual" : "deliveryDateManual";
+  const prev = String(prevValue || "");
+  return (legs || []).map((l: any) => !["sea", "air", "rail"].includes(String(l?.mode || "").toLowerCase()) ? l
+    : { ...l, vehicles: (l.vehicles || []).map((u: any) => (u[flag] || (u[field] && String(u[field]) !== prev)) ? u : { ...u, [field]: newValue }) });
+}

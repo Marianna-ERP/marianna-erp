@@ -5,6 +5,7 @@ import { currentUser } from "./permissions.domain";
 import { Card } from "./ui";
 
 import {localTodayISO } from "./dates";
+import { ModulePage } from "./ui";
 
 // ─── DASHBOARD ──────────────────────────────────────────────────────────────
 // Phase 1 dashboard: reads live state from PO / SO / Inventory / Contacts and
@@ -20,18 +21,8 @@ import {localTodayISO } from "./dates";
 
 export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], invoices = [], claims = [], financeNotes = [], onNavigate = () => {}, inspections = [], stockCounts = [], closedPeriods = [], poSettlements = [], users = [], userName = "", integrityIssues = [] }: any) {
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
-      <div style={{ maxWidth: 1400, margin: "0 auto" }}>
-        {/* Header strip */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18 }}>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", letterSpacing: "-0.3px" }}>Dashboard</div>
-            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Live snapshot — Phase 1 · pulls from PO · SO · Inventory · Contacts</div>
-          </div>
-          <div style={{ fontSize: 11, color: "#AAA" }}>
-            {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
-          </div>
-        </div>
+    <ModulePage title="Dashboard" right={<span style={{ fontSize: 11, color: "#AAA" }}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>}>   {/* v6.99.61 (A-HD-1/2) */}
+      <div>
 
         {/* v6.99.4 (DA-1…DA-8): role-composed tile sets — exceptions and today's events only; "none" in green when nothing */}
         {(() => {
@@ -72,6 +63,6 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
         })()}
         <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", textAlign: "center" }}>The Dashboard shows what needs attention today. Analysis lives in Finance; registers in their modules.</div>
       </div>
-    </div>
+    </ModulePage>
   );
 }

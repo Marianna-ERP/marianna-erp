@@ -1,3 +1,4 @@
+import { ModulePage } from "./ui";
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
 import React, { useRef, useState } from "react";
@@ -806,15 +807,9 @@ export default function Settings({
   }
 
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
+    <ModulePage title="Settings" right={<span style={{ fontSize: 11, color: "#AAA" }}>storage schema v{STORAGE_VERSION}</span>}>   {/* v6.99.61 (A-HD-1): shared header; the form column stays narrow */}
       {stNode}
       <div style={{ maxWidth: 800, margin: "0 auto" }}>
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#111", letterSpacing: "-0.3px" }}>Settings</div>
-          <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
-            Manage the local-only data stored in your browser. Storage schema: v{STORAGE_VERSION}.
-          </div>
-        </div>
 
         {/* Batch 5: storage usage — the one number that predicts the localStorage failure mode. */}
         {(() => {
@@ -1079,6 +1074,6 @@ export default function Settings({
           Phase 2 will add: a real backend with shared data, login, audit trail, and automatic backups.
         </div>
       </div>
-    </div>
+    </ModulePage>
   );
 }

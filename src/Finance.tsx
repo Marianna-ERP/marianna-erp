@@ -1,3 +1,4 @@
+import { ModulePage } from "./ui";
 import { useUnsavedGuard } from "./unsaved";
 import { useConfirm, SmallButton } from "./ui";
 import { allocateInvoiceCostsToLots } from "./costAllocation";
@@ -857,17 +858,7 @@ export default function Finance({
   }
 
   return (
-    <div style={{ flex: 1, overflow: "auto", padding: "24px 28px", background: "#FAFAFA" }}>
-      {finNode}
-      <div style={{ maxWidth: 1450, margin: "0 auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18 }}>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111", letterSpacing: "-0.3px" }}>Finance · P&L Analytics</div>
-            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
-              {mode === "forecast" ? "Forecast — commitments, expected costs and budget overhead" : "Actual — shipped revenue, settled costs and posted overhead"}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+    <ModulePage title="Finance · P&L Analytics" right={<div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 6, background: "#F3F4F6", padding: 3, borderRadius: 8 }}>
               {(["pl", "costs", "warehouse", "ledger"] as const).filter(t => canOpenFinance(users, userName, t)).map(t => {
                 const active = tab === t;
@@ -884,8 +875,9 @@ export default function Finance({
             <div style={{ display: "flex", gap: 2, background: "#F3F4F6", padding: 3, borderRadius: 7 }}>
               {(["forecast", "actual"] as MarginMode[]).map(m => <button key={m} onClick={() => setMode(m)} style={{ padding: "6px 14px", borderRadius: 5, border: "none", background: mode === m ? "#fff" : "transparent", color: mode === m ? "#111" : "#666", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", boxShadow: mode === m ? "0 1px 2px rgba(0,0,0,0.05)" : "none", textTransform: "capitalize" }}>{m}</button>)}
             </div>
-          </div>
-        </div>
+          </div>}>   {/* v6.99.61 (A-HD-1/2) */}
+      {finNode}
+      <div>
 
         {tab === "ledger" ? (
           <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
@@ -1185,6 +1177,6 @@ export default function Finance({
           </>
         )}
       </div>
-    </div>
+    </ModulePage>
   );
 }

@@ -23,6 +23,26 @@ export const PAGE_MAX = 1720;
 export const INFO_GREEN = { color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0" } as const;
 export const WARN_RED = { color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA" } as const;
 
+// v6.99.61 (A-HD-1, owner): ONE module header — the bar PO, SO, Inventory, Invoices and Parties already use: white, 52 px,
+// title 16 px bold on the left, actions on the right, no paragraph. Every other module renders this component.
+export function ModuleHeader({ title, right = null }: any) {
+  return (
+    <div data-module-header="1" style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>{title}</div>
+      <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>{right}</div>
+    </div>
+  );
+}
+// v6.99.61 (A-HD-2): the reference page — header, then a full-width body with 24/28 px padding (no width cap)
+export function ModulePage({ title, right = null, children, background = "#FAFAFA" }: any) {
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background }}>
+      <ModuleHeader title={title} right={right} />
+      <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px" }}>{children}</div>
+    </div>
+  );
+}
+
 export function Card({ children, style = {} }: any) {
   return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "18px 20px", ...style }}>{children}</div>;
 }

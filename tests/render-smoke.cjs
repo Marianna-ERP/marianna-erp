@@ -80,6 +80,28 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ok = html.includes(sup.number) && (!plate || html.includes(plate)) && !html.includes("No truck registered yet");
     if (ok) { passed++; console.log("  \u2713 supplier-truck box shows the registered truck (" + sup.number + ")"); } else { failed++; console.log("  \u2717 supplier-truck box does not show " + sup.number); }
   } catch (e) { failed++; console.log("  \u2717 supplier-truck box —", (e.message || "").slice(0, 120)); } } }
+// v6.99.63 (A-SH): the planning sheet renders her imported tabs with the owner's columns, and no colour index
+{ try { const PS = require(path.resolve("./src/PlanningSheet")).default; const Sh = require(path.resolve("./src/sheet.domain")); const Bd = require(path.resolve("./src/board.domain")); const XLSX = require("xlsx");
+    const wb = XLSX.readFile("/mnt/user-data/uploads/Shipments_season_2026_2027.xlsx", { cellDates: true });
+    const tabs = wb.SheetNames.map((n, i) => ({ ...Sh.importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }), Bd.HER_HEADERS, "2026-09-25T10:00:00Z"), order: i + 1 }));
+    const d7 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    _where = "planning sheet";
+    const html = renderToStaticMarkup(React.createElement(PS, { tabs, setTabs: () => {}, log: [], setLog: () => {}, contacts: d7.contacts, catalog: [], orders: d7.orders, invoices: d7.invoices || [] }));
+    const ok = ["Planning sheet", "Controlling person", ">ETD<", ">ETA<", ">SO<", "New tab", "Add row", "Export all tabs"].every(s => html.includes(s)) && !html.includes("1 · Purchase");
+    if (ok) { passed++; console.log("  \u2713 planning sheet renders her 5 tabs with the owner's columns; no colour index"); } else { failed++; console.log("  \u2717 planning sheet did not render as expected"); }
+  } catch (e) { failed++; console.log("  \u2717 planning sheet —", (e.message || "").slice(0, 120)); } }
+// v6.99.61 (A-HD-1/2): one header, one width — the changed modules render the shared header and carry no width cap
+{ try { const d6 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const props = { pos: d6.pos, orders: d6.orders, lots: d6.lots, contacts: d6.contacts, shipments: d6.shipments, invoices: d6.invoices || [], claims: d6.claims || [], setShipments: () => {}, setClaims: () => {}, operationalCosts: [], setOperationalCosts: () => {}, users: [], userName: "" };
+    const bad = [];
+    for (const [name, file] of [["Dashboard", "Dashboard"], ["Finance", "Finance"], ["Shipments", "Shipments"], ["Claims", "Claims"], ["Settings", "Settings"]]) {
+      _where = name; let html = "";
+      try { html = renderToStaticMarkup(React.createElement(require(path.resolve("./src/" + file)).default, props)); } catch (e) { bad.push(name + " (render: " + (e.message || "").slice(0, 60) + ")"); continue; }
+      if (!html.includes('data-module-header="1"')) bad.push(name + " has no shared header");
+      if (name !== "Settings" && /max-width:\s*(1400|1450|1720)px/.test(html)) bad.push(name + " still capped");
+    }
+    if (!bad.length) { passed++; console.log("  \u2713 one header, one width: Dashboard · Finance · Shipments · Claims · Settings"); } else { failed++; console.log("  \u2717 one header, one width — " + bad.join("; ")); }
+  } catch (e) { failed++; console.log("  \u2717 one header, one width —", (e.message || "").slice(0, 120)); } }
 // v6.99.60 (A-SO-1/2): a Confirmed SO without price or quantity is held; a sourced line's origin/size/class are the source's
 { try { const SOmod = require(path.resolve("./src/SalesOrders"));
     const d5 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
