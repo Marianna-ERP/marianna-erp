@@ -1,4 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S, r2, r0 } from "./format";
 // shipmentModel.domain.ts — v6.85.0: THE REDESIGNED SHIPMENT MODEL (additive layer)
 //
 // Twelve owner rulings (SHIPMENTS_REDESIGN.md §8, 5 Sept 2026). Implemented as a
@@ -22,10 +23,7 @@
 //   D12 load plan derived from feeder links     → containerMap()
 // ─────────────────────────────────────────────────────────────────────────────
 
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r0 = (v: number) => Math.round(v);
-const r2 = (v: number) => Math.round(v * 100) / 100;
 
 // ── D5 · BOOKING ──────────────────────────────────────────────────────────────
 export interface Booking {
@@ -65,9 +63,6 @@ export function cutOffWarnings(sh: any): CutOffWarning[] {
   return out;
 }
 
-// ── UNIT KINDS (D7 catalogue) ─────────────────────────────────────────────────
-export const UNIT_KINDS = ["truck", "container", "wagon", "air", "ferry", "empty_container"] as const;
-export const LEG_KINDS = ["road", "sea", "rail", "air", "ferry", "bonded_store", "cross_dock", "repositioning"] as const;
 export function isTruck(u: any, leg?: any): boolean {
   const k = S(u?.kind).toLowerCase();
   if (k) return k === "truck";
@@ -385,6 +380,12 @@ export function syncUnitKgMirrors(sh: any): any {
 }
 /** v6.99.9: one-time heal on load — mirrors in step; stale zero-amount leg-freight lines removed once carrier×leg lines exist. */
 export function healShipmentModel(sh: any): { sh: any; changed: boolean } {
+  // v6.99.67 (A-IN-1, owner): goods rows carried a COPY of the trade direction from old versions; it is derived now — drop it
+  let healedDir = false;
+  if (sh && Array.isArray(sh.goods) && sh.goods.some((g: any) => g && g.tradeDirection !== undefined)) {
+    sh = { ...sh, goods: sh.goods.map((g: any) => { if (!g || g.tradeDirection === undefined) return g; const { tradeDirection, ...rest } = g; return rest; }) };
+    healedDir = true;
+  }
   let next = syncUnitKgMirrors(sh); let changed = next !== sh && JSON.stringify(next.legs) !== JSON.stringify(sh.legs);
   const costs = sh?.costs || [];
   if (costs.some((c: any) => String(c.source || "").startsWith("LEGCAR:"))) {
@@ -396,6 +397,7 @@ export function healShipmentModel(sh: any): { sh: any; changed: boolean } {
     const cleaned = costs2.filter((c: any) => { const src = String(c.source || ""); const legacy = src.startsWith("leg-freight:") || src.startsWith("LEG:"); if (!legacy) return true; const legNo = src.split(":")[1]; const covered = costs.some((x: any) => String(x.source || "").startsWith("LEGCAR:") && String(x.source).split(":")[1] === String(Number(legNo) - 1)); return num(c.amount) > 0 && !covered; });
     if (cleaned.length !== costs.length) { next = { ...next, costs: cleaned }; changed = true; }
   }
+  if (healedDir) changed = true;
   return { sh: next, changed };
 }
 

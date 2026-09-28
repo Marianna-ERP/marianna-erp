@@ -1,10 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S, r2 } from "./format";
 // financePlus.domain.ts — v6.99.1: FINANCE PART 2 (FN-4 client risk · FN-5 PO result for every PO · FN-6 warehouse agreement)
 // Pure. Reads; stores nothing.
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r2 = (v: number) => Math.round(v * 100) / 100;
 const days = (a: string, b: string) => Math.round((new Date(b + "T00:00:00").getTime() - new Date(a + "T00:00:00").getTime()) / 86400000);
 
 // ── FN-4: CLIENT RISK ─────────────────────────────────────────────────────────

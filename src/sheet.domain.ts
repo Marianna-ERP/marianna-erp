@@ -1,10 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S } from "./format";
 // sheet.domain.ts — v6.99.63 (A-SH-1…13, owner 25 Sept)
 // THE PLANNING SHEET: the dispatcher's weekly workbook inside the system — tabs, rows, cells — deliberately writing to NO
 // module until we have studied how it is filled (when, how often it changes, when it becomes solid). Every change is logged
 // so that study can be done on facts. Pure helpers only; the screen is PlanningSheet.tsx.
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 
 export type CellKind = "text" | "date" | "list" | "product";
 export interface SheetCol { key: string; label: string; kind: CellKind; list?: "clients" | "suppliers" | "ports" | "places" | "carriers" | "forwarders" | "orders"; width: number; }

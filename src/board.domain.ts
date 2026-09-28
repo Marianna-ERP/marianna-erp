@@ -1,9 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S } from "./format";
 // board.domain.ts — v6.99.55 (BD-1…6, owner ruling 23 Sept)
 // THE WEEKLY SHIPMENT BOARD: the dispatcher's spreadsheet as a VIEW over the modules. One row per truck, her 26 columns
 // in her six steps, every cell reading from — and writing to — the module that owns it. The board stores nothing.
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 
 export type Step = 1 | 2 | 3 | 4 | 5 | 6;
 export const STEP_META: Record<Step, { label: string; colour: string; bg: string }> = {

@@ -1,10 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S } from "./format";
 // season.domain.ts — v6.99.54 (AR-1…7, owner ruling 23 Sept)
 // Numbers continue across seasons. The old season is ARCHIVED: tagged, hidden from the day-to-day screens, exportable to
 // its own JSON, re-importable read-only. Nothing is deleted at season end, and nothing about a document changes except
 // how it is shown. A lot that still holds kilos is this season's stock whenever it was bought — it never archives.
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(S(v).replace(",", ".")); return isFinite(n) ? n : 0; };
 
 export interface SeasonSettings { startMonth: number; startDay: number; }   // default 1 July

@@ -13,3 +13,10 @@ export function fmtNum(n: any): string {
 }
 
 /** Money in PLN with thousands separators, no decimals (dashboard/inventory style). */
+
+// ── v6.99.67 (A-AUD-1, owner): the helpers that were copied byte-for-byte into many files live here once. Only IDENTICAL
+// copies were folded in; `num` exists in six flavours (they parse typed numbers differently) and stays per module until
+// each flavour is reviewed — a parser is behaviour, not a duplicate.
+export const S = (v: any) => String(v ?? "").trim();
+export const r2 = (v: number) => Math.round(v * 100) / 100;
+export const r0 = (v: number) => Math.round(v);

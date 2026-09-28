@@ -257,7 +257,7 @@ export default function LoadingProtocolModal({
           <SmallButton onClick={() => save("Sent")} kind="blue">Mark sent to producer</SmallButton>
           <SmallButton onClick={() => save("Returned")} kind="green">Record returned sheet</SmallButton>
           <SmallButton onClick={() => save()}>Save</SmallButton>
-          <SmallButton onClick={onClose}>Close</SmallButton>
+          <SmallButton kind="close" onClick={onClose}>Close</SmallButton>
         </div>
 
         {/* ── v6.53.0: one sheet per truck (not printed) ── */}

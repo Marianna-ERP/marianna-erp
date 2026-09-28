@@ -8,8 +8,8 @@ import * as XLSX from "xlsx";
 import { SHEET_COLUMNS, SheetTab, SheetRow, SheetLogEntry, blankRow, sid, parseClipboard, pasteGrid, productText, tabToGrid, importWorkbookRows, sheetUsage, toISODate } from "./sheet.domain";
 import { HER_HEADERS } from "./board.domain";
 import { unifiedLocations } from "./locations";
+import { S } from "./format";
 
-const S = (v: any) => String(v ?? "").trim();
 const nowISO = () => new Date().toISOString();
 const rolesOf = (c: any) => (Array.isArray(c?.roles) && c.roles.length ? c.roles : [c?.type, ...(c?.additionalTypes || [])]).map((x: any) => String(x || ""));
 
@@ -114,9 +114,9 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
         <div style={{ fontSize: 13, fontWeight: 800 }}>Planning sheet</div>
         <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "2px 8px" }}>a planning sheet — it writes to no module; every change is recorded for the study</div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ ...btn, borderStyle: "dashed", color: "#1E40AF" }}>⬆ Import her workbook<input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => importFile(e.target.files?.[0])} /></label>
-          <button style={btn} onClick={() => exportXlsx(false)} disabled={!tab}>⬇ Export this tab</button>
-          <button style={btn} onClick={() => exportXlsx(true)} disabled={!sorted.length}>⬇ Export all tabs</button>
+          <label style={{ ...btn, borderStyle: "dashed", color: "#1E40AF" }}>Import file<input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => importFile(e.target.files?.[0])} /></label>
+          <button style={btn} onClick={() => exportXlsx(false)} disabled={!tab}>Export file (this tab)</button>
+          <button style={btn} onClick={() => exportXlsx(true)} disabled={!sorted.length}>Export file (all tabs)</button>
           <button style={btn} onClick={copyTab} disabled={!tab} title="copies the tab as a table you can paste into Excel">⧉ Copy tab</button>
           <button style={{ ...btn, background: showUsage ? "#0F172A" : "#fff", color: showUsage ? "#fff" : "#111" }} onClick={() => setShowUsage(!showUsage)}>How the sheet is used</button>
         </div>
@@ -127,11 +127,11 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
         {tab && <span style={{ display: "inline-flex", gap: 4, marginLeft: 8, marginBottom: 2 }}>
           <button style={btn} onClick={() => moveTab(-1)} title="move left">◀</button><button style={btn} onClick={() => moveTab(1)} title="move right">▶</button>
           <button style={btn} onClick={renameTab}>✎ Rename</button><button style={btn} onClick={freezeTab}>🔒 Freeze tab</button>
-          <button style={{ ...btn, color: "#B91C1C", borderColor: "#FECACA" }} onClick={deleteTab}>✕ Delete tab</button></span>}
+          <button style={{ ...btn, background: "#DC2626", color: "#fff", borderColor: "#DC2626" }} onClick={deleteTab}>Delete tab</button></span>}
       </div>
       {showUsage && (
         <div style={{ margin: "10px 16px 0", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "8px 10px", maxHeight: 260, overflow: "auto" }}>
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}><div style={{ fontSize: 12, fontWeight: 800 }}>How the sheet is used — from {(log || []).length} recorded change(s)</div><button style={{ ...btn, marginLeft: "auto" }} onClick={exportLog}>⬇ Export the change log</button></div>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}><div style={{ fontSize: 12, fontWeight: 800 }}>How the sheet is used — from {(log || []).length} recorded change(s)</div><button style={{ ...btn, marginLeft: "auto" }} onClick={exportLog}>Export file (change log)</button></div>
           <table style={{ borderCollapse: "collapse", fontSize: 11.5, width: "100%" }}>
             <thead><tr>{["Column", "Filled", "First filled (median days before loading)", "Changes after the first fill (avg)", "Changes after freezing"].map(h => <th key={h} style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: "3px 6px", color: "#64748B" }}>{h}</th>)}</tr></thead>
             <tbody>{usage.map(u => <tr key={u.key}><td style={{ padding: "3px 6px" }}>{u.label}</td><td style={{ padding: "3px 6px" }}>{u.filledPct}%</td><td style={{ padding: "3px 6px" }}>{u.medianDaysBeforeLoading === null ? "—" : u.medianDaysBeforeLoading}</td><td style={{ padding: "3px 6px" }}>{u.avgChangesAfterFirst}</td><td style={{ padding: "3px 6px", color: u.changedAfterFreeze ? "#B91C1C" : undefined, fontWeight: u.changedAfterFreeze ? 800 : 400 }}>{u.changedAfterFreeze}</td></tr>)}</tbody>
@@ -139,7 +139,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
         </div>
       )}
       <div style={{ flex: 1, overflow: "auto", padding: "10px 16px" }} onPaste={onPaste}>
-        {!tab && <div style={{ fontSize: 12.5, color: "#94A3B8", padding: 12 }}>No tab yet — ＋ New tab, or ⬆ Import her workbook to start from her real file.</div>}
+        {!tab && <div style={{ fontSize: 12.5, color: "#94A3B8", padding: 12 }}>No tab yet — ＋ New tab, or Import file to start from her real file.</div>}
         {tab && (
           <table style={{ borderCollapse: "collapse", fontSize: 12, background: "#fff", minWidth: SHEET_COLUMNS.reduce((s, c) => s + c.width, 150) }}>
             <thead><tr>
@@ -155,7 +155,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
                     <button title="insert a row below" onClick={() => addRow(ri + 1)} style={{ border: "none", background: "none", cursor: "pointer" }}>↧</button>
                     <button title="duplicate the row" onClick={() => duplicateRow(ri)} style={{ border: "none", background: "none", cursor: "pointer" }}>⧉</button>
                     <button title={r.frozen ? "unfreeze" : "freeze on loading day"} onClick={() => toggleFreeze(ri)} style={{ border: "none", background: "none", cursor: "pointer" }}>{r.frozen ? "🔒" : "🔓"}</button>
-                    <button title="delete the row" onClick={() => deleteRow(ri)} style={{ border: "none", background: "none", cursor: "pointer", color: "#B91C1C" }}>✕</button>
+                    <button title="delete the row" onClick={() => deleteRow(ri)} style={{ border: "none", background: "none", cursor: "pointer", color: "#B91C1C", fontWeight: 800 }}>Delete</button>
                   </td>
                   {SHEET_COLUMNS.map((c, ci) => <td key={c.key} style={{ border: "1px solid #E5E7EB", padding: 0, outline: sel.row === ri && sel.col === ci ? "2px solid #2563EB" : undefined }}><Cell r={r} ri={ri} ci={ci} /></td>)}
                 </tr>

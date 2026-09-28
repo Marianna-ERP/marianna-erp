@@ -10,9 +10,18 @@ handling, settlements and claims have all been rebuilt since then.
 ## 1. Getting started
 
 - The app runs in the browser. All data lives in this browser's local storage
-  and travels in the Settings → **Export JSON** backup. Export regularly; the
-  app also keeps an automatic backup ring and takes a backup before every
-  import and reset (Settings → Local backups).
+  and travels in the Settings → **Export all data** file.
+- **Automatic backup (v6.99.70).** In Settings → *Automatic backup folder*, choose
+  a folder once — best one that OneDrive or Google Drive already syncs, so a copy
+  leaves the computer. The app writes a file there when it opens, then two
+  minutes after your changes stop (at most every 15 minutes), and keeps the
+  newest 30 files plus one per day for 30 days. Each file is an ordinary Export
+  file: to restore, use Settings → Import. Works in Chrome and Edge; in other
+  browsers a strip offers *Download today's backup* once a day. After a browser
+  restart Chrome may ask for the folder again — choose *Allow on every visit*.
+- Settings → *Local backups* keeps snapshots taken before each import, restore
+  or wipe, in this browser, as long as there is room. When your data needs the
+  space, the oldest snapshot gives way first.
 - A **clean system starts empty by design**: after a reset, the PO supplier
   picker, the SO client picker and the shipment carrier/forwarder pickers show
   nothing until you add counterparties. No demo data exists anywhere.

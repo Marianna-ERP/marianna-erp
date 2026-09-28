@@ -1,3 +1,4 @@
+import { paymentDaysOf } from "./legacy";
 // ─────────────────────────────────────────────────────────────────────────────
 // po.domain.ts — v6.94.0: PURCHASE ORDER RULES (owner decisions PO-1…PO-9, 9 Sept 2026)
 //   PO-1 box as an ordered unit: pricingUnit kg|box per line; type one, the other derives
@@ -8,10 +9,9 @@
 // Pure.
 // ─────────────────────────────────────────────────────────────────────────────
 import { kgPerBoxForLine } from "./pricingUnit.domain";
+import { S, r2 } from "./format";
 
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r2 = (v: number) => Math.round(v * 100) / 100;
 
 // ── PO-1 ─────────────────────────────────────────────────────────────────────
 /** Recompute the derived side of a PO line after the user typed the other. */
@@ -40,7 +40,7 @@ export function poLineValue(line: any): number {
 export function paymentDaysFor(po: any, supplier: any): number {
   const own = num(po?.paymentDays);
   if (own > 0) return own;
-  const inherited = num(supplier?.paymentTermsDays);
+  const inherited = paymentDaysOf(supplier);   // v6.99.67 (legacy.ts)
   if (inherited > 0) return inherited;
   const m = S(po?.paymentTerms).match(/(\d{1,3})/);   // legacy free text "30 days"
   return m ? num(m[1]) : 0;

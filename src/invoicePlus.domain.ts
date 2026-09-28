@@ -3,10 +3,9 @@
 // Pure.
 // ─────────────────────────────────────────────────────────────────────────────
 import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
+import { S, r2 } from "./format";
 
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r2 = (v: number) => Math.round(v * 100) / 100;
 
 // ── IV-3: ONE classification ──────────────────────────────────────────────────
 export const CATEGORIES = ["SALES", "COMMISSION", "PURCHASE", "FREIGHT", "CUSTOMS", "WAREHOUSE", "OVERHEAD", "OTHER"] as const;

@@ -399,7 +399,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     <SmallButton kind="green" onClick={() => recoverFrom(selected)} title="Create a linked claim against the party responsible">+ Recover from supplier / carrier</SmallButton>
                   )}
                   <SmallButton kind="red" onClick={() => removeClaim(selected)}>Delete</SmallButton>
-                  <SmallButton onClick={() => setSelectedId(null)}>Close</SmallButton>
+                  <SmallButton kind="close" onClick={() => setSelectedId(null)}>Close</SmallButton>
                 </div>
                 <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12, lineHeight: 1.5 }}>{ds.hint}</div>
 

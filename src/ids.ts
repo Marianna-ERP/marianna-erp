@@ -54,12 +54,6 @@ export function nextId(): number {
   return counter;
 }
 
-// Convenience for code that wants several ids at once (e.g. lots in a loop).
-export function nextIds(count: number): number[] {
-  const out: number[] = [];
-  for (let i = 0; i < count; i++) out.push(nextId());
-  return out;
-}
 
 // Raise the counter above every id present in the supplied collections. Call this
 // once at startup with all loaded entities (and after importing a JSON file), so

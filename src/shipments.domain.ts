@@ -135,7 +135,8 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     // pass-through, not a receipt into our stock. This is what produces the SHIP_OUT
     // that gives the SO its COGS.
     const goodsAreSold = relatedGoods.some((g: any) => !!g.soRef) || (sh.soRefs || []).length > 0;
-    const goodsAreExport = relatedGoods.some((g: any) => String(g.tradeDirection || "").toUpperCase() === "EXPORT");
+    // v6.99.67 (A-IN-1): derived, not read from a copy — sold goods on an OUTBOUND shipment are a pass-through
+    const goodsAreExport = String(sh.purpose || "").toUpperCase() === "OUTBOUND" || relatedGoods.some((g: any) => !!g.soRef);
     const isDirect = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected" || (goodsAreSold && goodsAreExport);
     const notYetReceived = !(num(lot.receivedKg) > 0) && currentPhysical <= 0;
     // v6.73.0 THE DOUBLE-RECEIPT FIX. This guard was COMPUTED HERE and never
@@ -314,10 +315,6 @@ export function appendSourceGoods(sh: any, kind: "PO" | "SO", doc: any, lots: an
   };
 }
 
-// ── Shipment lifecycle (BP-22) ──────────────────────────────────────────────
-// Canonical simplified statuses. Legacy statuses map on read so old data and the
-// full-editor dropdown keep working during the transition.
-export const SHIPMENT_LIFECYCLE = ["Draft", "Booked", "Loaded", "Delivered", "Closed"];
 
 export function canonicalStatus(s: any): string {
   const v = String(s || "").trim();

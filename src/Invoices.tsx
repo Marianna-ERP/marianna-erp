@@ -7,7 +7,7 @@ import { requiredLinkMissing, proposeLinks, defaultCostDueDate, matchInvoiceToCo
 import { periodGuard } from "./periodClose.domain";
 import { fxMissing } from "./fx";
 import DateInput from "./DateInput";
-import { useConfirm } from "./ui";
+import { useConfirm, notifySaved } from "./ui";
 import React, { useMemo, useState } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
 import { nextId } from "./ids";
@@ -24,8 +24,9 @@ import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
+import { companyProfile } from "./useLocalStoredState";
 
-const COMPANY = { name: "MARIANNA", nip: "PL525-284-27-87" };
+const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the company block comes from Settings (defaults = the former literal)
 
 // ── shared atoms (match app style) ──
 function Card({ children, style }: any) { return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", ...style }}>{children}</div>; }
@@ -220,7 +221,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
             <div style={{ fontSize: 15, fontWeight: 800 }}>Import from Fakturownia</div>
             <div style={{ fontSize: 11.5, color: "#64748B" }}>Fetch your received cost invoices, tag each one, and post — freight/customs flip the matching shipment cost line to <b>Received</b>; goods link the PO; warehouse and overhead go to their registers. Fakturownia stays the register of record.</div>
           </div>
-          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Close</button>
+          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Close</button>
         </div>
         <div style={{ padding: "12px 22px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid #F3F4F6", flexWrap: "wrap" }}>
           <select style={inp} value={period} onChange={(e: any) => setPeriod(e.target.value)}>
@@ -425,6 +426,7 @@ export default function Invoices(props: any) {
       return [...prev, { ...(rec as Invoice), id: nextId(), source: rec.source || `manual:${Date.now()}` }];
     });
     setView("list"); setForm(null);
+    notifySaved(String(form?.number || ""));   // v6.99.69 (A-CF-3)
   }
   // v6.63.0 (D-05, ruling D1): the workflow statuses are FORWARD-ONLY —
   // Draft → Issued → Sent (Sent locks permanently; corrections via credit note).
@@ -600,7 +602,7 @@ export default function Invoices(props: any) {
           {/* v6.65.0 (owner question): "+ Sales invoice" removed — every SINV is issued
               from its Sales Order (Issue invoice on the SO), so the register can never
               hold a sales invoice with no order behind it. Cost invoices remain manual. */}
-          <button onClick={() => exportRowsToXlsx(`invoices_${xlsStamp()}`, filtered, [{ key: "kind", label: "Kind" }, { key: "category", label: "Category" }, { key: "number", label: "Number" }, { key: "counterparty", label: "Counterparty", fmt: (v: any) => v?.name || "" }, { key: "issueDate", label: "Issued" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "netAmount", label: "Net" }, { key: "vatAmount", label: "VAT" }, { key: "grossAmount", label: "Gross" }, { key: "fxRate", label: "Rate" }, { key: "grossPLN", label: "Gross PLN" }, { key: "paidAmount", label: "Paid" }, { key: "paymentStatus", label: "Status" }, { key: "links", label: "Linked", fmt: (v: any) => (v || []).map((l: any) => l.number).join(", ") }, { key: "fakturownia", label: "KSeF", fmt: (v: any) => v?.ksefNo || "" }], "Invoices")} title="v6.99.0: exports the rows as filtered, columns as shown" style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⬇ Excel</button>
+          <button onClick={() => exportRowsToXlsx(`invoices_${xlsStamp()}`, filtered, [{ key: "kind", label: "Kind" }, { key: "category", label: "Category" }, { key: "number", label: "Number" }, { key: "counterparty", label: "Counterparty", fmt: (v: any) => v?.name || "" }, { key: "issueDate", label: "Issued" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "netAmount", label: "Net" }, { key: "vatAmount", label: "VAT" }, { key: "grossAmount", label: "Gross" }, { key: "fxRate", label: "Rate" }, { key: "grossPLN", label: "Gross PLN" }, { key: "paidAmount", label: "Paid" }, { key: "paymentStatus", label: "Status" }, { key: "links", label: "Linked", fmt: (v: any) => (v || []).map((l: any) => l.number).join(", ") }, { key: "fakturownia", label: "KSeF", fmt: (v: any) => v?.ksefNo || "" }], "Invoices")} title="v6.99.0: exports the rows as filtered, columns as shown" style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Export file (Excel)</button>
           <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
           + Cost invoice</button>
           <button onClick={() => setShowImport(true)} title="Fetch received cost invoices from Fakturownia, tag them (goods / freight / customs / warehouse / overhead) and post them where they belong." style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Import from Fakturownia</button>
@@ -694,7 +696,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
           {inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark issued</button>}
           {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel invoice</button>}
-          {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
+          {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
           {(() => {
             const evts = normalizeInvoicePayments(inv);

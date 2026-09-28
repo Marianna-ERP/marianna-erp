@@ -1,16 +1,11 @@
 import React, { useState, useMemo } from "react";
-import QualityReportDoc from "./QualityReportDoc";
-import { issueReportNumber, lastReportNumber } from "./reportNumbers";
-import { PrintLogo } from "./brand";
-import LocationPicker from "./LocationPicker";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
-import { receiptMovement, sortingJob as runSortingJob, gradeSplit, blankInspection, inspectionTotals, defectsFor, PEPPER_DEFECTS, DEFECT_CATEGORIES, applyStockCount, plateMismatch, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, lotReceiptDate } from "./seasonOps.domain";
-import { PAGE_MAX, SmallButton } from "./ui";
+import { receiptMovement, gradeSplit, inspectionTotals, defectsFor, DEFECT_CATEGORIES, plateMismatch, inspectionVerdict, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, lotReceiptDate } from "./seasonOps.domain";
+import { SmallButton, ActionButton } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
 import { claimsForLot } from "./claims.domain";
-import { buildTraceTree } from "./trace.domain";
 import { fmtNum } from "./format";
 import { Card, Lbl, useConfirm, DocRef, cancelledDocSet} from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
@@ -18,14 +13,15 @@ import { lotReservationsForStock, productsMatch as domainProductsMatch, soClient
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { unifiedLocations, locationById } from "./locations";
-import { customsSummary } from "./customs.domain";
-import { localTodayISO, formatDMY } from "./dates";
-import { computeLotWarehouseCharges } from "./warehouseCharges";
+import { localTodayISO } from "./dates";
 import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
-import { computeLotSettlement, currentCommissionPct, currentCommissionRate, commissionPctForSales, settlementCostComponents } from "./consignment";
+import { settlementCostComponents } from "./consignment";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
+import { r0 } from "./format";
+import { LotDetail } from "./InventoryLot";
+import { MovementModal, SettlementModal } from "./InventoryWindows";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 
@@ -41,7 +37,7 @@ const LOCATION_TYPES: Record<string, any> = {
 // Safe lookup: never throws if a location carries a type not in the table above
 // (e.g. a new legacyType added later). Falls back to a neutral default.
 const DEFAULT_LOCATION_TYPE = { label: "Location", color: "#6B7280", bg: "#F3F4F6", icon: "📍" };
-function locType(t: string) {
+export function locType(t: string) {
   return LOCATION_TYPES[t] || DEFAULT_LOCATION_TYPE;
 }
 
@@ -51,7 +47,7 @@ function locType(t: string) {
 // v6.86.0: module-level LOCATIONS alias removed — pickers read unifiedLocations()
 // v6.18.4 (P0-4): snapshot + live counterparty addresses, deduped, so movement
 // pickers see a counterparty added this session without a browser refresh.
-function mergedLocations(contacts: any[]) {
+export function mergedLocations(contacts: any[]) {
   // v6.86.0 (owner ruling): ONE source — unifiedLocations() — no module-level merge, no demo seeds.
   return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
 }
@@ -81,7 +77,7 @@ const LOT_STATUSES: Record<string, any> = {
 
 // v6.37.0: generic stage labels — a fallback only; stored/baked and shipment-derived
 // journey stages carry their own real labels, which the render prefers.
-function standardStageLabel(kind: string) {
+export function standardStageLabel(kind: string) {
   switch (kind) {
     case "supplier": return "At supplier";
     case "transit_road": return "Road carriage";
@@ -154,7 +150,7 @@ function journeyFromShipments(lot: any, shipments: any[], locResolve: (id: any) 
 
 // On-the-fly journey for a lot with no stored journey — derived from real shipments
 // (Phase C), falling back to the flow template only for legacy lots with no shipments.
-function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = []) {
+export function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = []) {
   // v6.35.1 (Phase C): resolve the REAL incoterms for ownership — buy from the lot (or its
   // stored value), sell from the governing SO that draws on this lot/PO.
   const lotBuyIncoterm = lot.buyIncoterm || lot.purchaseIncoterm || "";
@@ -325,7 +321,7 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
 // v6.35.2 (Phase C step 4): whether a lot has customs stages is now derived from its
 // real shipments — a shipment with customs applied, or one that crosses the EU boundary
 // (import/export direction) — not from the obsolete flow template.
-function customsStagesForLot(lot: any, shipments: any[]): string[] {
+export function customsStagesForLot(lot: any, shipments: any[]): string[] {
   const shs = shipmentsForLot(lot, shipments || []);
   const out = new Set<string>();
   shs.forEach((sh: any) => {
@@ -345,7 +341,7 @@ const QUALITY_GRADES = ["I", "IB", "II", "Industrial"]; // Polish convention (Kl
 
 // Movement types — physical operations only.
 // SO reservations are NOT movements (they're a calculated overlay from SO state).
-const MOVEMENT_TYPES: Record<string, any> = {
+export const MOVEMENT_TYPES: Record<string, any> = {
   IN:        { label: "Stock In",   color: "#16A34A", icon: "↓", desc: "Lot received into a location" },
   TRANSFER:  { label: "Transfer",   color: "#0284C7", icon: "⇄", desc: "Move between locations (truck/port/WH)" },
   SHIP_OUT:  { label: "Ship Out",   color: "#2563EB", icon: "→", desc: "Physical dispatch to client (decrements physicalKg)" },
@@ -355,9 +351,9 @@ const MOVEMENT_TYPES: Record<string, any> = {
 };
 
 // ─── SEED DATA — lots covering all 7 flows ──────────────────────────────────
-const today = localTodayISO();
+export const today = localTodayISO();
 
-function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
+export function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
 
 // ─── SO STUB ────────────────────────────────────────────────────────────────
 // Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically
@@ -401,7 +397,7 @@ const _soClientName = soClientName; // Batch 1
 // Normalize an SO from either the standalone stub shape ({clientName}) or the real SO module
 // shape ({client: {name, ...}}). Returns flat clientName for display.
 
-function lotReservations(lot, sourceSOs, ctx) {
+export function lotReservations(lot, sourceSOs, ctx) {
   // Engine: salesOrders.domain (Batch 1). G1: no SOS stub fallback — live SOs only.
   // v6.41.0 (A5): ctx {lots, shipments} enables the unshipped-remainder rule.
   return lotReservationsForStock(lot, sourceSOs ?? [], ctx);
@@ -409,7 +405,7 @@ function lotReservations(lot, sourceSOs, ctx) {
 
 // Returns array of SO references this lot has ever been linked to
 // (across all statuses including Shipped+ historical).
-function soRefsFor(lot, sourceSOs, shipmentsList = []) {
+export function soRefsFor(lot, sourceSOs, shipmentsList = []) {
   const list = sourceSOs ?? SOS;
   const refs = [];
   list.forEach(o => {
@@ -465,24 +461,24 @@ function uniqStrings(arr) {
 // v6.32.0 (R7b-5): demo seed INIT_LOTS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED UI ATOMS ────────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max, min, noFuture, title }: any) {
+export function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, max, min, noFuture, title }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={false} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <input value={value || ""} onChange={onChange} type={type || "text"} placeholder={placeholder} max={max} style={{ ...base, ...style }} />;
 }
-function Sel({ value, onChange = () => {}, children, style = {} }: any) {
+export function Sel({ value, onChange = () => {}, children, style = {} }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: "#fff" };
   return <select value={value || ""} onChange={onChange} style={{ ...base, ...style }}>{children}</select>;
 }
-function SectionTitle({ children }: any) {
+export function SectionTitle({ children }: any) {
   return <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 14 }}>{children}</div>;
 }
-function StatusBadge({ status }: any) {
+export function StatusBadge({ status }: any) {
   const s = LOT_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
   return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{status}</span>;
 }
-function QualityBadge({ quality }: any) {
+export function QualityBadge({ quality }: any) {
   const palette = {
     "I":          { bg: "#DCFCE7", color: "#16A34A" },  // top quality — green
     "IB":         { bg: "#ECFCCB", color: "#65A30D" },  // intermediate — lime
@@ -492,7 +488,7 @@ function QualityBadge({ quality }: any) {
   const p = palette[quality] || palette["I"];
   return <span style={{ background: p.bg, color: p.color, padding: "1px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
-function LocationPill({ locationId, lot = null }: any) {
+export function LocationPill({ locationId, lot = null }: any) {
   const loc = locById(locationId);
   // v6.45.0 (test-round): a DIRECT lot never sits in one of our locations — the
   // goods go producer → client. Say so instead of showing an empty dash.
@@ -517,7 +513,7 @@ function LocationPill({ locationId, lot = null }: any) {
 // v6.34.7 (Step 1 of flow retirement): the lot's movement is DERIVED from its actual
 // shipment (which now owns the trade direction), not from the obsolete PO flow key.
 // An EXW-purchase + CIF-sale lot no longer mislabels itself "IMP · EXWs → our WH".
-function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], compact = false }: any) {
+export function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], compact = false }: any) {
   const shs = shipmentsForLot(lot, shipments);
   // Prefer an explicit shipment direction; else derive from the lot's PO + governing SO.
   let dir = "";
@@ -532,8 +528,9 @@ function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], compact
   // it is Expected, not broken. A bare dash read as a failure.
   if (!shs.length && !(lot.movements || []).length) return null;
   for (const sh of shs) {
-    const g = (sh?.goods || []).find((x: any) => String(x.lotRef || "") === String(lot.number) && x.tradeDirection && MOVEMENT_LABELS[x.tradeDirection]);
-    if (g) { dir = g.tradeDirection; break; }
+    // v6.99.67 (A-IN-1, owner): goods rows used to carry a COPY of the direction (written before the sale was known and never
+    // re-derived — LOT-0119 read "import" beside LOT-0120's "export" on the same PO and sale). Only a USER'S choice on the
+    // shipment header counts; everything else is derived below from the PO and the governing SO.
     const d = sh?.tradeDirection;
     if (d && MOVEMENT_LABELS[d]) { dir = d; break; }
   }
@@ -562,7 +559,7 @@ function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], compact
   );
 }
 
-function VarianceBadge({ expected, actual }: any) {
+export function VarianceBadge({ expected, actual }: any) {
   if (!expected || !actual) return null;
   const delta = actual - expected;
   if (delta === 0) return null;
@@ -576,11 +573,11 @@ function VarianceBadge({ expected, actual }: any) {
   );
 }
 
-function parseNum(v, fallback = 0) {
+export function parseNum(v, fallback = 0) {
   const n = parseFloat(v);
   return isNaN(n) ? fallback : n;
 }
-function fmtMoney(n, cur = "PLN") {
+export function fmtMoney(n, cur = "PLN") {
   if (n === undefined || n === null || isNaN(n)) return "—";
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
 }
@@ -597,17 +594,17 @@ function lotAgeDays(lot: any): number | null {
 }
 function ageColor(days: number): string { return days <= 7 ? "#16A34A" : days <= 14 ? "#D97706" : "#DC2626"; }
 
-function totalCost(lot) {
+export function totalCost(lot) {
   return (lot.costs || []).reduce((s, c) => s + (c.pln || 0), 0);
 }
-function costPerKg(lot) {
+export function costPerKg(lot) {
   const total = totalCost(lot);
   // Denominator is the lot's original capacity (receivedKg), not what's left now.
   // We allocate cost across what came in — what's still here is just a portion of that.
   const denom = lot.receivedKg || lot.expectedKg || 0;
   return denom > 0 ? total / denom : 0;
 }
-function valueInStock(lot) {
+export function valueInStock(lot) {
   // Value still on hand = what's physically here × per-kg cost basis.
   // Note: physicalKg already accounts for SHIP_OUT movements (goods gone).
   return (lot.physicalKg || 0) * costPerKg(lot);
@@ -621,221 +618,16 @@ function recomputeLotFromMovements(lot: any, movements: any[]) {
   return domainRecomputeLot(lot, movements, locById); // engine: inventory.domain (Batch 1)
 }
 
-// ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
-function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", contacts = [], allLots = [], shipments = [], onCancel, onConfirm }: any) {
-  const moveLocs = mergedLocations(contacts);
-  // Default to TRANSFER for in-stock lots; IN for Expected/Direct Expected lots
-  // (v6.3.0 fix — "Direct Expected" previously fell through to TRANSFER whose max
-  // was 0 kg, making every quantity error out). In edit mode, prefill.
-  // v6.11 (#11) / v6.13 (#14): two modes — "movement" (IN / Transfer / Ship Out)
-  // and "quality" (Damage / Reclassify). The mode is fixed by which button opened
-  // the modal (Record movement vs the red Record quality issue), so there is no
-  // in-modal tab toggle anymore.
-  const QUALITY_TYPES = ["DAMAGE", "RECLASS", "CLAIM"];
-  // v6.35.4: manual movement is TRANSFER ONLY (relocation between our locations).
-  // Receipts (IN) and dispatches (SHIP_OUT) are driven by Shipments — arrival posts the
-  // receipt automatically, and an EXW client-collection posts the ship-out via its
-  // collection shipment. This removes the manual receipt/dispatch that let a lot's state
-  // drift from its shipment (T-20). Quality corrections stay in the separate quality mode.
-  const MOVEMENT_MODE_TYPES = ["TRANSFER"]; // v6.99.28 (owner): DAMAGE is owned by the QUALITY INSPECTION (and the sorting job / stock count) — a manual movement moves goods, it never judges them. Legacy damage rows stay visible and voidable in the history. // v6.96.0 (IN-1, owner money rule): by hand only cost-free transfers and damage/corrections — receipts, ship-outs and reversals are shipment postings
-  const mode: "movement" | "quality" = editing ? (QUALITY_TYPES.includes(editing.type) ? "quality" : "movement") : (initialMode === "quality" ? "quality" : "movement");
-  const [type, setType] = useState(editing?.type || (mode === "quality" ? "DAMAGE" : "TRANSFER"));
-  // v6.13 (#15): where the quality problem was detected along the journey.
-  const QUALITY_DETECTED_AT = ["At port of discharge", "At the client (export delivery)", "At our warehouse (on arrival)", "At the client's warehouse (direct delivery)", "At supplier / origin", "Other"];
-  const [detectedAt, setDetectedAt] = useState(editing?.detectedAt || QUALITY_DETECTED_AT[0]);
-  const [qty, setQty] = useState(editing ? String(editing.qtyKg ?? "") : "");
-  const [fromId, setFromId] = useState(editing?.fromId ?? lot.locationId);
-  const [toId, setToId] = useState(editing?.toId ?? lot.locationId);
-  const [note, setNote] = useState(editing?.note || "");
-  const [soRef, setSoRef] = useState(editing?.soRef || "");
-  const [date, setDate] = useState(editing?.date || today);
-  // v6.18.10 (#5): a quality issue detected AT THE CLIENT (after we shipped) is a
-  // client claim, not a warehouse write-off — it leaves our stock alone and drives a
-  // credit note. "Detected at" decides which path runs.
-  const CLIENT_SIDE_DETECTION = ["At the client (export delivery)", "At the client's warehouse (direct delivery)"];
-  const clientSide = mode === "quality" && CLIENT_SIDE_DETECTION.includes(detectedAt);
-  const lotShipSoRefs = Array.from(new Set((lot.movements || []).filter((m: any) => m.type === "SHIP_OUT" && m.soRef).map((m: any) => m.soRef)));
-  const clientSORefs = (lotShipSoRefs.length ? lotShipSoRefs : (liveSOs || []).map((o: any) => o.number)).filter(Boolean);
-  const [claimSoRef, setClaimSoRef] = useState(editing?.soRef || lotShipSoRefs[0] || "");
-  const [claimValue, setClaimValue] = useState(editing?.claimValue != null ? String(editing.claimValue) : "");
-  const [claimCurrency, setClaimCurrency] = useState(editing?.claimCurrency || "PLN");
-  const effectiveType = clientSide && type === "DAMAGE" ? "CLAIM" : type;
-  const reservationState = lotReservations(lot, liveSOs, { lots: allLots, shipments });
-  // Direct-flow lots never physically enter our warehouse (physicalKg stays 0),
-  // so quantity-reducing movements validate against the expected/direct quantity —
-  // consistent with how lotReservations computes availability for direct lots.
-  const isDirect = !!lot.directFlow || lot.status === "Direct Expected";
-  const physicalBasis = isDirect
-    ? Math.max(parseNum(lot.expectedKg), lot.physicalKg || 0)
-    : (lot.physicalKg || 0);
-  // In edit mode the max should add back this movement's own effect so it isn't
-  // double-counted against itself.
-  const selfQty = editing && (editing.type === type) ? parseNum(editing.qtyKg) : 0;
-  const maxByType = {
-    IN:       Infinity,
-    TRANSFER: physicalBasis + selfQty,
-    // v6.11 (#8): a Ship Out is the *physical* dispatch — for an EXW sale the lot is
-    // already reserved/sold (liveAvailable = 0), which used to block it. Cap by the
-    // physical (or expected, for direct flows) quantity instead of the reserved-net.
-    SHIP_OUT: physicalBasis + selfQty,
-    DAMAGE:   physicalBasis + selfQty,
-    RECLASS:  physicalBasis + selfQty,
-    CLAIM:    (parseNum(lot.receivedKg) || physicalBasis) + selfQty, // can't claim more than was ever received
-  };
-  const max = maxByType[effectiveType] ?? Infinity;
-  const qtyNum = parseFloat(qty) || 0;
-  const isInvalid = qtyNum <= 0 || qtyNum > max || (clientSide && !(parseFloat(claimValue) > 0));
-  const typeInfo = MOVEMENT_TYPES[type] || {};
-  const showRoute = type === "TRANSFER" || type === "IN" || type === "SHIP_OUT";
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "24px 16px", overflowY: "auto" }}>
-      <div style={{ background: "#fff", borderRadius: 14, width: 540, maxWidth: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", margin: "auto" }}>
-        <div style={{ padding: "20px 24px", borderBottom: "1px solid #EBEBEB" }}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>{editing ? (mode === "quality" ? "Edit quality issue" : "Edit movement") : (mode === "quality" ? "Record quality issue" : "Record movement")}</div>
-          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot.number} · {lot.product}{lot.variety ? " — " + lot.variety : ""} · received {(lot.receivedKg || 0).toLocaleString()} kg, physical {(lot.physicalKg || 0).toLocaleString()} kg</div>
-        </div>
-        <div style={{ padding: 24 }}>
-          {mode === "movement" ? (
-            <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
-              <strong>Manual movement relocates stock between your own locations</strong> (e.g. port → warehouse, warehouse → warehouse). Everything else is automatic: a shipment posts the <strong>receipt</strong> when it arrives and the <strong>ship-out</strong> when it delivers — with transport, cost and paperwork linked to the lot. To receive or dispatch goods, use <strong>Shipments</strong>, not a manual movement. (Quality issues and write-offs are recorded via <em>Record quality issue</em>.)
-            </div>
-          ) : clientSide ? (
-            <div style={{ padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5, marginBottom: 16 }}>
-              <strong>Client claim (goods already shipped).</strong> Because this defect was found at the client after delivery, it will <strong>not</strong> change your warehouse stock — those kg already left. Recording it logs a client claim against the delivery and creates a <strong>draft credit note</strong> to the client for the value below, which you can finalise in Invoices.
-            </div>
-          ) : (
-            <div style={{ padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11.5, color: "#991B1B", lineHeight: 1.5, marginBottom: 16 }}>
-              <strong>Quality issue (goods in our hands).</strong> <strong>Damage</strong> writes off rejected kg (reduces stock on hand), and <strong>Reclassify</strong> changes the quality grade (e.g. Kl. I → Kl. II) with no quantity change. If the defect is reported by the client after you shipped, change "Detected at" to a client location — it becomes a claim that won't touch your stock.
-            </div>
-          )}
-
-          <div style={{ marginBottom: 4 }}><Lbl>{mode === "quality" ? "Quality issue type" : "Movement type"}</Lbl>
-            <Sel value={type} onChange={e => setType(e.target.value)}>
-              {Object.entries(MOVEMENT_TYPES).filter(([k]) => k !== "REVERSAL" && (mode === "quality" ? QUALITY_TYPES.includes(k) : MOVEMENT_MODE_TYPES.includes(k))).map(([k, v]: any) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
-            </Sel>
-          </div>
-          {/* Live plain-language description of the selected type */}
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#F8FAFC", border: "1px solid #EEF2F7", borderRadius: 8, padding: "8px 10px", marginBottom: 14 }}>
-            <span style={{ color: typeInfo.color, fontWeight: 800, fontSize: 14, lineHeight: 1 }}>{typeInfo.icon}</span>
-            <span style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.4 }}>{typeInfo.desc}{type === "IN" ? " — increases stock on hand." : type === "TRANSFER" ? " — same quantity, new location." : type === "SHIP_OUT" ? " — reduces stock on hand. Use for an EXW sale where the client collects with their own truck (no transport on our side)." : type === "DAMAGE" ? " — reduces stock on hand and records a write-off." : type === "RECLASS" ? " — no quantity change." : ""}</span>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div>
-              <Lbl>Quantity (kg) <span style={{ color: "#AAA", fontWeight: 400 }}>· max {max === Infinity ? "∞" : max.toLocaleString()}</span></Lbl>
-              <Inp value={qty} onChange={e => setQty(e.target.value)} type="number" placeholder="0" />
-            </div>
-            <div>
-              <Lbl>Date</Lbl>
-              <Inp value={date} onChange={e => setDate(e.target.value)} type="date" noFuture />
-            </div>
-          </div>
-
-          {clientSide && (
-            <div style={{ marginBottom: 12, padding: "12px 14px", background: "#F8FAFF", border: "1px solid #DBEAFE", borderRadius: 8 }}>
-              <div style={{ marginBottom: 10 }}>
-                <Lbl>Delivery / sales order this claim is against</Lbl>
-                <Sel value={claimSoRef} onChange={e => setClaimSoRef(e.target.value)}>
-                  <option value="">— select the delivery —</option>
-                  {clientSORefs.map((r: any) => <option key={r} value={r}>{r}</option>)}
-                </Sel>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 12 }}>
-                <div>
-                  <Lbl>Agreed credit value</Lbl>
-                  <Inp value={claimValue} onChange={e => setClaimValue(e.target.value)} type="number" placeholder="0.00" />
-                </div>
-                <div>
-                  <Lbl>Currency</Lbl>
-                  <Sel value={claimCurrency} onChange={e => setClaimCurrency(e.target.value)}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel>
-                </div>
-              </div>
-              <div style={{ fontSize: 11, color: "#64748B", marginTop: 8, lineHeight: 1.4 }}>The {qty || "0"} kg won't be removed from warehouse stock. A draft credit note for this value goes to the client (linked to the sales invoice if one exists); finalise it in Invoices.</div>
-            </div>
-          )}
-
-          {showRoute && !clientSide && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 24px 1fr", gap: 8, alignItems: "end", marginBottom: 12 }}>
-              <div>
-                <Lbl>{type === "IN" ? "Received from" : "From"}</Lbl>
-                <Sel value={fromId} onChange={e => setFromId(parseInt(e.target.value))}>
-                  {moveLocs.map((l: any) => <option key={l.id} value={l.id}>{locType(l.type).icon} {l.name}</option>)}
-                </Sel>
-              </div>
-              <div style={{ textAlign: "center", paddingBottom: 9, color: "#94A3B8", fontSize: 16 }}>→</div>
-              <div>
-                <Lbl>{type === "SHIP_OUT" ? "Shipped to" : "To"}</Lbl>
-                <LocationPicker value={toId ?? ""} contacts={contacts} onChange={(r: any) => setToId(r.id)} placeholder="— destination —" />
-              </div>
-            </div>
-          )}
-
-          {mode === "quality" && (
-            <div style={{ marginBottom: 14 }}>
-              <Lbl>Where was it detected?</Lbl>
-              <Sel value={detectedAt} onChange={e => setDetectedAt(e.target.value)}>
-                {QUALITY_DETECTED_AT.map(d => <option key={d}>{d}</option>)}
-              </Sel>
-              <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 4, lineHeight: 1.4 }}>The problem is recorded against this lot, but it's usually found later in the journey — at the port of discharge, on arrival at our warehouse, or at the client.</div>
-            </div>
-          )}
-
-          {type === "SHIP_OUT" && (
-            <div style={{ marginBottom: 14 }}>
-              <Lbl>For Sales Order <span style={{ color: "#BBB", fontWeight: 400 }}>(links this dispatch to the SO for correct P/L)</span></Lbl>
-              <select value={soRef} onChange={e => setSoRef(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", background: "#fff" }}>
-                <option value="">— none / not linked —</option>
-                {(reservationState.reservations || []).map((r: any) => (
-                  <option key={r.soNumber} value={r.soNumber}>{r.soNumber}{r.clientName ? ` · ${r.clientName}` : ""} ({r.qty.toLocaleString("pl-PL")} kg)</option>
-                ))}
-                {/* Also allow any non-cancelled SO that sources this lot, even if not currently reserving */}
-                {(liveSOs || [])
-                  .filter((o: any) => !(reservationState.reservations || []).some((r: any) => r.soNumber === o.number))
-                  .filter((o: any) => (o.items || []).some((it: any) => (it.sourceType === "STOCK" && it.sourceRef === lot.number) || (it.sourceType === "PO" && it.sourceRef === lot.poRef)))
-                  .map((o: any) => <option key={o.number} value={o.number}>{o.number}{o.client?.name ? ` · ${o.client.name}` : ""}</option>)}
-              </select>
-            </div>
-          )}
-
-          <div style={{ marginBottom: 18 }}>
-            <Lbl>Note</Lbl>
-            <Inp value={note} onChange={e => setNote(e.target.value)} placeholder={mode === "quality" ? "e.g. 2 pallets soft/over-ripe found on arrival at Gdańsk" : "e.g. Reserved for SO-2026-0094 (Biedronka)"} />
-          </div>
-          {isInvalid && qty && (
-            <div style={{ padding: "8px 12px", background: "#FEE2E2", color: "#9A1B1B", fontSize: 12, borderRadius: 6, marginBottom: 12 }}>
-              {qtyNum > max ? `Quantity exceeds max (${max.toLocaleString()} kg)` : "Quantity must be greater than zero"}
-            </div>
-          )}
-          {max === 0 && type !== "IN" && (
-            <div style={{ padding: "8px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontSize: 12, borderRadius: 6, marginBottom: 12 }}>
-              This lot has <strong>no {type === "SHIP_OUT" ? "available" : "physical"} stock yet</strong>, so a {String(typeInfo.label || type).toLowerCase()} of any quantity is blocked.
-              {(lot.physicalKg || 0) === 0 && !isDirect && <> Record a <strong>⊕ Receipt (IN)</strong> first to bring goods into stock, then come back to this movement.</>}
-              {type === "SHIP_OUT" && (lot.physicalKg || 0) > 0 && <> All physical stock is currently reserved by confirmed SOs.</>}
-            </div>
-          )}
-          <div style={{ display: "flex", gap: 10 }}>
-            <button onClick={onCancel} style={{ flex: 1, padding: "10px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={() => onConfirm({ id: editing?.id, type: effectiveType, qtyKg: qtyNum, fromId, toId, note, date, soRef: effectiveType === "CLAIM" ? (claimSoRef || null) : (type === "SHIP_OUT" ? (soRef || null) : (editing?.soRef ?? null)), ...(mode === "quality" ? { detectedAt } : {}), ...(effectiveType === "CLAIM" ? { claimValue: parseFloat(claimValue) || 0, claimCurrency } : {}) })} disabled={isInvalid}
-              style={{ flex: 1, padding: "10px", border: "none", borderRadius: 8, background: isInvalid ? "#D1D5DB" : "#111", color: "#fff", fontSize: 13, fontWeight: 600, cursor: isInvalid ? "not-allowed" : "pointer" }}>
-              {editing ? "Save changes" : (mode === "quality" ? "Record quality issue" : "Record movement")}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 
 // ─── INSPECTION MODAL (v6.2) ────────────────────────────────────────────────
-const INSPECTION_CONTEXTS = [
+export const INSPECTION_CONTEXTS = [
   { code: "arrival", label: "Arrival QC (our inspection on receipt)" },
   { code: "warehouse", label: "Warehouse-reported (during storage)" },
   { code: "client", label: "Client feedback (after delivery)" },
   { code: "customs", label: "Customs examination" },
 ];
-const INSPECTION_OUTCOMES = [
+export const INSPECTION_OUTCOMES = [
   { code: "ok", label: "Passed — no issue" },
   { code: "weight_loss", label: "Weight loss / shrinkage" },
   { code: "damage", label: "Damaged / spoiled (write-off)" },
@@ -919,7 +711,7 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
 // ─── LOT DETAIL VIEW ────────────────────────────────────────────────────────
 
 // ─── v6.6: print helper for the settlement statement (same pattern as Shipments) ─
-function printHtmlNodeInv(nodeId, title, notify = null) {
+export function printHtmlNodeInv(nodeId, title, notify = null) {
   const node = document.getElementById(nodeId);
   if (!node) { if (notify) notify({ tone: "warn", title: "Not ready", message: "Print preview not ready — please try again in a moment." }); else console.warn("print preview node missing:", nodeId); return; }
   const existing = document.getElementById(`${nodeId}-frame`);
@@ -951,180 +743,8 @@ function printHtmlNodeInv(nodeId, title, notify = null) {
 }
 
 
-// ─── v6.6: CONSIGNMENT SETTLEMENT MODAL ─────────────────────────────────────
-// Per-lot/truck settlement: gross sales (auto from SOs) − expenses (auto from
-// lot costs + manual) = net sales value → producer invoice; commission % × net
-// → our invoice; payout = net − commission. Closing writes the two cost
-// components onto the lot so SO P/L lands at exactly the commission.
-function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, onSave }: any) {
-  const { confirm: stConfirm, dialogNode: stDialogNode } = useConfirm(); // P2-6
-  const po = (pos || []).find((p: any) => p.number === lot.poRef);
-  const producer = po ? (contacts || []).find((c: any) => normName(c.name) === normName(po.supplier?.name)) : null;
-  const seasonPct = producer ? currentCommissionPct(producer, localTodayISO()) : null;
-  const st = lot.settlement || { status: "None" };
-  const [pct, setPct] = useState<any>(st.commissionPct ?? (seasonPct ?? ""));
-  const [extra, setExtra] = useState<any[]>(st.extraExpenses || []);
-  const [prodInvNo, setProdInvNo] = useState(st.producerInvoiceNo || "");
-  const [prodInvPLN, setProdInvPLN] = useState<any>(st.producerInvoiceAmountPLN ?? "");
-  const [commInvNo, setCommInvNo] = useState(st.commissionInvoiceNo || "");
-  // v6.81.0 (D-57, owner ruling): tiers per TRUCK — the band follows this settlement's own gross.
-  const rateRec = producer ? currentCommissionRate(producer, localTodayISO()) : null;
-  const grossForBand = computeLotSettlement(lot, orders, 0, extra).grossPLN;
-  const bandPct = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, grossForBand) : null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  React.useEffect(() => { if (bandPct != null && st.status !== "Closed" && (pct === "" || pct === seasonPct)) setPct(bandPct); }, [bandPct]);
-  const calc = computeLotSettlement(lot, orders, parseFloat(pct) || 0, extra);
-  const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
-  const status = st.status || "None";
-  // v6.63.0 (owner ruling D2): once Closed — its cost components written and the
-  // commission invoice issued — a settlement can NEVER be reopened. Corrections,
-  // like invoices, happen only via credit/debit note.
-  const closedFinal = status === "Closed";
-  const prodInvNum = parseFloat(prodInvPLN);
-  const invVariance = isFinite(prodInvNum) && prodInvNum > 0 ? Math.round((prodInvNum - calc.netPLN) * 100) / 100 : null;
 
-  function save(nextStatus: string) {
-    if (closedFinal) return; // ruling D2: Closed is immutable — no path may rewrite it
-    const settlement = {
-      ...st,
-      status: nextStatus,
-      commissionPct: parseFloat(pct) || 0,
-      extraExpenses: extra,
-      producerInvoiceNo: prodInvNo,
-      producerInvoiceAmountPLN: isFinite(prodInvNum) ? prodInvNum : null,
-      commissionInvoiceNo: commInvNo,
-      expectedNetPLN: calc.netPLN,
-      expectedCommissionPLN: calc.commissionPLN,
-      // commission is charged on the producer's ACTUAL invoiced net sales value
-      finalCommissionPLN: isFinite(prodInvNum) && prodInvNum > 0 ? Math.round(prodInvNum * (parseFloat(pct) || 0)) / 100 : calc.commissionPLN,
-      ...(nextStatus === "Sent" && !st.sentAt ? { sentAt: localTodayISO() } : {}),
-      ...(nextStatus === "Closed" ? { closedAt: localTodayISO() } : {}),
-    };
-    onSave(settlement, nextStatus === "Closed");
-  }
-
-  function canClose() {
-    return isFinite(prodInvNum) && prodInvNum > 0 && (parseFloat(pct) || 0) > 0;
-  }
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120, padding: 20 }}>
-      {stDialogNode}
-      <div style={{ width: 860, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
-        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Consignment settlement {st?.number ? <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 6, padding: "1px 8px", marginRight: 6 }}>{st.number}</span> : null}· {lot.number}</div>
-            <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{po ? `${po.number} · ${po.supplier?.name || "producer"}` : "No PO link"} · status: <strong>{status}</strong>{producer && seasonPct !== null && <> · season rate {seasonPct}%</>}</div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => printHtmlNodeInv("settlement-statement", `Settlement-${lot.number}`)} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Print / PDF statement</button>
-            <button onClick={onCancel} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Close</button>
-          </div>
-        </div>
-
-        <div style={{ padding: "14px 22px", display: "grid", gridTemplateColumns: "200px 1fr 1fr 1fr", gap: 10, alignItems: "end", borderBottom: "1px solid #F3F4F6", background: "#FAFAFA" }}>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Commission %</label>
-            <input type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} disabled={status === "Closed"} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Producer invoice no. (their FV to us)</label>
-            <input value={prodInvNo} onChange={e => setProdInvNo(e.target.value)} disabled={status === "Closed"} placeholder="FV/…" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Producer invoice amount (PLN)</label>
-            <input type="number" value={prodInvPLN} onChange={e => setProdInvPLN(e.target.value)} disabled={status === "Closed"} placeholder={`expected ${fmt(calc.netPLN)}`} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-            {invVariance !== null && Math.abs(invVariance) >= 1 && <div style={{ fontSize: 10.5, color: invVariance > 0 ? "#DC2626" : "#D97706", marginTop: 3, fontWeight: 600 }}>{invVariance > 0 ? "+" : ""}{fmt(invVariance)} vs expected net</div>}
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Our commission invoice no.</label>
-            <input value={commInvNo} onChange={e => setCommInvNo(e.target.value)} disabled={status === "Closed"} placeholder="FV/…" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-          </div>
-        </div>
-
-        {calc.warnings.length > 0 && (
-          <div style={{ margin: "12px 22px 0", padding: "8px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 7, fontSize: 11.5, color: "#92400E" }}>
-            {calc.warnings.map((w, i) => <div key={i}>· {w}</div>)}
-          </div>
-        )}
-
-        {/* The bilingual statement — also the print target */}
-        <div style={{ padding: 22 }}>
-          <div id="settlement-statement" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "18px 22px", fontSize: 11.5 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 800 }}>CONSIGNMENT SETTLEMENT / ROZLICZENIE SPRZEDAŻY KOMISOWEJ</div>
-                <div style={{ color: "#555", marginTop: 2 }}>Lot / Partia: <strong>{lot.number}</strong> · {lot.product}{lot.variety ? " — " + lot.variety : ""} · {po ? `PO ${po.number}` : ""} · Date / Data: {localTodayISO()}</div>
-              </div>
-              <div style={{ textAlign: "right", color: "#555" }}>
-                <div style={{ fontWeight: 700 }}>MARIANNA</div>
-                <div>for / dla: {po?.supplier?.name || "Producer"}</div>
-              </div>
-            </div>
-            <div style={{ fontWeight: 800, fontSize: 11, marginTop: 6 }}>1. Sales / Sprzedaż</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 3 }}>
-              <thead><tr>{["SO", "Client / Klient", "Product / Produkt", "Kg", "Price / Cena", "Value / Wartość PLN"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left", fontSize: 10 }}>{h}</th>)}</tr></thead>
-              <tbody>{calc.salesLines.map((l, i) => <tr key={i}>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.soNumber}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.client}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.product}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.kg.toLocaleString("pl-PL")}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.unitPrice.toFixed(2)} {l.currency}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.pln.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
-              </tr>)}</tbody>
-            </table>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 2px", fontWeight: 700 }}>
-              <span>Gross sales value / Wartość sprzedaży brutto ({calc.soldKg.toLocaleString("pl-PL")} kg)</span><span>{fmt(calc.grossPLN)}</span>
-            </div>
-            <div style={{ fontWeight: 800, fontSize: 11, marginTop: 6 }}>2. Deducted expenses / Potrącone koszty</div>
-            {calc.expenseLines.map((l, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "2px 2px", borderBottom: "1px dotted #E5E7EB" }}>
-                <span>{l.label}{l.manual ? " (manual / ręczny)" : ""}</span><span>−{l.pln.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span>
-              </div>
-            ))}
-            {!calc.expenseLines.length && <div style={{ color: "#888", fontStyle: "italic", padding: "2px 2px" }}>No expenses recorded / Brak kosztów</div>}
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 2px", fontWeight: 700 }}>
-              <span>Total expenses / Suma kosztów</span><span>−{fmt(calc.expensesPLN)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6, marginTop: 6, fontWeight: 800 }}>
-              <span>3. NET SALES VALUE / WARTOŚĆ SPRZEDAŻY NETTO — producer invoices us this amount / producent wystawia fakturę na tę kwotę</span><span>{fmt(calc.netPLN)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 8px", marginTop: 4 }}>
-              <span>4. Our commission / Nasza prowizja ({calc.commissionPct}% × net)</span><span>−{fmt(calc.commissionPLN)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, fontWeight: 800 }}>
-              <span>5. PRODUCER PAYOUT / DO WYPŁATY PRODUCENTOWI</span><span>{fmt(calc.payoutPLN)}</span>
-            </div>
-          </div>
-
-          {/* manual expense editor (not printed) */}
-          {status !== "Closed" && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em", marginBottom: 6 }}>MANUAL EXPENSE LINES</div>
-              {extra.map((e: any, i: number) => (
-                <div key={e.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 160px 34px", gap: 8, marginBottom: 6 }}>
-                  <input value={e.label} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, label: ev.target.value } : x))} placeholder="e.g. Phytosanitary certificate" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
-                  <input type="number" value={e.pln} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, pln: ev.target.value } : x))} placeholder="PLN" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
-                  <button onClick={() => setExtra(prev => prev.filter((_, idx) => idx !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
-                </div>
-              ))}
-              <button onClick={() => setExtra(prev => [...prev, { id: nextId(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
-            </div>
-          )}
-        </div>
-
-        <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save</button>}
-          {(status === "None" || status === "Draft") && <button onClick={() => save("Sent")} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Mark statement sent</button>}
-          {closedFinal && <div style={{ fontSize: 12, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "8px 12px", fontWeight: 600 }}>🔒 Closed &amp; final (ruling D2) — this settlement cannot be reopened or edited. Corrections go through a credit or debit note.</div>}
-          {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={async () => { if (await stConfirm({ tone: "warn", title: `Close settlement for ${lot.number}?`, message: `Producer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`, confirmLabel: "Close settlement" })) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function normName(v: any) { return String(v || "").trim().toLowerCase(); }
+export function normName(v: any) { return String(v || "").trim().toLowerCase(); }
 
 // ─── v6.5: SORTING EVENT MODAL ──────────────────────────────────────────────
 // Logs a warehouse sorting service on the lot (kg sorted on a date). No stock
@@ -1221,170 +841,20 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
 // Three acts, in the order they happen in the building: inspect → sort → count. Each opens its own WINDOW
 // (the old toggles unfolded a form under the buttons and read as a wall of text). Ownership is unchanged:
 // the inspection judges, the sorting re-classes, the count corrects — none of them does another's job.
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+export const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
 // v6.99.33 (owner): the row actions are unmistakable - edit in the same blue as Claims, delete in red.
 const qhBtn: any = { padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" };
-const qhEdit: any = { ...qhBtn, border: "1px solid #2563EB", background: "#EFF6FF", color: "#1D4ED8" };
-const qhPrint: any = { ...qhBtn, border: "1px solid #0E7490", background: "#F0FDFA", color: "#0E7490" };
-const qhDelete: any = { ...qhBtn, border: "1px solid #DC2626", background: "#DC2626", color: "#fff" };
-const r0 = (v: number) => Math.round(v);
+export const qhEdit: any = { ...qhBtn, border: "1px solid #2563EB", background: "#EFF6FF", color: "#1D4ED8" };
+export const qhPrint: any = { ...qhBtn, border: "1px solid #0E7490", background: "#F0FDFA", color: "#0E7490" };
+export const qhDelete: any = { ...qhBtn, border: "1px solid #DC2626", background: "#DC2626", color: "#fff" };
 
-function supplierRefOf(lot: any, shipments: any[]): string {
+export function supplierRefOf(lot: any, shipments: any[]): string {
   // v6.99.34: the supplier's own reference travels on the truck that brought the lot (GM-004 and the like).
   const sh = (shipments || []).find((s: any) => s && String(s.status) !== "Cancelled" && ((s.poRefs || []).includes(lot?.poRef) || (s.goods || []).some((g: any) => String(g.lotRef) === String(lot?.number))) && (s.supplierRef || (s.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => u.supplierRef))));
   if (!sh) return "";
   return String(sh.supplierRef || (sh.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => u.supplierRef)).find(Boolean) || "");
 }
 
-function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "", shipments: shipmentsRef = [] }: any) {
-  // v6.99.19 (A-R14-8): once a claim on this lot is finalised or its truck settlement is closed, the facts behind them are frozen.
-  const frozenBy = (() => {
-    const cl = (claims || []).find((c: any) => ["Settled", "Accepted", "Closed"].includes(String(c.status)) && ((c.subjects || []).some((s: any) => String(s.ref) === String(lot.number)) || String(c.rootDoc?.number) === String(lot.poRef)));
-    if (cl) return `claim ${cl.number} is ${String(cl.status).toLowerCase()}`;
-    const st = (settlements || []).find((s: any) => String(s.poNumber) === String(lot.poRef) && s.status === "Closed");
-    if (st) return `settlement ${st.number || ""} is closed`.trim();
-    return "";
-  })();
-
-  const [win, setWin] = React.useState<"" | "inspect" | "sort" | "count">("");
-  const [ins, setIns] = React.useState<any>(null);
-  const [qrNos, setQrNos] = React.useState<any>({});
-  const [sortF, setSortF] = React.useState<any>(null);
-  const [countF, setCountF] = React.useState<any>(null);
-  const cat = PEPPER_DEFECTS;   // v6.99.33 (owner): the producer's defect list is part of the report definition — nothing to configure
-  const myIns = (inspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number)).sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
-  const myJobs = (lot.sortingJobs || []).slice().sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
-  const myCounts = (stockCounts || []).filter((c: any) => (c.lines || []).some((l: any) => String(l.lotNumber) === String(lot.number))).sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)));
-  const po = (pos || []).find((p: any) => String(p.number) === String(lot.poRef)) || null;
-  const g = gradeSplit(lot);
-
-
-  // v6.99.33 (owner): a sorting job can be corrected or removed. The ledger is never rewritten: its RECLASS / DAMAGE
-  // movements are VOIDED (visible, with a reason) and the job record is dropped; editing then re-posts a fresh job.
-  function voidJob(j: any, why: string) {
-    const src = `sorting:${j.id}`;
-    const next = { ...lot, movements: (lot.movements || []).map((m: any) => String(m.source || "") === src && !m.voided ? { ...m, voided: true, voidReason: `sorting job ${why} on ${localTodayISO()}` } : m), sortingJobs: (lot.sortingJobs || []).filter((x: any) => String(x.id) !== String(j.id)) };
-    const healed = recompute(next, next.movements);
-    setLots && setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? healed : l));
-    recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job of ${j.date} ${why} — its movements voided` });
-  }
-  function openInspection(existing?: any) {
-    setIns(existing ? { ...existing } : blankInspection(lot, { nextId, todayISO: localTodayISO, po, tolerances: tolerancesFromLast(inspections, lot.product) }));
-    setWin("inspect");
-  }
-  function openSorting() {
-    const last = myIns[0];
-    // v6.99.34 (A-R24-3): start from the pool that still has goods — the unsorted remainder first, never the whole lot again.
-    const pools = sortablePools(lot);
-    const first = pools.find(x => x.kg > 0) || pools[0];
-    setSortF({ date: localTodayISO(), followsInspection: last ? String(last.id) : "", fromPool: first.key, kgIn: first.kg || "", classIKg: "", classIIKg: "", wasteKg: "", by: "", hours: "", note: "" });
-    setWin("sort");
-  }
-  function openCount() {
-    // v6.99.34 (A-R24-4): only what the counter types is held in state — the system figures are read from the lot at render,
-    // so a sorting or another count in the same session cannot leave the window counting against stale numbers.
-    const kgPerBox = num((po?.items || []).find((it: any) => String(it.id) === String(lot.poLineId))?.kgPerBox) || num(lot.kgPerBox) || "";
-    setCountF({ date: localTodayISO(), by: userName || "", reason: "", kgPerBox, entries: {} });
-    setWin("count");
-  }
-  React.useEffect(() => { const h = () => openInspection(); window.addEventListener("marianna:open-inspection", h); return () => window.removeEventListener("marianna:open-inspection", h); });
-
-  const bigBtn = (color: string, bg: string, icon: string, title: string, sub: string, onClick: any) => (
-    <button onClick={onClick} disabled={!!frozenBy} style={{ flex: "1 1 210px", textAlign: "left", padding: "10px 14px", borderRadius: 10, border: `1px solid ${color}`, background: frozenBy ? "#F3F4F6" : bg, cursor: frozenBy ? "not-allowed" : "pointer" }}>
-      <div style={{ fontSize: 13.5, fontWeight: 800, color }}>{icon} {title}</div>
-      <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>{sub}</div>
-    </button>
-  );
-
-  return (
-    <div style={{ background: "#fff", border: "2px solid #0E7490", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
-      <div style={{ background: "#ECFEFF", borderBottom: "1px solid #A5F3FC", padding: "8px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 12, fontWeight: 800, color: "#0E7490", letterSpacing: "0.04em" }}>QUALITY &amp; HANDLING</div>
-        <div style={{ fontSize: 11.5, color: "#0F766E" }}>class I {g.I.toLocaleString("pl-PL")} kg · class II {g.II.toLocaleString("pl-PL")} kg · waste {g.waste.toLocaleString("pl-PL")} kg</div>
-      </div>
-      <div style={{ padding: "12px 16px" }}>
-        {frozenBy && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>🔒 Locked — {frozenBy}. Correct by voiding a movement in the history, or by re-opening the settlement.</div>}
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-          {bigBtn("#0E7490", "#F0FDFA", "🔬", "Quality inspection", "check the goods and judge them", () => openInspection())}
-          {bigBtn("#7C3AED", "#F5F3FF", "⚖", "Sorting job", "split what the inspection said to sort", openSorting)}
-          {bigBtn("#B45309", "#FFFBEB", "📋", "Stock count", "verify what is physically there", openCount)}
-        </div>
-
-        {/* the timeline — one line per act, newest first */}
-        {!myIns.length && !myJobs.length && !myCounts.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>Nothing recorded yet — inspect the goods before sorting.</div>}
-        {myIns.map((x: any) => { const v = inspectionVerdict(x); return (
-          <div key={String(x.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
-            <span style={{ width: 20 }}>🔬</span>
-            <b style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{qrNos[String(x.id)] || lastReportNumber("QR", String(x.id)) || "—"}</b>
-            <span>{x.date} · {x.stage} · {x.inspector || "—"}</span>
-            <span>checked {num(x.checkedQty).toLocaleString("pl-PL")} {x.unit || "kg"} ({samplePctOf(x)} %)</span>
-            <span>defects <b>{v.totalPct} %</b></span>
-            <span style={{ fontWeight: 800, color: v.acceptable ? "#16A34A" : "#DC2626" }}>{v.acceptable ? "Acceptable" : "Not acceptable"}</span>
-            <span style={{ color: "#64748B" }}>· {x.verdict}</span>
-            <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              {!frozenBy && <button onClick={() => openInspection(x)} style={qhEdit}>✎ Edit</button>}
-              <button style={qhPrint} onClick={() => { const no = lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</button>
-              {!frozenBy && setInspections && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).filter((p: any) => String(p.id) !== String(x.id))); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} deleted` }); }}>🗑 Delete</button>}
-            </span>
-            <QualityReportDoc x={x} lot={lot} no={qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} supplierRef={supplierRefOf(lot, shipmentsRef)} />
-          </div>
-        ); })}
-        {myJobs.map((j: any) => (
-          <div key={String(j.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
-            <span style={{ width: 20 }}>⚖</span><span>{j.date}</span>
-            <span>sorted <b>{Math.round(num(j.kgIn)).toLocaleString("pl-PL")} kg</b> → I {Math.round(num(j.classIKg)).toLocaleString("pl-PL")} · II {Math.round(num(j.classIIKg)).toLocaleString("pl-PL")} · waste {Math.round(num(j.wasteKg)).toLocaleString("pl-PL")}</span>
-            {j.by ? <span>· {j.by}</span> : null}{j.hours ? <span>· {j.hours} h</span> : null}
-            <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              {!frozenBy && <button style={qhEdit} onClick={() => { voidJob(j, "corrected"); setSortF({ date: j.date, followsInspection: j.followsInspection || "", kgIn: j.kgIn, classIKg: j.classIKg, classIIKg: j.classIIKg, wasteKg: j.wasteKg, by: j.by || "", hours: j.hours || "", note: j.note || "" }); setWin("sort"); }}>✎ Edit</button>}
-              {!frozenBy && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the sorting job of ${j.date}? Its RECLASS and DAMAGE movements are voided (they stay visible in the history).`)) return; voidJob(j, "deleted"); }}>🗑 Delete</button>}
-            </span>
-          </div>
-        ))}
-        {myCounts.map((c: any) => { const mine = (c.lines || []).filter((l: any) => String(l.lotNumber) === String(lot.number)); return (
-          <div key={String(c.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
-            <span style={{ width: 20 }}>📋</span><span>{c.date} count</span>
-            {mine.map((l: any, k: number) => <span key={k}>{l.grade ? `class ${l.grade}: ` : ""}counted {Math.round(num(l.countedKg)).toLocaleString("pl-PL")} vs system {Math.round(num(l.systemKg)).toLocaleString("pl-PL")} → <b style={{ color: num(l.diffKg) ? "#B45309" : "#16A34A" }}>{num(l.diffKg) >= 0 ? "+" : ""}{Math.round(num(l.diffKg))} kg</b></span>)}
-            {c.by ? <span>· {c.by}</span> : null}
-          </div>
-        ); })}
-      </div>
-
-      {win === "inspect" && ins && (
-        <InspectionWindow ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={(final: any) => {
-          const w = beforeReceiptWarning(lot, final.date); if (w) { window.alert("⚠ " + w); return; }
-          setInspections && setInspections((prev: any[]) => (prev || []).some((p: any) => String(p.id) === String(final.id)) ? (prev || []).map((p: any) => String(p.id) === String(final.id) ? final : p) : [...(prev || []), final]);
-          recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Quality inspection ${final.date} · defects ${inspectionVerdict(final).totalPct}% · ${final.verdict}` });
-          setWin("");
-        }} />
-      )}
-      {win === "sort" && sortF && (
-        <SortingWindow f={sortF} setF={setSortF} lot={lot} inspections={myIns} contacts={contacts} onClose={() => setWin("")} onSave={() => {
-          const w = beforeReceiptWarning(lot, sortF.date); if (w) { window.alert("⚠ " + w); return; }
-          const r = runSortingJob(lot, { ...sortF, fromPool: sortF.fromPool || "UNSORTED", date: sortF.date || localTodayISO() }, { nextId });
-          if (r.error) { window.alert(r.error); return; }
-          const healed = recompute(r.lot, r.lot.movements);
-          setLots && setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? healed : l));
-          recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job: I ${sortF.classIKg} · II ${sortF.classIIKg} · waste ${sortF.wasteKg} kg` });
-          const warn = gradeCommitmentWarning(healed, orders || []); if (warn) window.alert("⚠ " + warn);
-          setWin("");
-        }} />
-      )}
-      {win === "count" && countF && (
-        <CountWindow f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={() => {
-          const w = beforeReceiptWarning(lot, countF.date); if (w) { window.alert("⚠ " + w); return; }
-          const lines = countLinesForLot(lot).filter((r: any) => !r.informational).map((r: any) => { const e = { ...(countF.entries || {})[r.grade || "-"], kgPerBox: countF.kgPerBox }; const counted = countedKgOf(e as any);
-            return { lotNumber: lot.number, grade: r.grade, countedKg: counted, systemKg: r.systemKg, diffKg: r0(counted - num(r.systemKg)), pallets: (e as any).pallets, boxesPerPallet: (e as any).boxesPerPallet, looseBoxes: (e as any).looseBoxes }; });
-          const count = { id: nextId(), date: countF.date || localTodayISO(), locationId: lot.locationId, by: countF.by || userName || "", lines };
-          const res = applyStockCount(lots || [], count as any, countF.reason || "stock count", { nextId });
-          setLots && setLots((prev: any[]) => (prev || []).map((l: any) => { const hit = (res.lots || []).find((x: any) => x.id === l.id); return hit ? recompute(hit, hit.movements) : l; }));
-          setStockCounts && setStockCounts((prev: any[]) => [...(prev || []), count]);
-          recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Stock count ${count.date}: ${lines.map((l: any) => `${l.grade ? "class " + l.grade + " " : ""}${l.diffKg >= 0 ? "+" : ""}${l.diffKg} kg`).join(" · ")}` });
-          setWin("");
-        }} />
-      )}
-    </div>
-  );
-}
 
 // ── v6.99.32: the three windows of Quality & Handling (A-QH-1/3/5/6/8) ──
 function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save", confirmText = "", children, extra = null, draft = undefined }: any) {
@@ -1398,7 +868,7 @@ function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save"
           <div><div style={{ fontSize: 14, fontWeight: 800, color: colour }}>{title}</div><div style={{ fontSize: 11.5, color: "#64748B" }}>{subtitle}</div></div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             {extra}
-            <SmallButton onClick={onClose}>Close</SmallButton>
+            <SmallButton kind="close" onClick={onClose}>Close</SmallButton>
             <button onClick={() => (confirmText ? setAsking(true) : onSave())} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{saveLabel}</button>
           </div>
         </div>
@@ -1422,7 +892,7 @@ function QhField({ label, hint, children }: any) {
 }
 
 /** A-QH-3/4/7/8: the quality report as the producer's sheet — header · external quality · defects · conclusion. */
-function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
+export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
   const set = (k: string, v: any) => setIns((x: any) => ({ ...x, [k]: v }));
   const v = inspectionVerdict(ins);
   const checks: any[] = ins.externalChecks || [];
@@ -1468,7 +938,7 @@ function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
           </Sel>
           <input type="number" step="0.01" placeholder="% found" value={d.pct ?? ""} onChange={e => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, pct: e.target.value } : x))} style={qhInp} />
           <div style={{ fontSize: 10.5, color: "#94A3B8", textAlign: "center" }}>tol. {(ins.tolerances || {})[d.category] ?? 0} %</div>
-          <button onClick={() => set("defects", ins.defects.filter((_: any, k: number) => k !== i))} style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 32, cursor: "pointer" }}>✕</button>
+          <ActionButton action="close" onClick={() => set("defects", ins.defects.filter((_: any, k: number) => k !== i))} />
         </div>
       ))}
       <button onClick={() => set("defects", [...(ins.defects || []), { category: "Major", name: "", pct: "" }])}
@@ -1500,7 +970,7 @@ function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
 }
 
 /** A-QH-5: sorting follows an inspection; it warns when there is none but never blocks. */
-function SortingWindow({ f, setF, lot, inspections = [], contacts = [], onClose, onSave }: any) {
+export function SortingWindow({ f, setF, lot, inspections = [], contacts = [], onClose, onSave }: any) {
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const placed = num(f.classIKg) + num(f.classIIKg) + num(f.wasteKg);
   const remaining = r0(num(f.kgIn) - placed);
@@ -1536,7 +1006,7 @@ function SortingWindow({ f, setF, lot, inspections = [], contacts = [], onClose,
 }
 
 /** A-QH-6: counted as the warehouse counts — pallets and boxes, per class. */
-function CountWindow({ f, setF, lot, onClose, onSave }: any) {
+export function CountWindow({ f, setF, lot, onClose, onSave }: any) {
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const setRow = (grade: string, k: string, v: any) => set("entries", { ...(f.entries || {}), [grade || "-"]: { ...((f.entries || {})[grade || "-"] || {}), [k]: v } });
   return (
@@ -1571,7 +1041,7 @@ function CountWindow({ f, setF, lot, onClose, onSave }: any) {
 
 
 // ── v6.91.0: THE LOT WORKBENCH — one screen per lot, composed from the owning modules, storing nothing ──
-function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orders = [], settlements = [], contacts = [] }: any) {
+export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orders = [], settlements = [], contacts = [] }: any) {
   const S = (v: any) => String(v ?? "").trim();
   const num = (v: any) => { const n = parseFloat(String(v ?? "")); return isFinite(n) ? n : 0; };
   // Arrival: the supplier-delivery (or any inbound) shipment that carried this lot
@@ -1623,552 +1093,6 @@ function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orde
 
 
 
-function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [], season = null , userName = "" }: any) {
-  // v6.99.30 (A-R21-3, owner): a recall document must be identifiable afterwards — it carries its own number,
-  // minted when it is issued and written to the audit trail with the lot and the person who ran it.
-  const [traceNo, setTraceNo] = useState<string>("");
-  const seasonInspections = season?.inspections || [];   // v6.99.17 (A-R13-9): ONE inspections store — the legacy card reads it too
-  const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
-  const cpk = costPerKg(lot);
-  const total = totalCost(lot);
-  const value = valueInStock(lot);
-  const variance = (lot.receivedKg || 0) - (lot.expectedKg || 0);
-  const shippedOutKg = Math.max(0, (lot.receivedKg || 0) - (lot.physicalKg || 0) - (lot.damagedKg || 0) - (lot.wasteKg || 0));   // v6.99.34 (A-R24-1)
-
-  // Qty stripe segments — show the lifecycle of the receivedKg
-  const segments = [
-    { key: "Available",   kg: res.liveAvailable,   color: "#16A34A" },
-    { key: "Reserved",    kg: res.totalReserved,   color: "#7C3AED" },
-    { key: "Shipped out", kg: shippedOutKg,        color: "#2563EB" },
-    { key: "Damaged",     kg: lot.damagedKg || 0,  color: "#DC2626" },
-    { key: "Waste (sorting)", kg: lot.wasteKg || 0, color: "#6B7280" },
-  ].filter(s => s.kg > 0);
-  const totalKg = segments.reduce((s, x) => s + x.kg, 0);
-
-  return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Inventory</button>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          <button onClick={onMove} title="v6.99.28: cost-free transfers only — damage belongs to the quality inspection" style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7DD3FC", background: "#E0F2FE", color: "#0369A1", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Record movement</button>
-          {/* v6.99.30 (A-R21-1, owner): the header's "Report quality issue" is gone — quality has ONE entry, the Quality inspection in Season actions */}
-          {(lot.movements || []).some((m: any) => m.type === "SHIP_OUT") && (
-            <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
-          )}
-          {/* v6.99.28 (owner): only a purchase the SUPPLIER delivers (DDP / DAP / DPU) is received here — every other lot arrives through its shipment */}
-          {typeof onDirectReceive === "function" && (lot.status === "Expected" || lot.status === "Direct Expected") && !(lot.movements || []).some((m: any) => !m.voided) && ["DDP", "DAP", "DPU"].includes(String((pos || []).find((x: any) => String(x.number) === String(lot.poRef))?.buyIncoterm || "").toUpperCase()) && (
-            <button onClick={onDirectReceive} title="For DDP / direct arrivals with no shipment of ours: posts the receipt movement so the stock becomes available." style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📥 Receive into stock (direct/DDP)</button>
-          )}
-          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
-        </div>
-      </div>
-
-      <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
-        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
-          {/* Header */}
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22 }}>
-            <div>
-              {/* v6.59.0 (user ruling): the lot NUMBER comes first. Status,
-                  class and the expected/received variance sat above it, so the
-                  eye met three qualifiers before the thing being qualified. */}
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 6 }}>{lot.number}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                <StatusBadge status={lot.status} />
-                <QualityBadge quality={lot.quality} />
-                <VarianceBadge expected={lot.expectedKg} actual={lot.receivedKg} />
-              </div>
-              {/* v6.59.0: the supplier — asked far more often than the packaging. */}
-              {(() => { const po = (pos || []).find((x: any) => String(x.number) === String(lot.poRef));
-                const sup = po?.supplier?.name || lot.supplierName || "";
-                // v6.65.0 (owner request): the supplier must read as a different kind of
-                // information than the product — amber, smaller caps, not near-black.
-                return sup ? <div style={{ fontSize: 11.5, fontWeight: 700, color: "#0369A1", letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 2 }}>{sup}</div> : null; })()}
-              <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
-              <div style={{ marginTop: 10 }}><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} pos={pos} /></div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 11, color: "#888" }}>Value of physical stock</div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111" }}>{fmtMoney(value)}</div>
-              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(cpk)}/kg · received {fmtNum(lot.receivedKg)} kg</div>
-            </div>
-          </div>
-
-          {/* Qty breakdown — v6.3.0 compact strip (PO-module density): figures + bar on one row */}
-          <Card style={{ marginBottom: 12, padding: "12px 16px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(78px, 1fr))", gap: 10, alignItems: "center" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>QUANTITY<br />BREAKDOWN</div>
-              <div><div style={{ fontSize: 9, color: "#888" }}>EXPECTED</div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#555" }}>{fmtNum(lot.expectedKg)} kg</div></div>
-              <div><div style={{ fontSize: 9, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#111" }}>{fmtNum(lot.receivedKg)} kg</div></div>
-              <div title="Live: physicalKg − reservations from pre-dispatch SOs"><div style={{ fontSize: 9, color: "#16A34A" }}>AVAILABLE</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#16A34A" }}>{fmtNum(res.liveAvailable)} kg</div></div>
-              <div title="From Confirmed/Reserved/Loading SOs"><div style={{ fontSize: 9, color: "#7C3AED" }}>RESERVED</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#7C3AED" }}>{fmtNum(res.totalReserved)} kg</div></div>
-              {(() => { const g = { ...gradeSplit(lot), waste: num(lot.wasteKg) || gradeSplit(lot).waste }; return (g.II > 0 || g.waste > 0) ? <><div title="v6.99.19: sorted classes — CLASS II is sound fruit reclassified by sorting; WASTE is what the sorting threw away (a DAMAGE movement with source sorting:). DAMAGED is any other loss: transit damage, a count adjustment, damage found in store."><div style={{ fontSize: 9, color: "#166534" }}>CLASS I</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#166534" }}>{fmtNum(g.I)} kg</div></div><div><div style={{ fontSize: 9, color: "#B45309" }}>CLASS II</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#B45309" }}>{fmtNum(g.II)} kg</div></div><div><div style={{ fontSize: 9, color: "#6B7280" }}>WASTE (sorting)</div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#6B7280" }}>{fmtNum(g.waste)} kg</div></div></> : null; })()}
-              <div><div title="v6.99.19: DAMAGED = losses outside sorting (transit, store, count adjustments). Sorting waste is shown separately."><div style={{ fontSize: 9, color: "#DC2626" }}>DAMAGED</div></div><div style={{ fontSize: 12.5, fontWeight: 700, color: "#DC2626" }}>{fmtNum(lot.damagedKg)} kg</div></div>
-              <div>
-                {totalKg > 0 && (
-                  <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", border: "1px solid #F3F4F6" }} title={segments.map(s => `${s.key}: ${s.kg.toLocaleString()} kg`).join("  ·  ")}>
-                    {segments.map((s, i) => (
-                      <div key={i} title={`${s.key}: ${s.kg.toLocaleString()} kg (${((s.kg / totalKg) * 100).toFixed(1)}%)`} style={{ background: s.color, width: `${(s.kg / totalKg) * 100}%` }} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            {variance !== 0 && lot.receivedKg > 0 && (
-              <div style={{ marginTop: 8, padding: "5px 9px", background: variance < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${variance < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 6, fontSize: 11, color: variance < 0 ? "#92400E" : "#1E40AF" }}>
-                <strong>{variance > 0 ? "Surplus" : "Shortfall"}:</strong> {Math.abs(variance).toLocaleString()} kg ({((variance / lot.expectedKg) * 100).toFixed(2)}%) vs PO {lot.poRef}
-                <span title={variance < 0 ? "Common causes: moisture loss in transit, weight check at port, damage. Consider raising a damage report if responsibility lies with carrier or supplier." : "Higher than ordered — confirm with supplier."} style={{ marginLeft: 6, cursor: "help", color: "inherit", opacity: 0.7 }}>ⓘ</span>
-              </div>
-            )}
-          </Card>
-
-          {/* v6.6: consignment banner + settlement entry point */}
-          {lot.consignment && (
-            <Card style={{ marginBottom: 12, border: "1px solid #DDD6FE", background: "#FAF5FF" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 800, color: "#6D28D9" }}>⚖ CONSIGNMENT LOT — price settled on sales</div>
-                  <div style={{ fontSize: 11.5, color: "#7C3AED", marginTop: 3, lineHeight: 1.5 }}>
-                    Producer's goods in our custody. Sell at your prices; all expenses are deducted at settlement.
-                    Settled per truck on the purchase order (all lots of the PO together; expenses include delivery freight; producer invoice in its own currency).
-                    {lot.settlement?.closedAt ? ` · closed ${lot.settlement.closedAt}` : lot.settlement?.sentAt ? ` · statement sent ${lot.settlement.sentAt}` : ""}
-                  </div>
-                </div>
-{/* v6.99.17 (A-R13-2, ownership): the settlement is per PO (truck) and lives in PURCHASE ORDERS — the old per-lot settlement is retired */}
-                <span style={{ fontSize: 11.5, color: "#6D28D9", fontWeight: 700 }}>Settlement: on {lot.poRef || "the PO"} (Purchase Orders → Truck settlement)</span>
-                {onOpenClaim && (
-                  <button onClick={() => onOpenClaim(lot)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#B45309", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="Quantify damage on this consignment and request a credit note from the producer">
-                    {(lotClaims || []).length ? `Producer claim (${(lotClaims || []).length})` : "Producer claim"}
-                  </button>
-                )}
-                <button onClick={() => { const no = issueReportNumber("TRC", lot.number, userName); setTraceNo(no); setTimeout(() => printHtmlNodeInv("lot-trace-doc", `${no}-${lot.number}`), 60); }} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #0F766E", background: "#fff", color: "#0F766E", fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", marginLeft: 8 }} title="One-click recall report: where this lot came from and everywhere it went — supplier, shipments, clients, invoices.">
-                  🔎 Trace / recall
-                </button>
-              </div>
-            </Card>
-          )}
-
-          {/* v6.5: expected warehouse charges — predicted from movements + tariff */}
-          {(() => {
-            const wh = computeLotWarehouseCharges(lot, contacts, localTodayISO());
-            if (!wh) return null;
-            return (
-              <Card style={{ marginBottom: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <div>
-                    <SectionTitle>WAREHOUSE CHARGES — EXPECTED · {wh.warehouseName.toUpperCase()}</SectionTitle>
-                    <div style={{ fontSize: 10.5, color: "#888", marginTop: -8 }}>
-                      {wh.basis === "pallet"
-                        ? `${wh.chargeablePalletDays.toLocaleString("pl-PL")} chargeable pallet-days`
-                        : `${wh.chargeableKgDays.toLocaleString("pl-PL")} chargeable kg-days`}
-                      {" "}accrued to date · predicted from this lot's movements — compare against the warehouse invoice
-                    </div>
-                  </div>
-                  <button onClick={() => onRecordSorting && onRecordSorting(lot)} style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>+ Record sorting</button>
-                </div>
-                {wh.lines.map((l, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #F9FAFB", fontSize: 12, color: "#444" }}>
-                    <span>{l.label}{l.date ? <span style={{ color: "#999", fontSize: 10.5 }}> · {formatDMY(l.date)}</span> : null}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
-                    <span style={{ fontWeight: 600 }}>{l.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {wh.currency}</span>
-                  </div>
-                ))}
-                {!wh.lines.length && <div style={{ fontSize: 11, color: "#AAA", fontStyle: "italic" }}>No chargeable activity yet (free period or no stock days).</div>}
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, padding: "8px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 7 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: "#0C4A6E" }}>Expected invoice for this lot (to date)</span>
-                  <span style={{ fontSize: 13, fontWeight: 800, color: "#0C4A6E" }}>
-                    {wh.total.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {wh.currency}
-                    {wh.currency !== "PLN" && <span style={{ fontWeight: 500, color: "#0369A1", marginLeft: 8, fontSize: 11 }}>≈ {wh.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>}
-                  </span>
-                </div>
-                {wh.notes.map((n, i) => <div key={i} style={{ fontSize: 10.5, color: "#92400E", marginTop: 6 }}>ⓘ {n}</div>)}
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 6 }}>Monthly totals per warehouse and invoice reconciliation: Finance → Warehouse charges.</div>
-              </Card>
-            );
-          })()}
-          {res.reservations.length > 0 && (
-            <Card style={{ marginBottom: 16, border: "1px solid #DDD6FE", background: "#FAF8FF" }}>
-              <SectionTitle>RESERVATIONS · {res.reservations.length} SO{res.reservations.length !== 1 ? "s" : ""}</SectionTitle>
-              <div style={{ display: "grid", gap: 8 }}>
-                {res.reservations.map((r, i) => (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "160px 1fr 100px 100px", gap: 10, alignItems: "center", padding: "8px 10px", background: "#fff", border: "1px solid #EDE9FE", borderRadius: 7 }}>
-                    <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#7C3AED" }}>{r.soNumber}</div>
-                    <div style={{ fontSize: 12, color: "#555" }}>{r.clientName}</div>
-                    <div><StatusBadge status={r.status} /></div>
-                    <div style={{ textAlign: "right", fontSize: 12.5, fontWeight: 600, color: "#7C3AED" }}>{fmtNum(r.qty)} kg</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginTop: 10, fontSize: 10.5, color: "#888", fontStyle: "italic" }}>
-                Only SOs in Confirmed/Reserved/Loading status count against live availability. Shipped+ SOs have already physically left and are reflected in SHIP_OUT movements.
-              </div>
-            </Card>
-          )}
-
-          {/* Two-column body */}
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
-            <div>
-              {/* Journey (v6.1b) — planned stages from the PO flow, with ownership coding */}
-              {(() => { const journey = journeyForLot(lot, shipments || [], liveSOs || []); return journey.length > 0 && (
-                <Card style={{ marginBottom: 16 }}>
-                  <SectionTitle>JOURNEY · {journey.length} STAGES</SectionTitle>
-                  <div style={{ fontSize: 11, color: "#888", marginBottom: 14, lineHeight: 1.5 }}>
-                    Planned route for this lot, from its flow. <span style={{ color: "#16A34A", fontWeight: 600 }}>Green = ours (our risk)</span>; grey = not yet ours / handed to client.
-                  </div>
-                  <div style={{ position: "relative" }}>
-                    {journey.map((s, i) => {
-                      const owned = s.ownership === "owned";
-                      const tagText = s.ownership === "owned" ? "OURS" : s.ownership === "not_owned" ? "supplier's" : "client's";
-                      const done = s.status === "done";
-                      const active = s.status === "active";
-                      const dotColor = done ? "#16A34A" : active ? "#D97706" : (owned ? "#86EFAC" : "#D1D5DB");
-                      // Black/gray emphasis: stages where goods are OURS render in black;
-                      // the supplier's / client's portions render gray.
-                      const textColor = owned ? "#111827" : "#9CA3AF";
-                      const labelText = s.label || standardStageLabel(s.kind); // v6.34.9: prefer the real (shipment-derived) stage label
-                      const last = i === journey.length - 1;
-                      return (
-                        <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", paddingBottom: last ? 0 : 16, position: "relative" }}>
-                          {!last && <div style={{ position: "absolute", left: 7, top: 18, bottom: 0, width: 2, background: done ? "#16A34A" : "#E5E7EB" }} />}
-                          <div style={{ width: 16, height: 16, borderRadius: "50%", background: dotColor, flexShrink: 0, marginTop: 2, border: "2px solid #fff", boxShadow: "0 0 0 1px " + dotColor, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#fff", fontWeight: 900 }}>{done ? "✓" : ""}</div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                              <span style={{ fontSize: 13, fontWeight: owned ? 700 : 500, color: textColor }}>{labelText}{active && <span style={{ color: "#D97706", fontWeight: 700, fontSize: 10, marginLeft: 6 }}>● IN PROGRESS</span>}</span>
-                              <span style={{ fontSize: 10, fontWeight: 700, color: owned ? "#16A34A" : "#9CA3AF", background: owned ? "#DCFCE7" : "#F3F4F6", padding: "1px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>{tagText}</span>
-                            </div>
-                            <div style={{ fontSize: 11, marginTop: 2, color: done ? "#9CA3AF" : active ? "#D97706" : "#9CA3AF" }}>
-                              {done
-                                ? `${formatDMY(s.actualDate || s.plannedDate) || ""} · done`
-                                : active
-                                  ? `${s.plannedDate ? "planned " + formatDMY(s.plannedDate) : "date TBA"} · in progress`
-                                  : `${s.plannedDate ? "planned " + formatDMY(s.plannedDate) : "date TBA"}`}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Card>
-              ); })()}
-
-              {/* Customs overlay (v6.1d) — independent clearance events, editable */}
-              {(() => {
-                const kinds = customsStagesForLot(lot, shipments);
-                if (kinds.length === 0) return null;
-                return (
-                  <Card style={{ marginBottom: 16 }}>
-                    <SectionTitle>CUSTOMS CLEARANCE</SectionTitle>
-                    {/* v6.51.0 (user ruling): was a signpost saying "managed in shipments".
-                        Now it SUMMARISES the clearance facts already held on the shipments
-                        that carried this lot, so the lot answers "was this cleared, by whom,
-                        under what reference, at what cost" without opening each shipment. */}
-                    {(() => {
-                      const carrying = (shipments || []).filter((s: any) => s && s.status !== "Cancelled"
-                        && ((s.goods || []).some((g: any) => String(g.lotRef) === String(lot.number)) || (s.lotRefs || []).includes(lot.number)));
-                      const withCustoms = carrying.filter((s: any) => (s.customs || {}).applies);
-                      const customsCostPLN = (lot.costs || [])
-                        .filter((c: any) => String(c.type || "").toLowerCase().includes("customs"))
-                        .reduce((a: number, c: any) => a + (parseFloat(c.pln) || 0), 0);
-                      if (!withCustoms.length && !customsCostPLN) {
-                        return <div style={{ fontSize: 12, color: "#94A3B8", lineHeight: 1.6 }}>
-                          No customs clearance recorded on the shipments carrying this lot. Clearance is captured on the shipment (Shipments → <em>Customs clearance</em>) and summarised here.
-                        </div>;
-                      }
-                      const ROLE: any = { our_broker: "our Polish broker", forwarder_abroad: "the forwarder abroad", t1_local_broker: "a local broker under T1", not_required: "no clearance required" };
-                      const ST: any = { cleared: { t: "Cleared", c: "#059669", bg: "#DCFCE7" }, in_progress: { t: "Being cleared", c: "#B45309", bg: "#FEF3C7" }, pending: { t: "Not yet cleared", c: "#B91C1C", bg: "#FEE2E2" } };
-                      const allCleared = withCustoms.every((s: any) => String((s.customs || {}).status) === "cleared");
-                      return <div>
-                        {/* one plain sentence first — the answer most people want */}
-                        <div style={{ fontSize: 12.5, color: "#334155", lineHeight: 1.6, marginBottom: 10 }}>
-                          {withCustoms.length === 0
-                            ? "No customs clearance was needed for the shipments carrying this lot."
-                            : allCleared
-                              ? <>These goods have been <strong style={{ color: "#059669" }}>cleared through customs</strong>{withCustoms.length > 1 ? ` on all ${withCustoms.length} shipments that carried them` : ""}.</>
-                              : <>Customs is <strong style={{ color: "#B45309" }}>not yet complete</strong> for these goods — see the shipment(s) below.</>}
-                        </div>
-                        {withCustoms.map((s: any, i: number) => {
-                          const c = s.customs || {};
-                          const st = ST[String(c.status || "pending")] || ST.pending;
-                          const broker = (contacts || []).find((x: any) => String(x.id) === String(c.brokerId || s.brokerId));
-                          const who = ROLE[c.role] || "";
-                          // v6.58.0: role "not_required" used to concatenate into
-                          // "Cleared by no clearance required (broker name)" — nonsense.
-                          // v6.60.0: the shared summary replaces this ad-hoc
-                          // concatenation, so one sentence is produced the same
-                          // way everywhere and cannot contradict itself.
-                          const shared = customsSummary(c, broker?.name);
-                          const sentence = shared || (c.role === "not_required" ? "No customs clearance was required for this shipment" : [
-                            who ? `Cleared by ${who}` : "",
-                            broker?.name ? `(${broker.name})` : "",
-                            c.place ? `at ${c.place}` : "",
-                            c.t1Transit ? "· moved under T1 transit" : "",
-                            c.entryRef ? `· entry ${c.entryRef}` : "",
-                          ].filter(Boolean).join(" "));
-                          return <div key={i} style={{ padding: "8px 0", borderTop: i ? "1px solid #F1F5F9" : "none", fontSize: 12 }}>
-                            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 2 }}>
-                              <span style={{ fontWeight: 700 }}>{s.number}</span>
-                              <span style={{ background: st.bg, color: st.c, borderRadius: 999, padding: "1px 9px", fontSize: 10.5, fontWeight: 800 }}>{st.t}</span>
-                            </div>
-                            <div style={{ color: "#64748B", lineHeight: 1.5 }}>{sentence || "No clearance details recorded on this shipment."}</div>
-                          </div>;
-                        })}
-                        <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid #E5E7EB", fontSize: 12, color: "#334155", lineHeight: 1.55 }}>
-                          {customsCostPLN > 0
-                            ? <>Customs and duty cost included in this lot's landed cost: <strong>{customsCostPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} PLN</strong>. It is already part of the cost of goods used in every sale from this lot.</>
-                            : <span style={{ color: "#94A3B8" }}>No customs cost has been allocated to this lot.</span>}
-                        </div>
-                      </div>;
-                    })()}
-                  </Card>
-                );
-              })()}
-
-              {/* Inspections (v6.2) — recordable at any stage */}
-              {season && <LotWorkbench lot={lot} shipments={shipments} inspections={season.inspections} claims={season.claims || []} orders={liveSOs} settlements={season.settlements || []} contacts={contacts} />}
-              {season && <SeasonActions lot={lot} {...season} />}
-              <Card style={{ marginBottom: 16 }}>
-                <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ Record inspection</button>}>INSPECTIONS{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
-                {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No inspections recorded. Record one when goods are checked on arrival, in storage, by a client, or at customs.</div>}
-                {([...(lot.inspections || []), ...((seasonInspections || []).filter((x: any) => String(x.lotNumber) === String(lot.number)).map((x: any) => ({ date: x.date, context: `${x.stage} — quality inspection`, outcome: x.verdict, findings: `defects ${inspectionTotals(x).totalPct}%: ` + ((x.defects || []).map((d: any) => `${d.name} ${d.pct}%`).join(", ") || "none") + (x.observations ? ` — ${x.observations}` : "") + (x.inspector ? ` · ${x.inspector}` : ""), lossKg: 0, creditNote: null, _season: true })))]).map((ins, i) => {
-                  const ctx = INSPECTION_CONTEXTS.find(c => c.code === ins.context);
-                  const out = INSPECTION_OUTCOMES.find(o => o.code === ins.outcome);
-                  const bad = ins.outcome !== "ok";
-                  return (
-                    <div key={i} style={{ padding: "10px 0", borderBottom: "1px solid #F3F4F6" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111" }}>🔍 {ctx ? ctx.label.split(" (")[0] : ins.context}</div>
-                        <span style={{ fontSize: 10.5, color: "#AAA" }}>{ins.date}</span>
-                      </div>
-                      <div style={{ fontSize: 11.5, color: bad ? "#B91C1C" : "#16A34A", fontWeight: 600, marginTop: 3 }}>
-                        {out ? out.label : ins.outcome}{ins.lossKg ? ` · −${fmtNum(ins.lossKg)} kg` : ""}
-                      </div>
-                      {ins.findings && <div style={{ fontSize: 11.5, color: "#666", marginTop: 3 }}>{ins.findings}</div>}
-                      {ins.creditNote && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4, background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "4px 8px", display: "inline-block" }}>Proposed credit note: {fmtNum(ins.creditNote.amount)} {ins.creditNote.currency} (to be issued in Invoicing)</div>}
-                    </div>
-                  );
-                })}
-              </Card>
-
-              {/* Movement history */}
-              <Card style={{ marginBottom: 16 }}>
-                {(() => {
-                  // Safeguards 7a: the recall report — hidden, print-only.
-                  const co = (() => { try { return JSON.parse(window.localStorage.getItem("marianna-erp:v2:company") || "{}"); } catch { return {}; } })();
-                  const companyName = co.name || "MARIANNA";
-                  const companyAddress = co.address || "";
-                  const companyNip = co.nip || "";
-                  const t = buildTraceTree(lot, { contacts, pos: tracePOs, orders: liveSOs, shipments, invoices: traceInvoices }, localTodayISO());
-                  const cell = { border: "1px solid #999", padding: "4px 6px", fontSize: 11 } as any;
-                  const hd = { ...cell, background: "#F3F4F6", fontWeight: 700 } as any;
-                  return (
-                    <div id="lot-trace-doc" style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", color: "#111", fontFamily: "Arial, Calibri, sans-serif", fontSize: 12, padding: 24 }}>
-                      {/* v6.99.30 (owner 15 Sept): the recall document — real logo, its own number, three sections in the owner's order */}
-                      <div style={{ display: "flex", alignItems: "flex-start", gap: 14, borderBottom: "2px solid #111", paddingBottom: 10, marginBottom: 12 }}>
-                        <PrintLogo width={200} />
-                        <div style={{ marginLeft: "auto", textAlign: "right", fontSize: 9.5, color: "#444" }}>{companyName}<br />{companyAddress}<br />{companyNip ? `NIP ${companyNip}` : ""}</div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                        <div style={{ fontSize: 17, fontWeight: 800 }}>TRACEABILITY / RECALL REPORT</div>
-                        <div style={{ fontSize: 15, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{traceNo}</div>
-                      </div>
-                      <div style={{ marginBottom: 12, fontSize: 11, color: "#444" }}>Lot / Partia: <b>{t.lot.number}</b> · generated / wygenerowano {t.generatedAt}{userName ? ` · ${userName}` : ""}</div>
-
-                      <div style={{ fontWeight: 800, margin: "10px 0 4px" }}>1. PURCHASE / ZAKUP</div>
-                      <table><tbody>
-                        {[["PO / Zamówienie", t.origin.poNumber || "—"], ["Lot / Partia", t.lot.number], ["Supplier / Dostawca", t.origin.supplier || "—"], ["Origin / Pochodzenie", t.origin.origin || "—"],
-                          ["Product / Produkt", `${t.lot.product}${t.lot.variety ? ` — ${t.lot.variety}` : ""}`], ["Packaging / Opakowanie", t.lot.packaging || "—"], ["Size / Kaliber", t.lot.size || "—"],
-                          ["Quantity received / Ilość przyjęta", `${Number(t.lot.receivedKg || 0).toLocaleString("pl-PL")} kg`],
-                          ["Still in stock / Na stanie", `${Number(t.lot.physicalKg || 0).toLocaleString("pl-PL")} kg${(t.lot.inStockII || 0) > 0 ? ` — class I ${Number(t.lot.inStockI || 0).toLocaleString("pl-PL")} kg · class II ${Number(t.lot.inStockII || 0).toLocaleString("pl-PL")} kg` : ""}`]
-                        ].map(([k, v]: any) => <tr key={k}><td style={{ ...cell, width: 230, background: "#F9FAFB" }}>{k}</td><td style={cell}>{v}</td></tr>)}
-                      </tbody></table>
-
-                      <div style={{ fontWeight: 800, margin: "14px 0 4px" }}>2. SHIPMENTS / TRANSPORTY ({t.shipments.length})</div>
-                      <table><tbody>
-                        <tr>{["Shipment / Transport", "Loading place / Miejsce załadunku", "Loading date", "Unloading place / Miejsce rozładunku", "Unloading date", "Carrier / Przewoźnik"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
-                        {!t.shipments.length && <tr><td style={cell} colSpan={6}>— none yet / brak —</td></tr>}
-                        {t.shipments.map((s: any) => <tr key={s.number}>{[s.number, s.from || "—", s.loadedAt || "—", s.to || "—", s.unloadedAt || "—", s.carrier || "—"].map((v: any, k: number) => <td key={k} style={cell}>{v}</td>)}</tr>)}
-                      </tbody></table>
-
-                      <div style={{ fontWeight: 800, margin: "14px 0 4px" }}>3. SOLD TO / SPRZEDANO ({t.sales.length})</div>
-                      <table><tbody>
-                        <tr>{["SO", "Client / Klient", "Qty kg", "Incoterm", "Delivery place / Miejsce dostawy", "Delivery date"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
-                        {!t.sales.length && <tr><td style={cell} colSpan={6}>— none yet / brak —</td></tr>}
-                        {t.sales.map((s: any) => <tr key={s.soNumber}>{[s.soNumber, s.client, Number(s.qtyKg || 0).toLocaleString("pl-PL"), s.incoterm || "—", s.destination || "—", s.deliveredAt || "—"].map((v: any, k: number) => <td key={k} style={cell}>{v}</td>)}</tr>)}
-                      </tbody></table>
-                      <div style={{ fontWeight: 700, margin: "10px 0 4px", fontSize: 11 }}>Related invoices / Powiązane faktury ({t.invoices.length})</div>
-                      <table><tbody>
-                        <tr>{["Invoice / Faktura", "Kind", "Counterparty / Kontrahent", "Gross"].map(h => <th key={h} style={hd}>{h}</th>)}</tr>
-                        {!t.invoices.length && <tr><td style={cell} colSpan={4}>— none yet / brak —</td></tr>}
-                        {t.invoices.map((iv: any) => <tr key={iv.number}>{[iv.number, iv.kind || "—", iv.counterparty || "—", iv.gross || "—"].map((v: any, k: number) => <td key={k} style={cell}>{v}</td>)}</tr>)}
-                      </tbody></table>
-                      <div style={{ marginTop: 16, fontSize: 9.5, color: "#666" }}>Issued from MARIANNA ERP · {traceNo} · this report is recorded in the audit trail.</div>
-                    </div>
-                  );
-                })()}
-                {(() => {
-                  // Batch 6c (BP-33): one place for the lot's quality story —
-                  // claims, claimed/damaged totals, quality movements.
-                  const claims = lotClaims || [];   // v6.48.0: from the claims store
-                  const qmoves = (lot.movements || []).filter((m: any) => ["DAMAGE", "RECLASS", "CLAIM"].includes(m.type));
-                  if (!claims.length && !qmoves.length && !(lot.claimedKg > 0) && !(lot.damagedKg > 0)) return null;
-                  const chip = (s: string) => ({ Draft: "#94A3B8", Issued: "#B45309", Accepted: "#15803D", Rejected: "#DC2626", Settled: "#4338CA" } as any)[s] || "#94A3B8";
-                  return (
-                    <div style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: claims.length ? 8 : 0 }}>
-                        <div style={{ fontSize: 11, fontWeight: 800, color: "#B45309", letterSpacing: "0.04em" }}>QUALITY & CLAIMS</div>
-                        {lot.claimedKg > 0 && <span style={{ fontSize: 10.5, color: "#B45309" }}>claimed {Number(lot.claimedKg).toLocaleString("pl-PL")} kg</span>}
-                        {lot.damagedKg > 0 && <span style={{ fontSize: 10.5, color: "#DC2626" }}>damaged {Number(lot.damagedKg).toLocaleString("pl-PL")} kg</span>}
-                        {qmoves.length > 0 && <span style={{ fontSize: 10.5, color: "#94A3B8" }}>· {qmoves.length} quality movement{qmoves.length !== 1 ? "s" : ""} in the history below</span>}
-                      </div>
-                      {claims.map((c: any) => (
-                        <div key={String(c.id)} onClick={() => onOpenClaim && onOpenClaim(lot)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 7, background: "#fff", border: "1px solid #FDE68A", marginBottom: 4, cursor: onOpenClaim ? "pointer" : "default", fontSize: 12 }}>
-                          <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 800, color: "#B45309" }}>{c.number || "draft"}</span>
-                          <span style={{ color: "#64748B" }}>{c.date}</span>
-                          <span>{c.defectType || "defect"} · {c.defectPct || 0}%{c.affectedKg ? ` · ${Number(c.affectedKg).toLocaleString("pl-PL")} kg` : ""}</span>
-                          <span style={{ marginLeft: "auto", fontWeight: 700 }}>{c.requestedCreditEUR ? `€${Number(c.requestedCreditEUR).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}` : ""}</span>
-                          {c.status === "Accepted" && c.acceptedEUR ? <span style={{ fontSize: 10.5, color: "#15803D" }}>accepted €{Number(c.acceptedEUR).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span> : null}
-                          <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: chip(c.status), borderRadius: 999, padding: "1px 8px" }}>{c.status || "Draft"}</span>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-                <SectionTitle>MOVEMENT HISTORY ({lot.movements.length})</SectionTitle>
-                {lot.movements.length === 0 && (
-                  <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No movements yet — this lot is still in "Expected" status.</div>
-                )}
-                {lot.movements.length > 0 && (
-                  <div style={{ position: "relative" }}>
-                    <div style={{ position: "absolute", left: 11, top: 14, bottom: 14, width: 1, background: "#E5E7EB" }} />
-                    {lot.movements.map((m, i) => {
-                      const mt = MOVEMENT_TYPES[m.type] || { color: "#888", label: m.type, icon: "·" };
-                      const fromLoc = locById(m.fromId);
-                      const toLoc = locById(m.toId);
-                      const isMove = m.fromId !== m.toId;
-                      const isVoided = !!m.voided;
-                      const canVoid = !isVoided && ["TRANSFER", "DAMAGE", "CLAIM", "RECLASS"].includes(m.type); // manual events only; IN/SHIP_OUT/REVERSAL are system-driven
-                      return (
-                        <div key={i} style={{ display: "flex", gap: 14, paddingBottom: 14, position: "relative", opacity: isVoided ? 0.6 : 1 }}>
-                          <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff", border: `2px solid ${isVoided ? "#DC2626" : mt.color}`, color: isVoided ? "#DC2626" : mt.color, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, zIndex: 1 }}>{isVoided ? "✕" : mt.icon}</div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                              <div style={{ fontSize: 12.5, textDecoration: isVoided ? "line-through" : "none", color: isVoided ? "#B91C1C" : undefined }}>
-                                <span style={{ fontWeight: 600, color: isVoided ? "#B91C1C" : mt.color }}>{mt.label}</span>
-                                <span style={{ color: isVoided ? "#B91C1C" : "#444", marginLeft: 6 }}>· {fmtNum(m.qtyKg)} kg</span>
-                                {isMove && <span style={{ color: isVoided ? "#B91C1C" : "#666", marginLeft: 6 }}>· {fromLoc?.name} → {toLoc?.name}</span>}
-                                {isVoided && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, color: "#B91C1C", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 5, padding: "1px 6px" }}>VOIDED</span>}
-                              </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                                <span style={{ fontSize: 11, color: "#AAA" }}>{formatDMY(m.date)}</span>
-                                {!isVoided && onEditMovement && <button onClick={() => onEditMovement(m)} title="Edit movement" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #2563EB", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit</button>}
-                                {canVoid && onVoidMovement && <button onClick={() => onVoidMovement(m.id)} title="Void this entry — kept in the record but removed from stock" style={{ fontSize: 10.5, padding: "2px 7px", border: "1px solid #FECACA", background: "#fff", borderRadius: 5, cursor: "pointer", color: "#DC2626", fontWeight: 600 }}>Void</button>}
-                              </div>
-                            </div>
-                            {m.note && <div style={{ fontSize: 11.5, color: "#888", marginTop: 2, textDecoration: isVoided ? "line-through" : "none" }}>{m.note}</div>}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </Card>
-
-              {/* Notes */}
-              {lot.notes && (
-                <Card>
-                  <SectionTitle>NOTES</SectionTitle>
-                  <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.5 }}>{lot.notes}</div>
-                </Card>
-              )}
-            </div>
-
-            {/* Right column */}
-            <div>
-              {/* Linked docs */}
-              <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>LINKED DOCUMENTS</SectionTitle>
-                <div style={{ display: "grid", gap: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>PURCHASE ORDER</div>
-                    {lot.poRef ? (
-                      <div style={{ padding: "6px 10px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6, fontSize: 12.5, color: "#1D4ED8", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", display: "inline-block" }}>{lot.poRef}</div>
-                    ) : <span style={{ fontSize: 12, color: "#AAA" }}>—</span>}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>SALES ORDERS ({soRefsFor(lot, liveSOs, shipments).length})</div>
-                    {soRefsFor(lot, liveSOs, shipments).length > 0 ? (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                        {soRefsFor(lot, liveSOs, shipments).map(s => (
-                          <div key={s.number} title={`${s.clientName || ""}${s.status && s.status !== "—" ? ` · ${s.status}` : ""}${s.viaShipment ? ` · linked via shipment ${s.viaShipment}` : ""}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
-                            {s.number}{s.viaShipment ? <span style={{ fontSize: 9, color: "#16A34A", fontWeight: 700, marginLeft: 4 }}>via {s.viaShipment}</span> : null}
-                          </div>
-                        ))}
-                      </div>
-                    ) : <span style={{ fontSize: 12, color: "#AAA" }}>Not yet linked</span>}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>CURRENT LOCATION</div>
-                    <LocationPill locationId={lot.locationId} lot={lot} />
-                    {lot.directFlow && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4 }}>{lot.destinationText || "Direct destination"}</div>}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>DATES</div>
-                    <div style={{ fontSize: 12, color: "#444" }}>
-                      {lot.directFlow ? (
-                        <>
-                          Loading / pickup: <span style={{ fontWeight: 500 }}>{lot.loadingDate || "—"}</span><br />
-                          ETA destination: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span><br />
-                          <span style={{ color: "#92400E", fontSize: 11 }}>Direct flow · not received into our warehouse</span>
-                        </>
-                      ) : (
-                        <>
-                          {/* v6.51.0 (user ruling): the production date is the producer's
-                              harvest/packing date — nothing in the current workflow captures
-                              it, so it was blank on every lot. Hidden from the UI; the field
-                              stays in the data model for when producer documents feed it. */}
-                          {lot.productionDate ? <>Production: <span style={{ fontWeight: 500 }}>{lot.productionDate}</span><br /></> : null}
-                          Arrival: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </Card>
-
-              {/* Cost breakdown */}
-              <Card>
-                <SectionTitle>COST BREAKDOWN</SectionTitle>
-                {(lot.costs || []).map((c, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "8px 0", borderBottom: i < lot.costs.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: "#444" }}>{c.label}</div>
-                      <div style={{ fontSize: 10.5, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace", marginTop: 1 }}>{c.source}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{fmtMoney(c.pln)}</div>
-                      {c.currency && c.currency !== "PLN" && (
-                        <div style={{ fontSize: 10, color: "#888", marginTop: 1 }}>({fmtMoney(c.amount, c.currency)})</div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                <div style={{ marginTop: 8, padding: "10px 0 0", borderTop: "2px solid #E5E7EB", display: "flex", justifyContent: "space-between" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>Total cost</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#111" }}>{fmtMoney(total)}</div>
-                </div>
-                <div style={{ marginTop: 8, padding: "10px 12px", background: "#F9FAFB", borderRadius: 8, display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 11.5, color: "#666" }}>Cost per kg (PLN)</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{fmtMoney(cpk)}/kg</span>
-                </div>
-                <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", fontStyle: "italic", lineHeight: 1.5 }}>
-                  Costs accumulate as invoices arrive. Storage allocation (WINV) recalculates monthly.
-                </div>
-              </Card>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── MAIN — LIST VIEW + ROUTER ──────────────────────────────────────────────
 
@@ -2573,7 +1497,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
         {/* Filters — compact single row of dropdowns */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot, product, PO/SO, location…" style={{ flex: "1 1 220px", minWidth: 190, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
-          <SmallButton onClick={() => exportRowsToXlsx(`stock_on_hand_${xlsStamp()}`, filtered, [{ key: "number", label: "Lot" }, { key: "product", label: "Product" }, { key: "variety", label: "Variety" }, { key: "size", label: "Calibre" }, { key: "quality", label: "Class" }, { key: "status", label: "Status" }, { key: "locationId", label: "Location", fmt: (v: any) => (locById(v) || {}).name || "" }, { key: "expectedKg", label: "Expected kg" }, { key: "receivedKg", label: "Received kg" }, { key: "physicalKg", label: "Physical kg" }, { key: "reservedKg", label: "Reserved kg" }, { key: "grades", label: "Grades I/II/waste", fmt: (v: any) => v ? `${v.I || 0} / ${v.II || 0} / ${v.waste || 0}` : "" }, { key: "poRef", label: "PO" }, { key: "arrivalDate", label: "Arrived" }, { key: "costs", label: "Landed cost PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.pln) || 0), 0) }], "Stock")} title="v6.99.0: exports the rows as filtered, columns as shown">⬇ Excel</SmallButton>
+          <SmallButton onClick={() => exportRowsToXlsx(`stock_on_hand_${xlsStamp()}`, filtered, [{ key: "number", label: "Lot" }, { key: "product", label: "Product" }, { key: "variety", label: "Variety" }, { key: "size", label: "Calibre" }, { key: "quality", label: "Class" }, { key: "status", label: "Status" }, { key: "locationId", label: "Location", fmt: (v: any) => (locById(v) || {}).name || "" }, { key: "expectedKg", label: "Expected kg" }, { key: "receivedKg", label: "Received kg" }, { key: "physicalKg", label: "Physical kg" }, { key: "reservedKg", label: "Reserved kg" }, { key: "grades", label: "Grades I/II/waste", fmt: (v: any) => v ? `${v.I || 0} / ${v.II || 0} / ${v.waste || 0}` : "" }, { key: "poRef", label: "PO" }, { key: "arrivalDate", label: "Arrived" }, { key: "costs", label: "Landed cost PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.pln) || 0), 0) }], "Stock")} title="v6.99.0: exports the rows as filtered, columns as shown">Export file (Excel)</SmallButton>
             <select value={sortBy} onChange={e => setSortBy(e.target.value)} title="Sort by stock age (arrival date of the first receipt)" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff" }}>
             <option value="default">Sort: default</option>
             <option value="oldest">Oldest stock first</option>

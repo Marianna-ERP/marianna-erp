@@ -18,8 +18,12 @@ import { migrateFlowCleanup } from "./flowCleanup.migration";
 
 import { useState, useEffect } from "react";
 import { APP_VERSION } from "./version";
+import { planRingPrune, isQuotaError } from "./autoBackup.domain";
 
 export const STORAGE_VERSION = 2; // v6.37.0: flow-model retirement (migration 2)
+// v6.99.70 (A-BK-3): the planning budget of the browser store, in characters — the same conservative figure the Settings
+// gauge always used (5 MB at 2 bytes per character). The local ring is sized against it, so the two can never disagree.
+export const STORAGE_BUDGET_CHARS = 5 * 1024 * 1024 / 2;
 const NAMESPACE = "marianna-erp";
 
 function storageKey(name: string): string {
@@ -54,19 +58,31 @@ function notifyHealth() { storageHealth.listeners.forEach(fn => { try { fn(); } 
 
 export function readStoreValue(name: string): any { return readFromStorage(name, []); }
 export function writeStoreValue(name: string, value: any): void { writeToStorage(name, value); }
+function markWriteFailing(name: string, err: any): void {
+  console.warn(`[localStorage] Could not write "${name}":`, err);
+  storageHealth.failing = true;
+  storageHealth.lastError = String(err?.message || err);
+  storageHealth.failedKey = name;
+  storageHealth.failedAt = new Date().toISOString();
+  notifyHealth();
+}
 function writeToStorage<T>(name: string, value: T): void {
   if (typeof window === "undefined" || !window.localStorage) return;
-  try {
-    window.localStorage.setItem(storageKey(name), JSON.stringify(value));
-    if (storageHealth.failing) { storageHealth.failing = false; storageHealth.lastError = ""; notifyHealth(); }
-  } catch (err: any) {
-    console.warn(`[localStorage] Could not write "${name}":`, err);
-    storageHealth.failing = true;
-    storageHealth.lastError = String(err?.message || err);
-    storageHealth.failedKey = name;
-    storageHealth.failedAt = new Date().toISOString();
-    notifyHealth();
+  let json: string;
+  try { json = JSON.stringify(value); } catch (err: any) { markWriteFailing(name, err); return; }
+  // v6.99.70 (A-BK-3, owner): THE DATA ALWAYS WINS. When the browser store is full, the oldest local snapshot gives way
+  // and the save is tried again; the save fails (and the red banner says so) only when no snapshot is left to give way.
+  // Before, a full store failed the save while every old snapshot stayed.
+  let dropped = 0;
+  for (;;) {
+    try { window.localStorage.setItem(storageKey(name), json); break; }
+    catch (err: any) {
+      if (isQuotaError(err) && dropOldestBackup()) { dropped++; continue; }
+      markWriteFailing(name, err); return;
+    }
   }
+  if (dropped) console.info(`[storage] ${dropped} local snapshot(s) gave way so "${name}" could be saved.`);
+  if (storageHealth.failing) { storageHealth.failing = false; storageHealth.lastError = ""; notifyHealth(); }
 }
 
 /** Subscribe-to-health hook for the App banner. */
@@ -95,7 +111,7 @@ export function storageUsage(): { perKey: Array<{ key: string; kb: number }>; to
     }
   }
   perKey.sort((a, b) => b.kb - a.kb);
-  const budgetKB = 5 * 1024; // conservative common browser budget
+  const budgetKB = Math.round((STORAGE_BUDGET_CHARS * 2) / 1024); // conservative common browser budget (v6.99.70: one constant)
   return { perKey, totalKB: total, budgetKB, pct: Math.min(100, Math.round((total / budgetKB) * 100)) };
 }
 
@@ -191,7 +207,9 @@ export const DATA_KEYS = [
   "company", "numbering", "defectTolerances", "reportRegister", "archivedSeasons", "seasonSettings", "planningSheets", "planningSheetLog",
   "auditLog"];
 
-export function exportAllData(): string {
+/** The "Export all data" file. v6.99.70 (A-BK-2): the automatic folder backup writes exactly this (pretty); the local
+ *  ring stores the same content compact (`pretty = false`), about a third smaller. Import reads either. */
+export function exportAllData(pretty: boolean = true): string {
   const data: any = {
     _meta: {
       app: "marianna-erp",
@@ -207,7 +225,7 @@ export function exportAllData(): string {
     if (key === "creditNotes" && Array.isArray(v) && v.length === 0) continue;
     data[key] = v;
   }
-  return JSON.stringify(data, null, 2);
+  return pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
 }
 
 // ─── Local backup ring (v6.17) ──────────────────────────────────────────────
@@ -221,7 +239,31 @@ export interface BackupMeta { id: string; label: string; createdAt: string; vers
 
 const BACKUP_INDEX_KEY = `${NAMESPACE}:backups`;
 const backupSnapKey = (id: string) => `${NAMESPACE}:backup:${id}`;
-const MAX_BACKUPS = 8;
+// v6.99.70 (A-BK-3, owner): the ring is limited by SPACE, not by a count of 8. On the 25 Sept file one snapshot was 1.2 million
+// characters — so "the last 8" were really 1 to 3, sharing the store with the live data. Snapshots are now stored compact and
+// kept while the whole store stays under 70 % of its budget (planRingPrune); the newest is always kept.
+function snapshotChars(id: string): number { try { return (window.localStorage.getItem(backupSnapKey(id)) || "").length; } catch { return 0; } }
+/** Characters used by everything of ours EXCEPT the snapshots — the live data, preferences, counters. */
+function liveChars(): number {
+  let total = 0;
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (!k || !k.startsWith(NAMESPACE + ":") || k.startsWith(`${NAMESPACE}:backup:`) || k === BACKUP_INDEX_KEY) continue;
+      total += k.length + (window.localStorage.getItem(k) || "").length;
+    }
+  } catch { /* best effort */ }
+  return total;
+}
+/** Drop the oldest snapshot (used when the live data needs the space). False when there is none left. */
+function dropOldestBackup(): boolean {
+  const index = readBackupIndex();
+  if (!index.length) return false;
+  const oldest = index.shift()!;
+  try { window.localStorage.removeItem(backupSnapKey(oldest.id)); } catch {}
+  writeBackupIndex(index);
+  return true;
+}
 
 function readBackupIndex(): BackupMeta[] {
   if (typeof window === "undefined" || !window.localStorage) return [];
@@ -236,7 +278,7 @@ function writeBackupIndex(list: BackupMeta[]): void {
 export function createBackup(label: string): BackupMeta | null {
   if (typeof window === "undefined" || !window.localStorage) return null;
   try {
-    const json = exportAllData();
+    const json = exportAllData(false);   // v6.99.70 (A-BK-3): compact — same content, about a third smaller
     const id = String(Date.now());
     const index = readBackupIndex();
     const tryWrite = () => window.localStorage.setItem(backupSnapKey(id), json);
@@ -253,16 +295,32 @@ export function createBackup(label: string): BackupMeta | null {
     }
     const meta: BackupMeta = { id, label: label || "Backup", createdAt: new Date().toISOString(), version: STORAGE_VERSION, sizeKB: Math.max(1, Math.round(json.length / 1024)) };
     index.push(meta);
-    while (index.length > MAX_BACKUPS) {
-      const oldest = index.shift()!;
-      try { window.localStorage.removeItem(backupSnapKey(oldest.id)); } catch {}
-    }
-    writeBackupIndex(index);
+    const drop = planRingPrune(index.map(b => ({ id: b.id, chars: snapshotChars(b.id) })), liveChars(), STORAGE_BUDGET_CHARS);
+    drop.forEach(oldId => { try { window.localStorage.removeItem(backupSnapKey(oldId)); } catch {} });
+    writeBackupIndex(index.filter(b => !drop.includes(b.id)));
     return meta;
   } catch (err) {
     console.warn("[backup] createBackup failed:", err);
     return null;
   }
+}
+
+/** v6.99.70 (A-BK-3): snapshots written by earlier builds were pretty-printed; rewrite them compact once, on opening.
+ *  Nothing is dropped here — the space limit applies when the next snapshot is taken. Returns how many were rewritten. */
+export function compactLocalBackups(): number {
+  if (typeof window === "undefined" || !window.localStorage) return 0;
+  const index = readBackupIndex(); let n = 0;
+  index.forEach(b => {
+    try {
+      const raw = window.localStorage.getItem(backupSnapKey(b.id));
+      if (!raw || raw.indexOf("\n") < 0) return;   // compact JSON never holds a raw line break
+      const compact = JSON.stringify(JSON.parse(raw));
+      window.localStorage.setItem(backupSnapKey(b.id), compact);
+      b.sizeKB = Math.max(1, Math.round(compact.length / 1024)); n++;
+    } catch { /* leave it as it was */ }
+  });
+  if (n) writeBackupIndex(index);
+  return n;
 }
 
 export function listBackups(): BackupMeta[] {
@@ -353,4 +411,20 @@ export function clearAllData(opts: { autoBackup?: boolean } = {}): BackupMeta | 
     }
   }
   return backup;
+}
+
+// ── v6.99.67 (A-AUD-1, owner): ONE company profile. Five documents carried their own literal company block — a copy of
+// master data — so a change in Settings never reached them. They read this instead; the literal values are the fallback
+// for a field Settings has not filled yet, so nothing printed changes until the owner changes it in Settings.
+export const COMPANY_DEFAULTS = { name: "MARIANNA", person: "Hazem Osman", address: "ul. Długa 29,\n00-238 Warszawa\nPolska", nip: "PL525-284-27-87", regon: "387501311", phone: "", email: "", emergencyPhone: "+48 784 775 065" };
+/** The transport order's letterhead used a longer trade name and a two-line address; it derives from the profile the same way. */
+export function companyForTransportOrder(): { name: string; address1: string; address2: string; nip: string; emergencyPhone: string } {
+  const p = companyProfile(); const lines = String(p.address || "").split(/\n/).map((s: string) => s.trim()).filter(Boolean);
+  return { name: p.tradeName || (p.name === COMPANY_DEFAULTS.name ? "MARIANNA HAZEM OSMAN" : p.name), address1: lines[0]?.replace(/,$/, "") === "ul. Długa 29" ? "ul. Dluga 29" : (lines[0] || "").replace(/,$/, ""), address2: lines.length > 1 ? lines.slice(1).join(" - ") : "", nip: p.nip === COMPANY_DEFAULTS.nip ? "PL 525-284-27-87" : p.nip, emergencyPhone: p.emergencyPhone || p.phone || "" };
+}
+export function companyProfile(): typeof COMPANY_DEFAULTS & Record<string, any> {
+  let stored: any = {}; try { stored = readFromStorage("company", {}) || {}; } catch { stored = {}; }
+  const out: any = { ...COMPANY_DEFAULTS };
+  Object.keys(stored).forEach(k => { const v = stored[k]; if (v !== undefined && v !== null && String(v).trim() !== "") out[k] = v; });
+  return out;
 }

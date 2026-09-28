@@ -1,48 +1,40 @@
 import { newestFirst } from "./moduleGuards.domain";
 import QualityReportDoc from "./QualityReportDoc";
 import { lastReportNumber, issueReportNumber } from "./reportNumbers";
-import { readCountries } from "./Contacts";
-import LocationPicker from "./LocationPicker";
-import { documentTotals, totalsLine, effectiveCounts } from "./pricingUnit.domain";
+import { effectiveCounts } from "./pricingUnit.domain";
 import { exportRowsToXlsx, stamp as xlsStamp, exportVegaProSalesReport } from "./exportXlsx";
-import { PAGE_MAX, SmallButton } from "./ui";
+import { SmallButton, notifySaved } from "./ui";
 import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
-import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence, MOVEMENT_LABELS, poDirectFromSOs } from "./tradeFlow.domain";
+import { handoverSentence, MOVEMENT_LABELS, poDirectFromSOs } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
 import { FX_RATES } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
-import { warehouseAddressLocations, unifiedLocations, locationById, placeForPrint, counterpartyLocations } from "./locations";
+import { locationById } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
-import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
 import { isEstimatedLine, planPackingResult } from "./so.domain";
 import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
 import { PACKAGING_SEED } from "./packaging.domain";
 import { localTodayISO, formatDMY } from "./dates";
-import { ItemVarietyPicker } from "./ProductPicker";
-import { cnCodeForItem } from "./productCatalog";
 import { recordAudit } from "./audit";
-import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { syncGoodsFromPO } from "./shipments.domain";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
-let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
+import { companyProfile } from "./useLocalStoredState";
+import { OrderForm } from "./PurchaseOrderForm";
+import { PackingResultWindow, SupplierTruckWindow, OrderDetail } from "./PurchaseOrderDetail";
+import { PODoc, PrintModal } from "./PurchaseOrderDocument";
+export let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
-const COMPANY = {
-  name: "MARIANNA",
-  person: "Hazem Osman",
-  address: "ul. Długa 29,\n00-238 Warszawa\nPolska",
-  nip: "PL525-284-27-87",
-  regon: "387501311",
-};
+export const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the company block comes from Settings (defaults = the former literal)
 
 // ─── BRAND ASSETS ──────────────────────────────────────────────────────────
 // Logo embedded as base64 PNG so the printed PO is self-contained — no external image hosting.
@@ -63,11 +55,11 @@ function getSuppliersStub() {
 }
 
 // ─── REFERENCE ──────────────────────────────────────────────────────────────
-const CURRENCIES = ["PLN", "EUR", "USD"];
+export const CURRENCIES = ["PLN", "EUR", "USD"];
 
 // v6.99.23: the legacy PAYMENT_TERMS list retired — one source: basis + days (po.domain)
 
-const INCOTERMS_BUY = [
+export const INCOTERMS_BUY = [
   { code: "EXW", label: "EXW — Ex Works (we pick up at supplier)" },
   { code: "FCA", label: "FCA — Free Carrier" },
   { code: "FOB", label: "FOB — Free On Board (sea, we handle from port)" },
@@ -91,9 +83,9 @@ const INCOTERMS_BUY = [
 // v6.37.0: STAGE_KIND_TO_POINT retired with the template journey seed.
 
 // Groups for ordered rendering in UI (chips + dropdowns)
-const QUALITY_GRADES = ["I", "IB", "II", "Industrial"];
+export const QUALITY_GRADES = ["I", "IB", "II", "Industrial"];
 
-const PO_STATUSES: Record<string, any> = {
+export const PO_STATUSES: Record<string, any> = {
   Draft:           { bg: "#F3F4F6", color: "#6B7280", desc: "Building the order" },
   Confirmed:       { bg: "#DBEAFE", color: "#2563EB", desc: "Agreed with supplier · FX rate locked" },
   "In Production": { bg: "#FEF3C7", color: "#D97706", desc: "Supplier preparing the goods" },
@@ -106,7 +98,7 @@ const PO_STATUSES: Record<string, any> = {
 const STATUS_LIFECYCLE = ["Draft", "Confirmed", "In Production", "Shipped", "Arrived", "Closed"];
 
 // Destination location pool (mirrors Inventory/Shipments)
-const LOCATION_TYPES: Record<string, any> = {
+export const LOCATION_TYPES: Record<string, any> = {
   OWN:      { label: "Our Warehouse",  color: "#0284C7", icon: "🏢" },
   SUPPLIER: { label: "Supplier Site",  color: "#16A34A", icon: "🚜" },
   PORT:     { label: "Port / Transit", color: "#D97706", icon: "⚓" },
@@ -124,7 +116,7 @@ const LOCATION_TYPES: Record<string, any> = {
 // FX_RATES now sourced from ./fx (single source of truth)
 
 // ─── SEED DATA ──────────────────────────────────────────────────────────────
-const SUPPLIERS = getSuppliersStub();
+export const SUPPLIERS = getSuppliersStub();
 
 function primaryContactValue(counterparty) {
   const contacts = counterparty.contacts || [];
@@ -155,21 +147,21 @@ function suppliersFromContacts(contacts) {
 // v6.32.0 (R7b-5): demo seed INITIAL_ORDERS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // ─── SHARED ATOMS ───────────────────────────────────────────────────────────
-function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max, min, noFuture }: any) {
+export function Inp({ value, onChange = () => {}, type = "text", placeholder = "", style = {}, disabled = false, list, title, max, min, noFuture }: any) {
   if (type === "date") return <DateInput value={value} onChange={onChange} disabled={disabled} placeholder={placeholder} style={style} min={min} max={max} noFuture={noFuture} title={title} />; // v6.81.0 (D-52)
   if (type === "number") return <input value={value ?? ""} onChange={(e: any) => onChange && onChange({ target: { value: String(e.target.value).replace(",", ".") } })} inputMode="decimal" placeholder={undefined} disabled={undefined} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", background: "#fff", ...(style || {}) }} title={undefined} />; // v6.99.6 (A-R9-5): Polish comma decimals accepted
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <input value={value ?? ""} onChange={onChange} type={type || "text"} placeholder={placeholder} disabled={disabled} list={list} title={title} max={max} style={{ ...base, ...style }} />;
 }
-function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
+export function Sel({ value, onChange = () => {}, children, style = {}, disabled = false }: any) {
   const base = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, color: "#111", outline: "none", fontFamily: "inherit", background: disabled ? "#F9FAFB" : "#fff" };
   return <select value={value || ""} onChange={onChange} disabled={disabled} style={{ ...base, ...style }}>{children}</select>;
 }
-function StatusBadge({ status }: any) {
+export function StatusBadge({ status }: any) {
   const s = PO_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
   return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{status}</span>;
 }
-function QualityBadge({ quality }: any) {
+export function QualityBadge({ quality }: any) {
   const palette = {
     "I":          { bg: "#DCFCE7", color: "#16A34A" },  // top quality — green
     "IB":         { bg: "#ECFCCB", color: "#65A30D" },  // intermediate — lime
@@ -179,7 +171,7 @@ function QualityBadge({ quality }: any) {
   const p = palette[quality] || palette["I"];
   return <span style={{ background: p.bg, color: p.color, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
-function FlowBadge({ flow, order = null, compact = false }: any) {
+export function FlowBadge({ flow, order = null, compact = false }: any) {
   // v6.29.0: terms-first vocabulary — old-flow and new POs render identically.
   // v6.43.0 (test-round #4/#5b): NO import/export direction is guessed here. Trade
   // direction is the shipment's truth, not the PO's — defaulting to "Import" showed
@@ -198,7 +190,7 @@ function FlowBadge({ flow, order = null, compact = false }: any) {
   return null; // v6.37.0: no incoterm/movement on the PO → nothing to badge (flow key retired)
 }
 
-function VarianceBadge({ variance }: any) {
+export function VarianceBadge({ variance }: any) {
   if (!variance || !variance.expectedKg || variance.receivedKg == null) return null;
   const delta = variance.receivedKg - variance.expectedKg;
   if (delta === 0) return null;
@@ -211,26 +203,26 @@ function VarianceBadge({ variance }: any) {
     </span>
   );
 }
-function fmtNum(n) {
+export function fmtNum(n) {
   if (n == null || isNaN(n)) return "—";
   return Number(n).toLocaleString("pl-PL");
 }
-function fmtMoney(n, cur = "PLN") {
+export function fmtMoney(n, cur = "PLN") {
   if (n == null || isNaN(n)) return "—";
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
 }
-function fmtDate(d) { return d || "—"; }
+export function fmtDate(d) { return d || "—"; }
 
-function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
-let CONTACTS_REF: any[] = [];   // v6.99.39 (D-1): the printed document resolves a place's address through the registry
-function destinationDisplay(order) {
+export function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
+export let CONTACTS_REF: any[] = [];   // v6.99.39 (D-1): the printed document resolves a place's address through the registry
+export function destinationDisplay(order) {
   const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
   if (custom) return custom;
   const loc = locById(order?.destinationLocationId);
   if (!loc) return "—";
   return `${loc.name}${loc.country ? `, ${loc.country}` : ""}`;
 }
-function netTotal(items) { return items.reduce((s, i) => s + (parseFloat(i.qty) || 0) * (parseFloat(i.unitPrice) || 0), 0); }
+export function netTotal(items) { return items.reduce((s, i) => s + (parseFloat(i.qty) || 0) * (parseFloat(i.unitPrice) || 0), 0); }
 
 // Generate next PO number for the current year by finding the highest existing sequence and adding 1.
 // Format: PO-YYYY-NNNN (4-digit zero-padded sequence per year).
@@ -244,15 +236,15 @@ function nextPONumber(orders, year = new Date().getFullYear()) {
   const next = (seqs.length ? Math.max(...seqs) : 0) + 1;
   return `${prefix}${String(next).padStart(4, "0")}`;
 }
-function plnTotal(order) {
+export function plnTotal(order) {
   const fx = order.fxRate || FX_RATES[order.currency] || 1;
   return netTotal(order.items) * fx;
 }
-function totalQtyKg(items) { return items.reduce((s, i) => s + (parseFloat(i.qty) || 0), 0); }
+export function totalQtyKg(items) { return items.reduce((s, i) => s + (parseFloat(i.qty) || 0), 0); }
 
 // ─── PO DOCUMENT (print template) ───────────────────────────────────────────
 // Small bilingual label helper for the print template — English bold on top, Polish italic gray below
-function BiLbl({ en, pl, align = "left" }: any) {
+export function BiLbl({ en, pl, align = "left" }: any) {
   return (
     <div style={{ textAlign: align as React.CSSProperties["textAlign"], lineHeight: 1.1 }}>
       <div style={{ fontWeight: 700, fontSize: 10 }}>{en}</div>
@@ -263,7 +255,7 @@ function BiLbl({ en, pl, align = "left" }: any) {
 
 // Company logo block for the printed PO — uses the actual Marianna logo image
 // (LOGO_DATA_URL constant defined near the top of the file, embedded base64 PNG on white).
-function PrintLogo() {
+export function PrintLogo() {
   return (
     <div style={{ background: "#fff", display: "inline-block" }}>
       <img
@@ -275,321 +267,7 @@ function PrintLogo() {
   );
 }
 
-function PODoc({ order }: any) {
-  const total = netTotal(order.items);
-  const currency = order.currency || order.items[0]?.currency || "PLN";
-  const paymentDisplay = paymentTermsLabel(paymentBasisOf(order), order.paymentDays, true);   // v6.99.23: derived from the one source
 
-  // Single source of truth for the row labels in the metadata + supplier blocks
-  const meta = [
-    { en: "PO No.",             pl: "Nr zamówienia",          value: order.number,             strong: true },
-    { en: "Order date",         pl: "Data zamówienia",        value: formatDMY(order.orderDate) },
-    { en: "Loading date",       pl: "Data załadunku",         value: formatDMY(order.loadingDate) },
-    { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: formatDMY(order.expectedDeliveryDate) },
-    { en: "Destination",        pl: "Miejsce docelowe",       value: placeForPrint(order.destinationLocationId, order.destinationText, CONTACTS_REF || []).line || destinationDisplay(order) },   // v6.99.39 (D-1): with the address
-    { en: "Purchase Incoterm",  pl: "Warunki zakupu Incoterms", value: order.buyIncoterm,      strong: true },
-    { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
-  ];
-  const supplierRows = [
-    { en: "Name",      pl: "Nazwa",   value: order.supplier?.name || "—" },
-    { en: "Country",   pl: "Kraj",    value: order.supplier?.country || "—" },
-    { en: "Address",   pl: "Adres",   value: formatAddress(addressOf(liveParty(order.supplier, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.supplier, CONTACTS_REF || [])?.address || "—" },   // v6.99.40 (ADDR-1)
-    { en: "NIP / VAT", pl: "NIP / VAT", value: order.supplier?.nip || "—" },
-    { en: "Contact",   pl: "Kontakt", value: order.supplier?.contact || "—" },
-  ];
-
-  return (
-    <div style={{ fontFamily: "Calibri, Arial, sans-serif", fontSize: 10.5, color: "#111", width: "100%" }}>
-      {/* HEADER — logo top-left, title center, blank right for breathing room */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
-        <tbody>
-          <tr>
-            <td style={{ width: "35%", verticalAlign: "middle", padding: "4px 0" }}>
-              <PrintLogo />
-            </td>
-            <td style={{ width: "65%", textAlign: "right", verticalAlign: "middle" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, lineHeight: 1.1 }}>Purchase Order</div>
-              <div style={{ fontSize: 13, fontStyle: "italic", color: "#555", marginTop: 2 }}>Zamówienie zakupu</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      {/* META + BUYER */}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <tbody>
-          <tr>
-            <td style={{ border: "1px solid #ccc", padding: "8px 10px", width: "50%", verticalAlign: "top" }}>
-              {meta.map((r, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "baseline", marginBottom: i === meta.length - 1 ? 0 : 4, gap: 8 }}>
-                  <div style={{ flex: "0 0 42%" }}>
-                    <span style={{ fontWeight: 700, fontSize: 9.5 }}>{r.en}</span>
-                    <span style={{ fontStyle: "italic", color: "#777", fontSize: 8.5, marginLeft: 4 }}>{r.pl}</span>
-                  </div>
-                  <div style={{ fontWeight: r.strong ? 700 : 500, fontSize: r.strong ? 12 : 11 }}>{r.value || "—"}</div>
-                </div>
-              ))}
-            </td>
-            <td style={{ border: "1px solid #ccc", padding: "8px 10px", verticalAlign: "top", width: "50%" }}>
-              <BiLbl en="Buyer" pl="Nabywca" />
-              <div style={{ marginTop: 4, fontWeight: 700, fontSize: 12 }}>{COMPANY.name}</div>
-              <div style={{ fontSize: 11 }}>{COMPANY.person}</div>
-              {COMPANY.address.split("\n").map((l, i) => <div key={i} style={{ fontSize: 11 }}>{l}</div>)}
-              <div style={{ fontSize: 11, marginTop: 2 }}><span style={{ fontWeight: 600 }}>NIP:</span> {COMPANY.nip}</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      {/* SUPPLIER */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: -1 }}>
-        <thead>
-          <tr>
-            <th colSpan={2} style={{ border: "1px solid #ccc", background: "#f9f9f9", padding: "6px 10px", textAlign: "left" }}>
-              <BiLbl en="Supplier" pl="Dostawca / Sprzedawca" />
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {supplierRows.map(r => (
-            <tr key={r.en}>
-              <td style={{ border: "1px solid #ccc", padding: "5px 10px", width: "30%", verticalAlign: "top" }}>
-                <span style={{ fontWeight: 700, fontSize: 9.5 }}>{r.en}</span>
-                <span style={{ fontStyle: "italic", color: "#777", fontSize: 8.5, marginLeft: 4 }}>{r.pl}</span>
-              </td>
-              <td style={{ border: "1px solid #ccc", padding: "5px 10px", fontWeight: 500 }}>{r.value}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {/* GOODS TABLE */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: -1 }}>
-        <thead>
-          <tr>
-            <th colSpan={11} style={{ border: "1px solid #ccc", background: "#f9f9f9", padding: "6px 10px", textAlign: "left" }}>
-              <BiLbl en="Description of goods" pl="Opis towaru" />
-            </th>
-          </tr>
-          <tr style={{ background: "#f3f3f3" }}>
-            {[
-              { en: "Product",     pl: "Produkt",      align: "left" },
-              { en: "Origin",      pl: "Pochodzenie",  align: "left" },
-              { en: "Size",        pl: "Kaliber",      align: "center" },
-              { en: "Quality",     pl: "Klasa",        align: "center" },
-              { en: "Packaging",   pl: "Opakowanie",   align: "left" },
-              { en: "Pallets",     pl: "Palety",       align: "center" },
-              { en: "Unit",        pl: "Jedn.",        align: "center" },
-              { en: "Qty",         pl: "Ilość",        align: "right" },
-              { en: "Unit Price",  pl: "Cena jedn.",   align: "right" },
-              { en: "Currency",    pl: "Waluta",       align: "center" },
-              { en: "Total",       pl: "Wartość",      align: "right" },
-            ].map((h, i) => {
-              const headerAlign = h.align as "left" | "center" | "right";
-              return (
-                <th key={i} style={{ border: "1px solid #ccc", padding: "5px 5px", textAlign: headerAlign, verticalAlign: "bottom" }}>
-                  <BiLbl en={h.en} pl={h.pl} align={headerAlign} />
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody>
-          {order.items.map((item, i) => {
-            const lt = ((parseFloat(item.qty) || 0) * (parseFloat(item.unitPrice) || 0)).toFixed(2);
-            return (
-              <tr key={i}>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", fontWeight: 700 }}>
-                  {item.product}{item.variety ? <span style={{ fontWeight: 400 }}> — {item.variety}</span> : null}
-                  {item.coloration && <div style={{ fontSize: 9.5, color: "#666", fontWeight: 400, fontStyle: "italic" }}>{item.coloration}</div>}
-                </td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.origin}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.size}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>Kl. {item.quality}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px" }}>{item.packaging || "—"}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.pallets || "—"}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{item.unit || "Kg"}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{parseFloat(item.qty || 0).toLocaleString("pl-PL")}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : parseFloat(item.unitPrice || 0).toFixed(2)}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "center" }}>{(order.pricingMode || "firm") === "consignment" ? "—" : order.currency}</td>
-                <td style={{ border: "1px solid #ccc", padding: "5px 8px", textAlign: "right", fontWeight: 600 }}>{(order.pricingMode || "firm") === "consignment" ? "Konsygnacja / Consignment" : parseFloat(lt).toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
-              </tr>
-            );
-          })}
-          <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10.5 }}>{(() => { const t = documentTotals(order.items, PO_PACKAGING_TYPES, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
-          <tr>
-            <td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", verticalAlign: "top" }}>
-              <div style={{ fontSize: 9, color: "#777" }}>
-                <span style={{ fontWeight: 700, color: "#E05A2B" }}>Notes</span>
-                <span style={{ fontStyle: "italic", marginLeft: 4 }}>/ Uwagi</span>
-              </div>
-              <div style={{ marginTop: 3, fontSize: 10.5, color: "#333", whiteSpace: "pre-wrap" }}>{order.notes || "—"}</div>
-            </td>
-            <td style={{ border: "1px solid #ccc", padding: "6px 8px", textAlign: "right", background: "#f9f9f9", verticalAlign: "top" }}>
-              <BiLbl en="Net Total" pl="Suma netto" align="right" />
-            </td>
-            <td style={{ border: "1px solid #ccc", padding: "6px 8px", textAlign: "right", fontWeight: 700, fontSize: 12, verticalAlign: "top" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ fontSize: 10.5 }}>Konsygnacja — rozliczenie ze sprzedaży / Consignment — settled on sales</span> : <>
-              {total.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {currency}
-            </>}</td>
-          </tr>
-        </tbody>
-      </table>
-
-      {/* SIGNATURES — placed before the legal clause; reduced cell padding */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12 }}>
-        <tbody>
-          <tr>
-            <td style={{ border: "1px solid #ccc", padding: "10px 10px 6px", width: "50%", textAlign: "center", color: "#888" }}>
-              <div style={{ height: 14 }} />
-              <div style={{ borderTop: "1px solid #555", paddingTop: 3, margin: "0 auto", maxWidth: 220 }}>
-                <BiLbl en="Supplier signature" pl="Podpis dostawcy" align="center" />
-              </div>
-            </td>
-            <td style={{ border: "1px solid #ccc", padding: "10px 10px 6px", width: "50%", textAlign: "center", color: "#888" }}>
-              <div style={{ height: 14 }} />
-              <div style={{ borderTop: "1px solid #555", paddingTop: 3, margin: "0 auto", maxWidth: 220 }}>
-                <BiLbl en="Buyer signature" pl="Podpis nabywcy" align="center" />
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      {/* LEGAL ACCEPTANCE CLAUSE — printed at the end of the page, both languages */}
-      <div style={{ marginTop: 8, padding: "6px 10px", border: "1px solid #E5E7EB", borderRadius: 4, background: "#FAFAFA" }}>
-        <div style={{ fontSize: 7.5, color: "#666", fontStyle: "italic", lineHeight: 1.35, marginBottom: 4 }}>
-          In the absence of any written objections from the supplier, the PO shall be considered accepted even if it is not signed, stamped, or returned by the supplier. The supplier remains responsible for the quality of the product until it reaches the final destination, provided that all transport conditions have been properly met.
-        </div>
-        <div style={{ fontSize: 7.5, color: "#666", fontStyle: "italic", lineHeight: 1.35 }}>
-          W przypadku braku jakichkolwiek pisemnych zastrzeżeń ze strony dostawcy, zamówienie (PO) uznaje się za zaakceptowane, nawet jeśli nie zostało podpisane, opieczętowane ani odesłane przez dostawcę. Dostawca ponosi odpowiedzialność za jakość produktu aż do momentu dostarczenia go do miejsca docelowego, pod warunkiem że wszystkie warunki transportu zostały prawidłowo spełnione.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── PRINT MODAL ────────────────────────────────────────────────────────────
-function PrintModal({ order, onClose }: any) {
-  const { alert: pmAlert, dialogNode: pmNode } = useConfirm(); // P2-6 completion
-  // Inject a hidden iframe into the current document, populate it with the
-  // A4-styled print HTML, then call print on the iframe's window.
-  // This approach is more reliable than window.open + document.write, because
-  //   (1) iframes are not blocked by popup blockers,
-  //   (2) it works inside sandboxed contexts like StackBlitz preview,
-  //   (3) document.write is treated as deprecated in modern Chrome.
-  function printDoc() {
-    const node = document.getElementById("po-print-doc");
-    if (!node) {
-      pmAlert({ tone: "warn", title: "Print", message: "Print preview not ready — please try again in a moment." });
-      return;
-    }
-
-    // Remove any leftover print frame from a previous run
-    const existing = document.getElementById("po-print-frame");
-    if (existing) existing.remove();
-
-    // Create the hidden iframe
-    const iframe = document.createElement("iframe");
-    iframe.id = "po-print-frame";
-    iframe.style.position = "fixed";
-    iframe.style.right = "0";
-    iframe.style.bottom = "0";
-    iframe.style.width = "0";
-    iframe.style.height = "0";
-    iframe.style.border = "0";
-    document.body.appendChild(iframe);
-
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>${order.number}</title>
-<style>
-  @page { size: A4; margin: 12mm; }
-  html, body { margin: 0; padding: 0; background: #fff; }
-  body {
-    font-family: Calibri, Arial, sans-serif;
-    color: #111;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  #po-print-doc { width: 186mm; margin: 0 auto; }
-  table { page-break-inside: avoid; border-collapse: collapse; }
-  tr { page-break-inside: avoid; page-break-after: auto; }
-  img { max-width: 100%; }
-</style>
-</head>
-<body>${node.outerHTML}</body>
-</html>`;
-
-    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!doc) {
-      pmAlert({ tone: "warn", title: "Print", message: "Unable to open the print preview window. Please try again." });
-      iframe.remove();
-      return;
-    }
-
-    doc.open();
-    doc.write(html);
-    doc.close();
-
-    // Wait for the embedded base64 logo image to load before triggering print
-    const fire = () => {
-      // v6.18.8 (#1): the browser's "Save as PDF" uses the top document's title for
-      // the default filename, so temporarily set it to the PO number, then restore.
-      // v6.34.2: the browser reads the TOP document's title for the Save-as-PDF
-      // filename when the user CONFIRMS the save — long after print() returns. Restore
-      // on afterprint (real dialog close), not a 1s timeout, so the number sticks.
-      const prevTitle = document.title;
-      document.title = order.number || prevTitle;
-      const restore = () => { document.title = prevTitle; iframe.remove(); };
-      try {
-        iframe.contentWindow?.focus();
-        const w = iframe.contentWindow as any; if (w) w.onafterprint = restore;
-        iframe.contentWindow?.print();
-      } catch (e) {
-        console.error("Print failed:", e);
-        pmAlert({ tone: "warn", title: "Print", message: "Printing failed. Try opening the artifact in its own window and printing from there." });
-      }
-      setTimeout(() => { if (document.title === (order.number || prevTitle)) restore(); }, 60000);
-    };
-
-    // The image inside the iframe needs to finish loading first
-    const img = doc.querySelector("img");
-    if (img && !img.complete) {
-      img.addEventListener("load", () => setTimeout(fire, 100));
-      img.addEventListener("error", () => setTimeout(fire, 100));
-      // Safety fallback: fire after 2s even if events don't trigger
-      setTimeout(fire, 2000);
-    } else {
-      setTimeout(fire, 200);
-    }
-  }
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-      {pmNode}
-      <div style={{ background: "#fff", borderRadius: 14, width: "min(940px, 96vw)", maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
-        <div style={{ padding: "16px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Preview · {order.number}</div>
-            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>A4 format · in the print dialog, set Destination to "Save as PDF"</div>
-          </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <button onClick={printDoc} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#2563EB", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🖨 Print / Save as PDF</button>
-            <button onClick={onClose} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Close</button>
-          </div>
-        </div>
-        <div style={{ padding: 24, overflowY: "auto", background: "#ECECEC" }}>
-          {/* On-screen preview sized to mimic an A4 sheet */}
-          <div id="po-print-doc" style={{ background: "#fff", padding: "8mm", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", width: "186mm", margin: "0 auto", boxSizing: "content-box" }}>
-            <PODoc order={order} />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── EMAIL MODAL ────────────────────────────────────────────────────────────
 // v6.18.14 (#1): resolve the supplier email LIVE from Contacts at send time, so an
@@ -677,7 +355,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
             <div style={{ fontSize: 16, fontWeight: 700 }}>Email PO to {order.supplier?.name}</div>
             <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Two-step send · PDF download, then email draft</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, color: "#999", cursor: "pointer" }}>×</button>
+          <ActionButton action="close" onClick={onClose} />
         </div>
 
         <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -725,7 +403,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
 }
 
 // ─── LIFECYCLE TIMELINE ─────────────────────────────────────────────────────
-function LifecycleTimeline({ status }: any) {
+export function LifecycleTimeline({ status }: any) {
   // v6.13 (#1): standardised to match the Sales Order lifecycle bar (pill chips
   // with check-marks for completed stages) so PO and SO read the same way.
   const stages = STATUS_LIFECYCLE;
@@ -757,410 +435,6 @@ function LifecycleTimeline({ status }: any) {
 
 // ─── ORDER FORM ─────────────────────────────────────────────────────────────
 
-// Batch 6b hard gate: a PO leaving Draft — or being printed/emailed to the
-// producer — must carry its purchase terms. "CIF" without "CIF Alexandria" is
-// only half the contract, so the incoterm and its named place gate together.
-function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPLIERS, contacts = [], allSOs = [], allShipments = [], lots = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail }: any) {
-  const { alert: ofAlert, dialogNode: ofPONode } = useConfirm(); // P2-6 completion
-  const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
-  const si = (idx, k, v) => setOrder(o => { const it = [...o.items]; it[idx] = { ...it[idx], [k]: v };
-    // v6.94.0 (PO-1, owner ruling): base is kg; boxes allowed as the ordered unit — type one, the other derives from the packaging type.
-    if (["qty", "boxes", "pricingUnit", "packaging", "packagingId"].includes(k)) it[idx] = derivePOLineQuantities(it[idx], PO_PACKAGING_TYPES, k === "qty" ? "qty" : k === "boxes" ? "boxes" : k === "pricingUnit" ? "unit" : "packaging");
-    return { ...o, items: it }; });
-  // v6.10 (#9): goods can't be Shipped (or beyond) before they are loaded at origin.
-  const SHIP_OR_LATER = ["Shipped", "Arrived", "Closed"];
-
-  // v6.18.5 (P0-5) + v6.18.14 (#3): once anything downstream depends on this PO — a
-  // linked SO line, a non-cancelled shipment, or a lot that's been received/moved — the
-  // PO is the base of the structure and is FULLY locked: no field edits and no status
-  // change at all (including revert-to-Draft and Cancel). It can only be removed by
-  // unlinking every downstream document first, then deleting.
-  const poNum = order.number;
-  // v6.81.0 (D-54): a DRAFT sale is an intention, not a dependency — it must not lock the PO it draws from (Draft↔Draft deadlock, PO-2026-0031).
-  const hasLinkedSO = (allSOs || []).some((so: any) => so.status !== "Cancelled" && so.status !== "Draft" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
-  const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
-  // v6.35.0: a lot whose linked shipments are ALL cancelled must not keep the PO locked —
-  // otherwise cancelling everything to fix the PO leaves it permanently trapped. We treat a
-  // lot as "really received/moved" only if it has a non-cancelled shipment, OR it carries
-  // manual movements that are not shipment-driven receipts.
-  const shipmentsForLot = (lotNo: string) => (allShipments || []).filter((sh: any) =>
-    (sh.lotRefs || []).map(String).includes(String(lotNo)) ||
-    (sh.goods || []).some((g: any) => String(g.lotRef) === String(lotNo)));
-  const lotReceivedOrMoved = (lots || []).some((l: any) => {
-    if (l.poRef !== poNum) return false;
-    // v6.76.0: VOIDED movements must not lock the PO. Record a receipt on a
-    // direct-DDP lot, then void it because it was wrong, and `movements.length`
-    // still counted it — so a Confirmed PO with no sales order and no live
-    // movement could never return to Draft. Nothing is deleted in this system,
-    // so "there is history here" is never the same question as "something
-    // depends on this". Only LIVE movements and real kilos lock it.
-    const liveMoves = (l.movements || []).filter((m: any) => m && !m.voided);
-    const received = (parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || liveMoves.length > 0;
-    if (!received) return false;
-    // If this lot has any linked shipment, only a NON-cancelled one keeps it "live".
-    const shs = shipmentsForLot(l.number);
-    if (shs.length > 0) return shs.some((sh: any) => sh.status !== "Cancelled");
-    // No shipments at all: a lot with real received kg / movements is a genuine manual receipt → still locks.
-    return received;
-  });
-  const hasDependents = hasLinkedSO || hasShipment || lotReceivedOrMoved;
-  const terminalStatus = ["Arrived", "Shipped", "Closed", "Cancelled", "Invoiced"].includes(order.status);
-  const isLocked = !!order.id && (hasDependents || (order.status !== "Draft" && terminalStatus)); // fully locked once anything depends on it
-
-  const setStatus = (newStatus) => {
-    recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: newStatus === "Cancelled" ? "cancelled" : "status", summary: `Status → ${newStatus}` });
-    if (hasDependents) {
-      const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
-      ofAlert({ tone: "warn", title: "PO locked", message: `This PO is locked: it has downstream dependents (${what}).\n\nWhile anything is linked, its status can't be changed (including back to Draft) or cancelled — that would corrupt the linked records. Unlink all downstream documents first, then the PO can be changed or deleted.` });
-      return;
-    }
-    if (SHIP_OR_LATER.includes(newStatus) && order.loadingDate && String(order.loadingDate) > localTodayISO()) {
-      ofAlert({ tone: "warn", title: "Too early", message: `This PO can't be set to "${newStatus}" yet — the loading date (${order.loadingDate}) hasn't been reached.\n\nGoods can't leave origin before they are loaded. Update the loading date if it has actually changed, or wait until the loading date.` });
-      return;
-    }
-    sf("status", newStatus);
-  };
-  const WAREHOUSE_ADDRESS = ((unifiedLocations(contacts || []).find((l: any) => ["WAREHOUSE", "OWN"].includes(String(l.legacyType))) || {}) as any).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
-  const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
-  const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
-  const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
-
-  const total = netTotal(order.items);
-  const totalKg = totalQtyKg(order.items);
-  const totalInPLN = total * (parseFloat(order.fxRate) || FX_RATES[order.currency] || 1);
-
-  return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      {ofPONode}
-      <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-        <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Purchase Orders</button>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          {order.id && (() => {
-            const isDraft = order.status === "Draft";
-            const draftStyle = {
-              padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB",
-              background: isDraft ? "#F9FAFB" : "#fff",
-              color: isDraft ? "#9CA3AF" : "#111",
-              fontSize: 12, fontWeight: 600,
-              cursor: isDraft ? "not-allowed" : "pointer"
-            };
-            const tip = isDraft ? "Confirm the PO first — drafts cannot be printed or sent to suppliers" : "";
-            return <>
-              <button onClick={isDraft ? undefined : onPrint} disabled={isDraft} title={tip} style={draftStyle}>🖨 Print / PDF</button>
-              <button onClick={isDraft ? undefined : onEmail} disabled={isDraft} title={tip} style={draftStyle}>✉ Email Supplier</button>
-            </>;
-          })()}
-          <button onClick={onCancel} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
-          <button onClick={() => onSave(order)} style={{ padding: "5px 16px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Save</button>
-        </div>
-      </div>
-
-      <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
-        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, gap: 20 }}>
-            <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
-                <StatusBadge status={order.status || "Draft"} />
-                {(order.buyIncoterm || order.tradeMovement) && <FlowBadge order={order} />}
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
-              <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Locked — commercial terms can't change; downstream records depend on this PO" : order.status !== "Draft" && order.id ? "Confirmed — still editable (nothing depends on it yet); edits re-sync the expected lot" : "Draft — all fields editable"}</div>
-            </div>
-            <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
-              <div style={{ fontSize: 11, color: "#888" }}>Total net</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
-              {order.currency !== "PLN" && <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(totalInPLN, "PLN")} · rate {order.fxRate}</div>}
-              <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>{fmtNum(totalKg)} kg total</div>
-            </div>
-          </div>
-
-          {isLocked && (
-            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12.5, color: "#92400E", lineHeight: 1.5 }}>
-              🔒 <strong>This PO is locked.</strong> Its commercial terms (product, quantities, supplier, incoterm, flow, pricing) can't be changed because something downstream already depends on it{(() => {
-                const reasons = [hasLinkedSO && "a sales order is sourced from it", hasShipment && "a shipment references it", lotReceivedOrMoved && "its goods have been received or moved"].filter(Boolean);
-                return reasons.length ? ` — ${reasons.join(", ")}` : "";
-              })()}. Every field is now locked — the PO is the building block the whole deal is built on, so once anything references it, it's frozen. To change anything, cancel this PO and raise a new one.
-            </div>
-          )}
-          {!isLocked && order.id && order.status !== "Draft" && (
-            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 12.5, color: "#1E40AF", lineHeight: 1.5 }}>
-              ✎ <strong>Confirmed, and still editable.</strong> Nothing depends on this PO yet (no sales order, no shipment, goods not received), so you can still change its details — saving will re-sync the expected inventory lot. ⚠ As soon as you link a sales order, create a shipment, or receive goods, THIS PO LOCKS COMPLETELY — every field becomes read-only and can't be changed again. Get the details right now. (Reverting to Draft withdraws the not-yet-received lot.)
-            </div>
-          )}
-
-          {/* Header card */}
-          <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>ORDER DETAILS</SectionTitle>
-            {/* v6.99.24 (owner): identity on one line, the four dates on the next */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 14, marginBottom: 14 }}>
-              <div>
-                <Lbl>PO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
-                {/* BP-6: number is a controlled document id — display/copy only, never edited. */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, fontWeight: 700, color: "#334155" }}>
-                  <span>{order.number || "PO-2026-…"}</span>
-                  <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy PO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
-                </div>
-              </div>
-              <div>
-                <Lbl>Supplier</Lbl>
-                <Sel disabled={isLocked} value={order.supplier?.name || ""} onChange={e => sSupplier(e.target.value)}>
-                  <option value="">— select —</option>
-                  {suppliers.map(s => <option key={s.id} value={s.name}>{s.name} {s.country ? `· ${s.country}` : ""} {s.nip ? `(NIP ${s.nip})` : ""}</option>)}
-                </Sel>
-              </div>
-              <div>
-                <Lbl>Status</Lbl>
-                <Sel value={order.status || "Draft"} onChange={e => setStatus(e.target.value)} disabled={hasDependents || order.status === "Cancelled"}
-                  title={order.status === "Cancelled" ? "This PO is cancelled — kept for the record, read-only, and can't be reactivated." : hasDependents ? "Locked — a Sales Order, shipment or inventory depends on this PO. Unlink everything first." : ""}
-                  style={{ borderLeft: `4px solid ${(PO_STATUSES[order.status || "Draft"] || {}).color || "#9CA3AF"}`, fontWeight: 700, color: (PO_STATUSES[order.status || "Draft"] || {}).color || "#111" }}>
-                  {Object.keys(PO_STATUSES).map(s => <option key={s}>{s}</option>)}
-                </Sel>
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
-              <div>
-                <Lbl>Order date</Lbl>
-                <Inp disabled={isLocked} value={order.orderDate} onChange={e => sf("orderDate", e.target.value)} type="date" noFuture title="The date the PO was created/agreed with the supplier" />
-              </div>
-              <div>
-                <Lbl>Loading date</Lbl>
-                <Inp disabled={isLocked} value={order.loadingDate} onChange={e => sf("loadingDate", e.target.value)} type="date" title="When the supplier loads our truck / container — goods leave origin" />
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Goods leave origin</div>
-              </div>
-              <div>
-                <Lbl>Expected delivery date</Lbl>
-                <Inp disabled={isLocked} value={order.expectedDeliveryDate} onChange={e => sf("expectedDeliveryDate", e.target.value)} type="date" title="When the goods are expected to arrive at the agreed handover point" />
-                {/* FB-14: 'means' dropdown removed — the handover point (derived from the incoterm) already says where. */}
-              </div>
-              <div>
-                <Lbl>Actual availability</Lbl>
-                {/* BP-9: no longer typed here — the real date comes from the Shipment arrival /
-                    Inventory receipt event. Shown read-only when known. */}
-                <div style={{ padding: "9px 11px", border: "1px dashed #E5E7EB", borderRadius: 8, background: "#FAFAFA", fontSize: 12.5, color: order.actualAvailabilityDate ? "#334155" : "#9CA3AF" }}>
-                  {order.actualAvailabilityDate ? `${order.actualAvailabilityDate} · from arrival/receipt` : "From shipment arrival / inventory receipt"}
-                </div>
-                <div style={{ fontSize: 10, color: "#AAA", marginTop: 3, lineHeight: 1.4 }}>Fill once it arrives</div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Flow + Incoterm + Sea */}
-          <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>FLOW · PURCHASE INCOTERM · DESTINATION</SectionTitle>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
-              {/* ═══ Batch 6b (BP-56 final): PURCHASE TERMS — the contract, not the machinery.
-                  Incoterm + named place are THE inputs; movement + handover derive; the
-                  direct-ness derives live from the governing sale (poDirectFromSOs at save). */}
-              <div style={{ gridColumn: "1 / -1", border: "1px solid #E0E7FF", background: "#F5F7FF", borderRadius: 10, padding: "12px 14px", marginBottom: 4 }}>
-                <div style={{ fontSize: 11, fontWeight: 800, color: "#4338CA", letterSpacing: "0.04em", marginBottom: 8 }}>INCOTERM DELIVERY (PURCHASE) <span style={{ fontWeight: 500, color: "#818CF8" }}>· required to confirm / print / send</span></div>
-                <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10 }}>
-                  <div>
-                    <Lbl>Purchase incoterm *</Lbl>
-                    <Sel value={order.buyIncoterm || ""} onChange={e => { const inc = e.target.value; setOrder(o => {
-                      const hp = handoverPointForIncoterm(inc);
-                      // v6.34.1 (item 1): default the delivery place per the incoterm, mirroring the SO.
-                      // EXW/FCA → supplier's address; DAP/DDP → our warehouse address; FOB/CFR/CIF → leave for a port pick.
-                      const ic = String(inc).toUpperCase();
-                      let patch: any = { ...o, buyIncoterm: inc, purchaseIncoterm: inc, handoverPoint: hp || o.handoverPoint };
-                      if (ic === "EXW" || ic === "FCA") {
-                        // v6.99.48 (A-PO-13, owner): the named place defaults to the SUPPLIER'S OWN SITE (a registered place — it prints and it passes G-1), adjustable from the picker
-                        const sites = counterpartyLocations((CONTACTS_REF || []).filter((c: any) => String(c.id) === String(o.supplier?.id)));
-                        const site = sites[0] || null;
-                        patch.destinationLocationId = site ? site.id : null; patch.destinationText = site ? site.name : (o.supplier?.address || o.destinationText || "");
-                      }
-                      else if (ic === "DAP" || ic === "DDP") { patch.destinationLocationId = null; patch.destinationText = (WAREHOUSE_ADDRESS || "") || o.destinationText || ""; }
-                      else { patch.destinationText = o.destinationText || ""; } // ports: user picks from the pool
-                      return patch;
-                    }); }} disabled={isLocked}>
-                      <option value="">— select —</option>
-                      {INCOTERMS_BUY.map(i => <option key={i.code} value={i.code}>{i.code}</option>)}
-                    </Sel>
-                  </div>
-                  <div>
-                    {(() => {
-                      const pool = namedPlacePoolForIncoterm(order.buyIncoterm);
-                      // v6.99.13 (A-LOC-2): the ONE picker, preferred kinds first (from the incoterm), every other place in its own group below; no free text
-                      return (<>
-                        <Lbl>{pool.label} *</Lbl>
-                        <LocationPicker disabled={isLocked} value={order.destinationLocationId ?? order.destinationText ?? ""} contacts={contacts} preferredKinds={pool.types} placeholder={`— ${pool.label.toLowerCase()} —`} onChange={(r: any) => setOrder((o: any) => ({ ...o, destinationLocationId: r.id, destinationText: r.name }))} />
-                        <div style={{ fontSize: 10.5, color: "#6366F1", marginTop: 5 }}>{(() => {
-                          const ic = String(order.buyIncoterm || "").toUpperCase();
-                          if (!ic) return "Select the purchase incoterm — it sets what to fill here.";
-                          if (ic === "EXW" || ic === "FCA") return `${ic} — pickup at the supplier's premises (defaults to the supplier address).`;
-                          if (ic === "FOB") return "FOB — name the port of loading.";
-                          if (ic === "CFR" || ic === "CIF") return `${ic} — name the port of discharge (destination port).`;
-                          if (ic === "DAP") return "DAP — delivery place (defaults to our warehouse; change if elsewhere).";
-                          if (ic === "DDP") return "DDP — delivered to our address (duties paid by the supplier).";
-                          return "";
-                        })()}</div>
-                      </>);
-                    })()}
-                  </div>
-                </div>
-                {(() => {
-                  // v6.43.0 (test-round #2): the provisional IMPORT/EXPORT chip is
-                  // removed — trade direction is the shipment's truth, and a flow-era
-                  // guess here was misleading (showed intra-EU on a CIF export). The
-                  // contractual handover sentence stays; it's a fact of the incoterm.
-                  const placeName = order.destinationText || (locationById(order.destinationLocationId)?.name) || "";
-                  if (!order.buyIncoterm) return null;
-                  return (
-                    <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF", fontSize: 11.5, color: "#4338CA", lineHeight: 1.45 }}>
-                      {handoverSentence(order.buyIncoterm, placeName)}
-                    </div>
-                  );
-                })()}
-                {/* v6.72.0 READINESS. Everything that would stop or weaken this
-                    order, shown WHILE you are filling it in rather than at the
-                    moment you press save — the difference between a note and an
-                    obstacle. Red is a hard gate, amber costs you later. */}
-                {(() => {
-                  const gate = poTermsMissing(order);
-                  const warn = poWarnings(order);
-                  if (!gate && !warn.length) {
-                    return order.status === "Draft" ? (
-                      <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#F0FDF4", border: "1px solid #BBF7D0", fontSize: 11.5, color: "#166534" }}>
-                        ✓ Ready to confirm — terms complete, every line has what the protocol and customs will need.
-                      </div>
-                    ) : null;
-                  }
-                  return (
-                    <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, fontSize: 11.5,
-                      background: gate ? "#FEF2F2" : "#FFFBEB",
-                      border: `1px solid ${gate ? "#FECACA" : "#FDE68A"}`,
-                      color: gate ? "#991B1B" : "#92400E" }}>
-                      {gate && <div style={{ fontWeight: 700, marginBottom: warn.length ? 5 : 0 }}>
-                        Cannot be confirmed without {gate}.
-                      </div>}
-                      {warn.length > 0 && <>
-                        {gate ? <div style={{ fontWeight: 700, marginBottom: 4, color: "#92400E" }}>Also incomplete — these do not block:</div> : null}
-                        <div style={{ lineHeight: 1.5, color: "#92400E" }}>{warn.map((w, i) => <div key={i}>· {w}</div>)}</div>
-                      </>}
-                    </div>
-                  );
-                })()}
-              </div>
-              {/* v6.29.0: the legacy Destination field is GONE — the named place in
-                  PURCHASE TERMS is the single location fact on a PO (both wrote the
-                  same stored keys, so nothing is lost). Onward routing belongs to the
-                  shipment; disposition to the sale. */}
-            </div>
-            {/* v6.43.0 (test-round #3/#4): the "Sea freight involved" toggle is
-                removed — transport planning (road/sea/multimodal legs) is owned by
-                the Shipment module, not declared on the PO. */}
-          </Card>
-
-          {/* Pricing */}
-          <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>PAYMENT · CURRENCY · FX</SectionTitle>
-            <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1.3fr 0.8fr 0.9fr", gap: 14, alignItems: "start" }}>   {/* v6.99.24 (owner): terms · pricing · currency · rate on one line */}
-              <div>
-                {/* v6.99.23 (owner): ONE payment-terms field — a basis, plus days only when days apply. The legacy text dropdown is retired. */}
-                <Lbl>Payment terms</Lbl>
-                <div style={{ display: "grid", gridTemplateColumns: paymentBasisOf(order) === "INVOICE" ? "90px 1fr" : "1fr", gap: 8 }}>
-                  {paymentBasisOf(order) === "INVOICE" && <Inp disabled={isLocked} type="number" value={order.paymentDays ?? paymentDaysFor(order, order.supplier)} onChange={e => sf("paymentDays", parseFloat(e.target.value) || 0)} placeholder={String(paymentDaysFor(order, order.supplier) || 30)} title="Days counted from the invoice issue date (owner ruling) — the purchase invoice's due date derives from this" />}
-                  <Sel disabled={isLocked} value={paymentBasisOf(order)} onChange={e => sf("paymentBasis", e.target.value)}>
-                    {PAYMENT_BASES.map(b => <option key={b.value} value={b.value}>{b.value === "INVOICE" ? "days from invoice date" : b.label}</option>)}
-                  </Sel>
-                </div>
-                <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 4 }}>{paymentTermsLabel(paymentBasisOf(order), order.paymentDays ?? paymentDaysFor(order, order.supplier))} — printed on the order and used for the invoice's due date</div>
-              </div>
-              <div>
-                <Lbl>Pricing</Lbl>
-                <Sel value={order.pricingMode || "firm"} onChange={e => sf("pricingMode", e.target.value)} disabled={isLocked}
-                  title="Consignment: the producer's price is settled from your sales later — the PO saves WITHOUT purchase prices.">
-                  <option value="firm">Firm price</option>
-                  <option value="consignment">Consignment — settled on sales</option>
-                </Sel>
-              </div>
-              <div>
-                <Lbl>Currency</Lbl>
-                <Sel value={order.currency} onChange={e => setOrder(o => ({ ...o, currency: e.target.value, items: (o.items || []).map(it => ({ ...it, currency: e.target.value })) }))} disabled={isLocked}>
-                  {CURRENCIES.map(c => <option key={c}>{c}</option>)}
-                </Sel>
-              </div>
-              <div>
-                <Lbl>FX rate to PLN {isLocked && <span style={{ color: "#888", fontWeight: 400 }}>(locked)</span>}</Lbl>
-                <Inp type="number" value={order.fxRate ?? ""} onChange={e => sf("fxRate", e.target.value)} disabled={isLocked} />
-                {order.fxLockedAt && <div style={{ fontSize: 10, color: "#888", marginTop: 4 }}>Locked on {order.fxLockedAt}</div>}
-              </div>
-            </div>
-          </Card>
-
-          {/* Line items */}
-          <Card style={{ marginBottom: 16 }}>
-            <SectionTitle right={<button onClick={isLocked ? undefined : addItem} disabled={isLocked} title={isLocked ? "Confirmed PO — line items are locked" : ""} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #16A34A", background: "#fff", color: isLocked ? "#9CA3AF" : "#16A34A", fontSize: 11, fontWeight: 600, cursor: isLocked ? "not-allowed" : "pointer", opacity: isLocked ? 0.5 : 1 }}>+ Add line</button>}>LINE ITEMS ({order.items.length})</SectionTitle>
-            {/* Shared datalist — product autocomplete pulls from this; grows as POs are added */}
-            <datalist id="po-product-suggestions">
-              {productSuggestions.map(p => <option key={p} value={p} />)}
-            </datalist>
-            <fieldset disabled={isLocked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-            {order.items.map((it, i) => {
-              const lineTotal = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
-              // Normalize product casing on blur — if user typed "golden delicious" but list has "Golden Delicious", match it
-              return (
-                <div key={i} style={{ marginBottom: 12, padding: 12, background: "#FAFAFA", borderRadius: 8, border: "1px solid #F3F4F6" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "minmax(190px, 2fr) 1fr 0.7fr 0.7fr 1fr 0.8fr 1fr minmax(130px, 1.3fr)", gap: 8, alignItems: "end" }}>   {/* v6.99.24 (owner): item · origin · size · quality · qty · unit · quantity type · unit price */}
-                    <div>
-                      <Lbl>Item / Variety</Lbl>
-                      <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => {
-                        // v6.34.1 (BP-8): auto-fill CN/HS from the catalog on product pick,
-                        // empty-only so a manually-entered code is never overwritten.
-                        setOrder(o => ({ ...o, items: o.items.map((row: any, ri: number) => {
-                          if (ri !== i) return row;
-                          const cn = (!row.cnCode || !String(row.cnCode).trim()) ? cnCodeForItem(productCatalog, v) : row.cnCode;
-                          return { ...row, product: v, cnCode: cn };
-                        }) }));
-                      }} onVariety={(v: string) => si(i, "variety", v)} />
-                    </div>
-                    <div><Lbl>Origin</Lbl><Sel value={it.origin || ""} onChange={e => si(i, "origin", e.target.value)} title="v6.99.24 (owner): country of origin — the list is the Directory's Countries tab"><option value="">— country —</option>{readCountries().map((c: any) => <option key={c.iso} value={c.name}>{c.name}</option>)}{it.origin && !readCountries().some((c: any) => c.name === it.origin) && <option value={it.origin}>{it.origin}</option>}</Sel></div>
-                    <div><Lbl>Size</Lbl><Inp value={it.size} onChange={e => si(i, "size", e.target.value)} placeholder="70-80" /></div>
-                    <div><Lbl>Quality</Lbl><Sel value={it.quality} onChange={e => si(i, "quality", e.target.value)}>{QUALITY_GRADES.map(q => <option key={q}>{q}</option>)}</Sel></div>
-                    <div><Lbl>Qty (kg){String(it.pricingUnit || "kg") === "box" ? " (derived)" : ""}{isEstimatedLine(it) ? " · ESTIMATED" : ""}</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 19500" disabled={isLocked && !isEstimatedLine(it)} title={isEstimatedLine(it) ? "v6.95.0 (PO-10): quantities are ESTIMATED until the producer's packing result — editable even on a confirmed order; prices and terms are locked" : ""} /></div>
-                    <div><Lbl>Unit</Lbl><Sel value={it.pricingUnit || "kg"} onChange={e => si(i, "pricingUnit", e.target.value)} title="v6.94.0 (PO-1): order in kg or in boxes — the other figure derives from the packaging type"><option value="kg">kg</option><option value="box">box</option></Sel></div>
-                    <div><Lbl>Quantity</Lbl><Sel value={isEstimatedLine(it) ? "ESTIMATED" : "FINAL"} onChange={e => si(i, "quantityStatus", e.target.value)} disabled={isLocked && !isEstimatedLine(it)} title="v6.95.0 (PO-10): ESTIMATED = agreed price, quantity to be confirmed by the producer's packing result"><option value="FINAL">Final</option><option value="ESTIMATED">Estimated</option></Sel></div>
-                    <div><Lbl>Unit price</Lbl>{(order.pricingMode || "firm") === "consignment"
-                      ? <div style={{ padding: "8px 10px", border: "1px dashed #D8B4FE", borderRadius: 6, fontSize: 12, color: "#7C3AED", background: "#FAF5FF", fontWeight: 600 }} title="Consignment — the producer's price is settled from your sales">Consignment ⚖</div>
-                      : <Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" />}</div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.8fr 0.7fr 1fr 1.1fr 38px", gap: 8, alignItems: "end", marginTop: 8 }}>   {/* coloration · packaging · boxes · pallets · CN/HS · line total · delete */}
-                    <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
-                    <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PO_PACKAGING_TYPES || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="po-packaging-types" />
-                      <datalist id="po-packaging-types">{(PO_PACKAGING_TYPES || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist></div>
-                    {/* v6.99.46 (A-PO-11, owner): boxes and pallets derive from the LINE'S packaging (never the product default);
-                        a typed figure is a manual override, marked and reversible with ↺; the override survives re-derivation. */}
-                    {(() => { const ec = effectiveCounts(it, PO_PACKAGING_TYPES || []); const isBoxUnit = String(it.pricingUnit || "kg") !== "kg"; return <>
-                    <div><Lbl>Boxes{isBoxUnit ? "" : (ec.boxesManual ? <span style={{ color: "#B45309" }}> (manual) <button onClick={() => si(i, "boxesManual", null)} title="back to the derived figure" style={{ border: "none", background: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, padding: 0 }}>↺</button></span> : (ec.derived.hasPackaging ? " (derived)" : ""))}</Lbl>
-                      {isBoxUnit
-                        ? <Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} placeholder="e.g. 1500" />
-                        : <Inp type="number" value={ec.boxes ?? ""} onChange={e => si(i, "boxesManual", e.target.value)} placeholder={ec.derived.hasPackaging ? "e.g. 1500" : "choose a packaging"} title={ec.derived.hasPackaging ? `${ec.derived.kgPerBox} kg per box` : "the packaging decides the box count — pick it first"} style={ec.boxesManual ? { borderColor: "#F59E0B" } : {}} />}
-                    </div>
-                    <div><Lbl>Pallets{ec.palletsManual ? <span style={{ color: "#B45309" }}> (manual) <button onClick={() => si(i, "palletsManual", null)} title="back to the derived figure" style={{ border: "none", background: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, padding: 0 }}>↺</button></span> : (ec.derived.pallets != null ? " (derived)" : "")}</Lbl>
-                      <Inp type="number" value={ec.pallets ?? ""} onChange={e => si(i, "palletsManual", e.target.value)} placeholder={ec.derived.boxesPerPallet > 0 ? "e.g. 24" : (ec.derived.hasPackaging ? "boxes per pallet not set" : "choose a packaging")} title={ec.derived.boxesPerPallet > 0 ? `${ec.derived.boxesPerPallet} boxes per pallet` : ""} style={ec.palletsManual ? { borderColor: "#F59E0B" } : {}} />
-                    </div>
-                    </>; })()}
-                    <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode ?? ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 0808 10" title="Customs tariff code for this item — carried to the SO and shipment" /></div>
-                    <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
-                    <button onClick={() => removeItem(i)} title="Delete this line" disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #DC2626", borderRadius: 6, background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 800, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
-                  </div>
-                </div>
-              );
-            })}
-            </fieldset>
-          <div style={{ marginTop: 8, padding: "6px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#166534" }} title="v6.99.6 (A-R9-2): totals of the lines — check before Confirm">Σ {totalsLine(documentTotals(order.items, PO_PACKAGING_TYPES, order.fxRate), order.currency)}</div>
-            </Card>
-
-          {/* Notes */}
-          <Card>
-            <SectionTitle>NOTES</SectionTitle>
-            <textarea disabled={isLocked} value={order.notes || ""} onChange={e => sf("notes", e.target.value)} rows={4} placeholder="Special instructions, packing requirements, labels…"
-              style={{ width: "100%", border: "1.5px solid #F59E0B", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} />
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── ORDER DETAIL ───────────────────────────────────────────────────────────
 
@@ -1168,7 +442,7 @@ function OrderForm({ order, setOrder, productSuggestions = [], suppliers = SUPPL
 // ── v6.99.1 (FN-5): THE RESULT OF EVERY PURCHASE — the firm-price mirror of the consignment settlement ──
 
 // ── v6.90.0: THE TRUCK'S FINAL RESULT — settlement per PO (owner rulings V1…V6) ──
-function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null }: any) {
+export function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null }: any) {
   const rec: any = (settlements || []).find((s: any) => String(s.poNumber) === String(order.number)) || null;
   const producer = (contacts || []).find((c: any) => String(c.id) === String(order.supplier?.id)) || null;
   const rateRec = producer ? currentCommissionRate(producer, localTodayISO()) : null;
@@ -1274,365 +548,10 @@ function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shi
 }
 
 
-// ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
-// ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
-// have (at its own price), a line not loaded (0). Allowed on a Confirmed PO with a shipment, as long as nothing was received
-// or shipped: securing the truck must not freeze the order. The shipment's goods rows re-derive; the truck total is what it is.
-function PackingResultWindow({ order, onClose, onConfirm, preview = null, catalog = [], setCatalog = null, packagingTypes = [], counts = null }: any) {
-  const [rows, setRows] = React.useState<any[]>(() => (order.items || []).map((it: any, i: number) => ({ lineId: it.id ?? i + 1, it, qty: isEstimatedLine(it) ? "" : String(it.qty ?? ""), boxes: "" })));
-  const [added, setAdded] = React.useState<any[]>([]);
-  const [choice, setChoice] = React.useState<Record<string, string>>({});
-  const [prices, setPrices] = React.useState<Record<string, any>>({});
-  // v6.99.65 (A-PK-6, owner): every field except coloration — variety only when the catalogue item has varieties
-  const missingOf = (a: any): string[] => { const hasVar = ((catalog || []).find((c: any) => String(c.item) === String(a.product))?.varieties || []).length > 0;
-    return [!String(a.product || "").trim() && "item", hasVar && !String(a.variety || "").trim() && "variety", !String(a.size || "").trim() && "size", !String(a.quality || "").trim() && "quality", !(parseFloat(a.qty) > 0) && "quantity", !(parseFloat(a.unitPrice) > 0) && "unit price", !(a.packagingId || String(a.packaging || "").trim()) && "packaging"].filter(Boolean) as string[]; };
-  const incomplete = added.map((a: any, i: number) => ({ i, miss: missingOf(a) })).filter(x => x.miss.length);
-  const payload = () => [...rows.map(r => ({ lineId: r.lineId, qty: String(r.qty).trim() === "" ? undefined : parseFloat(String(r.qty).replace(",", ".")), boxes: String(r.boxes ?? "").trim() === "" ? undefined : parseFloat(String(r.boxes).replace(",", ".")) })), ...added.filter(a => parseFloat(a.qty) > 0).map(a => ({ newLine: { ...a, qty: parseFloat(String(a.qty).replace(",", ".")), unitPrice: parseFloat(String(a.unitPrice).replace(",", ".")) || 0 } }))];
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
-  const total = rows.reduce((s, r) => s + (parseFloat(String(r.qty).replace(",", ".")) || (String(r.qty).trim() === "" ? (parseFloat(r.it.qty) || 0) : 0)), 0) + added.reduce((s, a) => s + (parseFloat(String(a.qty).replace(",", ".")) || 0), 0);
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "50px 16px", overflow: "auto" }}>
-      <div style={{ background: "#fff", borderRadius: 12, width: "min(900px, 100%)", border: "2px solid #7C3AED", overflow: "hidden" }}>
-        <div style={{ background: "#F5F3FF", borderBottom: "1px solid #DDD6FE", padding: "10px 16px" }}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: "#6D28D9" }}>📦 Producer's packing list · {order.number}</div>
-          <div style={{ fontSize: 11.5, color: "#64748B" }}>the final kilos per line — blank keeps the estimate · 0 = not loaded · anything loaded that the order did not have is added below as an additional item</div>
-        </div>
-        <div style={{ padding: "12px 16px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr 0.9fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>LINE</div><div>SIZE</div><div>CLASS</div><div>ESTIMATED / ORDERED</div><div>FINAL KG</div><div>BOXES LOADED</div></div>
-          {rows.map((r, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr 0.9fr", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F1F5F9" }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700 }}>{r.it.product}{r.it.variety ? ` — ${r.it.variety}` : ""}</div><div style={{ fontSize: 12 }}>{r.it.size || "—"}</div><div style={{ fontSize: 12 }}>{r.it.quality || "—"}</div>
-            <div style={{ fontSize: 12 }}>{Math.round(parseFloat(r.it.qty) || 0).toLocaleString("pl-PL")} kg {isEstimatedLine(r.it) ? <span style={{ color: "#B45309" }}>≈ estimated</span> : <span style={{ color: "#94A3B8" }}>final</span>}</div>
-            <input type="number" value={r.qty} onChange={e => setRows(rows.map((x, k) => k === i ? { ...x, qty: e.target.value } : x))} placeholder={isEstimatedLine(r.it) ? "final kg" : String(r.it.qty)} style={inp} />
-            {/* v6.99.65 (A-PK-4): the boxes follow the final kilos (from the packaging); type the producer's count if it differs */}
-            {(() => { const fk = String(r.qty).trim() === "" ? parseFloat(r.it.qty) : parseFloat(String(r.qty).replace(",", ".")); const d = counts ? counts({ ...r.it, qty: fk, boxesManual: undefined, palletsManual: undefined }).boxes : null;
-              return <input type="number" value={r.boxes} onChange={e => setRows(rows.map((x, k) => k === i ? { ...x, boxes: e.target.value } : x))} placeholder={d != null ? String(d) : "boxes"} title={d != null ? `${d} from the final kilos and the packaging — type the producer's count if it differs` : "no packaging on this line"} style={inp} />; })()}
-          </div>)}
-          <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>ADDITIONAL ITEMS — loaded, not on the order</div>
-          {/* v6.99.57 (A-PK-1, owner): the PO line's own editors — item/variety from the catalogue, size, quality, quantity, price, coloration, packaging.
-              Origin and unit come from the order; the quantity is FINAL (it is what is loaded); CN code, boxes and pallets derive. */}
-          <datalist id="pk-sizes">{Array.from(new Set((order.items || []).map((x: any) => String(x.size || "")).filter(Boolean))).map((v: any) => <option key={v} value={v} />)}</datalist>
-          <datalist id="pk-colorations">{Array.from(new Set((order.items || []).map((x: any) => String(x.coloration || "")).filter(Boolean))).map((v: any) => <option key={v} value={v} />)}</datalist>
-          {added.map((a, i) => { const set = (patch: any) => setAdded(added.map((x, k) => k === i ? { ...x, ...patch } : x)); return (
-            <div key={a.id || i} style={{ border: "1px solid #EDE9FE", borderRadius: 8, padding: "8px", marginBottom: 6, background: "#FFFFFF" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 2fr) 0.8fr 0.7fr 0.8fr 0.8fr 1fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
-                <div><Lbl>Item / Variety</Lbl><ItemVarietyPicker catalog={catalog} setCatalog={setCatalog || (() => {})} item={a.product || ""} variety={a.variety || ""} onItem={(v: string) => set({ product: v, variety: "", cnCode: cnCodeForItem(catalog, v) || "" })} onVariety={(v: string) => set({ variety: v })} /></div>
-                <div><Lbl>Size</Lbl><input list="pk-sizes" value={a.size} onChange={e => set({ size: e.target.value })} placeholder="60-65" style={missingOf(a).includes("size") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
-                <div><Lbl>Quality</Lbl><select value={a.quality || "I"} onChange={e => set({ quality: e.target.value })} style={inp}>{QUALITY_GRADES.map(g => <option key={g}>{g}</option>)}</select></div>
-                <div><Lbl>Quantity ({a.pricingUnit || "kg"})</Lbl><input type="number" value={a.qty} onChange={e => set({ qty: e.target.value })} placeholder="final" style={missingOf(a).includes("quantity") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
-                <div><Lbl>Unit price ({order.currency || "PLN"})</Lbl><input type="number" value={a.unitPrice} onChange={e => set({ unitPrice: e.target.value })} style={missingOf(a).includes("unit price") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
-                <div><Lbl>Coloration</Lbl><input list="pk-colorations" value={a.coloration || ""} onChange={e => set({ coloration: e.target.value })} style={inp} /></div>
-                <div><Lbl>Packaging</Lbl><select value={a.packagingId ?? ""} onChange={e => { const pk = (packagingTypes || []).find((t: any) => String(t.id) === e.target.value); set({ packagingId: pk ? pk.id : null, packaging: pk ? pk.label : "" }); }} style={missingOf(a).includes("packaging") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp}><option value="">— choose —</option>{(packagingTypes || []).map((t: any) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div>
-                <button onClick={() => setAdded(added.filter((_, k) => k !== i))} title="remove this item" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 32, cursor: "pointer" }}>✕</button>
-              </div>
-              <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 4 }}>taken from the order: origin <b>{a.origin || "—"}</b> · unit <b>{a.pricingUnit || "kg"}</b> · quantity <b>final</b>{a.cnCode ? <> · CN <b>{a.cnCode}</b></> : null} · boxes and pallets derive from the packaging</div>
-            </div>); })}
-          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${Date.now()}-${added.length + 1}`, product: b.product || "", variety: "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", coloration: "", packaging: "", packagingId: null, cnCode: cnCodeForItem(catalog, b.product) || "", origin: b.origin || "", pricingUnit: b.pricingUnit || "kg" }]); }}
-            style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add additional items</button>
-          <div style={{ marginTop: 12, fontSize: 13, fontWeight: 800 }}>Truck total: {Math.round(total).toLocaleString("pl-PL")} kg</div>
-          {/* v6.99.56 (A-PL-2, owner): what follows — the sale is what was loaded, so it takes the final kilos; a new size joins it at a price to agree */}
-          {preview && (() => { const pv = preview(payload(), { choice, prices }); return (
-            <div style={{ marginTop: 12, border: "1px solid #DDD6FE", borderRadius: 8, padding: "8px 10px", background: "#FAF5FF" }}>
-              <div style={{ fontSize: 10.5, fontWeight: 800, color: "#6D28D9", marginBottom: 4 }}>WHAT FOLLOWS</div>
-              <div style={{ fontSize: 11.5, color: "#475569" }}>Expected lots rebuilt from the final lines · shipments not yet loaded re-derive their goods.</div>
-              {pv.soChanges.map((s: string, i: number) => <div key={i} style={{ fontSize: 12, marginTop: 3 }}>• {s}</div>)}
-              {pv.questions.map((q: any) => <div key={q.key} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}><span style={{ color: "#92400E", fontWeight: 700 }}>? {q.label}</span>
-                <select value={choice[q.key] || ""} onChange={e => setChoice({ ...choice, [q.key]: e.target.value })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }}><option value="">— choose —</option>{q.options.map((o: string) => <option key={o}>{o}</option>)}</select></div>)}
-              {added.filter(a => parseFloat(a.qty) > 0).map((a: any) => <div key={a.id} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
-                <span>Sales price for {[a.product, a.variety, a.size].filter(Boolean).join(" ") || "the additional item"} <span style={{ color: "#94A3B8" }}>(blank = to agree — the sales invoice waits for it)</span></span>
-                <input type="number" value={prices[a.id] ?? ""} onChange={e => setPrices({ ...prices, [a.id]: e.target.value })} placeholder="price / kg" style={{ width: 110, border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }} /></div>)}
-            </div>); })()}
-        </div>
-        <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <SmallButton onClick={onClose}>Cancel</SmallButton>
-          {incomplete.length > 0 && <span style={{ fontSize: 11.5, color: "#B91C1C", fontWeight: 700, alignSelf: "center" }}>Additional item{incomplete.length > 1 ? "s" : ""} incomplete: {incomplete.map(x => `#${x.i + 1} — ${x.miss.join(", ")}`).join(" · ")}</span>}
-          <button disabled={incomplete.length > 0} onClick={() => { if (incomplete.length) return; onConfirm(payload(), { choice, prices }); }}
-            style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#6D28D9", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Quantities are final</button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
-function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: any) {
-  const [f, setF] = React.useState<any>({ plate: "", trailer: "", driver: "", supplierRef: "", eta: "", recorder: "", note: "" });
-  const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
-  const myLots = (lots || []).filter((l: any) => String(l.poRef) === String(order.number));
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
-  const [asking, setAsking] = React.useState(false);
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "50px 16px", overflow: "auto" }}>
-      <div style={{ background: "#fff", borderRadius: 12, width: "min(820px, 100%)", border: "2px solid #0F766E", overflow: "hidden" }}>
-        <div style={{ background: "#F0FDFA", borderBottom: "1px solid #99F6E4", padding: "10px 16px" }}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: "#0F766E" }}>🚚 Register the supplier's truck</div>
-          <div style={{ fontSize: 11.5, color: "#64748B" }}>{order.number} · {order.supplier?.name || ""} · the supplier delivers ({order.buyIncoterm}) — we track the truck, we do not pay for it</div>
-        </div>
-        <div style={{ padding: "14px 16px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-            <div><Lbl>Truck plate</Lbl><input value={f.plate} onChange={e => set("plate", e.target.value)} placeholder="WGM 4421K" style={inp} /></div>
-            <div><Lbl>Trailer plate</Lbl><input value={f.trailer} onChange={e => set("trailer", e.target.value)} style={inp} /></div>
-            <div><Lbl>Driver</Lbl><input value={f.driver} onChange={e => set("driver", e.target.value)} style={inp} /></div>
-            <div><Lbl>Supplier's reference</Lbl><input value={f.supplierRef} onChange={e => set("supplierRef", e.target.value)} placeholder="GM-004" style={inp} title="their own shipment reference — the link between their paperwork and ours" /></div>
-            <div><Lbl>ETA</Lbl><DateInput value={f.eta} onChange={(e: any) => set("eta", e.target.value)} /></div>
-            <div><Lbl>Temperature recorder</Lbl><input value={f.recorder} onChange={e => set("recorder", e.target.value)} placeholder="TR-88412" style={inp} /></div>
-          </div>
-          <div style={{ marginTop: 10 }}><Lbl>Note</Lbl><input value={f.note} onChange={e => set("note", e.target.value)} style={inp} /></div>
-          <div style={{ marginTop: 12, fontSize: 11.5, color: "#64748B" }}>
-            Carrying {myLots.length} lot(s): {myLots.map((l: any) => `${l.number} · ${l.product}${l.variety ? " " + l.variety : ""} ${Math.round(Number(l.expectedKg) || 0).toLocaleString("pl-PL")} kg`).join(" · ") || "—"}
-          </div>
-        </div>
-        <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, alignItems: "center" }}>
-          {asking && <span style={{ fontSize: 12, fontWeight: 700, color: "#92400E" }}>Create the inbound shipment for {f.plate || "this truck"}{f.supplierRef ? ` (${f.supplierRef})` : ""}?</span>}
-          <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <SmallButton onClick={onClose}>Close</SmallButton>
-            {asking
-              ? <><SmallButton onClick={() => setAsking(false)}>No</SmallButton><button onClick={() => onConfirm(f)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, register</button></>
-              : <button onClick={() => setAsking(true)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Register truck</button>}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
-function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
-  const total = netTotal(order.items);
-  const totalKg = totalQtyKg(order.items);
-  const totalPLN = plnTotal(order);
-  const dest = locById(order.destinationLocationId);
-  const destLabel = destinationDisplay(order);
 
-  return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", height: 52, display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#2563EB", fontWeight: 500 }}>← Purchase Orders</button>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          {(() => {
-            const isDraft = order.status === "Draft";
-            const draftStyle = {
-              padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB",
-              background: isDraft ? "#F9FAFB" : "#fff",
-              color: isDraft ? "#9CA3AF" : "#111",
-              fontSize: 12, fontWeight: 600,
-              cursor: isDraft ? "not-allowed" : "pointer"
-            };
-            const tip = isDraft ? "Confirm the PO first — drafts cannot be printed or sent to suppliers" : "";
-            return <>
-              <button onClick={isDraft ? undefined : onPrint} disabled={isDraft} title={tip} style={draftStyle}>🖨 Print / PDF</button>
-              <button onClick={isDraft ? undefined : onEmail} disabled={isDraft} title={tip} style={draftStyle}>✉ Email</button>
-            </>;
-          })()}
-          {order.status === "Cancelled"
-            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
-            : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit</button>}
-          <button onClick={onDelete} style={{ padding: "5px 12px", borderRadius: 7, border: "none", color: "#fff", background: "#DC2626", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Delete</button>
-        </div>
-      </div>
-
-      <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
-        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
-          {/* Header */}
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, gap: 20 }}>
-            <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-                <StatusBadge status={order.status} />
-                {(order.buyIncoterm || order.tradeMovement) && <FlowBadge order={order} />}
-                <VarianceBadge variance={order.variance} />
-              </div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>
-              <div style={{ fontSize: 13, color: "#444" }}>{order.supplier?.name} · {order.supplier?.country} {destLabel !== "—" && <>· destination {dest ? LOCATION_TYPES[dest.type]?.icon : "📍"} {destLabel}</>}</div>
-            </div>
-            <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
-              <div style={{ fontSize: 11, color: "#888" }}>Total value</div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
-              {order.currency !== "PLN" && <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(totalPLN, "PLN")} · rate {order.fxRate}</div>}
-              <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>{fmtNum(totalKg)} kg total</div>
-            </div>
-          </div>
-
-          {/* Lifecycle */}
-          <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>LIFECYCLE</SectionTitle>
-            <LifecycleTimeline status={order.status} />
-          </Card>
-
-          {/* Two-column body */}
-          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 20 }}>
-            <div>
-              {/* Line items */}
-              <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>LINE ITEMS ({order.items.length})</SectionTitle>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-                  <thead>
-                    <tr style={{ background: "#F9FAFB" }}>
-                      {["Product", "Origin", "Size", "Kl.", "Packaging", "Boxes", "Qty kg", "Unit price", "Total"].map((h, i) => (
-                        <th key={i} style={{ padding: "8px 10px", textAlign: i >= 5 ? "right" : "left", fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.06em" }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {order.items.map((it, i) => {
-                      const lt = (parseFloat(it.qty) || 0) * (parseFloat(it.unitPrice) || 0);
-                      return (
-                        <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
-                          <td style={{ padding: "10px", fontWeight: 600 }}>
-                            {it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}
-                            {it.coloration && <div style={{ fontSize: 10.5, color: "#AAA", fontWeight: 400 }}>{it.coloration}</div>}
-                          </td>
-                          <td style={{ padding: "10px", color: "#555" }}>{it.origin || "—"}</td>
-                          <td style={{ padding: "10px", color: "#555" }}>{it.size || "—"}</td>
-                          <td style={{ padding: "10px" }}><QualityBadge quality={it.quality} /></td>
-                          <td style={{ padding: "10px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
-                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{(() => { const b = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PO_PACKAGING_TYPES || []).boxes; return b ? fmtNum(b) : "—"; })()}</td>
-                          <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
-                          <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {order.currency}</>}</td>
-                          <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{lt.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
-                        </tr>
-                      );
-                    })}
-                    <tr style={{ background: "#F9FAFB" }}>
-                      <td colSpan={5} style={{ padding: "10px", fontWeight: 700, color: "#111" }}>Total</td>
-                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s: number, it: any) => s + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PO_PACKAGING_TYPES || []).boxes) || 0), 0)) || "—"}</td>
-                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(totalKg)} kg</td>
-                      <td></td>
-                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
-
-              {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
-              {/* v6.99.36 (A-R25-6): SUPPLIER'S TRUCK — its own box under the lines, showing what was registered */}
-              {["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status !== "Draft" && (() => {
-                const trucks = supplierTrucks || [];   // v6.99.42 (hotfix): was filtering a list of NUMBERS for .arrangedBy — never matched, the box always read empty
-                return (
-                  <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>
-                    <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 {trucks.length ? "Register another truck" : "Register supplier's truck"}</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
-                    {!trucks.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No truck registered yet. Register it when the supplier announces the plates and the ETA.</div>}
-                    {trucks.map((s: any) => { const u = (s.legs || []).flatMap((l: any) => l.vehicles || [])[0] || {}; return (
-                      <div key={s.number} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr 1fr 1fr auto", gap: 8, fontSize: 12, alignItems: "center" }}>
-                          <div><b>{s.number}</b></div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
-                          <div>{s.supplierRef || u.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef || u.supplierRef}</span> : <span style={{ color: "#94A3B8" }}>no supplier ref</span>}</div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
-                          <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
-                          <div>{typeof onOpenShipment === "function" && <SmallButton onClick={() => onOpenShipment(s.number)}>Open</SmallButton>}</div>
-                        </div>
-                        <div style={{ fontSize: 11, color: "#64748B", marginTop: 3 }}>
-                          {u.driverName ? `driver ${u.driverName}${u.driverPhone ? " · " + u.driverPhone : ""} · ` : ""}
-                          {(s.goods || []).length ? `carrying ${(s.goods || []).map((g: any) => `${g.lotRef || g.product} ${Math.round(Number(g.qtyKg) || 0).toLocaleString("pl-PL")} kg`).join(", ")}` : ""}
-                          {s.notes ? ` · ${s.notes}` : ""}
-                        </div>
-                      </div>
-                    ); })}
-                  </Card>
-                );
-              })()}
-              {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
-              {/* v6.99.26 (owner ruling): the purchase RESULT left this screen — the PO is operational. It lives in Finance → Purchase results. */}
-              <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>LINKED DOCUMENTS</SectionTitle>
-                <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
-                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
-                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && ["EXW", "DAP", "DPU", "DDP", "CIF", "CFR", "FOB", "FCA"].includes(String(o.sellIncoterm || "").toUpperCase())); void sos;
-                  return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
-                <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" />
-                {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
-                    note — so receiving lives HERE too, not only on the lot in Inventory. */}
-                {typeof onPackingResult === "function" && order.status === "Confirmed" && (order.items || []).some((it: any) => isEstimatedLine(it)) && (
-                  <div style={{ marginTop: 8, padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8 }}>
-                    <div style={{ fontSize: 11.5, color: "#92400E", fontWeight: 700 }}>Quantities are ESTIMATED — prices agreed, kilos to be confirmed by the producer's packing result. Transport can be booked on these figures (v6.95.0, PO-10).</div>
-                    <button onClick={onPackingResult} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: "#B45309", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📦 Enter packing result → quantities final</button>
-                  </div>
-                )}
-                {/* v6.99.36 (A-R25-6, owner): the supplier truck moved OUT of Linked documents — it has its own box under the line items */}
-                {typeof onReceiveLot === "function" && (expectedLots || []).length > 0 && (
-                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <span style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
-                    {expectedLots.map((l: any) => (
-                      <button key={String(l.id)} onClick={() => onReceiveLot(l)} title="DDP / supplier-delivered arrival with no shipment of ours — posts the receipt movement" style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 Receive {l.number} ({Math.round(parseFloat(l.expectedKg) || 0).toLocaleString("pl-PL")} kg)</button>
-                    ))}
-                  </div>
-                )}
-                {/* v6.63.0 (BUG #2 fix): invoices are DERIVED from the register via its links[]
-                    — the stored legacy array was never updated by the Invoices module, so a
-                    cost invoice linked to this PO was invisible here. */}
-                <LinkRow label="Invoices" items={computedInvoices ?? order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
-                <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
-                  Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
-                </div>
-              </Card>
-
-              {order.notes && (
-                <Card style={{ marginBottom: 16 }}>
-                  <SectionTitle>NOTES</SectionTitle>
-                  <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{order.notes}</div>
-                </Card>
-              )}
-            </div>
-
-            {/* Right column */}
-            <div>
-              {/* Supplier */}
-              <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>SUPPLIER</SectionTitle>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginBottom: 4 }}>{order.supplier?.name}</div>
-                <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>{order.supplier?.country}</div>
-                {order.supplier?.nip && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>NIP / VAT</div><div style={{ fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.supplier.nip}</div></div>}
-                {liveParty(order.supplier, CONTACTS_REF || [])?.address && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Address</div><div style={{ fontSize: 12, color: "#444" }}>{formatAddress(addressOf(liveParty(order.supplier, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.supplier, CONTACTS_REF || [])?.address}</div></div>}
-                {order.supplier?.contact && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Contact</div><div style={{ fontSize: 12, color: "#444" }}>{order.supplier.contact}</div></div>}
-                {order.supplier?.email && <div><div style={{ fontSize: 10, color: "#888" }}>Email</div><a href={`mailto:${order.supplier.email}`} style={{ fontSize: 12, color: "#2563EB", textDecoration: "none" }}>{order.supplier.email}</a></div>}
-              </Card>
-
-              {/* Dates + payment */}
-              <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>TERMS</SectionTitle>
-                <div style={{ display: "grid", gap: 10, fontSize: 12 }}>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>ORDER DATE</div><div style={{ fontWeight: 500 }}>{fmtDate(order.orderDate)}</div></div>
-                  <div title="When the supplier loads our truck/container — goods leave origin"><div style={{ fontSize: 10, color: "#888" }}>LOADING <span style={{ color: "#BBB", fontWeight: 400 }}>· goods leave origin</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.loadingDate)}</div></div>
-                  <div title="When goods are expected to arrive at the destination"><div style={{ fontSize: 10, color: "#888" }}>EXPECTED DELIVERY <span style={{ color: "#BBB", fontWeight: 400 }}>· goods arrive</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.expectedDeliveryDate)}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>PURCHASE INCOTERM</div><div style={{ fontWeight: 600 }}>{order.buyIncoterm || "—"}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destLabel}</div></div>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888" }}>SEA FREIGHT</div>
-<div style={{ fontWeight: 600, color: "#888" }}>—</div>
-                  </div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
-                </div>
-              </Card>
-
-              {/* Variance (when arrived) */}
-              {order.variance && order.variance.receivedKg != null && (
-                <Card style={{ marginBottom: 16 }}>
-                  <SectionTitle>QUANTITY VARIANCE</SectionTitle>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-                    <div><div style={{ fontSize: 10, color: "#888" }}>EXPECTED</div><div style={{ fontSize: 16, fontWeight: 700 }}>{fmtNum(order.variance.expectedKg)} kg</div></div>
-                    <div><div style={{ fontSize: 10, color: "#888" }}>RECEIVED</div><div style={{ fontSize: 16, fontWeight: 700 }}>{fmtNum(order.variance.receivedKg)} kg</div></div>
-                  </div>
-                  {(() => {
-                    const delta = order.variance.receivedKg - order.variance.expectedKg;
-                    const pct = (delta / order.variance.expectedKg) * 100;
-                    if (delta === 0) return <div style={{ fontSize: 12, color: "#16A34A" }}>✓ Quantity matched exactly</div>;
-                    return (
-                      <div style={{ padding: "10px 12px", background: delta < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${delta < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 6, fontSize: 11.5, color: delta < 0 ? "#92400E" : "#1E40AF" }}>
-                        <strong>{delta > 0 ? "Surplus" : "Shortfall"}:</strong> {Math.abs(delta).toLocaleString()} kg ({pct.toFixed(2)}%)
-                      </div>
-                    );
-                  })()}
-                </Card>
-              )}
-
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LinkRow({ label, items, color, bg }: any) {
+export function LinkRow({ label, items, color, bg }: any) {
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ fontSize: 10, color: "#888", marginBottom: 4, letterSpacing: "0.04em" }}>{label.toUpperCase()}</div>
@@ -2072,6 +991,7 @@ ${blockNote}`.trim(),
     }
 
     setView("list");
+    notifySaved(String(o?.number || ""));   // v6.99.69 (A-CF-3)
     setForm(null);
   }
 
@@ -2284,7 +1204,7 @@ ${blockNote}`.trim(),
               recordAudit({ module: "Purchase orders", docType: "Commission run", docNumber: String(r.runId), action: "created", summary: `${r.invoices.length} commission invoice draft(s): ${r.invoices.map((i: any) => (i.links || [])[0]?.number).join(", ")}` });
             }}>⚙ Commission run ({(extSettlements || []).filter((s: any) => s.status === "Closed" && !s.commissionInvoiceId).length})</SmallButton>
           )}
-          <SmallButton onClick={() => exportRowsToXlsx(`purchase_orders_${xlsStamp()}`, filtered, [{ key: "number", label: "PO" }, { key: "supplier", label: "Supplier", fmt: (v: any) => v?.name || "" }, { key: "buyIncoterm", label: "Terms" }, { key: "orderDate", label: "Ordered" }, { key: "loadingDate", label: "Ready / loading" }, { key: "status", label: "Status" }, { key: "pricingMode", label: "Pricing" }, { key: "currency", label: "Currency" }, { key: "fxRate", label: "Rate" }, { key: "items", label: "Lines", fmt: (v: any) => (v || []).map((it: any) => `${it.product}${it.variety ? " " + it.variety : ""} ${it.size || ""} ${it.qty} kg @ ${it.unitPrice}`).join(" | ") }, { key: "paymentDays", label: "Payment days" }], "Purchase orders")} title="v6.99.0: exports the rows as filtered, columns as shown">⬇ Excel</SmallButton>
+          <SmallButton onClick={() => exportRowsToXlsx(`purchase_orders_${xlsStamp()}`, filtered, [{ key: "number", label: "PO" }, { key: "supplier", label: "Supplier", fmt: (v: any) => v?.name || "" }, { key: "buyIncoterm", label: "Terms" }, { key: "orderDate", label: "Ordered" }, { key: "loadingDate", label: "Ready / loading" }, { key: "status", label: "Status" }, { key: "pricingMode", label: "Pricing" }, { key: "currency", label: "Currency" }, { key: "fxRate", label: "Rate" }, { key: "items", label: "Lines", fmt: (v: any) => (v || []).map((it: any) => `${it.product}${it.variety ? " " + it.variety : ""} ${it.size || ""} ${it.qty} kg @ ${it.unitPrice}`).join(" | ") }, { key: "paymentDays", label: "Payment days" }], "Purchase orders")} title="v6.99.0: exports the rows as filtered, columns as shown">Export file (Excel)</SmallButton>
           <ActionButton action="create" label="Add new PO" onClick={newOrder} />
         </div>
       </div>

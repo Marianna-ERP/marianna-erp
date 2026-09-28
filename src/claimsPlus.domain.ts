@@ -7,10 +7,9 @@
 import { claimMoney } from "./claims.domain";
 import { applyPaymentEvent, outstandingAmount } from "./payments.domain";
 import { NOTICE_DEFAULTS, addDays } from "./claimReadiness.domain";
+import { S, r2 } from "./format";
 
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r2 = (v: number) => Math.round(v * 100) / 100;
 
 // ── CL-2: the defect comes from the Inspection the claim references ───────────
 export function defectFromInspection(claim: any, inspections: any[]): { defectType: string; defectPct: number; description: string; inspection: any | null } {

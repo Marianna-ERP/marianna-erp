@@ -34,9 +34,9 @@
 // has to own every line.
 
 import { parseNum } from "./numbers";
+import { r2 } from "./format";
 
 const n = parseNum;
-const r2 = (v: number) => Math.round(v * 100) / 100;
 
 export type CostOrigin = "OURS" | "CLIENT";
 

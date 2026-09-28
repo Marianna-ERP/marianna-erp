@@ -310,16 +310,6 @@ export function readLogisticsPoints(): any[] {
   }
 }
 
-// Synchronous write so a follow-up page reload re-bootstraps with the new data
-// (mirrors how custom locations persisted before a reload).
-export function writeLogisticsPoints(list: any[]): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
-  try {
-    window.localStorage.setItem(LOGISTICS_POINTS_KEY, JSON.stringify(list || []));
-  } catch (err) {
-    console.warn("[locations] Could not write logistics points:", err);
-  }
-}
 
 // Register (idempotently) logistics points as Location entries so locById/locText
 // resolve them everywhere — including the transport confirmation snapshot.
@@ -359,38 +349,8 @@ export function locText(id: any, fallback = ""): string {
   return l.address ? `${l.name}, ${l.address}` : l.name;
 }
 
-export function locationsOfType(...types: LocationType[]): Location[] {
-  return LOCATIONS.filter(l => types.includes(l.type) && !l.aliasOf);
-}
 
-// Locations filtered by the LEGACY type string (OWN/PORT/CLIENT/SUPPLIER/BROKER)
-// — used by existing v5.8 dropdowns that group by legacy type. Aliases hidden so
-// dropdowns don't show Biedronka twice.
-export function locationsByLegacyType(legacyType: string): Location[] {
-  return LOCATIONS.filter(l => l.legacyType === legacyType && !l.aliasOf);
-}
 
-// All non-alias locations (for datalists / full dropdowns)
-// ─── v6.73.0: BUILT-IN LOCATIONS ARE EDITABLE AND DELETABLE ─────────────────
-// Owner ruling: "I do not need any data that is built in by default that can
-// not be edited or changed."
-//
-// The seed table above stays as it is — it is reference data shipped with the
-// build, and rewriting it per user would make every install different. Instead
-// an OVERRIDE layer sits on top: a hidden flag, or replacement fields, stored
-// per id. allLocations() applies it on read. Nothing is destroyed, so a
-// location hidden by mistake can be restored, and an override is dropped
-// automatically once its id no longer exists in a future seed.
-//
-// This is the same read-forward discipline used for legacy customs roles and
-// per-truck protocols: change what is SHOWN, never rewrite what is STORED.
-// The existing override layer above already stores name/country/address per
-// built-in id. v6.73.0 adds the two things the owner asked for and it lacked:
-// a HIDDEN flag (the user's "delete" for a built-in they never use) and
-// alphabetical ordering. Hiding is reversible by design — nothing is destroyed,
-// so a location hidden by mistake comes back.
-
-export function hideBuiltInLocation(id: number): void { writeLocationOverride(id, { hidden: true } as any); }
 export function restoreBuiltInLocation(id: number): void {
   const all = readLocationOverrides() as any;
   const o = all[String(id)];

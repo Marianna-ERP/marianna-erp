@@ -22,9 +22,9 @@
 // is knowing at nine in the morning what is missing before you send at eleven.
 
 import { parseNum } from "./numbers";
+import { S } from "./format";
 
 const n = parseNum;
-const S = (v: any) => String(v ?? "").trim();
 
 // ── 1. NOTICE DEADLINES ─────────────────────────────────────────────────────
 // Defaults only. Every one is overridable on the claim, because the contract

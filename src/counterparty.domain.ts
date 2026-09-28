@@ -1,9 +1,9 @@
 import { paymentBasisOf } from "./po.domain";
+import { S } from "./format";
 // ─────────────────────────────────────────────────────────────────────────────
 // counterparty.domain.ts — v6.99.2: COUNTERPARTIES BATCH (CP-1…CP-7, CP-9; owner 11 Sept 2026)
 // Pure.
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
 
 export const ROLES = ["Client", "Supplier", "Carrier", "Forwarder", "Broker", "Warehouse", "ShippingLine", "Other"] as const;
@@ -50,8 +50,6 @@ export function normaliseCounterparty(c: any): { contact: any; changed: boolean 
   return { contact: n, changed };
 }
 
-// ── CP-3: people by role, for the composers ───────────────────────────────────
-export const PERSON_ROLES = ["Buyer", "Sales", "Accountant", "Dispatcher", "Quality", "Director", "Other"] as const;
 export function personFor(contact: any, role: string): { name: string; email: string; phone: string } | null {
   const people = (contact?.contacts && contact.contacts.length ? contact.contacts : contact?.people) || [];
   const hit = people.find((p: any) => S(p.role).toLowerCase() === S(role).toLowerCase() && S(p.email)) || people.find((p: any) => S(p.email)) || null;

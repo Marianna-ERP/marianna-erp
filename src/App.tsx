@@ -28,7 +28,9 @@ import { costTypeLabel, costInventoryType } from "./Shipments";
 import { localTodayISO } from "./dates";
 import { nextId as globalNextId, nextId } from "./ids";
 import { SHELL_SEED } from "./shell_seed";
-import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded } from "./useLocalStoredState";
+import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded, compactLocalBackups } from "./useLocalStoredState";
+import { startAutoBackup } from "./autoBackup";   // v6.99.70 (A-BK-1)
+import { BackupBanner } from "./BackupPanel";
 import { setAuditSink, recordAudit } from "./audit";
 import { appendAudit } from "./auditTrail.domain";
 import AuditTrail from "./AuditTrail";
@@ -518,8 +520,10 @@ export default function App() {
   // Claims module from birth.
   const [claimSeed, setClaimSeed] = useState<any>(null);
   const startClaim = (seed: any) => { setClaimSeed(seed); navigate("claims"); };
-  // One-time reminder for testers to export/back up their data (localStorage only).
-  const [backupReminderDismissed, setBackupReminderDismissed] = useLocalStoredState("backupReminderDismissed", false);
+  // v6.99.70 (A-BK, owner): the one-time "Test build — export regularly" reminder is replaced by the backup banner, which
+  // shows only when something needs the user (no folder, access paused, a failed write, or today's download in a browser
+  // that can't write to a folder). On opening: old pretty snapshots are compacted, then the folder backup starts.
+  useEffect(() => { try { compactLocalBackups(); } catch {} startAutoBackup(); }, []);
   const storageHealthState = useStorageHealth(); // Batch 5: surface failed writes
 
   // Batch 5d (BP-39): one-time conversion — legacy "mark paid" flags on invoices
@@ -619,16 +623,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {!backupReminderDismissed && (
-        <div style={{ background: "#FEF3C7", borderBottom: "1px solid #FDE68A", padding: "10px 28px", display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: "#92400E", flexShrink: 0 }}>
-          <span style={{ fontSize: 15 }}>💾</span>
-          <span style={{ flex: 1, lineHeight: 1.45 }}>
-            <strong>Test build — your data lives only in this browser.</strong> It survives refreshes and updates here, but is lost if you switch browser/device, use a private window, or clear browsing data. Back it up regularly via <strong>Settings → Export all data</strong>, and send that file with any bug report.
-          </span>
-          <button onClick={() => { navigate("settings"); }} style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#92400E", fontSize: 11.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>Open Settings</button>
-          <button onClick={() => setBackupReminderDismissed(true)} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "transparent", color: "#92400E", fontSize: 16, cursor: "pointer", lineHeight: 1 }} title="Dismiss">×</button>
-        </div>
-      )}
+      <BackupBanner onOpenSettings={() => navigate("settings")} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {renderActive()}
       </div>

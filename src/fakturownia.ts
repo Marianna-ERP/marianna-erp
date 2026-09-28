@@ -5,7 +5,7 @@
 // Browser CORS may block direct calls on some accounts; every caller must
 // handle {ok:false, corsLikely:true} by falling back to the XLS/CSV import.
 
-import { addressOf } from "./address.domain";
+
 
 export interface FakturowniaConfig {
   subdomain: string;   // e.g. "marianna2"  → https://marianna2.fakturownia.pl
@@ -198,72 +198,4 @@ export function mapInvoice(raw: any): MappedInvoice {
   };
 }
 
-// ── Matching a sales invoice to an SO ────────────────────────────────────────
-// Strategies in priority order; tolerance for FX rounding on amounts.
-export function matchInvoiceToSO(inv: MappedInvoice, so: any): { match: boolean; confidence: "exact" | "strong" | "weak"; reason: string } | null {
-  if (!inv || !so) return null;
-  const soNo = String(so.number || "");
-  if (soNo && (inv.oid === soNo || inv.description.includes(soNo))) {
-    return { match: true, confidence: "exact", reason: `invoice references ${soNo}` };
-  }
-  const clientName = String(so.client?.name || "").trim().toLowerCase();
-  const buyer = inv.buyerName.trim().toLowerCase();
-  // v6.79.0: box-aware — a box-priced line is boxes × price-per-box, not kg × price-per-box.
-  const lineNet = (it: any) => (String(it.pricingUnit || "") === "box" ? (parseFloat(it.boxes) || 0) : (parseFloat(it.qty) || 0)) * (parseFloat(it.unitPrice) || 0);
-  const soTotal = (so.items || []).reduce((s: number, it: any) => s + lineNet(it), 0);
-  const amountClose = soTotal > 0 && Math.abs(inv.netTotal - soTotal) <= Math.max(1, soTotal * 0.005);
-  const sameCurrency = inv.currency === String(so.currency || "PLN").toUpperCase();
-  const nameClose = clientName && buyer && (buyer.includes(clientName.slice(0, 12)) || clientName.includes(buyer.slice(0, 12)));
-  if (nameClose && amountClose && sameCurrency) return { match: true, confidence: "strong", reason: "client + amount + currency match" };
-  if (nameClose && amountClose) return { match: true, confidence: "weak", reason: "client + amount match (currency differs)" };
-  return null;
-}
 
-// ── "Prepare for Fakturownia" — payload for their Add-new-invoice endpoint ───
-// Returns the JSON the user can paste/POST to create the sales invoice with
-// every footer detail Marianna prints (ACID, permit, temp recorder, trucks…).
-export function buildInvoicePayloadFromSO(so: any, shipments: any[] = []): any {
-  const positions = (so.items || []).map((it: any) => ({
-    name: [it.product, it.size ? `Size ${it.size}` : "", it.quality ? `Class ${it.quality}` : "", it.packaging || ""].filter(Boolean).join(" ")
-      + (it.cnCode ? ` (CN: ${it.cnCode})` : ""),
-    quantity: String(it.pricingUnit || "") === "box" ? (parseFloat(it.boxes) || 0) : (parseFloat(it.qty) || 0),
-    quantity_unit: String(it.pricingUnit || "") === "box" ? "box" : "kg",
-    total_price_gross: Math.round((String(it.pricingUnit || "") === "box" ? (parseFloat(it.boxes) || 0) : (parseFloat(it.qty) || 0)) * (parseFloat(it.unitPrice) || 0) * 100) / 100, // v6.79.0 box-aware
-    tax: 0,
-  }));
-  const linked = (shipments || []).filter((sh: any) => (sh.soRefs || []).includes(so.number) || (sh.goods || []).some((g: any) => g.soRef === so.number));
-  const trucks = linked.flatMap((sh: any) => (sh.legs || []).flatMap((l: any) =>
-    [[l.vehiclePlate, l.trailerPlate].filter(Boolean).join(" / "), ...((l.vehicles || l.transportUnits || []).map((u: any) => [u.truckPlate || u.vehiclePlate, u.trailerPlate].filter(Boolean).join(" / ")))]
-  )).filter(Boolean);
-  const tempRec = linked.map((sh: any) => sh.tempRecorderNo).filter(Boolean);
-  const descLines = [
-    so.acidNo ? `ACID: ${so.acidNo}` : "",
-    so.importPermitNo ? `Import permit: ${so.importPermitNo}` : "",
-    tempRec.length ? `Temperature recorder: ${Array.from(new Set(tempRec)).join(", ")}` : "",
-    trucks.length ? `Truck number: ${Array.from(new Set(trucks)).join(", ")}` : "",
-    so.sellIncoterm ? `Delivery terms: ${so.sellIncoterm}` : "",
-    `Country of origin: Poland — Country Code: PL`,
-  ].filter(Boolean);
-  return {
-    invoice: {
-      kind: "vat",
-      income: 1,
-      oid: so.number,                       // lets the ERP re-find this invoice later
-      sell_date: so.deliveryDate || undefined,
-      issue_date: undefined,                // Fakturownia sets today
-      buyer_name: so.client?.name || "",
-      buyer_tax_no: so.client?.nip || so.client?.vatEuId || "",
-      // v6.99.41 (ADDR-4, owner): Fakturownia holds an address as four fields — we send ours as four,
-      // instead of flattening them into one string it would have to guess how to split again.
-      ...(() => { const a = addressOf(so.client || {}); return {
-        buyer_street: a.street || undefined,
-        buyer_post_code: a.postcode || undefined,
-        buyer_city: a.city || undefined,
-        buyer_country: a.country || so.client?.country || undefined,
-      }; })(),
-      currency: so.currency || "PLN",
-      description: descLines.join("\n"),
-      positions,
-    },
-  };
-}

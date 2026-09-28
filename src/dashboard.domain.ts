@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S } from "./format";
 // dashboard.domain.ts — v6.99.4: THE DASHBOARD'S QUESTIONS (owner decisions DA-1…DA-8)
 // Pure tile queries. Every tile = exceptions / today's events only; "none" when empty.
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
 const addDays = (iso: string, d: number) => { const m = S(iso).match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return ""; const x = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
 

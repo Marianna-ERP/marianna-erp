@@ -1,4 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S, r2, r0 } from "./format";
 // poSettlement.domain.ts — v6.90.0: THE TRUCK'S FINAL RESULT (settlement per PO)
 // Owner rulings 6 Sept 2026 (VEGA_PRO_REPORTING_MAPPING.md §1, §4, §5):
 //   V1 one PO = one truck → the settlement is FOR THE PO, summing its lots by variety
@@ -12,10 +13,7 @@
 //   waste = kg counted, never sold; class II same lot as a grade
 // Pure. Reads the stores it needs; writes nothing.
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r2 = (v: number) => Math.round(v * 100) / 100;
-const r0 = (v: number) => Math.round(v);
 
 export interface POSettlementRecord {
   id: any; poNumber: string; status: "Open" | "Closed"; number?: string;

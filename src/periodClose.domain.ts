@@ -1,7 +1,6 @@
 // ── v6.99.0 (FN-1/FN-2/FN-3): PERIOD CLOSE, MANAGEMENT SNAPSHOT, CASH PROJECTION ──
-const S = (v: any) => String(v ?? "").trim();
+import { S, r2 } from "./format";
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r2 = (v: number) => Math.round(v * 100) / 100;
 
 export interface ClosedPeriod { period: string; closedAt: string; closedBy: string; snapshot: any; }
 export function isDateInClosedPeriod(dateISO: any, closed: ClosedPeriod[]): string | null {

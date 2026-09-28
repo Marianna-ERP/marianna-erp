@@ -1,4 +1,5 @@
 // ── SHIPMENT & INVENTORY GATES (v6.78.0) ────────────────────────────────────
+import { S } from "./format";
 // The same shape Purchase Orders got in v6.72.0: a very small number of hard
 // gates, more warnings that state their CONSEQUENCE, and a readiness view while
 // you work rather than a refusal at the save button.
@@ -7,7 +8,6 @@
 // would leave the data saying a thing that did not happen. Everything else
 // reports — because a truck at a dock does not wait for a form.
 
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
 
 // ── SHIPMENTS ───────────────────────────────────────────────────────────────

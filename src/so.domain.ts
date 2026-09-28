@@ -1,12 +1,12 @@
+import { paymentDaysOf } from "./legacy";
 // ─────────────────────────────────────────────────────────────────────────────
 // so.domain.ts — v6.95.0: SALES ORDER RULES (owner decisions SO-1…SO-9 + PO-10, 10 Sept 2026)
 // Pure.
 // ─────────────────────────────────────────────────────────────────────────────
 import { paymentBasisOf, dueDateFor } from "./po.domain";
+import { S, r0 } from "./format";
 
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r0 = (v: number) => Math.round(v);
 
 // ── SO-1: grade on the line ───────────────────────────────────────────────────
 export type Grade = "I" | "II";
@@ -70,7 +70,7 @@ export function deliveryDelayDays(so: any, shipments: any[]): number | null {
 // ── SO-4: payment days from the client → due date ─────────────────────────────
 export function soPaymentDays(so: any, client: any): number {
   const own = num(so?.paymentDays); if (own > 0) return own;
-  const inh = num(client?.paymentTermsDays); if (inh > 0) return inh;
+  const inh = paymentDaysOf(client); if (inh > 0) return inh;   // v6.99.67 (legacy.ts)
   const m = S(so?.paymentTerms).match(/(\d{1,3})/); return m ? num(m[1]) : 0;
 }
 export function soInvoiceDueDate(issueISO: string, so: any, client: any): string { return dueDateFor(issueISO, paymentBasisOf(so?.paymentBasis ? so : client), soPaymentDays(so, client)); }   // v6.99.23: the basis decides whether days count

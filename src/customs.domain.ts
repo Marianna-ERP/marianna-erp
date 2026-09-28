@@ -43,7 +43,6 @@ export const CUSTOMS_DOCS: Record<string, string> = {
   OTHER: "Other",
 };
 
-export const CUSTOMS_STATUSES = ["Pending", "In progress", "Cleared"] as const;
 
 export interface CustomsRecord {
   applies?: boolean;

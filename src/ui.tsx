@@ -17,11 +17,6 @@ import React, { useState, useRef, useCallback } from "react";
 // so 27" monitors do not stretch tables into unreadable lines. Every module root reads this.
 export const PAGE_MAX = 1720;
 
-// v6.93.0 (owner ruling, A-R8-5): COLOUR RULE — RED is reserved for CANCELLED information and for system
-// warnings / errors / blocks. Informational references (sources, linked documents, derived labels) are GREEN
-// or neutral. Screens must use these two constants instead of choosing a red.
-export const INFO_GREEN = { color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0" } as const;
-export const WARN_RED = { color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA" } as const;
 
 // v6.99.61 (A-HD-1, owner): ONE module header — the bar PO, SO, Inventory, Invoices and Parties already use: white, 52 px,
 // title 16 px bold on the left, actions on the right, no paragraph. Every other module renders this component.
@@ -61,13 +56,16 @@ export function SectionTitle({ children, right = null }: any) {
 }
 
 export function SmallButton({ children, onClick, kind = "default", disabled = false, title = "" }: any) {
+  // v6.99.69 (A-BT-1): the vocabulary — save/confirm = green · close = black · delete = red · remove/cancel = white · add = green text · edit = blue text
+  if (kind === "close") kind = "dark"; if (kind === "save" || kind === "confirm") kind = "green"; if (kind === "delete") kind = "red";
   const dark = kind === "dark";
   const green = kind === "green";
   const amber = kind === "amber";
   const red = kind === "red";
-  const blue = kind === "blue";
-  const bg = disabled ? "#F3F4F6" : dark ? "#111" : green ? "#16A34A" : amber ? "#D97706" : red ? "#DC2626" : "#fff";
-  const color = disabled ? "#AAA" : dark || green || amber || red ? "#fff" : blue ? "#2563EB" : "#444";
+  const blue = kind === "blue" || kind === "edit" || kind === "import" || kind === "export";
+  const addK = kind === "add"; const removeK = kind === "remove";
+  const bg = disabled ? "#F3F4F6" : dark ? "#0F172A" : green ? "#16A34A" : amber ? "#D97706" : red ? "#DC2626" : "#fff";
+  const color = disabled ? "#AAA" : dark || green || amber || red ? "#fff" : blue ? "#2563EB" : addK ? "#15803D" : removeK ? "#DC2626" : "#444";
   const border = dark || green || amber || red ? "none" : blue ? "1px solid #2563EB" : "1px solid #E5E7EB";
   return <button disabled={disabled} title={title} onClick={onClick} style={{ padding: "7px 11px", borderRadius: 7, border, background: bg, color, fontSize: 12, fontWeight: 700, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{children}</button>;
 }
@@ -214,4 +212,18 @@ export function useConfirm() {
   ) : null;
 
   return { confirm, alert, prompt, dialogNode };
+}
+
+// ── v6.99.69 (A-CF-3, owner): after a save, a short "Saved ✓" that fades by itself — reassurance without a click ──
+export function notifySaved(what: string): void {
+  try {
+    if (typeof document === "undefined") return;
+    let host = document.getElementById("mar-saved-toast");
+    if (!host) { host = document.createElement("div"); host.id = "mar-saved-toast"; host.setAttribute("style", "position:fixed;right:18px;bottom:18px;z-index:9999;display:flex;flex-direction:column;gap:6px;pointer-events:none"); document.body.appendChild(host); }
+    const el = document.createElement("div");
+    el.textContent = `Saved ✓ ${what || ""}`.trim();
+    el.setAttribute("style", "background:#16A34A;color:#fff;font:600 12.5px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:8px 14px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);opacity:0;transition:opacity .2s");
+    host.appendChild(el); requestAnimationFrame(() => { el.style.opacity = "1"; });
+    setTimeout(() => { el.style.opacity = "0"; setTimeout(() => el.remove(), 300); }, 2200);
+  } catch { /* never let a toast break a save */ }
 }

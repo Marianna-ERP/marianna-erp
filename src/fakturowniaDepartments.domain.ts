@@ -1,4 +1,5 @@
 // ── FAKTUROWNIA DEPARTMENTS = BANK ACCOUNTS (v6.75.0) ───────────────────────
+import { S } from "./format";
 // Owner's account carries SEVEN departments across TWO companies, each holding
 // one bank account in one currency:
 //
@@ -36,7 +37,6 @@ export interface FktDepartment {
   isMain?: boolean;
 }
 
-const S = (v: any) => String(v ?? "").trim();
 const CUR = (v: any) => S(v).toUpperCase() || "PLN";
 
 /** Departments that can issue in this currency. */

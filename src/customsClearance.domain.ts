@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S } from "./format";
 // customsClearance.domain.ts — v6.99.44 (X-1, X-5…X-9, owner 19 Sept)
 // A customs clearance belongs to the UNIT that crosses the border. The agent's CC529C release message (Polish
 // customs, XML) carries every fact tagged — MRN, LRN, dates, offices, the truck's plates, kilos, packages, CN,
 // the invoice declared — so the clearance line is FILLED from the file, matched to the truck by plates, and
 // cross-checked against the shipment. The user types nothing; without a file, three fields suffice.
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(S(v).replace(",", ".")); return isFinite(n) ? n : 0; };
 
 export interface UnitClearance {

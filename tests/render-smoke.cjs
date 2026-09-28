@@ -23,7 +23,19 @@ function scanSelects(html, where) {
   }
 }
 let _where = "screen";
-const renderToStaticMarkup = (el) => { const html = _rsm(el); try { scanSelects(html, _where); } catch (e) {} return html; };
+// v6.99.69 (A-BT-1): every rendered screen is scanned for buttons that break the vocabulary — a bare "×"/"x" close, glyph-prefixed
+// Edit/Print, old export/import wordings, or a Delete that is not red.
+const buttonFaults = [];
+function scanButtons(html, where) {
+  const re = /<button\b([^>]*)>([^<]{0,60})<\/button>/g; let m;
+  while ((m = re.exec(html))) {
+    const attrs = m[1], label = m[2].trim();
+    if (/^(×|x|✕)$/.test(label) && !/title="Dismiss"|Remove variety|remove this item/.test(attrs)) buttonFaults.push(where + ': bare "' + label + '" close button');
+    if (/^(✎ Edit|🖨 Print|⬇ Excel|Export CSV|⬇ Export CSV|⬆ Import her workbook|⬆ Upload file)/.test(label)) buttonFaults.push(where + ': old wording "' + label + '"');
+    if (/^Delete\b/.test(label) && !/#DC2626|#B91C1C/i.test(attrs)) buttonFaults.push(where + ': Delete not red');
+  }
+}
+const renderToStaticMarkup = (el) => { const html = _rsm(el); try { scanSelects(html, _where); scanButtons(html, _where); } catch (e) {} return html; };
 const file = process.argv[2] || fs.readdirSync("/mnt/user-data/uploads").filter(f => /^marianna-erp_.*\.json$/.test(f)).map(f => "/mnt/user-data/uploads/" + f).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
 const d = JSON.parse(fs.readFileSync(file, "utf8"));
 // seed the browser stores the modules read directly
@@ -110,7 +122,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const d7 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
     _where = "planning sheet";
     const html = renderToStaticMarkup(React.createElement(PS, { tabs, setTabs: () => {}, log: [], setLog: () => {}, contacts: d7.contacts, catalog: [], orders: d7.orders, invoices: d7.invoices || [] }));
-    const ok = ["Planning sheet", "Controlling person", ">ETD<", ">ETA<", ">SO<", "New tab", "Add row", "Export all tabs"].every(s => html.includes(s)) && !html.includes("1 · Purchase");
+    const ok = ["Planning sheet", "Controlling person", ">ETD<", ">ETA<", ">SO<", "New tab", "Add row", "Export file (all tabs)"].every(s => html.includes(s)) && !html.includes("1 · Purchase");
     if (ok) { passed++; console.log("  \u2713 planning sheet renders her 5 tabs with the owner's columns; no colour index"); } else { failed++; console.log("  \u2717 planning sheet did not render as expected"); }
   } catch (e) { failed++; console.log("  \u2717 planning sheet —", (e.message || "").slice(0, 120)); } }
 // v6.99.61 (A-HD-1/2): one header, one width — the changed modules render the shared header and carry no width cap
@@ -154,13 +166,58 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ok = html.includes("Add additional items") && html.includes("Producer") && html.includes("BOXES LOADED") && !html.includes("Add a size that was loaded");
     if (ok) { passed++; console.log("  \u2713 packing-list window opens with 'Add additional items'"); } else { failed++; console.log("  \u2717 packing-list window did not render as expected"); }
   } catch (e) { failed++; console.log("  \u2717 packing-list window —", (e.message || "").slice(0, 120)); } }
-// v6.99.55 (BD-1): the weekly board renders one row per truck on real data
-{ try { const Board = require(path.resolve("./src/ShipmentBoard")).default;
-    const d2 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
-    const html = renderToStaticMarkup(React.createElement(Board, { shipments: d2.shipments, setShipments: () => {}, pos: d2.pos, setPOs: () => {}, orders: d2.orders, setOrders: () => {}, lots: d2.lots, invoices: d2.invoices || [], contacts: d2.contacts, inspections: d2.inspections || [] }));
-    const ok = html.includes("Weekly board") && html.includes("Purchase Price") && html.includes("PLATES") && (html.match(/<tr/g) || []).length > 3 && (html.match(/week \d+/g) || []).length >= 3;
-    if (ok) { passed++; console.log("  \u2713 weekly board renders her columns and the trucks (" + (html.match(/<tr/g) || []).length + " rows)"); } else { failed++; console.log("  \u2717 weekly board did not render"); }
-  } catch (e) { failed++; console.log("  \u2717 weekly board —", (e.message || "").slice(0, 120)); } }
+
+// v6.99.70 (A-BK-1): the backup folder card and the banner in EVERY state; Settings with and without folder support
+{ try {
+    const BP = require(path.resolve("./src/BackupPanel")); const AB = require(path.resolve("./src/autoBackup"));
+    const base = { folderName: "MARIANNA backups", lastWrittenAt: new Date().toISOString(), lastFileName: "marianna-erp_auto_2026-09-27_16-30-05_v6.99.70.json", lastError: "", filesKept: 12, lastDownloadDay: "", snoozedDay: "", busy: false };
+    const expect = { unsupported: "Download today&#x27;s backup", notSet: "Choose folder…", active: "Back up to folder now", paused: "Paused", failed: "can&#x27;t be found", starting: "Starting" };
+    const bad = [];
+    for (const mode of Object.keys(expect)) {
+      _where = "backup card · " + mode;
+      const html = renderToStaticMarkup(React.createElement(BP.AutoBackupCardView, { status: { ...base, mode, lastError: mode === "failed" ? "The backup folder can't be found — choose it again in Settings." : "" } }));
+      if (!html.includes("AUTOMATIC BACKUP FOLDER") || !html.includes(expect[mode])) bad.push("card " + mode);
+    }
+    // the banner: which state shows what — a failure is never snoozed, a healthy folder shows nothing
+    const today = "2026-09-27";
+    const cases = [
+      [{ mode: "active" }, "none"], [{ mode: "starting" }, "none"], [{ mode: "notSet" }, "notSet"], [{ mode: "notSet", snoozedDay: today }, "none"],
+      [{ mode: "paused" }, "paused"], [{ mode: "paused", snoozedDay: today }, "none"], [{ mode: "failed", snoozedDay: today }, "failed"],
+      [{ mode: "unsupported" }, "unsupported"], [{ mode: "unsupported", lastDownloadDay: today }, "none"], [{ mode: "unsupported", lastDownloadDay: "2026-09-26" }, "unsupported"],
+    ];
+    cases.forEach(([p, want]) => { const got = AB.bannerFor({ ...base, ...p }, today); if (got !== want) bad.push(`banner ${JSON.stringify(p)} → ${got}, expected ${want}`); });
+    const btn = { notSet: "Choose backup folder", paused: "Resume", failed: "Retry", unsupported: "Download today&#x27;s backup" };
+    for (const kind of Object.keys(btn)) {
+      _where = "backup banner · " + kind;
+      const html = renderToStaticMarkup(React.createElement(BP.BackupBannerView, { kind, status: { ...base, mode: kind, lastError: "disk full" } }));
+      if (!html.includes(btn[kind]) || !html.includes(`data-backup-banner="${kind}"`)) bad.push("banner view " + kind);
+      if ((kind === "failed") === html.includes(">Later<")) bad.push("banner " + kind + ": Later " + (kind === "failed" ? "offered on a failure" : "missing"));
+    }
+    if (_rsm(React.createElement(BP.BackupBannerView, { kind: "none", status: base })) !== "") bad.push("banner 'none' is not empty");
+    // Settings as jsdom opens it (no folder API) — the card explains the fallback; the old one-time reminder is gone from App
+    const SettingsMod = require(path.resolve("./src/Settings")).default;
+    _where = "Settings · no folder support";
+    const hNo = renderToStaticMarkup(React.createElement(SettingsMod, common));
+    if (!hNo.includes("AUTOMATIC BACKUP FOLDER") || !hNo.includes("can&#x27;t write to a folder")) bad.push("Settings without folder support");
+    if (fs.readFileSync(path.resolve("./src/App.tsx"), "utf8").includes("backupReminderDismissed")) bad.push("the old reminder is still in App");
+    // Settings in a browser WITH the folder API — fresh module instances so the status is read again; one local snapshot seeded
+    window.showDirectoryPicker = function () {};
+    Object.keys(require.cache).filter(k => /src[\\/](Settings|BackupPanel|autoBackup)\.tsx?$/.test(k)).forEach(k => { delete require.cache[k]; });
+    localStorage.setItem("marianna-erp:backups", JSON.stringify([{ id: "1", label: "Auto — before import", createdAt: new Date().toISOString(), version: 2, sizeKB: 1 }]));
+    localStorage.setItem("marianna-erp:backup:1", "{}");
+    const Settings2 = require(path.resolve("./src/Settings")).default;
+    _where = "Settings · with folder support";
+    const hYes = renderToStaticMarkup(React.createElement(Settings2, common));
+    if (!hYes.includes("Choose folder…") || hYes.includes("can&#x27;t write to a folder")) bad.push("Settings with folder support");
+    if (!/title="Delete this backup"[^>]*>Delete</.test(hYes)) bad.push("local snapshot Delete is not the word Delete");
+    delete window.showDirectoryPicker; localStorage.removeItem("marianna-erp:backups"); localStorage.removeItem("marianna-erp:backup:1");
+    if (!bad.length) { passed++; console.log("  \u2713 backups: the folder card in 6 states, the banner in 10 cases, Settings with and without folder support"); }
+    else { failed++; console.log("  \u2717 backups — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 backups —", (e.message || "").slice(0, 160)); } }
+
+{ const bf = Array.from(new Set(buttonFaults));
+  if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
+  else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }
 { const uniq = Array.from(new Set(silentSelects));
   if (!uniq.length) { passed++; console.log("  \u2713 no dropdown shows a choice nobody made"); }
   else { failed++; console.log("  \u2717 dropdowns showing an unchosen first option (" + uniq.length + "):"); uniq.slice(0, 30).forEach(s => console.log("      " + s)); } }

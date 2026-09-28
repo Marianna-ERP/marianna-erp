@@ -67,6 +67,23 @@ Watch the deploy log at vercel.com → your project → Deployments.
 
 ---
 
+## Your data belongs to the web address (read before the test campaign)
+
+The data lives in the browser, filed under the exact address you open. So:
+
+- **Always open the production address** (the one on the Vercel project's main
+  page). Every deploy also gets its own preview link — opened there, the app is
+  empty, because it is a different address. Nothing is lost; you are just
+  looking in a different drawer.
+- **Before you ever change the address** (a custom domain, a renamed project),
+  do Settings → Export all data first, then Import on the new address.
+- **One browser per person.** Chrome and Edge on the same laptop are two
+  separate stores. Pick one and stay in it.
+- **Set the automatic backup folder once per browser** (Settings → Automatic
+  backup folder), ideally inside OneDrive or Google Drive.
+
+---
+
 ## One-time Vercel settings (set these ONCE, never touch again)
 
 Go to vercel.com → your project → Settings → Build & Development Settings:

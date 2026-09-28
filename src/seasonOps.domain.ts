@@ -1,4 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S, r2, r0 } from "./format";
 // seasonOps.domain.ts — v6.89.0: CONSIGNMENT SEASON RECORDS (pure)
 // Owner rulings 6 Sept 2026 (CONSIGNMENT_SEASON_DESIGN.md, VEGA_PRO_REPORTING_MAPPING.md).
 // One owner per fact:
@@ -8,11 +9,8 @@
 //   sorting job: class I / class II (same lot, grade) / waste   → Inventory
 //   stock count → reasoned adjustments                          → Inventory
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
-const r0 = (v: number) => Math.round(v);
 const r1 = (v: number) => Math.round(v * 10) / 10;
-const r2 = (v: number) => Math.round(v * 100) / 100;
 
 // ── SUPPLIER-DELIVERY SHIPMENT (decision 1) ─────────────────────────────────
 /** One PO = one truck (V1). The supplier's truck is tracked, not paid: no transport order, no cost of ours. */

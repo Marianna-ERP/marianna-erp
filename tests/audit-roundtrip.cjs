@@ -2294,3 +2294,135 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.65 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.67 — consolidation: the lot direction is derived; the company block is one; nothing printed changes ══
+(function v69967(){
+  console.log("\n══ 75. v6.99.67: LOT-0119 and LOT-0120 agree; the direction copy is dropped on load; the company block is one ══");
+  const M = B("shipmentModel.domain.js"); const U = B("useLocalStoredState.js"); const L = B("legacy.js");
+  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_66_schema-v2_2026-09-26T14-16-24.json");
+  t("A-IN-1: the load-time heal drops every stored direction copy (139 rows on the 26 Sept file) and reports the change", () => {
+    let healed = 0, left = 0; d.shipments.forEach(s => { const r = M.healShipmentModel(s); if (r.changed) healed++; (r.sh.goods || []).forEach(g => { if (g.tradeDirection !== undefined) left++; }); });
+    ok(healed >= 30, "healed " + healed); eq(left, 0);
+  });
+  t("A-AUD-1: with Settings empty the company profile equals the former literals, so no document changes", () => {
+    const p = U.companyProfile(); eq(p.name, "MARIANNA"); eq(p.nip, "PL525-284-27-87"); eq(p.person, "Hazem Osman"); eq(p.regon, "387501311");
+    const to = U.companyForTransportOrder(); eq(to.name, "MARIANNA HAZEM OSMAN"); eq(to.address1, "ul. Dluga 29"); eq(to.address2, "00-238 Warszawa - Polska"); eq(to.nip, "PL 525-284-27-87"); eq(to.emergencyPhone, "+48 784 775 065");
+  });
+  t("legacy.ts: the source wins, the retired mirror is only a fallback", () => {
+    eq(L.paymentDaysOf({ terms: { paymentDays: 45 }, paymentTermsDays: 30 }), 45); eq(L.paymentDaysOf({ paymentTermsDays: 30 }), 30);
+    eq(L.peopleOf({ contacts: [{ name: "A" }], people: [{ name: "old" }] })[0].name, "A"); eq(L.qualityOf({ grade: "II" }), "II"); eq(L.qualityOf({ quality: "I", grade: "II" }), "I");
+  });
+  console.log("v6.99.67 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.70 — automatic backups: the folder file, 30 + 30, the timing, the ring by space, the data wins (A-BK-1..3) ══
+(function v69970(){
+  console.log("\n══ 76. v6.99.70: automatic backups — 30 + 30 retention, two-minute / 15-minute timing, ring by space, the data wins ══");
+  const AB = B("autoBackup.domain.js"); const U = B("useLocalStoredState.js");
+  // a browser store with a real quota (characters of keys + values), throwing the browser's own error when full
+  const quotaStorage = (quota) => { const m = new Map(); const used = () => { let n = 0; m.forEach((v, k) => { n += k.length + v.length; }); return n; };
+    return { deny: false, get length() { return m.size; }, key: i => Array.from(m.keys())[i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null),
+      setItem(k, v) { v = String(v); if (this.deny) { const e = new Error("storage disabled"); e.name = "SecurityError"; throw e; }
+        const prev = m.has(k) ? k.length + m.get(k).length : 0; if (used() - prev + k.length + v.length > quota) { const e = new Error("quota"); e.name = "QuotaExceededError"; throw e; } m.set(k, v); },
+      removeItem: k => { m.delete(k); }, clear: () => m.clear(), used }; };
+  const prevWin = global.window; const realNow = Date.now; let fakeNow = 1_790_000_000_000;
+  const withStore = (quota, fn) => { const ls = quotaStorage(quota); global.window = { localStorage: ls }; Date.now = () => (fakeNow += 1000); U.storageHealth.failing = false;
+    try { return fn(ls); } finally { global.window = prevWin; Date.now = realNow; } };
+
+  t("BK-1: one file-name pattern in local time; a manual export or a foreign file is not ours", () => {
+    const n = AB.autoFileName(new Date(2026, 8, 27, 16, 30, 5), "6.99.70");
+    eq(n, "marianna-erp_auto_2026-09-27_16-30-05_v6.99.70.json"); eq(AB.parseAutoFileName(n).day, "2026-09-27");
+    eq(AB.parseAutoFileName("marianna-erp_v6.99.70_schema-v2_2026-09-27T14-30-05.json"), null); eq(AB.parseAutoFileName("Faktura FV2026-09-15.pdf"), null);
+  });
+  t("BK-1: 30 + 30 — 40 days × 3 files keeps the newest 30 plus the last file of each earlier day inside 30 days (50 kept, 70 go); foreign files untouched", () => {
+    const now = new Date(2026, 8, 27, 18, 0, 0); const names = [];
+    for (let d = 0; d < 40; d++) for (const h of [9, 13, 17]) names.push(AB.autoFileName(new Date(2026, 8, 27 - d, h, 0, 0), "6.99.70"));
+    const foreign = ["marianna-erp_v6.99.69_schema-v2_2026-09-01T10-00-00.json", "Faktura.pdf"];
+    const r = AB.planRetention(names.concat(foreign), now);
+    eq(r.keep.length, 50); eq(r.remove.length, 70); ok(foreign.every(f => !r.keep.includes(f) && !r.remove.includes(f)), "foreign files are never listed");
+    ok(r.keep.includes(AB.autoFileName(new Date(2026, 8, 27 - 9, 9, 0, 0), "6.99.70")), "day 9: all three kept (inside the newest 30)");
+    ok(r.keep.includes(AB.autoFileName(new Date(2026, 8, 27 - 29, 17, 0, 0), "6.99.70")) && !r.keep.includes(AB.autoFileName(new Date(2026, 8, 27 - 29, 13, 0, 0), "6.99.70")), "day 29: only its last file");
+    ok(!r.keep.some(n => AB.parseAutoFileName(n).day <= "2026-08-28"), "nothing older than 30 days survives");
+    eq(AB.planRetention(names.slice(0, 12), now).remove.length, 0, "fewer than 30 files: nothing is deleted");
+  });
+  t("BK-1: on opening a file is written only when the data differs from the last file", () => {
+    eq(AB.tick({ ...AB.EMPTY_CLOCK, writtenFp: "A" }, "B", 1e9).write, true);
+    eq(AB.tick({ ...AB.EMPTY_CLOCK, writtenFp: "B" }, "B", 1e9).write, false);
+  });
+  t("BK-1: two minutes after the changes stop, never sooner than 15 minutes after the last file", () => {
+    const M = 60 * 1000; const T = 1e9;
+    let c = { ...AB.EMPTY_CLOCK, writtenFp: "X" }; c = AB.tick(c, "X", T).clock;               // opened, nothing to write
+    let r = AB.tick(c, "D", T + 10e3); eq(r.write, false, "just changed"); c = r.clock;
+    r = AB.tick(c, "D", T + 40e3); eq(r.write, false, "30 s of quiet"); c = r.clock;
+    r = AB.tick(c, "D", T + 10e3 + 2 * M); eq(r.write, true, "two minutes of quiet"); c = AB.afterWrite(r.clock, "D", T + 10e3 + 2 * M);
+    const w = T + 10e3 + 2 * M;
+    r = AB.tick(c, "E", w + 1 * M); eq(r.write, false); c = r.clock;
+    r = AB.tick(c, "E", w + 5 * M); eq(r.write, false, "quiet, but inside the 15 minutes"); c = r.clock;
+    r = AB.tick(c, "E", w + 15 * M); eq(r.write, true, "15 minutes after the last file");
+  });
+  t("BK-1: changes that never stop still reach the folder at the 15-minute mark", () => {
+    const T = 1e9; let c = AB.tick({ ...AB.EMPTY_CLOCK, writtenFp: "X" }, "X", T).clock; let at = -1;
+    for (let i = 1; i <= 40 && at < 0; i++) { const r = AB.tick(c, "E" + i, T + i * 30e3); c = r.clock; if (r.write) at = i * 30; }
+    ok(at >= 15 * 60 && at <= 16 * 60, "first file after " + at + " s of continuous editing");
+  });
+  t("BK-1: a failed write waits 15 minutes before the next automatic try (no retry storm)", () => {
+    const M = 60 * 1000; const c = AB.afterFailure({ ...AB.EMPTY_CLOCK, seenFp: "Z", writtenFp: "X" }, 1e9);
+    eq(AB.tick(c, "Z", 1e9 + 3 * M).write, false); eq(AB.tick(c, "Z", 1e9 + 15 * M).write, true);
+  });
+  t("BK-1: the fingerprint follows the stored data — equal data equal print, a moved value a different one", () => {
+    const a = AB.fingerprint([["pos", "[1]"], ["orders", "[]"]]);
+    eq(a, AB.fingerprint([["pos", "[1]"], ["orders", "[]"]])); ok(a !== AB.fingerprint([["pos", "[2]"], ["orders", "[]"]])); ok(a !== AB.fingerprint([["pos", "[]"], ["orders", "[1]"]]));
+  });
+  t("BK-2: the folder file IS an Export-all-data file — Import accepts it; the folder preference never travels in it", () => withStore(5e6, (ls) => {
+    U.writeStoreValue("pos", [{ number: "PO-2026-0040" }]); U.writeStoreValue("contacts", [{ name: "Grójecki Owoc" }]);
+    ls.setItem("marianna-erp:autoBackup", JSON.stringify({ folderName: "MARIANNA backups", writtenFp: "x" }));
+    const json = U.exportAllData(); const p = JSON.parse(json);
+    eq(p._meta.app, "marianna-erp"); eq(p._meta.version, U.STORAGE_VERSION); eq(p.pos[0].number, "PO-2026-0040"); ok(!("autoBackup" in p) && !json.includes("MARIANNA backups"), "preference not exported");
+    const r = U.importAllData(json, { autoBackup: false }); ok(r.ok, r.error); ok(r.loaded.includes("pos") && r.loaded.includes("contacts"));
+    const src = require("fs").readFileSync(require("path").join(__dirname, "..", "src", "autoBackup.ts"), "utf8");
+    eq((src.match(/const json = exportAllData\(\);/g) || []).length, 2, "the folder file and the daily download both write the pretty Export file");
+  }));
+  t("BK-3: a local snapshot is stored compact — same content, a third smaller — and restores", () => withStore(5e6, () => {
+    U.writeStoreValue("shipments", Array.from({ length: 300 }, (_, i) => ({ number: "SHP-2026-" + i, goods: [{ lot: "LOT-" + i, kg: 19422 }] })));
+    const m = U.createBackup("test"); const raw = U.getBackupJSON(m.id);
+    ok(raw.indexOf("\n") < 0, "no line breaks"); ok(raw.length < U.exportAllData().length * 0.8, `compact ${raw.length} vs pretty ${U.exportAllData().length}`);
+    eq(JSON.parse(raw).shipments.length, 300); ok(U.importAllData(raw, { autoBackup: false }).ok);
+  }));
+  t("BK-3: limited by space — on the 25 Sept scale (0.78 M data, 0.78 M snapshots) one snapshot stays; small data keeps many; the newest always stays", () => {
+    const b = U.STORAGE_BUDGET_CHARS; eq(b, 2621440, "the gauge's own budget");
+    eq(AB.planRingPrune([{ id: "a", chars: 780565 }, { id: "b", chars: 780565 }, { id: "c", chars: 780565 }], 780565, b), ["a", "b"]);
+    eq(AB.planRingPrune(Array.from({ length: 12 }, (_, i) => ({ id: "s" + i, chars: 20000 })), 20000, b).length, 0, "12 small snapshots all fit");
+    eq(AB.planRingPrune([{ id: "only", chars: 1e6 }], 3e6, b), [], "the newest is never dropped by the rule");
+    withStore(5.2e6, () => {
+      U.writeStoreValue("shipments", ["x".repeat(700000)]);
+      U.createBackup("1"); U.createBackup("2"); U.createBackup("3");
+      eq(U.listBackups().length, 1, "0.7 M of data leaves room for one 0.7 M snapshot under 70 %");
+      eq(U.listBackups()[0].label, "3", "and it is the newest");
+    });
+    withStore(5.2e6, () => { U.writeStoreValue("pos", [{ n: 1 }]); U.createBackup("a"); U.createBackup("b"); U.createBackup("c"); eq(U.listBackups().length, 3, "small data: all three kept"); });
+  });
+  t("BK-3: the data wins — a save that doesn't fit makes the oldest snapshots give way; only with none left does it fail", () => withStore(3000, (ls) => {
+    U.writeStoreValue("pos", ["p".repeat(300)]);
+    U.createBackup("old"); U.createBackup("newer"); eq(U.listBackups().length, 2);
+    U.writeStoreValue("pos", ["q".repeat(1900)]);
+    eq(U.readStoreValue("pos")[0].length, 1900, "the new data is saved"); eq(U.storageHealth.failing, false); ok(U.listBackups().length < 2, "a snapshot gave way");
+    ok(!U.listBackups().some(b => b.label === "old"), "the oldest went first");
+    U.writeStoreValue("orders", ["o".repeat(5000)]);
+    eq(U.storageHealth.failing, true, "bigger than the whole store: the save fails and the red banner shows"); eq(U.listBackups().length, 0);
+  }));
+  t("BK-3: a storage error that is not 'full' never deletes a snapshot", () => withStore(5e6, (ls) => {
+    U.writeStoreValue("pos", [1]); U.createBackup("keep me"); ls.deny = true;
+    U.writeStoreValue("pos", [2]); ls.deny = false;
+    eq(U.storageHealth.failing, true); eq(U.listBackups().length, 1); eq(U.listBackups()[0].label, "keep me");
+  }));
+  t("BK-3: snapshots written pretty by earlier builds are compacted once on opening — nothing dropped, content equal", () => withStore(5e6, (ls) => {
+    const data = { _meta: { app: "marianna-erp", version: 2 }, pos: [{ number: "PO-1", items: [{ kg: 1000 }] }] };
+    ls.setItem("marianna-erp:backups", JSON.stringify([{ id: "1", label: "Auto — before import", createdAt: "2026-09-25T08:00:00Z", version: 2, sizeKB: 9 }]));
+    ls.setItem("marianna-erp:backup:1", JSON.stringify(data, null, 2));
+    eq(U.compactLocalBackups(), 1); const raw = ls.getItem("marianna-erp:backup:1");
+    ok(raw.indexOf("\n") < 0); eq(JSON.parse(raw), data); eq(U.listBackups().length, 1); eq(U.compactLocalBackups(), 0, "a second pass changes nothing");
+  }));
+  console.log("v6.99.70 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

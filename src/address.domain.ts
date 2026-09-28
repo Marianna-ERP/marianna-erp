@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
+import { S } from "./format";
 // address.domain.ts — v6.99.40 (A-ADDR, owner proposal 18 Sept)
 // An address is FOUR facts, not one string: street (with number) · postcode · city · country.
 // Storing them together is why a document cannot print a proper three-line address, why Fakturownia's
 // four fields had to be flattened, and why a city could not be filtered. One shape, one formatter,
 // one parser for what we already hold — the original text is kept until the DDL (declared mirror).
 // ─────────────────────────────────────────────────────────────────────────────
-const S = (v: any) => String(v ?? "").trim();
 
 export interface Address { street?: string; postcode?: string; city?: string; country?: string; note?: string; }
 

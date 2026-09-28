@@ -8,9 +8,9 @@
 // In Supabase this becomes the advance_payments table + allocations.
 // ─────────────────────────────────────────────────────────────────────────────
 import { applyPaymentEvent } from "./payments.domain";
+import { r2 } from "./format";
 
 const n = (v: any) => { const x = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(x) ? x : 0; };
-const r2 = (v: number) => Math.round(v * 100) / 100;
 
 export interface AdvanceAllocation { id: any; invoiceId: any; invoiceNumber: string; amount: number; date: string; }
 export interface AdvancePayment {

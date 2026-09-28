@@ -128,20 +128,6 @@ export function poDirectFromSOs(po: any, orders: any[]): boolean {
 
 
 
-// ── v6.34.0: the SHIPMENT resolves direction from its REAL ends ──────────────
-// A shipment's direction is a fact about ITS journey — producer country (from
-// the PO) × final destination country (from the governing SO's destination).
-// One CIF-Koper PO can father an EU-import truck AND a T1 cross-trade truck;
-// each shipment resolves independently once its governing SO is known.
-//
-// Resolution order (first hit wins):
-//   1. explicit manual override on the shipment (the human's final word — the
-//      T1-at-an-EU-port subtlety the matrix can't infer)
-//   2. DERIVED from ends: producer country × SO destination country, via the
-//      four-class matrix — the automatic, correct answer for the common case
-//   3. the PO's provisional movement (no governing SO — unsold-to-warehouse)
-//   4. legacy flow key, then Import
-export const TRADE_DIRECTIONS = ["IMPORT", "EXPORT", "INTRA_EU", "CROSS_TRADE"];
 
 /** A country string for the shipment's ORIGIN — the producer, from the PO. */
 export function poOriginCountry(po: any, resolveCountry?: (id: any) => string): string {

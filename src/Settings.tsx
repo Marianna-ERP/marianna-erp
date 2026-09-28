@@ -2,8 +2,10 @@ import { ModulePage } from "./ui";
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
 import React, { useRef, useState } from "react";
-import { exportAllData, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue } from "./useLocalStoredState";
+import { importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
+import { AutoBackupCard } from "./BackupPanel";   // v6.99.70 (A-BK-1)
+import { downloadAllData, flushFolderBackup } from "./autoBackup";
 import { fetchDepartments } from "./fakturownia";
 import { mapDepartments } from "./fakturowniaDepartments.domain";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
@@ -93,6 +95,7 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
   async function removeExported(season: string) {
     const ok = await stConfirm({ tone: "danger", title: `Remove season ${season} from this browser?`, message: "Only after you have EXPORTED it and kept the file. The archived documents of that season leave this browser (a backup is saved first); lots with kilos stay. Import the archive file to read them again.", confirmLabel: "Remove from this browser", cancelLabel: "Keep" });
     if (!ok) return;
+    await flushFolderBackup();   // v6.99.70 (A-BK): the folder gets the state before the overwrite
     createBackup(`Auto — before removing season ${season}`);
     const all: any = {}; Object.keys(STORE_KIND).forEach(k => { all[k] = readStoreValue(k); }); all.pos = readStoreValue("pos");
     const r = removeSeason(all, season, st);
@@ -107,6 +110,7 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
     const r = appendArchive(cur, parsed);
     const ok = await stConfirm({ tone: "info", title: `Import archive ${r.seasons.join(", ") || ""}?`, message: `Appended (hidden as archived): ${Object.entries(r.added).map(([k, n]) => `${k} ${n}`).join(", ") || "nothing new"}${r.skipped ? ` · ${r.skipped} already here` : ""}. Nothing live is changed.`, confirmLabel: "Import", cancelLabel: "Cancel" });
     if (!ok) return;
+    await flushFolderBackup();   // v6.99.70 (A-BK)
     createBackup("Auto — before importing an archive");
     Object.entries(r.data).forEach(([k, v]) => { if (Object.keys(STORE_KIND).includes(k)) writeStoreValue(k, v); });
     setArchivedSeasons(() => r.data.archivedSeasons || archivedSeasons);
@@ -120,7 +124,7 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
       <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginBottom: 10 }}>
         <div><Lbl>Season starts on</Lbl><div style={{ display: "flex", gap: 6 }}><input type="number" min={1} max={31} value={st.startDay} onChange={e => setSeasonSettings && setSeasonSettings({ ...st, startDay: Math.max(1, Math.min(31, parseInt(e.target.value) || 1)) })} style={{ width: 56, border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }} /><select value={st.startMonth} onChange={e => setSeasonSettings && setSeasonSettings({ ...st, startMonth: parseInt(e.target.value) })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }}>{["January","February","March","April","May","June","July","August","September","October","November","December"].map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select></div></div>
         <div style={{ fontSize: 12 }}>Current season: <b>{cur}</b></div>
-        <label style={{ fontSize: 12, border: "1px dashed #1E40AF", color: "#1E40AF", borderRadius: 7, padding: "6px 10px", cursor: "pointer", marginLeft: "auto" }}>⬆ import an archive file<input type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => importArchive(e.target.files?.[0])} /></label>
+        <label style={{ fontSize: 12, border: "1px dashed #1E40AF", color: "#1E40AF", borderRadius: 7, padding: "6px 10px", cursor: "pointer", marginLeft: "auto" }}>Import file (archive)<input type="file" accept=".json,application/json" style={{ display: "none" }} onChange={e => importArchive(e.target.files?.[0])} /></label>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>SEASON</div><div>DOCUMENTS</div><div>STATE</div><div /></div>
       {present.map(({ season, count }) => { const closed = (archivedSeasons || []).includes(season); return (
@@ -130,8 +134,8 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
           <div style={{ color: closed ? "#92400E" : "#16A34A", fontWeight: 700 }}>{closed ? "archived" : "open"}</div>
           <div style={{ display: "flex", gap: 6 }}>
             {!closed && season !== cur && <SmallButton onClick={() => closeSeason(season)}>Close season</SmallButton>}
-            {closed && <SmallButton onClick={() => exportSeason(season)}>⬇ Export</SmallButton>}
-            {closed && <SmallButton kind="danger" onClick={() => removeExported(season)}>Remove from browser</SmallButton>}
+            {closed && <SmallButton onClick={() => exportSeason(season)}>Export file</SmallButton>}
+            {closed && <SmallButton kind="red" onClick={() => removeExported(season)}>Remove from browser</SmallButton>}
             {closed && <SmallButton onClick={() => reopen(season)}>Re-open</SmallButton>}
           </div>
         </div>); })}
@@ -247,7 +251,7 @@ function FullScreenModal({ title, onClose, children }: any) {
       <div style={{ background: "#F8FAFC", borderRadius: 14, width: "100%", maxWidth: PAGE_MAX, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,0.35)" }} onClick={(e: any) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "#fff", borderBottom: "1px solid #E5E7EB" }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: "#111" }}>{title}</div>
-          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>✕ Close</button>
+          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Close</button>
         </div>
         <div style={{ overflowY: "auto", padding: 18 }}>{children}</div>
       </div>
@@ -443,7 +447,7 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
         <Button variant="primary" onClick={addItem}>+ Add item</Button>
         <span style={{ flex: 1 }} />
         <Button onClick={() => fileRef.current?.click()}>Import CSV</Button>
-        <Button onClick={exportCsv}>Export CSV</Button>
+        <Button onClick={exportCsv}>Export file (CSV)</Button>
         <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) importCsv(f); e.currentTarget.value = ""; }} />
       </div>
       <div style={{ maxHeight: 360, overflowY: "auto", border: "1px solid #F0F0F0", borderRadius: 8 }}>
@@ -686,19 +690,7 @@ export default function Settings({
 
   function handleExport() {
     try {
-      const json = exportAllData();
-      const blob = new Blob([json], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      // v6.17: stamp the build + schema version so testers can see at a glance
-      // whether a shared file matches their app build before importing.
-      a.download = `marianna-erp_v${APP_VERSION}_schema-v${STORAGE_VERSION}_${stamp}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadAllData();   // v6.99.70 (A-BK): one routine for Export and the daily download; either counts as today's backup
       setMessage({ kind: "success", text: `Export downloaded (build v${APP_VERSION}). Whoever imports it must be on the same app version (v${APP_VERSION}).` });
     } catch (err) {
       setMessage({ kind: "error", text: "Export failed: " + (err instanceof Error ? err.message : String(err)) });
@@ -740,6 +732,7 @@ export default function Settings({
         confirmLabel: "Replace & import", cancelLabel: "Cancel",
       });
       if (!proceed) { setMessage({ kind: "info", text: "Import cancelled — nothing was changed." }); return; }
+      await flushFolderBackup();   // v6.99.70 (A-BK): the folder gets the state before the overwrite
       const outcome = importAllData(result);
       if (!outcome.ok) {
         setMessage({ kind: "error", text: outcome.error || "Import failed." });
@@ -764,6 +757,7 @@ export default function Settings({
 
   async function handleRestore(b: BackupMeta) {
     if (!(await stConfirm({ tone: "danger", title: "Restore this backup?", message: `From ${new Date(b.createdAt).toLocaleString()}.\n\nThis REPLACES current data. Your current data will itself be backed up first, so this is reversible.`, confirmLabel: "Restore" }))) return;
+    await flushFolderBackup();   // v6.99.70 (A-BK)
     const outcome = restoreBackup(b.id);
     if (!outcome.ok) { setMessage({ kind: "error", text: outcome.error || "Restore failed." }); return; }
     setMessage({ kind: "success", text: "Backup restored. Reloading…" });
@@ -787,6 +781,7 @@ export default function Settings({
       confirmLabel: "Wipe the documents", cancelLabel: "Keep everything" });
     if (!confirmed) return;
     const resetNo = await stConfirm({ tone: "info", title: "Reset the numbering?", message: "Start PO / SO / SHP / LOT numbers again from 0001 for the new season? (Choose No to continue the sequence.)", confirmLabel: "Yes, restart at 0001", cancelLabel: "No, continue" });
+    await flushFolderBackup();   // v6.99.70 (A-BK)
     const backup = startFreshSeason({ resetNumbering: !!resetNo });
     refreshBackups();
     setMessage({ kind: "info", text: `Fresh season started${backup ? " (a backup was saved first)" : ""} — master data kept. Reloading…` });
@@ -800,6 +795,7 @@ export default function Settings({
       confirmLabel: "Clear all data", cancelLabel: "Keep my data",
     });
     if (!confirmed) return;
+    await flushFolderBackup();   // v6.99.70 (A-BK)
     const backup = clearAllData();
     refreshBackups();
     setMessage({ kind: "info", text: `All data cleared${backup ? " (a backup was saved first)" : ""}. Reloading to an empty system…` });
@@ -1025,10 +1021,12 @@ export default function Settings({
           <Button onClick={handleImportClick}>📤 Choose JSON file to import...</Button>
         </Card>
 
+        <AutoBackupCard />
+
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>LOCAL BACKUPS</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Automatic snapshots taken before each import or reset, kept in this browser (last {8}). Use one to undo an overwrite. These are a safety net, not a substitute for exporting a file you keep elsewhere.
+            Snapshots taken before each import, restore or wipe, kept in this browser as long as there is room — they may use up to 70 % of the browser storage together with your data, and when the data needs the space the oldest snapshot gives way first. Use one to undo an overwrite. They stay on this computer; the backup folder above is the copy that leaves it.
           </div>
           <div style={{ marginBottom: 12 }}><Button onClick={handleBackupNow} variant="primary">＋ Create backup now</Button></div>
           {backups.length === 0 ? (
@@ -1042,7 +1040,7 @@ export default function Settings({
                     <div style={{ fontSize: 11, color: "#888" }}>{new Date(b.createdAt).toLocaleString()} · {b.sizeKB} KB · schema v{b.version}</div>
                   </div>
                   <button onClick={() => handleRestore(b)} title="Replace current data with this backup" style={{ border: "1px solid #BFDBFE", background: "#fff", color: "#2563EB", borderRadius: 6, padding: "5px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Restore</button>
-                  <button onClick={() => handleDeleteBackup(b)} title="Delete this backup" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "5px 9px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✕</button>
+                  <SmallButton kind="delete" title="Delete this backup" onClick={() => handleDeleteBackup(b)}>Delete</SmallButton>
                 </div>
               ))}
             </div>
@@ -1067,11 +1065,11 @@ export default function Settings({
         </Card>
 
         <div style={{ marginTop: 24, padding: "14px 16px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
-          <strong>About local storage:</strong> Data lives in your browser only. Different browsers, devices, or private windows have separate copies. Clearing your browser data will wipe MARIANNA ERP data. There is no server — feedback gets shared via JSON export.
+          <strong>About local storage:</strong> Data lives in your browser only. Different browsers, devices, or private windows have separate copies. Clearing your browser data will wipe MARIANNA ERP data. There is no server: a copy leaves this computer only through the backup folder or an export.
         </div>
 
         <div style={{ marginTop: 16, fontSize: 11, color: "#AAA", textAlign: "center" }}>
-          Phase 2 will add: a real backend with shared data, login, audit trail, and automatic backups.
+          Phase 2 will add: a real backend with shared data, login, audit trail.
         </div>
       </div>
     </ModulePage>

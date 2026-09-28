@@ -1,4 +1,5 @@
 // ── STATUS OWNERSHIP (v6.77.0) ──────────────────────────────────────────────
+import { S } from "./format";
 // Owner ruling, Sept 2026: "once we create the shipment for that SO, the status
 // of this SO should reflect the status of the shipment… we need to have
 // distinction about where the ownership of each module ends and where the other
@@ -28,7 +29,6 @@
 //     shipment; you must be able to say so. It is recorded as an override, never
 //     silently blended with a derived value.
 
-const S = (v: any) => String(v ?? "").trim();
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
 
 /** Statuses the SALES ORDER owns. Everything else is derived. */

@@ -13,7 +13,6 @@
   "files": [
     "../src/auditTrail.domain.ts",
     "../src/cancellation.domain.ts",
-    "../src/claim.domain.ts",
     "../src/claims.domain.ts",
     "../src/consignment.ts",
     "../src/costAllocation.ts",
@@ -76,6 +75,10 @@
     "../src/customs.domain.ts",
     "../src/season.domain.ts",
     "../src/board.domain.ts",
-    "../src/sheet.domain.ts"
+    "../src/sheet.domain.ts",
+    "../src/claim.domain.ts",
+    "../src/legacy.ts",
+    "../src/format.ts",
+    "../src/autoBackup.domain.ts"
   ]
 }

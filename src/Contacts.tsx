@@ -6,7 +6,7 @@ import { WAREHOUSE_SERVICES } from "./financePlus.domain";
 
 import DateInput from "./DateInput";
 import React, { useState, useMemo, useRef } from "react";
-import { Lbl, useConfirm, ActionButton} from "./ui";
+import { Lbl, useConfirm, ActionButton, notifySaved } from "./ui";
 import { nextId } from "./ids";
 import { parseAddress, formatAddress, shortAddress } from "./address.domain";
 import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, readLocationOverrides, writeLocationOverride, LOCATIONS_ALL_BUILTIN } from "./locations";
@@ -146,19 +146,6 @@ export function getCounterpartiesByType(counterparties, type) {
     };
   });
 }
-// For Shipments.tsx — get all logistics providers (Forwarder + Carrier) that can do a given mode.
-// Use when populating carrier dropdowns on a shipment leg.
-export function getLogisticsProvidersByService(counterparties, service) {
-  return counterparties
-    .filter(c => {
-      const allTypes = [c.type, ...(c.additionalTypes || [])];
-      return allTypes.some(t => TYPES_WITH_SERVICES.has(t)) && (c.services || []).includes(service);
-    })
-    .map(c => ({
-      id: c.id, name: c.name, type: c.type, additionalTypes: c.additionalTypes || [], services: c.services,
-      country: c.country,
-    }));
-}
 
 // ─── COUNTERPARTY MODAL — company-level details ─────────────────────────────
 function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSeeCommission = true }: any) {
@@ -257,7 +244,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
             <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{counterparty ? "Edit Counterparty" : "New Counterparty"}</div>
             <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>Company-level details. Contact people are added on the next step.</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#999" }}>×</button>
+          <ActionButton action="close" onClick={onClose} />
         </div>
         <div style={{ overflowY: "auto", padding: "22px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
           <div>
@@ -510,7 +497,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
           </span>
         ))}
         <div style={{ flex: 1 }} />
-        <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#CCC" }}>×</button>
+        <ActionButton action="close" onClick={onClose} />
       </div>
 
       <div style={{ overflowY: "auto", flex: 1 }}>
@@ -611,7 +598,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
                 <div style={{ display: "flex", gap: 4 }}>
                   {p.email && <button onClick={() => onEmail(counterparty, p)} title="Email" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>✉</button>}
                   {!p.isPrimary && <button onClick={() => onSetPrimary(counterparty.id, p.id)} title="Make primary" style={{ background: "none", border: "1px solid #E5E7EB", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>★</button>}
-                  <button onClick={() => setEditingPersonId(p.id)} title="Edit contact" style={{ background: "#fff", border: "1px solid #2563EB", borderRadius: 4, fontSize: 11, padding: "2px 8px", cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>✎ Edit contact</button>
+                  <button onClick={() => setEditingPersonId(p.id)} title="Edit contact" style={{ background: "#fff", border: "1px solid #2563EB", borderRadius: 4, fontSize: 11, padding: "2px 8px", cursor: "pointer", color: "#2563EB", fontWeight: 600 }}>Edit contact</button>
                   {counterparty.contacts.length > 1 && (
                     <button onClick={async () => { if (await cdConfirm({ tone: "danger", title: `Remove ${p.name}?`, confirmLabel: "Remove" })) onDeletePerson(counterparty.id, p.id); }} title="Delete" style={{ background: "none", border: "1px solid #FECACA", color: "#DC2626", borderRadius: 4, fontSize: 11, padding: "2px 6px", cursor: "pointer" }}>🗑</button>
                   )}
@@ -636,7 +623,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
       </div>
 
       <div style={{ padding: "12px 20px", borderTop: "1px solid #F3F4F6", display: "flex", gap: 8 }}>
-        <button onClick={() => onEditCompany(counterparty)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✎ Edit company</button>
+        <button onClick={() => onEditCompany(counterparty)} style={{ flex: 1, padding: "7px 0", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit company</button>
         <button onClick={async () => { if (await cdConfirm({ tone: "danger", title: `Delete ${counterparty.name}?`, message: `This deletes the company and all ${counterparty.contacts.length} contact(s).`, confirmLabel: "Delete" })) { onDeleteCompany(counterparty.id); onClose(); } }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑</button>
       </div>
     </div>
@@ -657,7 +644,7 @@ function EmailModal({ counterparty, person, onClose }: any) {
             <div style={{ fontSize: 14, fontWeight: 600 }}>Email · {person.name}</div>
             <div style={{ fontSize: 11, color: "#999" }}>{counterparty.name}</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#999" }}>×</button>
+          <ActionButton action="close" onClick={onClose} />
         </div>
         {sent ? (
           <div style={{ padding: "40px 24px", textAlign: "center" }}>
@@ -1021,7 +1008,7 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
               {stage === "review" && `${parsedRows.length} records parsed — review and assign types, then import`}
             </div>
           </div>
-          <button onClick={onCancel} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#999" }}>×</button>
+          <ActionButton action="close" onClick={onCancel} />
         </div>
 
         {/* Stage: upload */}
@@ -1041,7 +1028,7 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
             </div>
             <div style={{ marginTop: 18, padding: "12px 16px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, maxWidth: 520, fontSize: 12, color: "#92400E" }}>
               {isCsv
-                ? <><strong>Tip:</strong> use a file with the same columns as <em>Export CSV</em> (<code>Type, Company, Country, NIP, EU VAT, Address, Currency, Payment Terms, Services, Person Name, Role, Email, Phone, Primary, Notes</code>). Several rows with the same company are merged into one contact with multiple people. Likely duplicates are flagged so you can skip them.</>
+                ? <><strong>Tip:</strong> use a file with the same columns as <em>Export file (CSV)</em> (<code>Type, Company, Country, NIP, EU VAT, Address, Currency, Payment Terms, Services, Person Name, Role, Email, Phone, Primary, Notes</code>). Several rows with the same company are merged into one contact with multiple people. Likely duplicates are flagged so you can skip them.</>
                 : <><strong>Tip:</strong> in Fakturownia, go to <em>Kontrahenci → Eksport → XLS</em>. The columns we expect are <code>ID, Client, TAX ID, City, Country, Company, E-mail, Bank, Account Number</code> and a few more — the standard export already includes them.</>}
             </div>
           </div>
@@ -1400,7 +1387,7 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
             <div style={{ fontSize: 16, fontWeight: 700 }}>Find duplicates</div>
             <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{pairs.length ? `${pairs.length} suspected duplicate pair${pairs.length !== 1 ? "s" : ""} found — review and merge.` : "No suspected duplicates found. 🎉"}</div>
           </div>
-          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 22, color: "#888", cursor: "pointer" }}>×</button>
+          <ActionButton action="close" onClick={onClose} />
         </div>
         <div style={{ padding: "14px 24px" }}>
           {pairs.map((p, i) => (
@@ -1531,7 +1518,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   // v6.81.0 (D-57): commission terms visible to the owner and the finance role (finance.pl) only; with no users defined, everyone.
   const _cu = currentUser(users, userName);
   const canSeeCommission = _cu === null ? true : !!(_cu && (_cu.isOwner || _cu.finance?.pl === true));
-  const { alert: guardAlert, dialogNode: guardNode } = useConfirm(); // v6.63.0 (D-01): delete-guard dialog
+  const { alert: guardAlert, confirm: guardConfirm, dialogNode: guardNode } = useConfirm(); // v6.63.0 (D-01): delete-guard dialog · v6.99.69 (A-CF-1): the same dialog asks before a delete
   // Integration mode: if parent passes state in, use it (shell owns state).
   // Standalone mode: use local state with the baked-in seed.
   const [localContacts, setLocalContacts] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
@@ -1640,6 +1627,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       return [...prev, newC];
     });
     setModal(null);
+    notifySaved(String((c as any)?.name || ""));   // v6.99.69 (A-CF-3)
     setDupReview(null);
   }
 
@@ -1651,6 +1639,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     setMergeTarget(null);
     setDupReview(null);
     setModal(null);
+    notifySaved(String((merged as any)?.name || ""));   // v6.99.69 (A-CF-3): the merged party
     setDupePairs(null);
   }
 
@@ -1682,6 +1671,8 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       });
       return;
     }
+    // v6.99.69 (A-CF-1, owner): a stored record is never deleted on a single click
+    { const cp = counterparties.find(c => c.id === id); const ok = await guardConfirm({ tone: "danger", title: `Delete ${cp?.name || "this party"}?`, message: "The party and its contact persons are removed from the Directory. Documents that already reference it keep their snapshot.", confirmLabel: "Delete", cancelLabel: "Keep" }); if (!ok) return; }
     setCounterparties(prev => prev.filter(c => c.id !== id));
     if (selectedId === id) setSelectedId(null);
   }
@@ -1710,7 +1701,9 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       return { ...c, contacts: nextContacts, people: nextContacts };   // v6.99.45 (CP-13): the mirror is written with the fact, not only healed on load
     }));
   }
-  function deletePerson(counterpartyId, personId) {
+  async function deletePerson(counterpartyId, personId) {
+    { const cp = counterparties.find(c => c.id === counterpartyId); const p = (cp?.contacts || []).find((x: any) => x.id === personId);
+      const ok = await guardConfirm({ tone: "danger", title: `Delete ${p?.name || "this contact person"}?`, message: `The person is removed from ${cp?.name || "the party"}.`, confirmLabel: "Delete", cancelLabel: "Keep" }); if (!ok) return; }   // v6.99.69 (A-CF-1)
     setCounterparties(prev => prev.map(c => {
       if (c.id !== counterpartyId) return c;
       const nextContacts = c.contacts.filter(p => p.id !== personId);
@@ -1826,7 +1819,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
         </div>
         <ActionButton action="importFkt" onClick={() => { setImportSource("fakturownia"); setShowImport(true); }} />
         <ActionButton action="importCsv" onClick={() => { setImportSource("csv"); setShowImport(true); }} />
-        <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⬇ Export CSV</button>
+        <button onClick={handleExport} style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Export file (CSV)</button>
         <button onClick={scanForDuplicates} title="Scan all counterparties for suspected duplicates (same tax ID or similar name)" style={{ background: "#fff", color: "#2563EB", border: "1px solid #BFDBFE", borderRadius: 8, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>⧉ Find duplicates</button>
         <button onClick={() => setModal("new")} style={{ background: "#16A34A", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>+ New Counterparty</button>
       </div>
@@ -1966,7 +1959,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
             </div>
             <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
               {primary?.email && <button onClick={() => onEmail(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Email primary">✉</button>}
-              <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Edit">✎ Edit</button>
+              <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Edit">Edit</button>
               <button onClick={async () => { if (await ctConfirm({ tone: "danger", title: `Delete ${c.name}?`, message: `This deletes the company and ${c.contacts.length} contact(s).`, confirmLabel: "Delete" })) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>
             </div>
           </div>
