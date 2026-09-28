@@ -5,7 +5,7 @@ import { CUSTOMS_PLACES, CUSTOMS_PARTIES, readCustoms, customsGaps } from "./cus
 import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
 import { SmallButton, useConfirm } from "./ui";
 import { derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
-import { clearanceLinesFor, parseCC529C, matchUnitByPlates, crossCheckClearance } from "./customsClearance.domain";
+import { clearanceLinesFor, crossCheckClearance, parseCustomsFile, findClearanceHome, applyCustomsFile, detachClearance, CLEARANCE_STATUSES, CUSTOMS_FILE_LABEL } from "./customsClearance.domain";   // v6.99.72 (A-CU-3)
 import { containerRecorder, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, cutOffWarnings, stuffingViolations, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, carrierOfUnit, followBookingDates } from "./shipmentModel.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { inspectLink } from "./docLinks.domain";
@@ -690,20 +690,25 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       {/* v6.99.44 (X-1, X-5…X-9, owner): the clearance belongs to the UNIT that crosses the border — one line per truck,
                           filled from the agent's CC529C file, matched by plates, cross-checked; typed fallback = MRN · released on · type. */}
                       <div style={{ gridColumn: "1 / -1", marginTop: 6 }}>
-                        <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>CLEARANCE PER UNIT <span style={{ fontWeight: 500 }}>— drop the agent's release file (CC529C .xml) on the line, or type the MRN</span></div>
+                        <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>CLEARANCE PER UNIT <span style={{ fontWeight: 500 }}>— drop the agent's file (release CC529C or exit confirmation CC599C, .xml) on the line, or type the MRN · several at once: Shipments → Import customs files</span></div>
                         {clearanceLinesFor(draft).map((cl: any) => {
                           const u = (draft.legs || []).flatMap((l: any) => l.vehicles || []).find((x: any) => String(x.id) === String(cl.unitId)) || {};
                           const setCl = (patch: any) => setDraft((prev: any) => { const cur = clearanceLinesFor(prev); return { ...prev, customsUnits: cur.map((x: any) => String(x.unitId) === String(cl.unitId) ? { ...x, ...patch } : x) }; });
                           const issues = cl.mrn ? crossCheckClearance(cl, draft, u, orders, invoices) : [];
                           const onFile = (file: any) => { if (!file) return; const rd = new FileReader(); rd.onload = () => {
-                            const parsed = parseCC529C(String(rd.result || "")); if (!parsed.ok) { window.alert("Not a CC529C release file — nothing read."); return; }
-                            const hit = parsed.plates ? matchUnitByPlates(draft, parsed.plates) : null;
-                            if (hit && String(hit.id) !== String(cl.unitId) && !window.confirm(`This file is for ${parsed.plates}, which is ${hit.truckPlate || "another unit"} — attach it to THIS line anyway?`)) return;
-                            const { ok, countriesOfRouting, invoiceValue, invoiceCurrency, ...rest } = parsed as any;
-                            setCl({ ...rest, sourceFile: file.name });
-                            // X-7: the release and the declaration are filed in the document register, attached to the truck
-                            setDraft((prev: any) => ({ ...prev, documents: [...(prev.documents || []), { id: nextId(), type: "Export declaration (EAD)", ref: parsed.mrn || "", status: "Have it", date: parsed.releasedOn || "", notes: `${u.truckPlate || ""} · from ${file.name}`, link: "" }, { id: nextId(), type: "Customs release (CC529C)", ref: parsed.mrn || "", status: "Have it", date: parsed.releasedOn || "", notes: u.truckPlate || "", link: "" }] }));
-                            recordAudit({ module: "Shipments", docType: "Shipment", docNumber: draft.number, action: "updated", summary: `Customs release ${parsed.mrn} read from ${file.name} for ${u.truckPlate || "unit"}` });
+                            // v6.99.72 (A-CU-3): the file says where it belongs; a drop on the wrong shipment is refused with the right one named
+                            const parsed = parseCustomsFile(String(rd.result || "")); if (!parsed.ok) { uiAlert({ title: "Not a customs file", message: "Nothing read — the file carries no MRN, LRN or SAD header." }); return; }
+                            const home = findClearanceHome(parsed, allShipmentsForCap || [], invoices || []);
+                            const elsewhere = home.exact && String(home.exact.shipment.id) !== String(draft.id);
+                            if (elsewhere) { uiAlert({ title: "This file belongs to another shipment", message: `${CUSTOMS_FILE_LABEL[parsed.kind]} — ${home.exact!.reasons.join("; ")}.\n\nIt belongs to ${home.exact!.shipment.number} (${home.exact!.unit.truckPlate || "unit"}). Attach it there, or use Shipments → Import customs files.` }); return; }
+                            const onThis = (home.exact && String(home.exact.shipment.id) === String(draft.id)) ? home.exact : home.candidates.find(h => String(h.shipment.id) === String(draft.id)) || null;
+                            const go = () => {
+                              setDraft((prev: any) => applyCustomsFile(prev, cl.unitId, parsed, file.name, nextId));
+                              recordAudit({ module: "Shipments", docType: "Shipment", docNumber: draft.number, action: "updated", summary: `${CUSTOMS_FILE_LABEL[parsed.kind]} ${parsed.mrn || parsed.agentRef || ""} read from ${file.name} for ${u.truckPlate || "unit"}` });
+                            };
+                            if (!onThis) { uiConfirm({ tone: "warn", title: "The plates are not on this shipment", message: `This file names the truck ${parsed.plates || "?"}${parsed.invoiceRef ? ` and invoice ${parsed.invoiceRef}` : ""}; ${home.reason || "no truck of this shipment matches"}.\n\nAttach it to ${u.truckPlate || "this line"} anyway?`, confirmLabel: "Attach anyway", cancelLabel: "Leave it" }).then((ok: boolean) => { if (ok) go(); }); return; }
+                            if (String(onThis.unit.id) !== String(cl.unitId)) { uiConfirm({ tone: "warn", title: "Another truck of this shipment", message: `This file is for ${parsed.plates}, which is ${onThis.unit.truckPlate || "another unit"} — attach it to THIS line (${u.truckPlate || "unit"}) anyway?`, confirmLabel: "Attach here", cancelLabel: "Leave it" }).then((ok: boolean) => { if (ok) go(); }); return; }
+                            go();
                           }; rd.readAsText(file); };
                           return <div key={String(cl.unitId)} style={{ display: "grid", gridTemplateColumns: "150px 110px 1.4fr 120px 120px 110px auto", gap: 8, alignItems: "center", padding: "6px 0", borderTop: "1px solid #F1F5F9" }}
                             onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); onFile(e.dataTransfer.files?.[0]); }}>
@@ -711,11 +716,12 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                             <Inp value={cl.type || ""} onChange={e => setCl({ type: e.target.value })} placeholder="EX A" />
                             <Inp value={cl.mrn || ""} onChange={e => setCl({ mrn: e.target.value })} placeholder="MRN" />
                             <Inp type="date" value={cl.releasedOn || ""} onChange={e => setCl({ releasedOn: e.target.value, status: e.target.value ? "Released" : cl.status })} noFuture />
-                            <Sel value={cl.status || "Pending"} onChange={e => setCl({ status: e.target.value })}>{["Pending", "Declared", "Released", "Held"].map(s => <option key={s}>{s}</option>)}</Sel>
-                            <div style={{ fontSize: 10.5, color: "#64748B" }}>{cl.officeExport ? `${cl.officeExport} → ${cl.officeExit || "?"}` : ""}</div>
+                            <Sel value={cl.status || "Pending"} onChange={e => setCl({ status: e.target.value })}>{CLEARANCE_STATUSES.map(s => <option key={s}>{s}</option>)}</Sel>
+                            <div style={{ fontSize: 10.5, color: "#64748B" }}>{cl.exitedOn ? <span style={{ color: "#1D4ED8", fontWeight: 700 }}>left the EU {cl.exitedOn}{cl.exitOffice ? ` · ${cl.exitOffice}` : ""}</span> : cl.officeExport ? `${cl.officeExport} → ${cl.officeExit || "?"}` : ""}</div>
                             <label title="v6.99.59 (A-CU-2): the agent's CC529C release (.xml) — or drop it on the line" style={{ fontSize: 11.5, fontWeight: 800, border: "none", background: "#0F766E", color: "#fff", borderRadius: 7, padding: "6px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>Import file<input type="file" accept=".xml,.XML" style={{ display: "none" }} onChange={e => onFile(e.target.files?.[0])} /></label>
                             {issues.length > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "4px 8px" }}>{issues.map((s, k) => <div key={k}>⚠ {s}</div>)}</div>}
-                            {cl.mrn && !issues.length && cl.sourceFile && <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#16A34A" }}>✓ matches the shipment · {cl.sourceFile}</div>}
+                            {cl.mrn && !issues.length && cl.sourceFile && <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#16A34A" }}>✓ matches the shipment · {cl.sourceFile}{cl.exitFile ? ` · exit: ${cl.exitFile}` : ""}</div>}
+                            {cl.mrn && <div style={{ gridColumn: "1 / -1" }}><SmallButton kind="remove" title="v6.99.72 (A-CU-3): the line goes back to Pending and its register rows go with it — the mistake is undone whole" onClick={() => { uiConfirm({ tone: "warn", title: "Detach the customs file?", message: `The line of ${u.truckPlate || "this unit"} goes back to Pending and the register rows for MRN ${cl.mrn} are removed. The file itself is not touched.`, confirmLabel: "Detach", cancelLabel: "Keep" }).then((ok: boolean) => { if (ok) { setDraft((prev: any) => detachClearance(prev, cl.unitId)); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: draft.number, action: "updated", summary: `Customs file detached from ${u.truckPlate || "unit"} (MRN ${cl.mrn})` }); } }); }}>Detach file</SmallButton></div>}
                           </div>;
                         })}
                         {!clearanceLinesFor(draft).length && <div style={{ fontSize: 11.5, color: "#94A3B8" }}>Add the units first — each truck is cleared on its own.</div>}

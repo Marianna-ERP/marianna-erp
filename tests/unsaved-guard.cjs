@@ -20,7 +20,7 @@ const eq = (a, b, m) => { if (a !== b) throw new Error((m || "") + " expected " 
   await t("US-1: a closed editor is not registered", async () => { await act(async () => root.render(React.createElement(Ed, { active: false }))); eq(U.dirtyEntries().length, 0); });
   await act(async () => root.unmount());
   // the real editors must not dirty themselves by opening (their mount-time derivations settle before the baseline)
-  const d = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+  const d = JSON.parse(fs.readFileSync(require("./fixtures.cjs").ownerDataFile(process.argv[2]), "utf8"));   // v6.99.71 (A-TF-1)
   const Sh = require(path.resolve(__dirname, "../src/Shipments")); const SO = require(path.resolve(__dirname, "../src/SalesOrders"));
   await t("US-4: the shipment editor, opened on a real shipment and left alone, asks nothing", async () => {
     const r2 = createRoot(document.getElementById("r")); const sh = d.shipments.find(s => (s.legs || []).length > 1) || d.shipments[0];

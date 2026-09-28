@@ -6,6 +6,7 @@
 // integrity checker does NOT see today.
 // ─────────────────────────────────────────────────────────────────────────────
 const B = p => require("./build/" + p);
+const FX = require("./fixtures.cjs");   // v6.99.71 (A-TF-1): every real file comes from tests/fixtures; a missing one is a visible skip
 const ship = B("shipments.domain.js");
 const inv = B("inventory.domain.js");
 const alloc = B("costAllocation.js");
@@ -1964,16 +1965,19 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v69944(){
   console.log("\n══ 61. v6.99.44: the CC529C release file fills the clearance line and is matched by plates ══");
   const C = B("customsClearance.domain.js"); const fs = require("fs");
-  const xml = fs.readFileSync("/mnt/user-data/uploads/CC529C_26PL3310200028K7B6_1.xml", "utf8");
+  // v6.99.71 (A-TF-1): the fixture is the agent's release for truck WRA5749J/WRA5925F (5 May 2026, invoice FV2026/05/1)
+  const xmlPath = FX.needFixture("CC529C_26PL445010003K5TB3_1.xml", "the agent's release file"); if (!xmlPath) return;
+  const xml = fs.readFileSync(xmlPath, "utf8");
   t("X-5: every fact is read from the owner's real release file", () => {
     const r = C.parseCC529C(xml);
-    ok(r.ok); eq(r.mrn, "26PL3310200028K7B6"); eq(r.lrn, "26S00KMT0C"); eq(r.releasedOn, "2026-09-19"); eq(r.declaredOn, "2026-09-19");
-    eq(r.officeExport, "PL331020"); eq(r.officeExit, "SI006044"); eq(r.plates, "WGR52365/WGR2UU2");
-    eq(r.grossKg, 22500); eq(r.netKg, 19422); eq(r.packages, 1494); eq(r.cn, "08081080"); eq(r.invoiceRef, "FV2026/09/9"); eq(r.incoterm, "CFR"); eq(r.status, "Released");
+    ok(r.ok); eq(r.mrn, "26PL445010003K5TB3"); eq(r.lrn, "26S00JOW0C"); eq(r.releasedOn, "2026-05-05"); eq(r.declaredOn, "2026-05-05");
+    eq(r.officeExport, "PL445010"); eq(r.officeExit, "IT137103"); eq(r.plates, "WRA5749J/WRA5925F");
+    eq(r.grossKg, 22500); eq(r.netKg, 19422); eq(r.packages, 1494); eq(r.cn, "08081080"); eq(r.invoiceRef, "FV2026/05/1"); eq(r.incoterm, "CFR"); eq(r.status, "Released");
+    eq(r.place, "PORT SAID EAST"); eq(r.invoiceValue, 17479.8); eq(r.invoiceCurrency, "EUR");
   });
   t("X-6: the file is matched to the truck by plates (truck or trailer, spacing ignored) and cross-checked", () => {
-    const sh = { number: "SHP-1", governingSoRef: "SO-9", goods: [{ id: 1, cnCode: "08081080", qtyKg: 19422 }], legs: [{ mode: "Road", vehicles: [{ id: 11, truckPlate: "WGR 52365", trailerPlate: "WGR 2UU2", load: [{ goodsLineId: 1, qtyKg: 19422 }] }, { id: 12, truckPlate: "WGM 8811P" }] }] };
-    const hit = C.matchUnitByPlates(sh, "WGR52365/WGR2UU2"); eq(hit.id, 11);
+    const sh = { number: "SHP-1", governingSoRef: "SO-9", goods: [{ id: 1, cnCode: "08081080", qtyKg: 19422 }], legs: [{ mode: "Road", vehicles: [{ id: 11, truckPlate: "WRA 5749J", trailerPlate: "WRA 5925F", load: [{ goodsLineId: 1, qtyKg: 19422 }] }, { id: 12, truckPlate: "WGM 8811P" }] }] };
+    const hit = C.matchUnitByPlates(sh, "WRA5749J/WRA5925F"); eq(hit.id, 11);
     eq(C.matchUnitByPlates(sh, "XX 0000"), null);
     const r = C.parseCC529C(xml);
     eq(C.crossCheckClearance(r, sh, hit, [{ number: "SO-9", sellIncoterm: "CFR", client: { name: "Al Baraka For Import & Export" } }], []).length, 0, "everything agrees → nothing to show");
@@ -2064,15 +2068,16 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v69951(){
   console.log("\n══ 65. v6.99.51: orphan lots and dangling links are found precisely; master vs transactional stores ══");
   const I = B("integrityCheck.js"); const U = B("useLocalStoredState.js");
-  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_50_schema-v2_2026-09-23T14-11-42.json");
+  t("A-FS-1: master stores are kept, transactional stores go — the two lists partition DATA_KEYS", () => {
+    const all = new Set(U.DATA_KEYS); ok(U.MASTER_KEYS.every(k => all.has(k))); eq(U.MASTER_KEYS.length + U.TRANSACTIONAL_KEYS.length, U.DATA_KEYS.length);
+    ok(U.MASTER_KEYS.includes("contacts") && U.MASTER_KEYS.includes("packagingTypes") && U.TRANSACTIONAL_KEYS.includes("lots") && U.TRANSACTIONAL_KEYS.includes("invoices"));
+  });
+  const dPath = FX.needFixture("marianna-erp_v6.99.50_schema-v2_2026-09-23T14-11-42.json", "the 23 Sept 14:11 file — before the clean-up"); if (!dPath) return;
+  const d = require(dPath);
   t("A-FS-2: on the owner's 23 Sept file — 40 orphan lots (no PO, no stock), 7 invoices and dangling claim subjects", () => {
     const ol = I.orphanLotsToRemove(d.lots, d.pos); eq(ol.length, 40); ok(ol.every(l => !(l.physicalKg > 0)), "never a lot with stock");
     const dl = I.danglingLinks(d.invoices, d.claims, d.pos, d.orders, d.shipments); eq(dl.invoices.length, 7); ok(dl.claims.length >= 1);
     ok(!ol.some(l => l.number === "LOT-2026-0071"), "PO-0021 exists, so its lots are not orphans — they are the owner's to delete (they were received last season)");
-  });
-  t("A-FS-1: master stores are kept, transactional stores go — the two lists partition DATA_KEYS", () => {
-    const all = new Set(U.DATA_KEYS); ok(U.MASTER_KEYS.every(k => all.has(k))); eq(U.MASTER_KEYS.length + U.TRANSACTIONAL_KEYS.length, U.DATA_KEYS.length);
-    ok(U.MASTER_KEYS.includes("contacts") && U.MASTER_KEYS.includes("packagingTypes") && U.TRANSACTIONAL_KEYS.includes("lots") && U.TRANSACTIONAL_KEYS.includes("invoices"));
   });
   console.log("v6.99.51 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
@@ -2082,7 +2087,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v69954(){
   console.log("\n══ 66. v6.99.54: an expected lot matching none of its PO's lines is flagged, never silently kept ══");
   const I = B("integrityCheck.js");
-  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_52_schema-v2_2026-09-23T16-04-33.json");
+  const dPath = FX.needFixture("marianna-erp_v6.99.52_schema-v2_2026-09-23T16-04-33.json", "the 23 Sept 16:04 file"); if (!dPath) return;
+  const d = require(dPath);
   t("the 16:04 file: last season's apple lots under this season's capsicum POs are flagged EXPECTED_LOT_MISMATCH", () => {
     const r = I.checkIntegrity({ contacts: d.contacts, pos: d.pos, lots: d.lots, orders: d.orders, shipments: d.shipments, warehouseInvoices: [], operationalCosts: [], creditNotes: [], invoices: d.invoices || [], financeNotes: [], claims: d.claims || [], loadPlans: [], advancePayments: [], bankAccounts: [], productCatalog: [] });
     const mm = r.issues.filter(i => i.code === "EXPECTED_LOT_MISMATCH");
@@ -2097,7 +2103,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v69954b(){
   console.log("\n══ 67. v6.99.54: seasons — derived, closed by tag, sliced to a file, removed, re-appended ══");
   const Z = B("season.domain.js"); const st = Z.DEFAULT_SEASON;
-  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_52_schema-v2_2026-09-23T16-04-33.json");
+  const dPath = FX.needFixture("marianna-erp_v6.99.52_schema-v2_2026-09-23T16-04-33.json", "the 23 Sept 16:04 file"); if (!dPath) return;
+  const d = require(dPath);
   const data = { pos: d.pos, orders: d.orders, shipments: d.shipments, lots: d.lots, invoices: d.invoices || [], claims: d.claims || [], poSettlements: [], inspections: d.inspections || [], stockCounts: [], financeNotes: [], creditNotes: [], warehouseInvoices: [], operationalCosts: [] };
   t("AR-1: the season of a date follows the 1 July boundary; the two seasons in the owner's file are found", () => {
     eq(Z.seasonOf("2025-10-30"), "2025/26"); eq(Z.seasonOf("2026-06-30"), "2025/26"); eq(Z.seasonOf("2026-07-01"), "2026/27");
@@ -2124,24 +2131,27 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v69955(){
   console.log("\n══ 68. v6.99.55: her workbook parses; rows match trucks; the board reads the modules ══");
   const Bd = B("board.domain.js"); const XLSX = require("xlsx");
-  const wb = XLSX.readFile("/mnt/user-data/uploads/Shipments_season_2026_2027.xlsx", { cellDates: true });
+  // v6.99.71 (A-TF-1): a SAMPLE in her 26-column layout stands in for her real workbook; the trucks come from the merged 25 Sept file
+  const wbPath = FX.needFixture("sample_season_workbook.xlsx", "her workbook layout"); const mPath = FX.needFixture("marianna-erp_MERGED_2026-09-25.json"); if (!wbPath || !mPath) return;
+  const wb = XLSX.readFile(wbPath, { cellDates: true });
   let all = []; wb.SheetNames.forEach(n => { const m = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }); all = all.concat(Bd.parseHerSheet(n, m)); });
   t("BD-4: her five week tabs parse into 21 truck rows with her 26 columns mapped (the two 'Price' columns told apart)", () => {
     eq(all.length, 21); ok(all.some(r => r.cells.truckPrice) && all.some(r => r.cells.containerPrice), "truck price and container price both read");
     eq(all[0].cells.supplier, "Grójecki Owoc"); eq(all[0].cells.acid, "4156951551024010017");
   });
-  t("BD-1/BD-2: the board builds one row per road unit from the 17 Sept file, grouped by week, with readiness per step", () => {
-    const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json");
+  t("BD-1/BD-2: the board builds one row per road unit from the merged 25 Sept file, grouped by week, with readiness per step", () => {
+    const d = require(mPath);
     const rows = Bd.boardRows({ shipments: d.shipments, pos: d.pos, orders: d.orders, lots: d.lots, invoices: d.invoices || [], contacts: d.contacts, inspections: d.inspections || [], locName: (id, t) => String(t || "") });
     ok(rows.length >= 30, "rows: " + rows.length); ok(rows.every(r => r.cells && r.week && r.ready));
     const wk = new Set(rows.map(r => r.week.key)); ok(wk.size >= 3, "several weeks: " + wk.size);
     ok(rows.some(r => r.ready.steps[3]), "some trucks are arranged (step 3)");
   });
   t("BD-4: matching — the TRUCK plate is exact, a shared trailer only probable, a stranger unmatched", () => {
-    const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json");
+    const d = require(mPath);
     const rows = Bd.boardRows({ shipments: d.shipments, pos: d.pos, orders: d.orders, lots: d.lots, invoices: d.invoices || [], contacts: d.contacts, inspections: d.inspections || [], locName: (id, t) => String(t || "") });
     const w37r5 = all.find(r => r.sheet === "week 37" && r.rowNo === 5); const m = Bd.matchImportedRow(w37r5, rows);
-    ok(m && m.confidence === "probable", "W8LEON2 with the trailer WPI19693 → probable, not exact");
+    ok(m && m.confidence === "probable", "an unknown truck WX 12345 with the trailer WPI19693 → probable, not exact");
+    ok(m && [m.hit.unit.truckPlate, m.hit.unit.trailerPlate].map(p => String(p).replace(/[\s-]/g, "").toUpperCase()).includes("WPI19693"), "matched through the trailer");
     const exact = all.map(r => Bd.matchImportedRow(r, rows)).filter(x => x && x.confidence === "exact"); ok(exact.length >= 3, "exact matches: " + exact.length);
     eq(Bd.matchImportedRow({ sheet: "x", rowNo: 1, cells: { plates: "ZZ 99999/ZZ 88888", supplier: "Nobody" } }, rows), null);
   });
@@ -2245,7 +2255,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v69963(){
   console.log("\n══ 73. v6.99.63: her workbook imports as it is; a block pasted from Excel fills right and down; the study reads the log ══");
   const Sh = B("sheet.domain.js"); const Bd = B("board.domain.js"); const XLSX = require("xlsx");
-  const wb = XLSX.readFile("/mnt/user-data/uploads/Shipments_season_2026_2027.xlsx", { cellDates: true });
+  const wbPath = FX.needFixture("sample_season_workbook.xlsx", "her workbook layout"); if (!wbPath) return;
+  const wb = XLSX.readFile(wbPath, { cellDates: true });
   const tabs = wb.SheetNames.map(n => Sh.importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }), Bd.HER_HEADERS, "2026-09-25T10:00:00Z"));
   t("SH-8: five week tabs, 21 rows, as they are; ETD–ETA split into two dates", () => {
     eq(tabs.length, 5); eq(tabs.reduce((s, t) => s + t.rows.length, 0), 21);
@@ -2299,7 +2310,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v69967(){
   console.log("\n══ 75. v6.99.67: LOT-0119 and LOT-0120 agree; the direction copy is dropped on load; the company block is one ══");
   const M = B("shipmentModel.domain.js"); const U = B("useLocalStoredState.js"); const L = B("legacy.js");
-  const d = require("/mnt/user-data/uploads/marianna-erp_v6_99_66_schema-v2_2026-09-26T14-16-24.json");
+  const dPath = FX.needFixture("marianna-erp_v6.99.66_schema-v2_2026-09-26T14-16-24.json", "the 26 Sept file — before the v6.99.67 heal"); if (!dPath) return;
+  const d = require(dPath);
   t("A-IN-1: the load-time heal drops every stored direction copy (139 rows on the 26 Sept file) and reports the change", () => {
     let healed = 0, left = 0; d.shipments.forEach(s => { const r = M.healShipmentModel(s); if (r.changed) healed++; (r.sh.goods || []).forEach(g => { if (g.tradeDirection !== undefined) left++; }); });
     ok(healed >= 30, "healed " + healed); eq(left, 0);
@@ -2424,5 +2436,86 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(raw.indexOf("\n") < 0); eq(JSON.parse(raw), data); eq(U.listBackups().length, 1); eq(U.compactLocalBackups(), 0, "a second pass changes nothing");
   }));
   console.log("v6.99.70 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.72 — customs files find their shipment: the exit confirmation, the finder, attach once, detach whole (A-CU-3) ══
+(function v69972(){
+  console.log("\n══ 77. v6.99.72: CC529C / CC599C / SAD are told apart; a file finds its truck; nothing is attached on a guess; detach undoes whole ══");
+  const C = B("customsClearance.domain.js"); const CI = B("customsImport.domain.js"); const fs = require("fs");
+  const need = ["CC529C_26PL445010003K5TB3_1.xml", "CC599C_26PL445010003K5TB3_1.xml", "SAD_25520.xml", "CC599C_26PL445010003B8HB3_1.xml"].map(n => FX.needFixture(n, "the agent's files"));
+  if (need.some(p => !p)) return;
+  const [relX, exitX, sadX, exit2X] = need.map(p => fs.readFileSync(p, "utf8"));
+  const rel = C.parseCustomsFile(relX), exit = C.parseCustomsFile(exitX), sad = C.parseCustomsFile(sadX), exit2 = C.parseCustomsFile(exit2X);
+  let ids = 90000; const nid = () => ++ids;
+  // the truck as it would be recorded: the same plates, 19 422 kg, the invoice linked through the SO
+  const mk = (over = {}) => ({ id: 1, number: "SHP-2026-0040", status: "Loaded", governingSoRef: "SO-2026-0090", soRefs: ["SO-2026-0090"], clientName: "Al Baraka For Import & Export",
+    goods: [{ id: 1, cnCode: "08081080", qtyKg: 19422 }], documents: [], customsUnits: [],
+    legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-05-04", vehicles: [{ id: 11, truckPlate: "WRA 5749J", trailerPlate: "WRA 5925F", load: [{ goodsLineId: 1, qtyKg: 19422 }] }] }], ...over });
+  const invoices = [{ number: "FV2026/05/1", kind: "SALES", links: [{ type: "SO", number: "SO-2026-0090" }] }];
+
+  t("A-CU-3: the three files are told apart, and the CC599C yields the exit — 12 May 2026 at IT137103, control A2", () => {
+    eq(rel.kind, "CC529C"); eq(exit.kind, "CC599C"); eq(sad.kind, "SAD"); eq(C.parseCustomsFile("<html>nothing</html>").kind, "unknown");
+    eq(exit.mrn, "26PL445010003K5TB3"); eq(exit.exitedOn, "2026-05-12"); eq(exit.exitOffice, "IT137103"); eq(exit.exitResult, "A2"); eq(exit.status, "Exited");
+    eq(rel.exitedOn, ""); eq(rel.status, "Released"); eq(exit2.exitedOn, "2026-05-18"); eq(exit2.exitOffice, "IT137100");
+    eq(rel.consignee, "Al Baraka For Import &", "&amp; is decoded"); eq(C.unescapeXml("A &amp; B &lt;c&gt;"), "A & B <c>");
+    eq(sad.plates, "WRA5749J/WRA5925F"); eq(sad.invoiceRef, "FV2026/05/1"); eq(sad.agentRef, "25520"); eq(sad.declaredOn, "2026-05-05"); eq(sad.cn, "08081080"); ok(/Al Baraka/.test(sad.consignee), sad.consignee);
+  });
+  t("A-CU-3: plates + the invoice linked to the shipment → exact; plates alone on two shipments → a proposal, the closer loading date first", () => {
+    const one = C.findClearanceHome(rel, [mk()], invoices);
+    ok(one.exact, one.reason); eq(one.exact.unit.id, 11); ok(one.exact.reasons.some(r => /invoice FV2026\/05\/1/.test(r)), one.exact.reasons.join("|"));
+    const two = [mk(), mk({ id: 2, number: "SHP-2026-0041", governingSoRef: "SO-2026-0091", soRefs: ["SO-2026-0091"], legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-04-10", vehicles: [{ id: 21, truckPlate: "WRA5749J", trailerPlate: "WRA5925F", load: [{ goodsLineId: 1, qtyKg: 19422 }] }] }] })];
+    const r = C.findClearanceHome(rel, two, []);
+    eq(r.exact, null, "without the invoice the plates alone never decide"); eq(r.candidates.length, 2); eq(r.candidates[0].shipment.number, "SHP-2026-0040", "loaded 4 May sits above loaded 10 April"); ok(/confirm/i.test(r.reason));
+    const trailerOnly = C.findClearanceHome(rel, [mk({ legs: [{ id: 1, mode: "Road", vehicles: [{ id: 11, truckPlate: "XX 00001", trailerPlate: "WRA5925F" }] }] })], []);
+    eq(trailerOnly.exact, null); ok(trailerOnly.candidates[0] && /only the trailer/.test(trailerOnly.candidates[0].reasons[0]));
+    eq(C.findClearanceHome(rel, [mk({ status: "Cancelled" })], invoices).candidates.length, 0, "a cancelled shipment is never a home");
+    ok(/No shipment carries/.test(C.findClearanceHome(rel, [mk({ legs: [{ id: 1, mode: "Road", vehicles: [{ id: 11, truckPlate: "PY 5655C" }] }] })], invoices).reason));
+  });
+  t("A-CU-3: the CC599C finds the line by MRN once the release is on it; without the release it is only ever a proposal", () => {
+    const alone = C.findClearanceHome(exit, [mk()], invoices); eq(alone.exact, null); ok(/release CC529C was not attached/.test(alone.reason), alone.reason); eq(alone.candidates.length, 1);
+    const withRel = C.applyCustomsFile(mk(), 11, rel, "CC529C_K5TB3.xml", nid);
+    const found = C.findClearanceHome(exit, [withRel], []); ok(found.exact); eq(found.exact.unit.id, 11); ok(/MRN 26PL445010003K5TB3 is already/.test(found.exact.reasons[0]));
+    const other = C.findClearanceHome(exit2, [withRel], []); eq(other.exact, null, "a different MRN does not land on that line");
+  });
+  t("A-CU-3: attach fills the line and files two register rows; attached twice → still two; the exit adds its facts and one row; Detach undoes the whole", () => {
+    let sh = C.applyCustomsFile(mk(), 11, rel, "CC529C_K5TB3.xml", nid);
+    const line = C.clearanceLinesFor(sh)[0]; eq(line.mrn, "26PL445010003K5TB3"); eq(line.status, "Released"); eq(line.releasedOn, "2026-05-05"); eq(line.invoiceRef, "FV2026/05/1"); eq(line.sourceFile, "CC529C_K5TB3.xml");
+    eq(sh.documents.length, 2); ok(sh.documents.some(d => d.type === "Export declaration (EAD)") && sh.documents.some(d => d.type === "Customs release (CC529C)"));
+    eq(sh.customs.applies, true, "a customs file means customs applies — the editor shows the line");
+    sh = C.applyCustomsFile(sh, 11, rel, "CC529C_K5TB3.xml", nid); eq(sh.documents.length, 2, "replace-by-ref: no duplicate rows");
+    sh = C.applyCustomsFile(sh, 11, exit, "CC599C_K5TB3.xml", nid);
+    const l2 = C.clearanceLinesFor(sh)[0]; eq(l2.status, "Exited"); eq(l2.exitedOn, "2026-05-12"); eq(l2.exitOffice, "IT137103"); eq(l2.exitResult, "A2"); eq(l2.releasedOn, "2026-05-05", "the release facts stay"); eq(l2.exitFile, "CC599C_K5TB3.xml");
+    eq(sh.documents.length, 3); const ex = sh.documents.find(d => d.type === "Exit confirmation (CC599C)"); eq(ex.date, "2026-05-12"); ok(/IT137103/.test(ex.notes));
+    sh = C.applyCustomsFile(sh, 11, sad, "SAD_25520.xml", nid); eq(sh.documents.length, 4); eq(C.clearanceLinesFor(sh)[0].status, "Exited", "the SAD never changes the status of a cleared line");
+    sh = C.applyCustomsFile(sh, 11, exit, "CC599C_K5TB3.xml", nid); eq(sh.documents.length, 4, "the exit twice → still one row");
+    eq(C.customsForInvoice("FV2026/05/1", [sh]).length, 1); const cv = C.customsForInvoice("FV2026/05/1", [sh])[0]; eq(cv.exitedOn, "2026-05-12"); eq(cv.mrn, "26PL445010003K5TB3"); eq(cv.shipment, "SHP-2026-0040");
+    eq(C.customsForInvoice("FV2026/05/2", [sh]).length, 0);
+    const back = C.detachClearance(sh, 11); eq(C.clearanceLinesFor(back)[0].status, "Pending"); eq(C.clearanceLinesFor(back)[0].mrn, undefined);
+    eq(back.documents.length, 1, "only the SAD copy stays (it carries no MRN)"); eq(back.documents[0].type, "Customs declaration copy (SAD)");
+  });
+  t("A-CU-3: the whole batch — SAD + release + exit dropped together — lands on one truck: the exit follows its release in the batch", () => {
+    const rows = CI.planImport([{ name: "SAD_25520.xml", text: sadX }, { name: "CC599C_K5TB3.xml", text: exitX }, { name: "CC529C_K5TB3.xml", text: relX }], [mk()], invoices);
+    eq(rows.length, 3); ok(rows.every(r => r.choice), rows.map(r => r.parsed.kind + ":" + (r.choice || "-")).join(" "));
+    ok(/in this batch/.test(rows[1].search.exact.reasons[0]), rows[1].search.exact.reasons[0]);
+    const r = CI.applyImport(rows, [mk()]); eq(r.done.length, 3);
+    const line = C.clearanceLinesFor(r.shipments[0])[0]; eq(line.status, "Exited"); eq(line.mrn, "26PL445010003K5TB3"); eq(line.releasedOn, "2026-05-05"); eq(line.exitedOn, "2026-05-12");
+    eq(r.shipments[0].documents.length, 4);
+    // the user moves the release to another truck → the exit moves with it; left out → the exit falls back to its own proposal
+    const two = [mk(), mk({ id: 2, number: "SHP-2026-0041", governingSoRef: "SO-2026-0091", soRefs: ["SO-2026-0091"], legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-05-05", vehicles: [{ id: 21, truckPlate: "WRA5749J", trailerPlate: "WRA5925F" }] }] })];
+    const rows2 = CI.planImport([{ name: "r.xml", text: relX }, { name: "e.xml", text: exitX }], two, invoices); ok(rows2[0].choice.startsWith("1|"), "invoice decides: shipment 1"); eq(rows2[1].choice, rows2[0].choice);
+    const moved = CI.withChoice(rows2, 0, "2|21"); eq(moved[1].choice, "2|21", "the exit followed"); const dropped = CI.withChoice(moved, 0, ""); eq(dropped[1].choice, "", "left out with its release"); ok(dropped[1].search.candidates.length >= 1, "its own proposal is back");
+    const unk = CI.planImport([{ name: "x.pdf", text: "%PDF" }], two, invoices); eq(unk[0].parsed.kind, "unknown"); eq(unk[0].choice, "");
+  });
+  t("A-CU-3: on the merged 25 Sept file the May files are NOT attached — the truck exists, the date does not fit, and the reason says so", () => {
+    const mPath = FX.needFixture("marianna-erp_MERGED_2026-09-25.json"); if (!mPath) return;
+    const d = require(mPath);
+    const r = C.findClearanceHome(rel, d.shipments, d.invoices || []);
+    eq(r.exact, null); ok(r.candidates.length >= 2, "WRA5749J is on several shipments: " + r.candidates.length); ok(r.candidates.every(c => c.shipment.status !== "Cancelled"));
+    ok(r.candidates[0].reasons.some(x => /declared 2026-05-05 but this truck loaded/.test(x)), r.candidates[0].reasons.join("|"));
+    const rows = CI.planImport([{ name: "r.xml", text: relX }, { name: "e.xml", text: exitX }], d.shipments, d.invoices || []); eq(rows[0].choice, ""); eq(rows[1].choice, "", "nothing pre-selected, nothing attached on a guess");
+    eq(CI.applyImport(rows, d.shipments).done.length, 0);
+  });
+  console.log("v6.99.72 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();

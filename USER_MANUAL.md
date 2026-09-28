@@ -134,6 +134,28 @@ default); the PO shows only a provisional chip.
 
 ---
 
+### Customs files (v6.99.72)
+
+The agent sends two e-mails per truck: the **release for export (CC529C)** on
+the day of loading and, a week or two later, the **exit confirmation (CC599C)**
+— the IE-599 that says the goods left the EU, the document behind 0 % VAT on
+the export invoice. Their own SAD copy may come too. Drop all of them at once
+in **Shipments → Import customs files**:
+
+- Each file shows what it is, its facts (MRN, plates, invoice, kilos, exit
+  date) and the shipment and truck it belongs to, with the reason.
+- **Exact** (the MRN is already on a line, or the plates *and* the invoice
+  point at one shipment) is pre-selected. Anything else you confirm from the
+  candidates, or leave out. Nothing is attached on a guess.
+- An exit confirmation dropped together with its release follows it.
+- A file dropped twice changes nothing. **Detach file** on the line undoes an
+  attachment whole (line back to *Pending*, register rows removed).
+
+The line in the shipment editor still accepts a single file; if it belongs to
+another shipment, the app names that shipment and refuses. The clearance
+status gains **Exited**; the sales invoice's detail shows *exit confirmed* or
+*exit not confirmed yet* per truck, straight from the shipments.
+
 ## 5. Inventory
 
 Inventory is **event-driven**: lots are created by PO confirmation, received

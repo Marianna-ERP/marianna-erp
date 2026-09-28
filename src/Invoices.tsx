@@ -1,4 +1,5 @@
 import { chooseDepartment, departmentBlockReason } from "./fakturowniaDepartments.domain";
+import { customsForInvoice } from "./customsClearance.domain";   // v6.99.72 (A-CU-3)
 import { effectiveSoStatus } from "./statusOwnership.domain";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
@@ -341,8 +342,10 @@ export default function Invoices(props: any) {
       (opCosts.length ? `, ${opCosts.length} operational cost(s)` : "") +
       (whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : "") + "." });
   }
-  const [view, setView] = useState<"list" | "form" | "detail" | "note">("list");
-  const [selId, setSelId] = useState<number | null>(null);
+  // v6.99.72: `initialSelectedNumber` opens a detail directly (the render smoke uses it, like the other modules)
+  const initialHit = props.initialSelectedNumber ? (invoices as any[]).find((i: any) => String(i.number) === String(props.initialSelectedNumber)) : null;
+  const [view, setView] = useState<"list" | "form" | "detail" | "note">(initialHit ? "detail" : "list");
+  const [selId, setSelId] = useState<number | null>(initialHit ? initialHit.id : null);
   const [form, setForm] = useState<any>(null);
   useUnsavedGuard({ id: "invoice-form", label: form?.number ? `Invoice ${form.number}` : "the new invoice", draft: form, active: view === "form" && !!form, save: () => saveForm() });   // v6.99.58 (A-US)
   const [noteForm, setNoteForm] = useState<any>(null);
@@ -586,6 +589,7 @@ export default function Invoices(props: any) {
       onCopyPayload={() => copyPayload(selected)}
       onNote={() => newNote(selected)}
       pushState={pushState && pushState.id === selected.id ? pushState : null}
+      shipments={shipments}
     />
     {paymentFor && (
       <PaymentEventModal inv={paymentFor} onClose={() => setPaymentFor(null)} onSave={savePaymentEvent} />
@@ -683,7 +687,9 @@ export default function Invoices(props: any) {
 }
 
 // ════════════════ DETAIL ════════════════
-function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null }: any) {
+function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null, shipments = [] }: any) {
+  // v6.99.72 (A-CU-3): what customs says about this invoice — read from the shipments' clearance lines, no store of its own
+  const customs = inv.kind === "SALES" ? customsForInvoice(inv.number, shipments) : [];
   const locked = isLocked(inv);
   const relatedNotes = (notes || []).filter((nt: FinanceNote) => (inv.creditNoteIds || []).includes(nt.id) || nt.invoiceId === inv.id);
   const netAdjust = relatedNotes.reduce((s: number, nt: FinanceNote) => s + noteSignedPLN(nt), 0);
@@ -761,6 +767,16 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
 
           {inv.links.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>LINKED DOCUMENTS</SectionTitle><div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{inv.links.map((l: any, i: number) => <div key={i} style={{ padding: "6px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6, fontSize: 12, color: "#1D4ED8", fontWeight: 600 }}>{l.type} · {l.number}</div>)}</div></Card>}
 
+          {customs.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>CUSTOMS</SectionTitle>
+            {customs.map((c: any, i: number) => (
+              <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12.5, color: "#444", padding: "6px 0", borderTop: i ? "1px solid #F3F4F6" : "none" }}>
+                <span><strong>{c.shipment}</strong>{c.plates ? ` · ${c.plates}` : ""}</span>
+                {c.mrn && <span>MRN {c.mrn}</span>}
+                {c.releasedOn && <span>released {c.releasedOn}</span>}
+                {c.exitedOn ? <span style={{ color: "#1D4ED8", fontWeight: 700 }}>exit confirmed {c.exitedOn}{c.exitOffice ? ` · ${c.exitOffice}` : ""}</span> : <span style={{ color: "#B45309", fontWeight: 600 }}>exit not confirmed yet (no CC599C)</span>}
+              </div>
+            ))}
+          </Card>}
           {relatedNotes.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>CREDIT / DEBIT NOTES</SectionTitle>{relatedNotes.map((nt: FinanceNote, i: number) => <div key={i} style={{ padding: "10px 12px", background: nt.noteType === "DEBIT" ? "#EFF6FF" : "#FFF7ED", border: `1px solid ${nt.noteType === "DEBIT" ? "#BFDBFE" : "#FED7AA"}`, borderRadius: 8, marginBottom: 8, display: "flex", justifyContent: "space-between" }}><div><div style={{ fontSize: 12.5, fontWeight: 600 }}>{nt.noteType === "DEBIT" ? "Debit" : "Credit"} note · {nt.reason || nt.category}</div><div style={{ fontSize: 11, color: "#888" }}>{formatDMY(nt.date)} · {nt.partyName}</div></div><div style={{ fontSize: 13, fontWeight: 700, color: nt.noteType === "DEBIT" ? "#1D4ED8" : "#9A3412" }}>{nt.noteType === "DEBIT" ? "+" : "−"}{money(nt.amount, nt.currency)}</div></div>)}<div style={{ fontSize: 11.5, color: "#666", marginTop: 4 }}>Net adjustment: {money(netAdjust, "PLN")} (applied to receivable/payable in Finance)</div></Card>}
 
           {inv.notes && <Card style={{ marginTop: 16 }}><SectionTitle>NOTES</SectionTitle><div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{inv.notes}</div></Card>}

@@ -36,7 +36,8 @@ function scanButtons(html, where) {
   }
 }
 const renderToStaticMarkup = (el) => { const html = _rsm(el); try { scanSelects(html, _where); scanButtons(html, _where); } catch (e) {} return html; };
-const file = process.argv[2] || fs.readdirSync("/mnt/user-data/uploads").filter(f => /^marianna-erp_.*\.json$/.test(f)).map(f => "/mnt/user-data/uploads/" + f).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+const FX = require("./fixtures.cjs");   // v6.99.71 (A-TF-1): the data file and every fixture come from tests/fixtures
+const file = FX.ownerDataFile(process.argv[2]);
 const d = JSON.parse(fs.readFileSync(file, "utf8"));
 // seed the browser stores the modules read directly
 try { localStorage.setItem("marianna-erp:v2:customLocations", JSON.stringify(d.customLocations || [])); } catch {}
@@ -97,7 +98,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 { try {
     const appSrc = fs.readFileSync(path.resolve("./src/App.tsx"), "utf8");
     const keys = Array.from(appSrc.matchAll(/case "([a-z]+)":\s*\n?\s*(?:\/\/[^\n]*\n\s*)*return <([A-Z][A-Za-z]+)/g)).map(m => [m[1], m[2]]);
-    const d8 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const d8 = JSON.parse(fs.readFileSync(file, "utf8"));
     const props = { pos: d8.pos, setPOs: () => {}, orders: d8.orders, setOrders: () => {}, lots: d8.lots, setLots: () => {}, contacts: d8.contacts, setContacts: () => {}, shipments: d8.shipments, setShipments: () => {}, invoices: d8.invoices || [], setInvoices: () => {}, claims: d8.claims || [], setClaims: () => {}, auditLog: [], operationalCosts: [], setOperationalCosts: () => {}, users: [], userName: "", reloadFromStorage: () => {} };
     const files = { Dashboard: "Dashboard", Claims: "Claims", AuditTrail: "AuditTrail", Finance: "Finance", Contacts: "Contacts", PurchaseOrders: "PurchaseOrders", Inventory: "Inventory", SalesOrders: "SalesOrders", Shipments: "Shipments", Invoices: "Invoices", Settings: "Settings" };
     const bad = []; let n = 0;
@@ -117,16 +118,16 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
   } catch (e) { failed++; console.log("  \u2717 module headers —", (e.message || "").slice(0, 120)); } }
 // v6.99.63 (A-SH): the planning sheet renders her imported tabs with the owner's columns, and no colour index
 { try { const PS = require(path.resolve("./src/PlanningSheet")).default; const Sh = require(path.resolve("./src/sheet.domain")); const Bd = require(path.resolve("./src/board.domain")); const XLSX = require("xlsx");
-    const wb = XLSX.readFile("/mnt/user-data/uploads/Shipments_season_2026_2027.xlsx", { cellDates: true });
+    const wb = XLSX.readFile(FX.fixture("sample_season_workbook.xlsx"), { cellDates: true });
     const tabs = wb.SheetNames.map((n, i) => ({ ...Sh.importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }), Bd.HER_HEADERS, "2026-09-25T10:00:00Z"), order: i + 1 }));
-    const d7 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const d7 = JSON.parse(fs.readFileSync(file, "utf8"));
     _where = "planning sheet";
     const html = renderToStaticMarkup(React.createElement(PS, { tabs, setTabs: () => {}, log: [], setLog: () => {}, contacts: d7.contacts, catalog: [], orders: d7.orders, invoices: d7.invoices || [] }));
     const ok = ["Planning sheet", "Controlling person", ">ETD<", ">ETA<", ">SO<", "New tab", "Add row", "Export file (all tabs)"].every(s => html.includes(s)) && !html.includes("1 · Purchase");
     if (ok) { passed++; console.log("  \u2713 planning sheet renders her 5 tabs with the owner's columns; no colour index"); } else { failed++; console.log("  \u2717 planning sheet did not render as expected"); }
   } catch (e) { failed++; console.log("  \u2717 planning sheet —", (e.message || "").slice(0, 120)); } }
 // v6.99.61 (A-HD-1/2): one header, one width — the changed modules render the shared header and carry no width cap
-{ try { const d6 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+{ try { const d6 = JSON.parse(fs.readFileSync(file, "utf8"));
     const props = { pos: d6.pos, orders: d6.orders, lots: d6.lots, contacts: d6.contacts, shipments: d6.shipments, invoices: d6.invoices || [], claims: d6.claims || [], setShipments: () => {}, setClaims: () => {}, operationalCosts: [], setOperationalCosts: () => {}, users: [], userName: "" };
     const bad = [];
     for (const [name, file] of [["Dashboard", "Dashboard"], ["Finance", "Finance"], ["Shipments", "Shipments"], ["Claims", "Claims"], ["Settings", "Settings"]]) {
@@ -139,7 +140,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
   } catch (e) { failed++; console.log("  \u2717 one header, one width —", (e.message || "").slice(0, 120)); } }
 // v6.99.60 (A-SO-1/2): a Confirmed SO without price or quantity is held; a sourced line's origin/size/class are the source's
 { try { const SOmod = require(path.resolve("./src/SalesOrders"));
-    const d5 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const d5 = JSON.parse(fs.readFileSync(file, "utf8"));
     const base = (d5.orders || []).find((o) => (o.items || []).some((it) => it.sourceType === "PO" && it.sourceRef)) || d5.orders[0];
     const so = { ...base, number: "SO-TEST-PRICE", status: "Confirmed", items: (base.items || []).map((it, i) => i === 0 ? { ...it, unitPrice: "" } : it) };
     _where = "SO form " + so.number;
@@ -149,7 +150,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
   } catch (e) { failed++; console.log("  \u2717 SO confirm needs price —", (e.message || "").slice(0, 120)); } }
 // v6.99.59 (A-OW/SU/BK/CU): the shipment editor — Close button, Header → Booking → Units, booking on one line, ports still shown
 { try { const ShMod = require(path.resolve("./src/Shipments"));
-    const d4 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const d4 = JSON.parse(fs.readFileSync(file, "utf8"));
     const sh = (d4.shipments || []).find((s) => String(s.mode || "").toLowerCase() === "multimodal" && (s.legs || []).length > 1) || d4.shipments[0];
     _where = "shipment editor " + sh.number;
     const html = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: d4.shipments, setShipments: () => {}, contacts: d4.contacts, lots: d4.lots, orders: d4.orders, pos: d4.pos, initialSelectedNumber: sh.number }));
@@ -160,7 +161,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
   } catch (e) { failed++; console.log("  \u2717 shipment editor layout —", (e.message || "").slice(0, 120)); } }
 // v6.99.57 (A-PK-1): the packing-list window renders with its "Add additional items" button
 { try { const POmod = require(path.resolve("./src/PurchaseOrders"));
-    const d3 = JSON.parse(fs.readFileSync("/mnt/user-data/uploads/marianna-erp_v6_99_37_schema-v2_2026-09-17T08-49-45.json", "utf8"));
+    const d3 = JSON.parse(fs.readFileSync(file, "utf8"));
     const po = (d3.pos || []).find((p) => p.status === "Confirmed");
     const html = renderToStaticMarkup(React.createElement(POmod.default, { pos: d3.pos, setPOs: () => {}, contacts: d3.contacts, lots: d3.lots, setLots: () => {}, orders: d3.orders, setOrders: () => {}, shipments: d3.shipments, setShipments: () => {}, initialSelectedNumber: po.number, initialAction: "packing" }));
     const ok = html.includes("Add additional items") && html.includes("Producer") && html.includes("BOXES LOADED") && !html.includes("Add a size that was loaded");
@@ -214,6 +215,42 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     if (!bad.length) { passed++; console.log("  \u2713 backups: the folder card in 6 states, the banner in 10 cases, Settings with and without folder support"); }
     else { failed++; console.log("  \u2717 backups — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 backups —", (e.message || "").slice(0, 160)); } }
+
+// v6.99.72 (A-CU-3): the customs import — exact / confirm / not placed / done rows; the editor line with an exit; the invoice's CUSTOMS card
+{ try {
+    const CI = require(path.resolve("./src/customsImport.domain")); const C = require(path.resolve("./src/customsClearance.domain")); const CIM = require(path.resolve("./src/CustomsImportModal"));
+    const relX = fs.readFileSync(FX.fixture("CC529C_26PL445010003K5TB3_1.xml"), "utf8"), exitX = fs.readFileSync(FX.fixture("CC599C_26PL445010003K5TB3_1.xml"), "utf8"), sadX = fs.readFileSync(FX.fixture("SAD_25520.xml"), "utf8");
+    const bad = [];
+    const mk = (over = {}) => ({ id: 7001, number: "SHP-2026-0040", status: "Loaded", tradeDirection: "EXPORT", governingSoRef: "SO-2026-0090", soRefs: ["SO-2026-0090"], clientName: "Al Baraka For Import & Export", goods: [{ id: 1, cnCode: "08081080", qtyKg: 19422 }], documents: [], customsUnits: [],
+      legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-05-04", vehicles: [{ id: 11, truckPlate: "WRA 5749J", trailerPlate: "WRA 5925F", load: [{ goodsLineId: 1, qtyKg: 19422 }] }] }], ...over });
+    const invoices = [{ id: 5001, number: "FV2026/05/1", kind: "SALES", paymentStatus: "Issued", currency: "EUR", fxRate: 4.24, netAmount: 17479.8, vatAmount: 0, grossAmount: 17479.8, netPLN: 74114, grossPLN: 74114, vatRate: 0, issueDate: "2026-05-05", dueDate: "2026-06-04", counterparty: { name: "Al Baraka For Import & Export" }, links: [{ type: "SO", number: "SO-2026-0090" }], payments: [] }];
+    // 1. the import window: exact (release + exit in one batch), a proposal (plates on two shipments, no invoice), not placed, unknown, done
+    const two = [mk(), mk({ id: 7002, number: "SHP-2026-0041", governingSoRef: "SO-2026-0091", soRefs: ["SO-2026-0091"], legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-05-05", vehicles: [{ id: 21, truckPlate: "WRA5749J", trailerPlate: "WRA5925F" }] }] })];
+    const rows = CI.planImport([{ name: "CC529C.xml", text: relX }, { name: "CC599C.xml", text: exitX }, { name: "SAD.xml", text: sadX }, { name: "CC529C_other_invoice.xml", text: relX.replace(/FV2026\/05\/1/g, "FV2026/05/9").replace(/26PL445010003K5TB3/g, "26PL445010003K5TB9") }, { name: "other.xml", text: relX.replace(/WRA5749J\/WRA5925F/g, "ZZ00001/ZZ00002") }, { name: "note.pdf", text: "%PDF" }], two, invoices);
+    if (!rows[0].search.exact || !rows[1].search.exact || rows[3].search.exact || rows[3].search.candidates.length < 2) bad.push("planning: expected exact, exact(batch), -, proposal; got " + rows.map(r => (r.search.exact ? "exact" : r.search.candidates.length + " cand")).join(", "));
+    rows[2].done = "SHP-2026-0040 · WRA 5749J";
+    _where = "customs import";
+    const html = renderToStaticMarkup(React.createElement(CIM.CustomsImportView, { rows, setRows: () => {}, onAttach: () => {}, onClose: () => {}, onFiles: () => {}, result: "" }));
+    const want = ["Import customs files", "Release for export (CC529C)", "Exit confirmation (CC599C)", "Declaration copy (SAD)", "Not a customs file", ">Confirm<", "leave this file out", "Not placed", "No shipment carries the plates", "✓ Attached to SHP-2026-0040", "left the EU <strong>2026-05-12</strong>", "MRN <strong>26PL445010003K5TB3</strong>", ">Close<"];
+    want.forEach(w => { if (!html.includes(w)) bad.push("import window lacks " + JSON.stringify(w)); });
+    if (!/<button[^>]*#16A34A[^>]*>Attach \d+ files?<\/button>/.test(html)) bad.push("no green Attach button");
+    // 2. the editor: an Exited line shows the exit and offers Detach; the status list has the fifth status
+    const ShMod = require(path.resolve("./src/Shipments"));
+    let sh = C.applyCustomsFile(mk(), 11, C.parseCustomsFile(relX), "CC529C.xml", () => 90001); sh = C.applyCustomsFile(sh, 11, C.parseCustomsFile(exitX), "CC599C.xml", () => 90002);
+    _where = "shipment editor · customs line";
+    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: [sh], setShipments: () => {}, contacts: [], lots: [], orders: [{ number: "SO-2026-0090", client: { name: "Al Baraka For Import & Export" }, sellIncoterm: "CFR" }], pos: [], invoices, initialSelectedNumber: sh.number }));
+    [">Exited<", "left the EU 2026-05-12", "IT137103", ">Detach file<", "Import customs files"].forEach(w => { if (!eh.includes(w)) bad.push("editor lacks " + JSON.stringify(w)); });
+    if (!/<button[^>]*>Detach file<\/button>/.test(eh) || !/<button[^>]*#DC2626[^>]*>Detach file<\/button>/.test(eh)) bad.push("Detach is not the white/red remove button");
+    // 3. the invoice: the CUSTOMS card reads the shipment
+    const Inv = require(path.resolve("./src/Invoices")).default;
+    _where = "invoice detail · customs";
+    const ih = renderToStaticMarkup(React.createElement(Inv, { ...common, invoices, shipments: [sh], initialSelectedNumber: "FV2026/05/1" }));
+    ["CUSTOMS", "SHP-2026-0040", "exit confirmed 2026-05-12", "MRN 26PL445010003K5TB3"].forEach(w => { if (!ih.includes(w)) bad.push("invoice detail lacks " + JSON.stringify(w)); });
+    const ih2 = renderToStaticMarkup(React.createElement(Inv, { ...common, invoices, shipments: [C.applyCustomsFile(mk(), 11, C.parseCustomsFile(relX), "CC529C.xml", () => 90003)], initialSelectedNumber: "FV2026/05/1" }));
+    if (!ih2.includes("exit not confirmed yet")) bad.push("invoice detail: a release without exit must say so");
+    if (!bad.length) { passed++; console.log("  \u2713 customs files: the import window in 5 states, the Exited line with Detach, the invoice's CUSTOMS card"); }
+    else { failed++; console.log("  \u2717 customs files — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 customs files —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }

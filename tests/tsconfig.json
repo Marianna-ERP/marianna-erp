@@ -79,6 +79,7 @@
     "../src/claim.domain.ts",
     "../src/legacy.ts",
     "../src/format.ts",
-    "../src/autoBackup.domain.ts"
+    "../src/autoBackup.domain.ts",
+    "../src/customsImport.domain.ts"
   ]
 }

@@ -5,7 +5,7 @@
 const fs = require("fs"); const path = require("path");
 const B = (m) => require(path.join(__dirname, "build", m));
 const I = B("inventory.domain.js"); const Z = B("seasonOps.domain.js");
-const file = process.argv[2] || fs.readdirSync("/mnt/user-data/uploads").filter(f => /^marianna-erp_.*\.json$/.test(f)).map(f => "/mnt/user-data/uploads/" + f).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+const file = require("./fixtures.cjs").ownerDataFile(process.argv[2]);   // v6.99.71 (A-TF-1)
 const d = JSON.parse(fs.readFileSync(file, "utf8"));
 let checked = 0, drift = 0; const rows = [];
 (d.lots || []).forEach(lot => {

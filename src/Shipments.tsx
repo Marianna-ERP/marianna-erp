@@ -28,6 +28,7 @@ import PlanningSheet from "./PlanningSheet";   // v6.99.63 — ShipmentBoard (th
 import { isEstimatedLine } from "./so.domain";
 import { companyForTransportOrder } from "./useLocalStoredState";
 import { EditShipmentModal } from "./ShipmentEditor";
+import CustomsImportModal from "./CustomsImportModal";   // v6.99.72 (A-CU-3)
 import { CreateShipmentModal } from "./ShipmentCreate";
 import { ShipmentDetail } from "./ShipmentDetail";
 import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDocuments";
@@ -1298,6 +1299,7 @@ export default function Shipments({ archive = null,
     return p ? p.number : "";
   }, [loadPlans]);
   // v6.99.42: a shipment can be opened from another module ("Open" on the PO's supplier-truck box)
+  const [showCustomsImport, setShowCustomsImport] = useState(false);   // v6.99.72 (A-CU-3)
   const [editShipment, setEditShipment] = useState<any>(() => (initialSelectedNumber ? (extShipments || []).find((x: any) => String(x.number) === String(initialSelectedNumber)) || null : null));
   const [printShipment, setPrintShipment] = useState(null);
   const [protocolShipment, setProtocolShipment] = useState<any>(null);
@@ -1771,7 +1773,7 @@ export default function Shipments({ archive = null,
             <div style={{ display: "inline-flex", border: "1px solid #CBD5E1", borderRadius: 8, overflow: "hidden" }}>
               {[["list", "List & detail"], ["board", "Weekly board"]].map(([k, l]) => <button key={k} onClick={() => setBoardView(k === "board")} style={{ padding: "4px 10px", border: "none", fontSize: 11.5, fontWeight: 800, cursor: "pointer", background: (k === "board") === boardView ? "#0F172A" : "#fff", color: (k === "board") === boardView ? "#fff" : "#475569" }}>{l}</button>)}
             </div>
-      <div style={{ display: "flex", gap: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`shipments_${xlsStamp()}`, filtered, [{ key: "number", label: "Shipment" }, { key: "purpose", label: "Purpose" }, { key: "arrangedBy", label: "Arranged by" }, { key: "mode", label: "Mode" }, { key: "status", label: "Status" }, { key: "poRefs", label: "POs", fmt: (v: any) => (v || []).join(", ") }, { key: "soRefs", label: "SOs", fmt: (v: any) => (v || []).join(", ") }, { key: "legs", label: "Units", fmt: (v: any) => (v || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => `${u.truckPlate || u.containerNumber || "unit"} ${Math.round(Number(u.qtyKg) || 0)} kg${u.loadedAt ? " loaded " + u.loadedAt : ""}`)).join(" | ") }, { key: "actualLoadingDate", label: "Loaded" }, { key: "actualDeliveryDate", label: "Delivered" }, { key: "costs", label: "Costs PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.amountPLN) || 0), 0) }, { key: "billingStatus", label: "Billing" }], "Shipments")} title="v6.99.0: exports the rows as filtered">Export file (Excel)</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
+      <div style={{ display: "flex", gap: 8 }}><ActionButton action="importCsv" label="Import customs files" title="v6.99.72 (A-CU-3): drop the agent's files — release (CC529C), exit confirmation (CC599C), SAD copy — each finds its truck" onClick={() => setShowCustomsImport(true)} /><SmallButton onClick={() => exportRowsToXlsx(`shipments_${xlsStamp()}`, filtered, [{ key: "number", label: "Shipment" }, { key: "purpose", label: "Purpose" }, { key: "arrangedBy", label: "Arranged by" }, { key: "mode", label: "Mode" }, { key: "status", label: "Status" }, { key: "poRefs", label: "POs", fmt: (v: any) => (v || []).join(", ") }, { key: "soRefs", label: "SOs", fmt: (v: any) => (v || []).join(", ") }, { key: "legs", label: "Units", fmt: (v: any) => (v || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => `${u.truckPlate || u.containerNumber || "unit"} ${Math.round(Number(u.qtyKg) || 0)} kg${u.loadedAt ? " loaded " + u.loadedAt : ""}`)).join(" | ") }, { key: "actualLoadingDate", label: "Loaded" }, { key: "actualDeliveryDate", label: "Delivered" }, { key: "costs", label: "Costs PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.amountPLN) || 0), 0) }, { key: "billingStatus", label: "Billing" }], "Shipments")} title="v6.99.0: exports the rows as filtered">Export file (Excel)</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
     </>} />   {/* v6.99.61 (A-HD-1) */}
     <div style={{ padding: "16px 28px 10px", borderBottom: "1px solid #EBEBEB", background: "#FAFAFA" }}>   {/* v6.99.61 (A-HD-2): full width, no cap */}
       <div>
@@ -1835,7 +1837,8 @@ export default function Shipments({ archive = null,
     </div>
 
     {showCreate && <CreateShipmentModal pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
-    {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} allShipmentsForCap={shipments} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
+    {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} allShipmentsForCap={shipments} invoices={extInvoices} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
+    {showCustomsImport && <CustomsImportModal shipments={shipments} invoices={extInvoices} onClose={() => setShowCustomsImport(false)} setShipments={(next: any[]) => { setShipments(() => next); notifySaved("customs files"); }} />}
     {protocolShipment && <LoadingProtocolModal
       shipment={protocolShipment}
       contacts={contacts}
