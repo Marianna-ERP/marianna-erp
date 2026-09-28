@@ -2519,3 +2519,52 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.72 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.73–75 — SHP-2026-0035 (owner 28 Sept): containers carry what their trucks load; dates exist; units follow their documents ══
+(function v69975(){
+  console.log("\n══ 78–80. v6.99.73–75: container cargo from its trucks · impossible dates named · trucks follow their goods, containers their booking ══");
+  const M = B("shipmentModel.domain.js"); const F = B("format.js"); const I = B("integrityCheck.js");
+  const fPath = FX.needFixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json", "the owner's 28 Sept file (SHP-2026-0035)"); if (!fPath) return;
+  const d = require(fPath); const sh = d.shipments.find(s => s.number === "SHP-2026-0035");
+  const [tr1, tr2] = sh.legs[0].vehicles, [c1, c2] = sh.legs[1].vehicles;
+  const kgOf = l => l.reduce((a, x) => a + Number(x.qtyKg), 0);
+  t("A-TO-7: each container carries its own truck's goods — 19 422 kg each, 38 844 together, never the whole shipment twice", () => {
+    const l1 = M.effectiveLoad(sh, c1), l2 = M.effectiveLoad(sh, c2);
+    eq(kgOf(l1), 19422); eq(kgOf(l2), 19422); eq(l1.map(a => a.goodsLineId).join(","), "3", "container 1 ← TR1: the Elise"); eq(l2.map(a => a.goodsLineId).sort().join(","), "1,2", "container 2 ← TR2: the Braeburn");
+    eq(kgOf(M.effectiveLoad(sh, c1)) + kgOf(M.effectiveLoad(sh, c2)), sh.goods.reduce((a, g) => a + g.qtyKg, 0), "containers add up to the goods");
+    eq(M.effectiveLoad(sh, tr1), tr1.load, "a truck's own load is returned as it is");
+    const split = JSON.parse(JSON.stringify(sh)); split.legs[1].vehicles[0].feeders = [{ fromUnitId: tr1.id, kg: 9711 }]; split.legs[1].vehicles[1].feeders = [{ fromUnitId: tr1.id, kg: 9711 }, { fromUnitId: tr2.id }];
+    eq(kgOf(M.effectiveLoad(split, split.legs[1].vehicles[0])), 9711, "a split feeder carries its split"); eq(Math.round(kgOf(M.effectiveLoad(split, split.legs[1].vehicles[1]))), 9711 + 19422);
+    eq(M.effectiveLoad(sh, { id: 1, feeders: [] }).length, 0, "no trucks, no cargo");
+  });
+  t("A-DT-1: 31 June does not exist — the date control refuses it and the check names the six stored on PO-2026-0041 and its lots", () => {
+    ok(F.isRealISODate("2026-06-30")); ok(!F.isRealISODate("2026-06-31")); ok(!F.isRealISODate("2026-02-29")); ok(F.isRealISODate("2028-02-29")); ok(F.isRealISODate("2026-07-04T10:00:00Z")); ok(!F.isRealISODate("30/06/2026"));
+    eq(F.daysInMonth(2026, 6), 30); eq(F.daysInMonth(2026, 2), 28);
+    const r = I.checkIntegrity({ contacts: d.contacts, pos: d.pos, lots: d.lots, orders: d.orders, shipments: d.shipments, warehouseInvoices: [], operationalCosts: [], creditNotes: [], invoices: d.invoices || [], financeNotes: [], claims: d.claims || [], loadProtocols: [] });
+    const x = r.issues.filter(i => i.code === "IMPOSSIBLE_DATE"); eq(x.length, 6); ok(x.every(i => i.severity === "error"));
+    eq(x.map(i => i.entity).sort().join(","), "LOT-2026-0122,LOT-2026-0122,LOT-2026-0123,LOT-2026-0123,PO-2026-0041,PO-2026-0041");
+    const m = FX.needFixture("marianna-erp_MERGED_2026-09-25.json"); if (m) { const d2 = require(m); eq(I.checkIntegrity({ contacts: d2.contacts, pos: d2.pos, lots: d2.lots, orders: d2.orders, shipments: d2.shipments, invoices: d2.invoices || [] }).issues.filter(i => i.code === "IMPOSSIBLE_DATE").length, 0, "the merged file has none"); }
+  });
+  t("A-UN-1: each truck follows ITS goods — TR1's Elise loads at Grójecki (PO-0042), TR2's Braeburn at Białski (PO-0041): both named as swapped", () => {
+    const n1 = M.truckPlaceNote(sh, tr1, d.pos, d.lots), n2 = M.truckPlaceNote(sh, tr2, d.pos, d.lots);
+    eq(n1.proposal.ref, "PO-2026-0042"); ok(/GRÓJECKI/.test(n1.proposal.text)); eq(n1.proposal.date, "2026-06-29"); ok(n1.mismatch, "TR1 is sent to Białski");
+    eq(n2.proposal.ref, "PO-2026-0041"); ok(/BIALSKI/.test(n2.proposal.text)); ok(n2.mismatch, "TR2 is sent to Grójecki"); ok(!F.isRealISODate(n2.proposal.date), "PO-0041's 31 June is never proposed");
+    const fixed = { ...tr1, pickupLocationId: n1.proposal.id, pickupText: n1.proposal.text }; eq(M.truckPlaceNote(sh, fixed, d.pos, d.lots).mismatch, null, "on its goods' place: nothing to say");
+    const both = { ...tr1, load: [{ goodsLineId: 1, qtyKg: 5382 }, { goodsLineId: 3, qtyKg: 10000 }] }; const nb = M.truckPlaceNote(sh, both, d.pos, d.lots);
+    ok(nb.twoPlaces); eq(nb.proposal, null, "two places: none is chosen for the user"); eq(nb.places.length, 2);
+    eq(M.truckPlaceNote(sh, { ...tr1, load: [] }, d.pos, d.lots).places.length, 0, "no load, no proposal");
+  });
+  t("A-UN-2/3: the containers take the booking's POL, POD, ETD, ETA where they have none; a different POD is named, never overwritten", () => {
+    const f = M.fillFromBooking(sh); const [f1, f2] = f.legs[1].vehicles;
+    eq(f1.plannedLoadingDate, "2026-07-04", "container 1 gets the ETD it lacked"); eq(f1.deliveryText, "Damietta Port", "what was typed stays");
+    eq(f2.deliveryText, "Gdańsk Port", "container 2 gets the booking's POD it lacked"); eq(f2.deliveryLocationId, 6);
+    eq(M.containerPlaceNote(f, f1).pod, "Gdańsk Port", "container 1 discharging at Damietta against a booking for Gdańsk is named"); eq(M.containerPlaceNote(f, f2).pod, null);
+    eq(M.fillFromBooking(f), f, "a second pass changes nothing"); eq(f.legs[0], sh.legs[0], "the road leg is not touched");
+    const legs = M.followBookingPlace(f.legs, "pod", { id: 6, name: "Gdańsk Port" }, { id: 126, name: "Damietta Port" });
+    eq(legs[1].vehicles[1].deliveryText, "Damietta Port", "on the old port → follows"); eq(legs[1].vehicles[0].deliveryText, "Damietta Port", "already there → stays");
+    eq(M.unitGaps(sh.legs[1].vehicles[0]).join(","), "loading date", "container 1 lacked only its loading date"); eq(M.unitGaps(f1).length, 0);
+    eq(M.unitGaps({}).join(","), "pickup place,delivery place,loading date,delivery date");
+  });
+  console.log("v6.99.75 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

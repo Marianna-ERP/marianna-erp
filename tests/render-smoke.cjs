@@ -252,6 +252,40 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     else { failed++; console.log("  \u2717 customs files — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 customs files —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
+// v6.99.73–75 (A-TO-7, A-DT-1, A-UN): SHP-2026-0035 from the owner's 28 Sept file — the sea order's cargo, the legs box, the editor
+{ try {
+    const p35 = FX.fixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json"); if (!p35) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(p35, "utf8")); const sh = d9.shipments.find(x => x.number === "SHP-2026-0035"); const bad = [];
+    const SD = require(path.resolve("./src/ShipmentDocuments")); const txt = h => h.replace(/<\/(td|th)>/g, " | ").replace(/<\/tr>/g, "\n").replace(/<[^>]+>/g, "");
+    _where = "SHP-2026-0035 sea order";
+    const sea = txt(renderToStaticMarkup(React.createElement(SD.TransportOrderDocument, { shipment: sh, contacts: d9.contacts, providerId: sh.bookings[0].forwarderId, legIds: ["2"], orders: d9.orders, pos: d9.pos, packagingTypes: d9.packagingTypes || [] })));
+    const rows = sea.split("\n").filter(l => /^unit \d/.test(l.trim()) || /^Total/.test(l.trim()));
+    const cell = (r, p, g) => new RegExp(`≈\\s${p}\\s\\|\\s≈\\s${g.replace(" ", "\\s")}\\s`).test(r.replace(/[\u00a0\u202f]/g, " "));   // pl-PL groups with a no-break space
+    if (!(rows.length === 3 && cell(rows[0], "21", "22 039") && cell(rows[1], "21", "22 039") && cell(rows[2], "42", "44 077"))) bad.push("sea cargo: " + rows.join(" // "));
+    _where = "SHP-2026-0035 print dialog";
+    const box = (pid) => { const h = renderToStaticMarkup(React.createElement(SD.TransportOrderPrintModal, { shipment: sh, contacts: d9.contacts, orders: d9.orders, pos: d9.pos, packagingTypes: d9.packagingTypes || [], onClose: () => {}, onMarkSent: () => {}, onEmail: () => {} }));
+      const i = h.indexOf("LEGS ON THIS ORDER"); return txt(h.slice(i, i + 3000)); };
+    const b1 = box(); if (!/Leg #1 · Road/.test(b1)) bad.push("legs box lacks leg 1"); if (!/Venice cold store/.test(b1)) bad.push("legs box: leg 1 does not end at the truck's delivery place");
+    { // the leg's own start must not decide what the box says: blank it, and the chosen carrier's truck still names its place
+      const cp = JSON.parse(JSON.stringify(sh)); cp.legs[0].fromLocationId = null; const pid = require(path.resolve("./src/Shipments")).providerIdsForShipment(cp)[0];
+      const h = renderToStaticMarkup(React.createElement(SD.TransportOrderPrintModal, { shipment: cp, contacts: d9.contacts, orders: d9.orders, pos: d9.pos, packagingTypes: d9.packagingTypes || [], onClose: () => {}, onMarkSent: () => {}, onEmail: () => {} }));
+      const i = h.indexOf("LEGS ON THIS ORDER"); const t1 = txt(h.slice(i, i + 3000)); const truck = cp.legs[0].vehicles.find(u => String(u.carrierId) === String(pid));
+      if (!truck || !t1.includes(String(truck.pickupText).slice(0, 20))) bad.push("legs box does not name the chosen carrier's own loading place (" + (truck ? truck.pickupText : "no truck for " + pid) + ")"); }
+    { const DI = require(path.resolve("./src/DateInput")); if (DI.dmyToIso("31/06/2026") !== null || DI.dmyToIso("29/02/2026") !== null || DI.dmyToIso("30/06/2026") !== "2026-06-30" || DI.dmyToIso("29/02/2028") !== "2028-02-29") bad.push("A-DT-1: the date control still accepts a day that does not exist"); }
+    _where = "SHP-2026-0035 editor";
+    const ShMod = require(path.resolve("./src/Shipments"));
+    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: d9.shipments, setShipments: () => {}, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, invoices: d9.invoices || [], initialSelectedNumber: "SHP-2026-0035" }));
+    const et = eh.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").replace(/&#x27;/g, "'");
+    [["its goods are PO-2026-0042's", "TR1's swap"], ["its goods are PO-2026-0041's", "TR2's swap"], ["SO-2026-0025 delivers to Damietta Port — this booking discharges at Gdańsk Port", "POD vs SO"], ["the booking discharges at Gdańsk Port", "container 1 vs booking"], ["Use it", "one-click fix"], ["↺ booking", "back to the booking"]].forEach(([w, why]) => { if (!et.includes(w)) bad.push("editor lacks " + why + ": " + JSON.stringify(w)); });
+    const rings = (eh.match(/box-shadow:0 0 0 2px #FCA5A5/g) || []).length;
+    // opened, the containers took the booking's missing ETD and POD; what stays empty on SHP-0035 is outlined (it has no gaps left but the truck times) — and a unit with gaps is outlined
+    const gapSh = JSON.parse(JSON.stringify(sh)); gapSh.legs[0].vehicles[1].plannedDeliveryDate = ""; gapSh.legs[0].vehicles[1].deliveryLocationId = null; gapSh.legs[0].vehicles[1].deliveryText = ""; gapSh.bookings[0].eta = "";
+    const gh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: [gapSh], setShipments: () => {}, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, invoices: [], initialSelectedNumber: "SHP-2026-0035" }));
+    const gr = (gh.match(/box-shadow:0 0 0 2px #FCA5A5/g) || []).length; if (gr < rings + 3) bad.push(`red rings: ${rings} on the file, ${gr} with 3 more gaps`);
+    if (!bad.length) { passed++; console.log(`  \u2713 SHP-2026-0035: containers 21 + 21 pallets (was 42 + 42); the legs box follows the carrier; the editor names both swapped trucks, the POD against the SO, and rings what is empty (${rings} → ${gr})`); }
+    else { failed++; console.log("  \u2717 SHP-2026-0035 — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 SHP-2026-0035 —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
   else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }

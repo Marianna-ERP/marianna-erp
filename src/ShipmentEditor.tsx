@@ -6,6 +6,8 @@ import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow
 import { SmallButton, useConfirm } from "./ui";
 import { derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
 import { clearanceLinesFor, crossCheckClearance, parseCustomsFile, findClearanceHome, applyCustomsFile, detachClearance, CLEARANCE_STATUSES, CUSTOMS_FILE_LABEL } from "./customsClearance.domain";   // v6.99.72 (A-CU-3)
+import { truckPlaceNote, fillFromBooking, followBookingPlace, containerPlaceNote, unitGaps } from "./shipmentModel.domain";   // v6.99.75 (A-UN)
+import { isRealISODate } from "./format";
 import { containerRecorder, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, cutOffWarnings, stuffingViolations, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, carrierOfUnit, followBookingDates } from "./shipmentModel.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { inspectLink } from "./docLinks.domain";
@@ -31,8 +33,41 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
   const [draft, setDraft] = useState(() => {
     const d = withStandardDocs(JSON.parse(JSON.stringify(shipment)));
     d.customs = normalizeCustoms(d.customs || d.customsClearance); // BP-27 string→object migration on open
-    return d;
+    // v6.99.75 (A-UN-1/2/3, owner 28 Sept): what the documents already know fills what is EMPTY — never what was typed.
+    // Done at opening, so it belongs to the editor's starting point (the leave-guard does not count it as a change).
+    return proposeEmpties(d);
   });
+  /** v6.99.75 (A-UN-3): the ports the documents name — POD = the SO's destination when it is a port (as the POD picker
+   *  already showed, now also stored); POL/POD by incoterm as before (H-12). */
+  function docPorts(d: any) {
+    const so = (orders || []).find((o: any) => String(o.number) === String(d.governingSoRef || (d.soRefs || [])[0])) || null;
+    const po = (pos || []).find((pp: any) => (d.poRefs || []).includes(pp.number)) || null;
+    const doc: any = so || po; const ic = String((so ? so.sellIncoterm : po?.buyIncoterm) || "").toUpperCase();
+    const named: any = doc ? locationById(doc.destinationLocationId, contacts || []) : null;
+    const isPort = (l: any) => !!l && (l.legacyType === "PORT" || String(l.type) === "Port");
+    const soDest: any = so ? locationById(so.destinationLocationId, contacts || []) : null;
+    const pol = isPort(named) && ["FOB", "FCA", "FAS"].includes(ic) ? named : null;
+    const pod = isPort(named) && ["CFR", "CIF", "CPT", "CIP", "DAP", "DPU", "DDP"].includes(ic) ? named : (isPort(soDest) ? soDest : null);
+    return { so, pol: pol ? { id: pol.id, name: pol.name } : null, pod: pod ? { id: pod.id, name: pod.name } : null, soPort: isPort(soDest) ? { id: soDest.id, name: soDest.name } : null };
+  }
+  function proposeEmpties(d0: any) {
+    let d = d0; const ports = docPorts(d);
+    if ((d.bookings || []).length) {
+      const b0 = { ...d.bookings[0] };
+      if (b0.podId == null && !String(b0.pod || "").trim() && ports.pod) { b0.podId = ports.pod.id; b0.pod = ports.pod.name; }
+      if (b0.polId == null && !String(b0.pol || "").trim() && ports.pol) { b0.polId = ports.pol.id; b0.pol = ports.pol.name; }
+      if (JSON.stringify(b0) !== JSON.stringify(d.bookings[0])) d = { ...d, bookings: [b0, ...d.bookings.slice(1)] };
+    }
+    d = fillFromBooking(d);
+    const soLoad = String(ports.so?.expectedLoadingDate || "");
+    let touched = false;
+    const legs = (d.legs || []).map((l: any) => String(l.mode || "") !== "Road" ? l : { ...l, vehicles: (l.vehicles || []).map((u: any) => {
+      const n = truckPlaceNote(d, u, pos || [], lots || []); const x = { ...u };
+      if (n.proposal && x.pickupLocationId == null && !String(x.pickupText || "").trim()) { x.pickupLocationId = n.proposal.id; x.pickupText = n.proposal.text; }
+      if (!x.plannedLoadingDate) { const dt = n.proposal && isRealISODate(n.proposal.date) ? n.proposal.date : (isRealISODate(soLoad) ? soLoad : ""); if (dt) x.plannedLoadingDate = dt; }
+      if (JSON.stringify(x) !== JSON.stringify(u)) touched = true; return x; }) });
+    return touched ? { ...d, legs } : d;
+  }
   // v6.99.58 (A-US): the Save button and the leave-guard call the SAME function — so every warning and gate still applies
   function saveShipmentDraft() {
           // v6.99.44 (L-6, owner): a unit with no price or no carrier is named before saving — a warning, never a block (the price can arrive after the booking)
@@ -209,6 +244,12 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
       if (legIdx === 0) {
         const load = (prev.goods || []).map((g: any) => ({ goodsLineId: g.id, qtyKg: allocationRemaining(prev, g.id) })).filter((a: any) => a.qtyKg > 0);
         if (load.length) { unit.load = load; }   // v6.99.8: NOT manual — it takes the remainder now and re-derives with the goods later
+        // v6.99.75 (A-UN-1, owner): the truck loads where ITS goods are — their PO's place and loading date, not the shipment's first PO
+        const n = truckPlaceNote(prev, unit, pos || [], lots || []);
+        if (n.proposal) { unit.pickupLocationId = n.proposal.id; unit.pickupText = n.proposal.text; if (isRealISODate(n.proposal.date)) unit.plannedLoadingDate = n.proposal.date; }
+        else if (n.twoPlaces) { unit.pickupLocationId = null; unit.pickupText = ""; }
+        // in a multimodal shipment the truck drives to the port of loading, never to the SO's destination
+        if ((prev.legs || []).some((l: any, k: number) => k > 0 && ["sea", "air", "rail"].includes(String(l.mode || "").toLowerCase()))) { const b = (prev.bookings || [])[0] || {}; unit.deliveryLocationId = b.polId ?? null; unit.deliveryText = b.pol || ""; }
       }
       return { ...prev, legs: (prev.legs || []).map((leg, i) => i === legIdx ? { ...leg, vehicles: [...transportUnitsForLeg(leg), unit] } : leg) };
     });
@@ -407,10 +448,17 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
           // v6.85.0 (D5, owner ruling): the BOOKING exists before any container number does —
           // booking no., cut-off, ETD, ETA, POL/POD, containers planned. Vessel/voyage optional.
           const b = (draft.bookings || [])[0] || null;
-          const sb = (k: string, v: any) => setDraft((d: any) => { const cur = (d.bookings || [])[0] || blankBooking(nextId());
+          const sb = (k: string, v: any) => setDraft((d: any) => { const cur = (d.bookings || [])[0] || (() => { const nb: any = blankBooking(nextId()); const pp = docPorts(d); if (pp.pod) { nb.podId = pp.pod.id; nb.pod = pp.pod.name; } if (pp.pol) { nb.polId = pp.pol.id; nb.pol = pp.pol.name; } return nb; })();
             let legs = d.legs;
             if (k === "etd" || k === "eta") legs = followBookingDates(d.legs, k as any, cur[k], v);   // v6.99.62 (A-SE-1, owner)
             return { ...d, legs, bookings: [{ ...cur, [k]: v }, ...((d.bookings || []).slice(1))] }; });
+          // v6.99.75 (A-UN-2): a port chosen on the booking reaches every container still empty or on the old port
+          const sbPort = (key: "pol" | "pod", r: any) => setDraft((d: any) => { const cur: any = (d.bookings || [])[0] || blankBooking(nextId());
+            const prev = key === "pol" ? { id: cur.polId, name: cur.pol } : { id: cur.podId, name: cur.pod };
+            const nb = key === "pol" ? { ...cur, pol: r.name, polId: r.id } : { ...cur, pod: r.name, podId: r.id };
+            return { ...d, legs: followBookingPlace(d.legs, key, prev, { id: r.id, name: r.name }), bookings: [nb, ...((d.bookings || []).slice(1))] }; });
+          const redOn = !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || ""));
+          const ring = (empty: boolean) => (empty && redOn) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : undefined;   // v6.99.75 (A-UN-4): what the order still needs
           return (
             <Card>
               <SectionTitle>Booking (sea / air / rail) — one place for the booking</SectionTitle>
@@ -418,8 +466,8 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                 <div><Lbl>Forwarder</Lbl><Sel value={b?.forwarderId ?? ""} onChange={e => sb("forwarderId", e.target.value || null)} title="v6.99.8: one forwarder per booking — every container on it is carried by him; the sea freight line names him"><option value="">— forwarder —</option>{(contacts || []).filter((c: any) => ["Forwarder", "Carrier", "ShippingLine"].includes(c.type) || (c.roles || []).some((r: string) => ["Forwarder", "Carrier", "ShippingLine"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}</Sel></div>
                 <div><Lbl>Booking no.</Lbl><Inp value={b?.number || ""} onChange={e => sb("number", e.target.value)} placeholder="from the forwarder" /></div>
                 <div><Lbl>Cut-off</Lbl><Inp type="date" value={b?.cutOff || ""} onChange={e => sb("cutOff", e.target.value)} /></div>
-                <div><Lbl>ETD</Lbl><Inp type="date" value={b?.etd || ""} onChange={e => sb("etd", e.target.value)} /></div>
-                <div><Lbl>ETA</Lbl><Inp type="date" value={b?.eta || ""} onChange={e => sb("eta", e.target.value)} /></div>
+                <div><Lbl>ETD</Lbl><div style={ring(!b?.etd)}><Inp type="date" value={b?.etd || ""} onChange={e => sb("etd", e.target.value)} /></div></div>
+                <div><Lbl>ETA</Lbl><div style={ring(!b?.eta)}><Inp type="date" value={b?.eta || ""} onChange={e => sb("eta", e.target.value)} /></div></div>
               </div>
               {/* v6.99.59 (A-BK-2, owner): warnings, not blocks — a late vessel is a fact to act on */}
               {(() => { const so = (orders || []).find((o: any) => String(o.number) === String(draft.governingSoRef || (draft.soRefs || [])[0])); const due = String(so?.expectedDeliveryDate || "").slice(0, 10);
@@ -442,8 +490,10 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   const srcLbl = (which: any) => which && doc ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {doc.number} ({ic})</span> : null;
                   const bp = { polDoc, podDoc, srcLbl };
                   return <>
-                <div><Lbl>POL{bp.srcLbl(bp.polDoc)}</Lbl><LocationPicker value={b?.polId ?? b?.pol ?? (bp.polDoc?.id ?? "")} contacts={contacts} kinds={["PORT"]} placeholder="— port of loading —" onChange={(r: any) => { sb("pol", r.name); sb("polId", r.id); }} /></div>
-                <div><Lbl>POD{bp.srcLbl(bp.podDoc)}</Lbl><LocationPicker value={b?.podId ?? b?.pod ?? (bp.podDoc?.id ?? (() => { const so = (orders || []).find((o: any) => String(o.number) === String(draft.governingSoRef || (draft.soRefs || [])[0])); const dl = so ? locationById(so.destinationLocationId, contacts || []) : null; return dl && dl.legacyType === "PORT" ? dl.name : ""; })())} contacts={contacts} kinds={["PORT"]} placeholder="— port of discharge —" title="defaults from the sales order's destination when it is a port" onChange={(r: any) => { sb("pod", r.name); sb("podId", r.id); }} /></div>
+                <div><Lbl>POL{bp.srcLbl(bp.polDoc)}</Lbl><div style={ring(b?.polId == null && !b?.pol)}><LocationPicker value={b?.polId ?? b?.pol ?? (bp.polDoc?.id ?? "")} contacts={contacts} kinds={["PORT"]} placeholder="— port of loading —" onChange={(r: any) => sbPort("pol", r)} /></div></div>
+                <div><Lbl>POD{bp.srcLbl(bp.podDoc)}</Lbl><div style={ring(b?.podId == null && !b?.pod)}><LocationPicker value={b?.podId ?? b?.pod ?? ""} contacts={contacts} kinds={["PORT"]} placeholder="— port of discharge —" title="v6.99.75 (A-UN-3): stored from the sales order's destination when it is a port" onChange={(r: any) => sbPort("pod", r)} /></div>
+                  {(() => { const sp = docPorts(draft).soPort; const off = sp && (b?.podId != null || b?.pod) && !(b?.podId != null && String(b.podId) === String(sp.id)) && String(b?.pod || "").trim().toLowerCase() !== String(sp.name || "").trim().toLowerCase();
+                    return off ? <div style={{ marginTop: 4, fontSize: 11, fontWeight: 700, color: "#B45309" }}>⚠ {docPorts(draft).so?.number} delivers to {sp!.name} — this booking discharges at {b?.pod || "another port"}</div> : null; })()}</div>
                   </>;
                 })()}
                 <div><Lbl>Containers planned</Lbl><Inp type="number" value={b?.containersPlanned ?? ""} onChange={e => sb("containersPlanned", parseNum(e.target.value, 0))} /></div>
@@ -552,10 +602,22 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   </div>}
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
                   {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
-                  <div style={{ gridColumn: "1 / 4" }}><Lbl>Loading place{(() => { const pr = unitProposals(draft); return (pr.loadId != null && String(u.pickupLocationId) === String(pr.loadId)) ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {pr.from}</span> : null; })()}</Lbl><LocationPicker value={u.pickupLocationId ?? u.pickupText ?? ""} contacts={contacts} placeholder={leg.fromCustom || leg.fromText || "— pickup location —"} onChange={(r: any) => { updateVehicle(i, ui, "pickupLocationId", r.id); updateVehicle(i, ui, "pickupText", r.name); }} title="v6.99.10: one location list — printed on the transport order" /></div>
-                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected loading date{uMode !== "Road" && (draft.bookings || [])[0]?.etd ? (u.loadDateManual && String(u.plannedLoadingDate || "") !== String((draft.bookings || [])[0].etd) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETD {formatDMY((draft.bookings || [])[0].etd)} <button onClick={() => { updateVehicle(i, ui, "plannedLoadingDate", (draft.bookings || [])[0].etd); updateVehicle(i, ui, "loadDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedLoadingDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "loadDateManual", true); }} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
-                  <div style={{ gridColumn: "1 / 4" }}><Lbl>Delivery place{(() => { const pr = unitProposals(draft); return (pr.delId != null && String(u.deliveryLocationId) === String(pr.delId)) ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {pr.from}</span> : null; })()}</Lbl><LocationPicker value={u.deliveryLocationId ?? u.deliveryText ?? ""} contacts={contacts} placeholder={leg.toCustom || leg.toText || "— delivery location —"} onChange={(r: any) => { updateVehicle(i, ui, "deliveryLocationId", r.id); updateVehicle(i, ui, "deliveryText", r.name); }} /></div>
-                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected delivery date{uMode !== "Road" && (draft.bookings || [])[0]?.eta ? (u.deliveryDateManual && String(u.plannedDeliveryDate || "") !== String((draft.bookings || [])[0].eta) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETA {formatDMY((draft.bookings || [])[0].eta)} <button onClick={() => { updateVehicle(i, ui, "plannedDeliveryDate", (draft.bookings || [])[0].eta); updateVehicle(i, ui, "deliveryDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4 }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedDeliveryDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "deliveryDateManual", true); }} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
+                  {(() => {   // v6.99.75 (A-UN-1/2/4): where this unit loads — from ITS goods (truck) or its booking (container); red while empty
+                    const tn = uMode === "Road" ? truckPlaceNote(draft, u, pos || [], lots || []) : null; const cn = uMode !== "Road" ? containerPlaceNote(draft, u) : null;
+                    const gaps = unitGaps(u); const red = !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || "")); const ringU = (k: string) => (red && (gaps as string[]).includes(k)) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : undefined;
+                    const b0 = (draft.bookings || [])[0] || null; const onBookingPol = cn && !cn.pol && b0 && (u.pickupLocationId != null || u.pickupText);
+                    const note = (txt: string, fix?: () => void, fixLbl?: string) => <div style={{ marginTop: 3, fontSize: 11, fontWeight: 700, color: "#B45309" }}>⚠ {txt}{fix && <> <button onClick={fix} style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11, fontWeight: 700 }}>{fixLbl}</button></>}</div>;
+                    return <div style={{ gridColumn: "1 / 4" }}><Lbl>Loading place{tn?.proposal && !tn.mismatch && (u.pickupLocationId != null || u.pickupText) ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {tn.proposal.ref}</span> : onBookingPol ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span> : null}</Lbl>
+                      <div style={ringU("pickup place")}><LocationPicker value={u.pickupLocationId ?? u.pickupText ?? ""} contacts={contacts} placeholder={leg.fromCustom || leg.fromText || "— pickup location —"} onChange={(r: any) => { updateVehicle(i, ui, "pickupLocationId", r.id); updateVehicle(i, ui, "pickupText", r.name); }} title="v6.99.10: one location list — printed on the transport order" /></div>
+                      {tn?.mismatch && note(`its goods are ${tn.mismatch.ref}'s — they load at ${tn.mismatch.text}`, () => { updateVehicle(i, ui, "pickupLocationId", tn.mismatch!.id); updateVehicle(i, ui, "pickupText", tn.mismatch!.text); }, "Use it")}
+                      {tn?.twoPlaces && note(`goods from ${tn.places.length} places: ${tn.places.map(p => `${p.text} (${p.ref})`).join(" + ")} — split the truck, or name every stop on the order`)}
+                      {cn?.pol && note(`the booking loads at ${cn.pol}`, () => { updateVehicle(i, ui, "pickupLocationId", b0?.polId ?? null); updateVehicle(i, ui, "pickupText", b0?.pol || ""); }, "↺ booking")}
+                    </div>;
+                  })()}
+                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected loading date{uMode !== "Road" && (draft.bookings || [])[0]?.etd ? (u.loadDateManual && String(u.plannedLoadingDate || "") !== String((draft.bookings || [])[0].etd) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETD {formatDMY((draft.bookings || [])[0].etd)} <button onClick={() => { updateVehicle(i, ui, "plannedLoadingDate", (draft.bookings || [])[0].etd); updateVehicle(i, ui, "loadDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4, ...((!u.plannedLoadingDate && !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || ""))) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : {}) }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedLoadingDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "loadDateManual", true); }} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
+                  <div style={{ gridColumn: "1 / 4" }}><Lbl>Delivery place{(() => { const pr = unitProposals(draft); return (pr.delId != null && String(u.deliveryLocationId) === String(pr.delId)) ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {pr.from}</span> : null; })()}</Lbl><div style={(!(u.deliveryText || u.deliveryLocationId) && !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || ""))) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : undefined}><LocationPicker value={u.deliveryLocationId ?? u.deliveryText ?? ""} contacts={contacts} placeholder={leg.toCustom || leg.toText || "— delivery location —"} onChange={(r: any) => { updateVehicle(i, ui, "deliveryLocationId", r.id); updateVehicle(i, ui, "deliveryText", r.name); }} /></div>
+                    {uMode !== "Road" && (() => { const cn = containerPlaceNote(draft, u); const b0 = (draft.bookings || [])[0]; return cn.pod ? <div style={{ marginTop: 3, fontSize: 11, fontWeight: 700, color: "#B45309" }}>⚠ the booking discharges at {cn.pod} <button onClick={() => { updateVehicle(i, ui, "deliveryLocationId", b0?.podId ?? null); updateVehicle(i, ui, "deliveryText", b0?.pod || ""); }} style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11, fontWeight: 700 }}>↺ booking</button></div> : null; })()}</div>
+                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected delivery date{uMode !== "Road" && (draft.bookings || [])[0]?.eta ? (u.deliveryDateManual && String(u.plannedDeliveryDate || "") !== String((draft.bookings || [])[0].eta) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETA {formatDMY((draft.bookings || [])[0].eta)} <button onClick={() => { updateVehicle(i, ui, "plannedDeliveryDate", (draft.bookings || [])[0].eta); updateVehicle(i, ui, "deliveryDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4, ...((!u.plannedDeliveryDate && !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || ""))) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : {}) }}><Inp type="date" value={u.plannedDeliveryDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedDeliveryDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "deliveryDateManual", true); }} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div></div>
                 </div>
                 {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>

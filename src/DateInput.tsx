@@ -1,4 +1,5 @@
 import React from "react";
+import { daysInMonth } from "./format";
 // ── v6.81.0 (D-52): dd/mm/yyyy DATE INPUT ─────────────────────────────────────
 // Every value the app PRINTS was already dd/mm/yyyy (formatDMY). What showed
 // mm/dd/yyyy were the native <input type="date"> fields: Chrome formats those in
@@ -9,11 +10,11 @@ function isoToDmy(iso: any): string {
   const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
 }
-function dmyToIso(txt: string): string | null {
+export function dmyToIso(txt: string): string | null {
   const m = String(txt || "").trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
   if (!m) return null;
   const d = Number(m[1]), mo = Number(m[2]), y = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  if (mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo)) return null;   // v6.99.74 (A-DT-1): 31/06 does not exist
   return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 // v6.99.39 (D-3, owner): the ONE date control. Every date in the system goes through it with the same rules —

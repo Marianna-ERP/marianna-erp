@@ -134,6 +134,28 @@ default); the PO shows only a provisional chip.
 
 ---
 
+### What the units take from the documents (v6.99.73–75)
+
+- **A truck loads where its goods are.** Each truck's loading place and date come from
+  the PO of the goods it carries (on EXW/FCA the producer's site and the PO's loading
+  date), never from the shipment's first PO. A truck sent somewhere else shows an amber
+  note with **Use it**; a truck carrying goods from two places is named, and you split
+  it or list every stop on the order. In a multimodal shipment a new truck drives to
+  the booking's POL.
+- **Containers sail on their booking.** Every container takes the booking's POL, POD,
+  ETD and ETA where it has none — also containers added before the booking was
+  complete. What you typed stays; a container off its booking's port shows
+  **↺ booking**. Changing the booking's port moves the containers still on the old one.
+- **The POD comes from the sales order** when the SO's destination is a port — now
+  stored, not only shown. A booking discharging elsewhere shows *SO-… delivers to …*.
+- **Red outline = the transport order still needs it**: each unit's loading place and
+  date, delivery place and date, and the booking's POL, POD, ETD, ETA (the same rule
+  that holds back *Mark sent*). Nothing is blocked.
+- **The sea order prints each container's own cargo** — what its trucks put in it.
+  Before v6.99.73 every container showed the whole shipment.
+- **A date must exist.** The date field refuses 31/06 or 29/02 in a normal year;
+  Settings → integrity check lists any such date already stored.
+
 ### Customs files (v6.99.72)
 
 The agent sends two e-mails per truck: the **release for export (CC529C)** on

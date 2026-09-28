@@ -20,3 +20,13 @@ export function fmtNum(n: any): string {
 export const S = (v: any) => String(v ?? "").trim();
 export const r2 = (v: number) => Math.round(v * 100) / 100;
 export const r0 = (v: number) => Math.round(v);
+
+// ── v6.99.74 (A-DT-1, owner 28 Sept): a date must exist. "31/06/2026" was stored as 2026-06-31 because the one date
+// control checked only 1–31 for the day; PO-2026-0041 and its two lots carried it. One rule, used by the control and the check.
+export function daysInMonth(year: number, month: number): number { return new Date(Date.UTC(year, month, 0)).getUTCDate(); }
+/** True for a real calendar day ("2026-06-30"), false for "2026-06-31" or "2026-02-30"; a trailing time is allowed. */
+export function isRealISODate(v: any): boolean {
+  const m = String(v ?? "").match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/); if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  return mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth(y, mo);
+}

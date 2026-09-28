@@ -434,3 +434,88 @@ export function followBookingDates(legs: any[], key: "etd" | "eta", prevValue: a
   return (legs || []).map((l: any) => !["sea", "air", "rail"].includes(String(l?.mode || "").toLowerCase()) ? l
     : { ...l, vehicles: (l.vehicles || []).map((u: any) => (u[flag] || (u[field] && String(u[field]) !== prev)) ? u : { ...u, [field]: newValue }) });
 }
+
+// ── v6.99.73 (A-TO-7, owner 28 Sept): a container carries what its trucks put in it ──────────────────────────────────
+// A container has no load of its own: its trucks fill it (feeders). The transport order read `u.load` only and, finding
+// nothing, printed ALL the shipment's goods on every container — SHP-2026-0035's two containers showed 42 pallets each
+// instead of 21. The effective load is the trucks' load, scaled by the split kg when a truck feeds more than one container.
+export function effectiveLoad(sh: any, u: any): Array<{ goodsLineId: any; qtyKg: number }> {
+  if ((u?.load || []).length) return u.load;
+  const fs = feedersOf(u); if (!fs.length) return [];
+  const acc = new Map<string, { goodsLineId: any; qtyKg: number }>();
+  fs.forEach(f => {
+    const t = findUnit(sh, f.fromUnitId); const tl = (t?.load || []).filter((a: any) => num(a.qtyKg) > 0); if (!tl.length) return;
+    const tKg = tl.reduce((s: number, a: any) => s + num(a.qtyKg), 0);
+    const share = num(f.kg) > 0 ? Math.min(1, num(f.kg) / tKg) : 1;
+    tl.forEach((a: any) => { const k = String(a.goodsLineId); const cur = acc.get(k) || { goodsLineId: a.goodsLineId, qtyKg: 0 }; cur.qtyKg += num(a.qtyKg) * share; acc.set(k, cur); });
+  });
+  return Array.from(acc.values()).map(x => ({ ...x, qtyKg: Math.round(x.qtyKg * 1000) / 1000 }));
+}
+
+// ── v6.99.75 (A-UN-4): the four facts a transport order needs on each unit — one rule for "Mark sent" and the red fields ──
+export function unitGaps(u: any): Array<"pickup place" | "delivery place" | "loading date" | "delivery date"> {
+  const out: any[] = [];
+  if (!(u?.pickupText || u?.pickupLocationId)) out.push("pickup place");
+  if (!(u?.deliveryText || u?.deliveryLocationId)) out.push("delivery place");
+  if (!u?.plannedLoadingDate) out.push("loading date");
+  if (!u?.plannedDeliveryDate) out.push("delivery date");
+  return out;
+}
+
+// ── v6.99.75 (A-UN-1, owner 28 Sept): a truck loads where ITS goods are ─────────────────────────────────────────────
+// Several POs on one SO: each truck follows the goods it carries, never the SO. A load line → its goods row → its PO:
+// on EXW / FCA the PO's named place is the producer's site and the PO's loading date is the day. Goods from stock load
+// at the lot's location. A truck whose goods come from two places is named, never silently given one of them.
+export interface LoadPlace { id: any; text: string; ref: string; date: string; }
+const samePlace = (aId: any, aText: any, bId: any, bText: any) => (aId != null && aId !== "" && bId != null && bId !== "") ? String(aId) === String(bId) : S(aText).toLowerCase() === S(bText).toLowerCase() && !!S(aText);
+export function truckLoadPlaces(sh: any, u: any, pos: any[] = [], lots: any[] = []): LoadPlace[] {
+  const out: LoadPlace[] = [];
+  (u?.load || []).filter((a: any) => num(a.qtyKg) > 0).forEach((a: any) => {
+    const g = (sh?.goods || []).find((x: any) => String(x.id) === String(a.goodsLineId)); if (!g) return;
+    const po = (pos || []).find((p: any) => String(p.number) === String(g.poRef)) || null;
+    const lot = (lots || []).find((l: any) => String(l.number) === String(g.lotRef)) || null;
+    let p: LoadPlace | null = null;
+    if (po && ["EXW", "FCA"].includes(S(po.buyIncoterm).toUpperCase()) && (po.destinationLocationId != null || S(po.destinationText))) p = { id: po.destinationLocationId ?? null, text: S(po.destinationText || po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate) };
+    else if (lot && (lot.locationId != null || S(lot.locationText))) p = { id: lot.locationId ?? null, text: S(lot.locationText), ref: S(lot.number), date: "" };
+    if (p && !out.some(q => samePlace(q.id, q.text, p!.id, p!.text))) out.push(p);
+  });
+  return out;
+}
+export interface TruckPlaceNote { places: LoadPlace[]; proposal: LoadPlace | null; mismatch: LoadPlace | null; twoPlaces: boolean; }
+export function truckPlaceNote(sh: any, u: any, pos: any[] = [], lots: any[] = []): TruckPlaceNote {
+  const places = truckLoadPlaces(sh, u, pos, lots);
+  const proposal = places.length === 1 ? places[0] : null;
+  const hasPickup = u?.pickupLocationId != null || !!S(u?.pickupText);
+  const mismatch = proposal && hasPickup && !samePlace(u.pickupLocationId, u.pickupText, proposal.id, proposal.text) ? proposal : null;
+  return { places, proposal, mismatch, twoPlaces: places.length > 1 };
+}
+
+// ── v6.99.75 (A-UN-2): containers sail on their booking — POL, POD, ETD, ETA fill every container that has none ──────
+export function bookingOf(sh: any, u: any): any | null { const bs = sh?.bookings || []; return bs.find((b: any) => String(b.id) === String(u?.bookingId)) || bs[0] || null; }
+const isSeaLike = (l: any) => ["sea", "air", "rail"].includes(S(l?.mode).toLowerCase());
+export function fillFromBooking(sh: any): any {
+  if (!(sh?.bookings || []).length) return sh;
+  let changed = false;
+  const legs = (sh.legs || []).map((l: any) => !isSeaLike(l) ? l : { ...l, vehicles: (l.vehicles || []).map((u: any) => {
+    const b = bookingOf(sh, u); if (!b) return u; const n = { ...u };
+    if (!S(n.plannedLoadingDate) && S(b.etd)) n.plannedLoadingDate = b.etd;
+    if (!S(n.plannedDeliveryDate) && S(b.eta)) n.plannedDeliveryDate = b.eta;
+    if (n.pickupLocationId == null && !S(n.pickupText) && (b.polId != null || S(b.pol))) { n.pickupLocationId = b.polId ?? null; n.pickupText = S(b.pol); }
+    if (n.deliveryLocationId == null && !S(n.deliveryText) && (b.podId != null || S(b.pod))) { n.deliveryLocationId = b.podId ?? null; n.deliveryText = S(b.pod); }
+    if (JSON.stringify(n) !== JSON.stringify(u)) changed = true; return n; }) });
+  return changed ? { ...sh, legs } : sh;
+}
+/** When the booking's POL or POD changes, a container that was empty or still on the old port takes the new one. */
+export function followBookingPlace(legs: any[], key: "pol" | "pod", prev: { id: any; name: any }, next: { id: any; name: any }): any[] {
+  const idF = key === "pol" ? "pickupLocationId" : "deliveryLocationId", txF = key === "pol" ? "pickupText" : "deliveryText";
+  return (legs || []).map((l: any) => !isSeaLike(l) ? l : { ...l, vehicles: (l.vehicles || []).map((u: any) => {
+    const empty = u[idF] == null && !S(u[txF]); const onOld = !empty && samePlace(u[idF], u[txF], prev?.id, prev?.name);
+    return (empty || onOld) ? { ...u, [idF]: next?.id ?? null, [txF]: S(next?.name) } : u; }) });
+}
+/** A container discharging somewhere other than its booking's POD (or loading off its POL) is named. */
+export function containerPlaceNote(sh: any, u: any): { pol: string | null; pod: string | null } {
+  const b = bookingOf(sh, u); if (!b) return { pol: null, pod: null };
+  const polOff = (b.polId != null || S(b.pol)) && (u.pickupLocationId != null || S(u.pickupText)) && !samePlace(u.pickupLocationId, u.pickupText, b.polId, b.pol);
+  const podOff = (b.podId != null || S(b.pod)) && (u.deliveryLocationId != null || S(u.deliveryText)) && !samePlace(u.deliveryLocationId, u.deliveryText, b.podId, b.pod);
+  return { pol: polOff ? S(b.pol) : null, pod: podOff ? S(b.pod) : null };
+}

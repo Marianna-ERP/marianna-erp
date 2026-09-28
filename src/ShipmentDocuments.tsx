@@ -1,7 +1,7 @@
 // ShipmentDocuments.tsx — v6.99.68 (A-AUD-2, owner): moved out of Shipments.tsx unchanged; the module's shared helpers are imported from it.
 import React, { useState } from "react";
 import { SmallButton, ActionButton } from "./ui";
-import { jobsByCarrierLeg } from "./shipmentModel.domain";
+import { jobsByCarrierLeg, effectiveLoad, unitGaps } from "./shipmentModel.domain";
 import { grossForGoodsLine } from "./packaging.domain";
 import { formatDMY } from "./dates";
 import { printHtmlNode } from "./documentService";
@@ -82,7 +82,8 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
   // v6.99.8: the order carries what THIS carrier's units load — kg per goods row from the units' allocations (whole rows only when no unit has a load)
   const providerLoadUnits = selectedLegs.flatMap((l: any) => providerUnitsForLeg(l, effectiveProviderId, shipment));
   const loadByRow: Record<string, number> = {};
-  providerLoadUnits.forEach((u: any) => (u.load || []).forEach((a: any) => { loadByRow[String(a.goodsLineId)] = (loadByRow[String(a.goodsLineId)] || 0) + (parseNum(a.qtyKg, 0)); }));
+  // v6.99.73 (A-TO-7): a container's load is what its trucks put in it — never "all goods"
+  providerLoadUnits.forEach((u: any) => effectiveLoad(shipment, u).forEach((a: any) => { loadByRow[String(a.goodsLineId)] = (loadByRow[String(a.goodsLineId)] || 0) + (parseNum(a.qtyKg, 0)); }));
   const hasLoads = Object.keys(loadByRow).length > 0;
   const scopedGoods = hasLoads
     ? (shipment.goods || []).filter((g: any) => loadByRow[String(g.id)] > 0).map((g: any) => { const kg = loadByRow[String(g.id)]; const ratio = parseNum(g.qtyKg, 0) > 0 ? kg / parseNum(g.qtyKg, 0) : 1; return { ...g, qtyKg: kg, boxes: g.boxes ? Math.round(parseNum(g.boxes, 0) * ratio) : g.boxes, pallets: g.pallets ? Math.round(parseNum(g.pallets, 0) * ratio * 10) / 10 : g.pallets, grossKg: g.grossKg ? Math.round(parseNum(g.grossKg, 0) * ratio) : g.grossKg }; })
@@ -200,7 +201,7 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
           {(() => {
             const est = (g: any) => { const po = (pos || []).find((pp: any) => String(pp.number) === String(g.poRef)); const line = po ? (po.items || []).find((it: any, k: number) => String(it.id ?? k + 1) === String(g.poLineId)) || (po.items || []).find((it: any) => String(it.product) === String(g.product) && String(it.size || "") === String(g.size || "")) : null; return line ? String(line.quantityStatus || "FINAL").toUpperCase() === "ESTIMATED" : false; };
             const rowsFor = (u: any) => {
-              const loads = (u.load || []);
+              const loads = effectiveLoad(shipment, u);   // v6.99.73 (A-TO-7): the container's own cargo, from its feeder trucks
               const rows = loads.length ? loads.map((a: any) => ({ g: scopedGoods.find((g: any) => String(g.id) === String(a.goodsLineId)) || (shipment.goods || []).find((g: any) => String(g.id) === String(a.goodsLineId)), kg: parseNum(a.qtyKg) })).filter((r: any) => r.g) : scopedGoods.map((g: any) => ({ g, kg: parseNum(g.qtyKg) }));
               let pallets = 0, gross = 0, anyEst = false; const products = new Set<string>();
               rows.forEach(({ g, kg }: any) => { const gr = grossForGoodsLine({ ...g, qtyKg: kg, boxes: undefined, pallets: undefined }, packagingTypes || []); pallets += gr.pallets || 0; gross += gr.grossKg || kg; if (est(g)) anyEst = true; products.add(`${g.product}${g.packaging ? ", " + g.packaging : ""}`); });
@@ -276,8 +277,13 @@ export function TransportOrderPrintModal({ shipment, contacts, orders = [], onSa
         <span style={{ fontSize: 11, fontWeight: 800, color: "#64748B" }}>LEGS ON THIS ORDER:</span>
         {allLegs.map((leg: any, i: number) => {
           const checked = legIds.includes(String(leg.id));
-          const from = locationTextFromFields(leg.fromLocationId, leg.fromCustom);
-          const to = locationTextFromFields(leg.toLocationId, leg.toCustom);
+          // v6.99.73 (A-TO-7, owner): the box names the CHOSEN provider's own route on this leg — its units' places — and
+          // changes with the provider; the leg's own start (the shipment's first producer) is only the fallback
+          const mine = providerUnitsForLeg(leg, providerId, shipment);
+          const nm = (id: any, text: any) => { const p = placeForPrint(id, text, contacts || []); return p.name || String(text || ""); };
+          const uniqJoin = (xs: string[]) => Array.from(new Set(xs.filter(Boolean))).join(" + ");
+          const from = (mine.length && uniqJoin(mine.map((u: any) => nm(u.pickupLocationId, u.pickupText)))) || locationTextFromFields(leg.fromLocationId, leg.fromCustom);
+          const to = (mine.length && uniqJoin(mine.map((u: any) => nm(u.deliveryLocationId, u.deliveryText)))) || locationTextFromFields(leg.toLocationId, leg.toCustom);
           return <label key={leg.id} style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, color: checked ? "#111" : "#94A3B8", cursor: "pointer", border: "1px solid", borderColor: checked ? "#2563EB" : "#E5E7EB", borderRadius: 7, padding: "5px 9px", background: checked ? "#EFF6FF" : "#fff" }}>
             <input type="checkbox" checked={checked} onChange={() => toggleLeg(String(leg.id))} />
             <span><strong>Leg #{i + 1} · {leg.mode}</strong> · {from} → {to}</span>
@@ -382,7 +388,7 @@ export function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null
           <div style={{ display: "flex", gap: 6 }}>
             {onCompose && <SmallButton onClick={() => onCompose(j.carrierId, j.legIndex)}>Order</SmallButton>}
             {(() => {   // v6.99.39 (G-5, owner): the order names places and dates — it cannot be SENT until its units carry them
-              const gaps = (j.units || []).flatMap((u: any) => [!(u.pickupText || u.pickupLocationId) && "pickup place", !(u.deliveryText || u.deliveryLocationId) && "delivery place", !u.plannedLoadingDate && "loading date", !u.plannedDeliveryDate && "delivery date"].filter(Boolean));
+              const gaps: string[] = (j.units || []).flatMap((u: any) => unitGaps(u));   // v6.99.75 (A-UN-4): the one rule — the editor outlines the same fields in red
               // v6.99.50 (TO-5, owner): the carrier needs pallets and gross weight — derivable from an ESTIMATE with a packaging; without that the order says nothing about the load
               { const g0 = (shipment.goods || []); const anyKg = g0.some((g: any) => parseNum(g.qtyKg) > 0); const anyPk = g0.some((g: any) => grossForGoodsLine(g, packagingTypes || []).pallets > 0); if (!anyKg) gaps.push("quantities (even estimated)"); else if (!anyPk) gaps.push("a packaging on the goods (pallets and gross derive from it)"); }
               const missing = Array.from(new Set(gaps)) as string[];

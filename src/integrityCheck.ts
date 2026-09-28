@@ -1,4 +1,5 @@
 import { lotReceiptDate } from "./seasonOps.domain";
+import { isRealISODate } from "./format";
 import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 import { missingPeopleInfo } from "./counterparty.domain";
 import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
@@ -691,6 +692,23 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     info: issues.filter(i => i.severity === "info").length,
     total: issues.length,
   };
+
+  // v6.99.74 (A-DT-1, owner 28 Sept): a stored date that is not a real day ("2026-06-31") is named with its record and field.
+  // Only date-shaped values are judged (yyyy-mm-dd…); free text is left alone. Nothing is changed here — the user corrects.
+  { const DATE_KEY = /(date|Date|^etd$|^eta$|^cutOff$|On$)$/;
+    const walk = (o: any, module: string, entity: string, where: string, depth: number) => {
+      if (!o || typeof o !== "object" || depth > 4) return;
+      for (const [k, v] of Object.entries(o)) {
+        if (typeof v === "string" && DATE_KEY.test(k) && /^\d{4}-\d{2}-\d{2}/.test(v) && !isRealISODate(v)) add("error", "IMPOSSIBLE_DATE", module, entity, `${entity}: ${where}${k} is ${v.slice(0, 10)} — that day does not exist`);
+        else if (v && typeof v === "object") walk(v, module, entity, Array.isArray(o) ? where : `${where}${k}.`, depth + 1);
+      }
+    };
+    pos.forEach((p: any) => walk(p, "PurchaseOrders", String(p.number || p.id), "", 0));
+    arr(inp.orders).forEach((o: any) => walk(o, "SalesOrders", String(o.number || o.id), "", 0));
+    arr(inp.lots).forEach((l: any) => walk(l, "Inventory", String(l.number || l.id), "", 0));
+    arr(inp.shipments).forEach((s: any) => walk(s, "Shipments", String(s.number || s.id), "", 0));
+    arr(inp.invoices).forEach((i: any) => walk(i, "Invoices", String(i.number || i.id), "", 0));
+  }
 
   // Stable sort: errors first, then warnings, then info; preserve discovery order within.
   const rank = { error: 0, warning: 1, info: 2 } as const;
