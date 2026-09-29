@@ -92,17 +92,22 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
     const c = SHEET_COLUMNS[ci]; const v = r.cells[c.key]; const dis = !!r.frozen;
     const focus = () => setSel({ row: ri, col: ci });
     const k = `${r.id}-${c.key}-${JSON.stringify(v ?? "")}`;
+    // v6.99.80 (A-PS-2, owner 29 Sept): a cell saves when you LEAVE it — Tab, a click elsewhere, or now Enter (saves and
+    // moves down); Escape puts the stored value back. The date cell saved on every keystroke, and each save re-drew the
+    // cell, so typing a date by hand lost the cursor after the first key — it now saves on leaving like every other cell.
+    const keys = (e: any) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); const rows = Array.from(document.querySelectorAll("table tbody tr")); const tr = e.target.closest("tr"); const next = rows[rows.indexOf(tr) + 1] as any; const cellIdx = Array.from(tr?.children || []).indexOf(e.target.closest("td")); const nt = next && next.children[cellIdx]?.querySelector("input"); if (nt) nt.focus(); }
+      else if (e.key === "Escape") { e.preventDefault(); e.target.value = c.kind === "product" ? e.target.defaultValue : S(v); e.target.blur(); } };
     if (c.kind === "product") { const p = typeof v === "object" && v ? v : { item: S(v), variety: "", size: "" }; const inCat = !p.item || (lists.items || []).includes(p.item);
       return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 60px", gap: 2 }}>
-        <input key={k + "i"} list="ps-items" disabled={dis} defaultValue={p.item} placeholder="item" onFocus={focus} onBlur={e => commit(r, c.key, { ...p, item: S(e.target.value) })} style={inCat ? inp : amber} title={inCat ? "" : "not in the product catalogue"} />
-        <input key={k + "v"} list="ps-varieties" disabled={dis} defaultValue={p.variety} placeholder="variety" onFocus={focus} onBlur={e => commit(r, c.key, { ...p, variety: S(e.target.value) })} style={inp} />
-        <input key={k + "s"} disabled={dis} defaultValue={p.size} placeholder="size" onFocus={focus} onBlur={e => commit(r, c.key, { ...p, size: S(e.target.value) })} style={inp} /></div>; }
+        <input key={k + "i"} list="ps-items" disabled={dis} defaultValue={p.item} placeholder="item" onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, { ...p, item: S(e.target.value) })} style={inCat ? inp : amber} title={inCat ? "" : "not in the product catalogue"} />
+        <input key={k + "v"} list="ps-varieties" disabled={dis} defaultValue={p.variety} placeholder="variety" onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, { ...p, variety: S(e.target.value) })} style={inp} />
+        <input key={k + "s"} disabled={dis} defaultValue={p.size} placeholder="size" onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, { ...p, size: S(e.target.value) })} style={inp} /></div>; }
     if (c.kind === "date") { const iso = !S(v) || /^\d{4}-\d{2}-\d{2}$/.test(S(v));
-      return iso ? <input key={k} type="date" disabled={dis} defaultValue={S(v)} onFocus={focus} onChange={e => commit(r, c.key, e.target.value)} style={inp} />
-        : <input key={k} disabled={dis} defaultValue={S(v)} onFocus={focus} title="not a date — type dd/mm/yyyy" onBlur={e => { const t = toISODate(e.target.value); commit(r, c.key, t === null ? S(e.target.value) : t); }} style={amber} />; }
+      return iso ? <input key={k} type="date" disabled={dis} defaultValue={S(v)} onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, e.target.value)} style={inp} />
+        : <input key={k} disabled={dis} defaultValue={S(v)} onFocus={focus} onKeyDown={keys} title="not a date — type dd/mm/yyyy" onBlur={e => { const t = toISODate(e.target.value); commit(r, c.key, t === null ? S(e.target.value) : t); }} style={amber} />; }
     if (c.kind === "list") { const known = !S(v) || (lists[c.list!] || []).includes(S(v));
-      return <input key={k} list={"ps-" + c.list} disabled={dis} defaultValue={S(v)} onFocus={focus} onBlur={e => commit(r, c.key, S(e.target.value))} style={known ? inp : amber} title={known ? "" : "not in the Directory"} />; }
-    return <input key={k} disabled={dis} defaultValue={S(v)} onFocus={focus} onBlur={e => commit(r, c.key, S(e.target.value))} style={inp} />;
+      return <input key={k} list={"ps-" + c.list} disabled={dis} defaultValue={S(v)} onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, S(e.target.value))} style={known ? inp : amber} title={known ? "" : "not in the Directory"} />; }
+    return <input key={k} disabled={dis} defaultValue={S(v)} onFocus={focus} onKeyDown={keys} onBlur={e => commit(r, c.key, S(e.target.value))} style={inp} />;
   }
 
   const usage = showUsage ? sheetUsage(sorted, log || []) : [];

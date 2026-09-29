@@ -534,6 +534,9 @@ export default function App() {
   const [openDocNum, setOpenDocNum] = useState<{ module: string; number: string; n: number }>({ module: "", number: "", n: 0 });
   const [navBack, setNavBack] = useState<{ module: string; number: string } | null>(null);   // v6.99.56 (A-PL-5): shipment → the PO's packing list
   useEffect(() => { if (activeModule !== "pos" && openPO.number) setOpenPO({ number: "", action: "" }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // v6.99.80 (owner 29 Sept): the shipment hand-off was never cleared, so after one link to a shipment EVERY later visit to
+  // Shipments reopened it; the same held for the SO / lot / invoice hand-offs added in v6.99.79. A hand-off is used once.
+  useEffect(() => { if (activeModule !== "shipments" && openShipmentNumber) setOpenShipmentNumber(""); if (openDocNum.module && activeModule !== openDocNum.module) setOpenDocNum({ module: "", number: "", n: openDocNum.n }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v6.63.0 (D-13): ONE claims UI, many doors. The claim buttons in Sales Orders,
   // Shipments and Inventory no longer open their own mini-forms — they navigate
   // here with a pre-filled seed, so every claim is a numbered document in the
