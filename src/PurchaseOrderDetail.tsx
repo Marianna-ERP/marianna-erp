@@ -8,6 +8,7 @@ import { cnCodeForItem } from "./productCatalog";
 import { effectiveCounts } from "./pricingUnit.domain";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { isEstimatedLine } from "./so.domain";
+import { paymentText } from "./po.domain";   // v6.99.76 (A-PV-2)
 import { CONTACTS_REF, FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, PO_PACKAGING_TYPES, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg } from "./PurchaseOrders";
 
 // ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
@@ -269,11 +270,11 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
               {/* v6.99.26 (owner ruling): the purchase RESULT left this screen — the PO is operational. It lives in Finance → Purchase results. */}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
-                <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" />
-                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" />
+                <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" from={order.number} />
+                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" from={order.number} />
                 {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && ["EXW", "DAP", "DPU", "DDP", "CIF", "CFR", "FOB", "FCA"].includes(String(o.sellIncoterm || "").toUpperCase())); void sos;
                   return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
-                <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" />
+                <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" from={order.number} />
                 {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
                     note — so receiving lives HERE too, not only on the lot in Inventory. */}
                 {typeof onPackingResult === "function" && order.status === "Confirmed" && (order.items || []).some((it: any) => isEstimatedLine(it)) && (
@@ -323,18 +324,18 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
 
               {/* Dates + payment */}
               <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>TERMS</SectionTitle>
+                <SectionTitle>ORDER DETAILS</SectionTitle>{/* v6.99.76 (A-PV-1, owner): was TERMS */}
                 <div style={{ display: "grid", gap: 10, fontSize: 12 }}>
                   <div><div style={{ fontSize: 10, color: "#888" }}>ORDER DATE</div><div style={{ fontWeight: 500 }}>{fmtDate(order.orderDate)}</div></div>
-                  <div title="When the supplier loads our truck/container — goods leave origin"><div style={{ fontSize: 10, color: "#888" }}>LOADING <span style={{ color: "#BBB", fontWeight: 400 }}>· goods leave origin</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.loadingDate)}</div></div>
-                  <div title="When goods are expected to arrive at the destination"><div style={{ fontSize: 10, color: "#888" }}>EXPECTED DELIVERY <span style={{ color: "#BBB", fontWeight: 400 }}>· goods arrive</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.expectedDeliveryDate)}</div></div>
+                  <div title="When the supplier loads our truck/container — goods leave origin"><div style={{ fontSize: 10, color: "#888" }}>LOADING DATE <span style={{ color: "#BBB", fontWeight: 400 }}>· goods leave origin</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.loadingDate)}</div></div>
+                  <div title="When goods are expected to arrive at the destination"><div style={{ fontSize: 10, color: "#888" }}>EXPECTED DELIVERY DATE <span style={{ color: "#BBB", fontWeight: 400 }}>· goods arrive</span></div><div style={{ fontWeight: 500 }}>{fmtDate(order.expectedDeliveryDate)}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>PURCHASE INCOTERM</div><div style={{ fontWeight: 600 }}>{order.buyIncoterm || "—"}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destLabel}</div></div>
                   <div>
                     <div style={{ fontSize: 10, color: "#888" }}>SEA FREIGHT</div>
 <div style={{ fontWeight: 600, color: "#888" }}>—</div>
                   </div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? (order.paymentTermsOther || "Other") : order.paymentTerms}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order, liveParty(order.supplier, CONTACTS_REF || []) || order.supplier)}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
                 </div>
               </Card>

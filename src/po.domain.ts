@@ -138,3 +138,24 @@ export function dueDateFor(issueISO: string, basis: PaymentBasis, days: any): st
   if (basis !== "INVOICE") return S(issueISO);
   return dueDateFromIssue(issueISO, num(days));
 }
+
+// v6.99.76 (A-PV-2 / A-SV-4, owner 28 Sept): what the views print for payment. The views read the legacy `paymentTerms`,
+// which the forms stopped filling when basis + days replaced it — so Payment showed empty on every new PO and SO.
+// Now: basis + days (the same text the form and the printed PO use); a record that only has the legacy text keeps it.
+export function paymentText(order: any, party: any = null): string {
+  const hasNew = order?.paymentBasis != null || order?.paymentDays != null || order?.terms?.paymentBasis != null;
+  if (hasNew) { const basis = paymentBasisOf(order); const days = basis === "INVOICE" ? (num(order?.paymentDays) > 0 ? order.paymentDays : (party ? paymentDaysFor(order, party) : order?.paymentDays)) : 0; return paymentTermsLabel(basis, days); }
+  const legacy = S(order?.paymentTerms === "Other" ? order?.paymentTermsOther : order?.paymentTerms);
+  return legacy || (party ? paymentTermsLabel("INVOICE", paymentDaysFor(order, party)) : "—");
+}
+
+// v6.99.77 (A-POL-1, owner 28 Sept): copy a PO line — the product, not its history. The copy lands under the original
+// with every commercial field (product, variety, origin, size, quality, packaging, price, CN…) so only what differs —
+// typically the size — is changed. It gets a NEW id and none of the original's record of what happened to it: the packing
+// result that added it, the estimate flag, the quantity status (links to lots / loads are keyed by the line id, which is new).
+const LINE_HISTORY = ["id", "addedByPackingResult", "estimatedQty", "quantityStatus"];
+export function copyPOLine(items: any[], idx: number, newId: any): any[] {
+  const src = (items || [])[idx]; if (!src) return items;
+  const copy: any = { ...src }; LINE_HISTORY.forEach(k => { delete copy[k]; }); copy.id = newId;
+  return [...items.slice(0, idx + 1), copy, ...items.slice(idx + 1)];
+}

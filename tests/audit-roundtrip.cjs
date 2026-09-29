@@ -2568,3 +2568,28 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.75 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.76–79 — the order views, copy a PO line, the planning sheet, document links (owner 28 Sept) ══
+(function v69979(){
+  console.log("\n══ 81. v6.99.76–79: payment text on the views · copy a PO line ══");
+  const P = B("po.domain.js");
+  t("A-PV-2 / A-SV-4: the views print the payment the form stored — basis + days — and a legacy text survives", () => {
+    eq(P.paymentText({ paymentBasis: "INVOICE", paymentDays: 30 }), P.paymentTermsLabel("INVOICE", 30));
+    eq(P.paymentText({ paymentBasis: "ADVANCE" }), P.paymentTermsLabel("ADVANCE", 0));
+    eq(P.paymentText({ paymentTerms: "14 days" }), "14 days", "an old record keeps its text");
+    eq(P.paymentText({ paymentTerms: "Other", paymentTermsOther: "LC at sight" }), "LC at sight");
+    eq(P.paymentText({}), "—"); { const party = { paymentDays: 21, paymentTermsDays: 21 }; eq(P.paymentText({ paymentBasis: "INVOICE" }, party), P.paymentTermsLabel("INVOICE", P.paymentDaysFor({ paymentBasis: "INVOICE" }, party)), "the party's days when the order has none — the form's own rule"); }
+    const fx = FX.fixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json"); if (fx) { const d = require(fx);
+      ok(/^30 /.test(P.paymentText(d.pos.find(p => p.number === "PO-2026-0041"))), "PO-2026-0041 now shows its 30 days"); ok(/^30 /.test(P.paymentText(d.orders.find(o => o.number === "SO-2026-0025"))), "SO-2026-0025 too"); }
+  });
+  t("A-POL-1: a copied PO line lands under the original with every product field, a new id, and none of its history", () => {
+    const items = [{ id: 1, product: "Apples", variety: "Braeburn", origin: "Poland", size: "70-75", quality: "I", packaging: "Wooden box (13 kg)", packagingId: 5, unitPrice: "3.10", cnCode: "08081080", qty: 5382, boxes: 414, pallets: 6, pricingUnit: "kg", kgPerBox: 13, coloration: "70%", addedByPackingResult: true, estimatedQty: true, quantityStatus: "ESTIMATED" }, { id: 2, product: "Apples", variety: "Elise" }];
+    const out = P.copyPOLine(items, 0, 99);
+    eq(out.length, 3); eq(out[0], items[0], "the original is untouched"); eq(out[1].id, 99); eq(out[2].id, 2, "the copy sits right under its original");
+    ["product", "variety", "origin", "size", "quality", "packaging", "packagingId", "unitPrice", "cnCode", "qty", "boxes", "pallets", "pricingUnit", "kgPerBox", "coloration"].forEach(k => eq(out[1][k], items[0][k], k));
+    ["addedByPackingResult", "estimatedQty", "quantityStatus"].forEach(k => eq(out[1][k], undefined, k + " is history, not product"));
+    eq(P.copyPOLine(items, 5, 99), items, "no such line: nothing happens");
+  });
+  console.log("v6.99.79 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

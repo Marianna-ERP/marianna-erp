@@ -3,7 +3,7 @@ import QualityReportDoc from "./QualityReportDoc";
 import { lastReportNumber, issueReportNumber } from "./reportNumbers";
 import { effectiveCounts } from "./pricingUnit.domain";
 import { exportRowsToXlsx, stamp as xlsStamp, exportVegaProSalesReport } from "./exportXlsx";
-import { SmallButton, notifySaved } from "./ui";
+import { SmallButton, notifySaved, DocLink } from "./ui";
 import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
@@ -551,14 +551,14 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
 
 
 
-export function LinkRow({ label, items, color, bg }: any) {
+export function LinkRow({ label, items, color, bg, from = "" }: any) {
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ fontSize: 10, color: "#888", marginBottom: 4, letterSpacing: "0.04em" }}>{label.toUpperCase()}</div>
       {items?.length > 0 ? (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
           {items.map(ref => (
-            <span key={ref} style={{ padding: "3px 8px", background: bg, color, border: `1px solid ${color}33`, borderRadius: 4, fontSize: 11, fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>{ref}</span>
+            <DocLink key={ref} num={ref} from={from}><span style={{ padding: "3px 8px", background: bg, color, border: `1px solid ${color}33`, borderRadius: 4, fontSize: 11, fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", display: "inline-block" }}>{ref}</span></DocLink>
           ))}
         </div>
       ) : <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>none yet</span>}

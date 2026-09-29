@@ -1,3 +1,4 @@
+import { DocNavContext } from "./ui";
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { checkIntegrity } from "./integrityCheck";
 import Dashboard from "./Dashboard";
@@ -509,10 +510,29 @@ export default function App() {
     setLeaveAsk({ target, labels: d.map(e => e.label), canSave: d.every(e => typeof e.save === "function") });
   };
   navigateRef.current = navigate;
+  const docModule = (num: string): string => {
+    const n = String(num || "");
+    const has = (list: any[]) => (list || []).some((x: any) => String(x?.number) === n);
+    if (has(pos)) return "pos"; if (has(orders)) return "orders"; if (has(shipments)) return "shipments"; if (has(lots)) return "lots"; if (has(invoices)) return "invoices";
+    return "";
+  };
+  const openDoc = (num: string, from = "") => {
+    const target = docModule(num); if (!target) return;
+    if (dirtyEntries().length) { navigate(target); return; }   // an unsaved form: the leave-guard asks first, as for any move
+    setNavBack(from ? { module: activeModule, number: from } : { module: activeModule, number: "" });
+    if (target === "pos") setOpenPO({ number: num, action: "" });
+    else if (target === "shipments") setOpenShipmentNumber(num);
+    else setOpenDocNum(p => ({ module: target, number: num, n: p.n + 1 }));
+    setActiveModule(target);
+  };
+  const docNav = { open: openDoc, canOpen: (num: string) => !!docModule(num) };
   // US-3: closing or reloading the tab while something is unsaved → the browser's own "leave site?" prompt
   useEffect(() => { const h = (e: any) => { if (dirtyEntries().length) { e.preventDefault(); e.returnValue = ""; return ""; } }; window.addEventListener("beforeunload", h); return () => window.removeEventListener("beforeunload", h); }, []);
   const [openShipmentNumber, setOpenShipmentNumber] = useState("");   // v6.99.42: cross-module hand-off (PO → its supplier truck)
-  const [openPO, setOpenPO] = useState<{ number: string; action: string }>({ number: "", action: "" });   // v6.99.56 (A-PL-5): shipment → the PO's packing list
+  const [openPO, setOpenPO] = useState<{ number: string; action: string }>({ number: "", action: "" });
+  // v6.99.79 (A-NAV-1, owner 28 Sept): ONE route from a document number to its document — the two hand-offs above generalised
+  const [openDocNum, setOpenDocNum] = useState<{ module: string; number: string; n: number }>({ module: "", number: "", n: 0 });
+  const [navBack, setNavBack] = useState<{ module: string; number: string } | null>(null);   // v6.99.56 (A-PL-5): shipment → the PO's packing list
   useEffect(() => { if (activeModule !== "pos" && openPO.number) setOpenPO({ number: "", action: "" }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v6.63.0 (D-13): ONE claims UI, many doors. The claim buttons in Sales Orders,
   // Shipments and Inventory no longer open their own mini-forms — they navigate
@@ -558,13 +578,13 @@ export default function App() {
       case "pos":
         return <PurchaseOrders key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} setInvoices={setInvoices}  users={users} userName={userName}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
       case "lots":
-        return <Inventory archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
+        return <Inventory key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
       case "orders":
-        return <SalesOrders archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
+        return <SalesOrders key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
-        return <Shipments planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={productCatalog} userName={userName} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
+        return <Shipments key={"shp-" + (openShipmentNumber || "list")} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={productCatalog} userName={userName} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} loadPlans={loadPlans} setLoadPlans={setLoadPlans} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
-        return <Invoices archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
+        return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
       case "settings":
         return <Settings seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
       default:
@@ -624,8 +644,14 @@ export default function App() {
         </div>
       )}
       <BackupBanner onOpenSettings={() => navigate("settings")} />
+      {navBack && navBack.module !== activeModule && (
+        <div style={{ padding: "6px 28px", background: "#EFF6FF", borderBottom: "1px solid #BFDBFE", fontSize: 12, display: "flex", gap: 14, alignItems: "center" }}>
+          <a href={`#back/${encodeURIComponent(navBack.number || navBack.module)}`} onClick={e => { e.preventDefault(); const b = navBack; setNavBack(null); if (b.number) openDoc(b.number); else navigate(b.module); }} style={{ color: "#1D4ED8", fontWeight: 700, textDecoration: "none" }}>Back to {navBack.number || navBack.module}</a>
+          <a href="#dismiss" onClick={e => { e.preventDefault(); setNavBack(null); }} style={{ color: "#64748B", textDecoration: "none", marginLeft: "auto" }} title="Hide this strip">Dismiss</a>
+        </div>
+      )}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {renderActive()}
+        <DocNavContext.Provider value={docNav}>{renderActive()}</DocNavContext.Provider>
       </div>
     </div>
   );

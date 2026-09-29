@@ -68,7 +68,6 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
     updateTab(tab.id, t => ({ ...t, rows: res.rows }));
     addLog(res.changed.map(c => ({ at: nowISO(), who, tab: tab.id, row: c.row, col: c.col, old: c.old, now: c.now, action: "paste" as const })));
   }
-  function copyTab() { if (!tab) return; const tsv = [SHEET_COLUMNS.map(c => c.label), ...tabToGrid(tab)].map(r => r.join("\t")).join("\n"); try { navigator.clipboard.writeText(tsv); } catch { /* ignore */ } }
   // ── her workbook in, the sheet out ──
   function importFile(f: any) {
     if (!f) return; const rd = new FileReader();
@@ -117,7 +116,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
           <label style={{ ...btn, borderStyle: "dashed", color: "#1E40AF" }}>Import file<input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => importFile(e.target.files?.[0])} /></label>
           <button style={btn} onClick={() => exportXlsx(false)} disabled={!tab}>Export file (this tab)</button>
           <button style={btn} onClick={() => exportXlsx(true)} disabled={!sorted.length}>Export file (all tabs)</button>
-          <button style={btn} onClick={copyTab} disabled={!tab} title="copies the tab as a table you can paste into Excel">⧉ Copy tab</button>
+          {/* v6.99.78 (A-PS-1, owner): "Copy tab" removed — every tab is a different week; pasting rows from Excel into a cell (Ctrl+V) stays */}
           <button style={{ ...btn, background: showUsage ? "#0F172A" : "#fff", color: showUsage ? "#fff" : "#111" }} onClick={() => setShowUsage(!showUsage)}>How the sheet is used</button>
         </div>
       </div>

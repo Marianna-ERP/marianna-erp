@@ -286,6 +286,57 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     else { failed++; console.log("  \u2717 SHP-2026-0035 — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 SHP-2026-0035 —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
+// v6.99.76–79 (A-PV, A-SV, A-POL-1, A-PS-1, A-NAV-1, owner 28 Sept): the order views, the PO line copy, the sheet, the links
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [] };
+    const POm = require(path.resolve("./src/PurchaseOrders")); const SOm = require(path.resolve("./src/SalesOrders")); const UI = require(path.resolve("./src/ui"));
+    // A-PV: PO-2026-0041's view
+    _where = "PO view PO-2026-0041";
+    const pv = renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0041" })); const pt = T(pv);
+    ["ORDER DETAILS", "LOADING DATE", "EXPECTED DELIVERY DATE"].forEach(w => { if (!pt.includes(w)) bad.push("PO view lacks " + w); });
+    if (/>TERMS</.test(pv)) bad.push("PO view still titled TERMS");
+    if (!/PAYMENT 30 /.test(pt)) bad.push("PO view payment: " + (pt.match(/PAYMENT .{0,40}/) || [""])[0]);
+    if (/<a [^>]*data-doclink/.test(pv)) bad.push("outside App the numbers must stay plain text");
+    // A-NAV-1: the same view inside the route: its linked numbers are links, and a click never reaches the row
+    _where = "PO view with the document route";
+    const opened = []; const nav = { open: (n, from) => opened.push(n + "<" + from), canOpen: n => /^(SO|SHP|LOT|PO)-/.test(n) };
+    const pvn = renderToStaticMarkup(React.createElement(UI.DocNavContext.Provider, { value: nav }, React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0041" })));
+    const links = (pvn.match(/<a [^>]*data-doclink="1"[^>]*title="Open ([^"]+)"/g) || []).map(x => x.match(/Open ([^"]+)/)[1]);
+    if (!links.some(n => /^SO-/.test(n)) || !links.some(n => /^LOT-/.test(n))) bad.push("PO view links: " + links.join(","));
+    // A-SV: SO-2026-0025's view
+    _where = "SO view SO-2026-0025";
+    const sv = renderToStaticMarkup(React.createElement(SOm.default, { ...c9, initialSelectedNumber: "SO-2026-0025" })); const st = T(sv);
+    const heads = (sv.match(/LINE ITEMS[\s\S]*?<\/thead>/) || [""])[0].match(/<th[^>]*>([^<]*)<\/th>/g) || [];
+    const hs = heads.map(h => h.replace(/<[^>]+>/g, "")).join("|"); if (hs !== "SOURCE|PRODUCT|ORIGIN|KL.|PACKAGING|BOXES|QTY KG|UNIT PRICE|TOTAL") bad.push("SO columns: " + hs);
+    if (!/<td colspan="5"[^>]*>Total<\/td>/i.test(sv)) bad.push("SO total row is not the PO's");
+    const cl = (st.match(/CLIENT .{0,260}/) || [""])[0]; ["NIP / VAT", "Contact", "Email"].forEach(w => { if (!cl.includes(w)) bad.push("client box lacks " + w); });
+    const od = (st.match(/ORDER DETAILS (.{0,420})/) || ["", ""])[1];
+    const order = ["ORDER DATE", "EXPECTED LOADING DATE", "EXPECTED DELIVERY DATE", "SALES INCOTERM", "DESTINATION", "PAYMENT", "IMPORT PERMIT NO.", "ACID NO."]; let at = -1;
+    order.forEach(w => { const k = od.indexOf(w, at + 1); if (k < 0) bad.push("order details lacks " + w + " (in order)"); else at = k; });
+    if (/CURRENCY/.test(od)) bad.push("order details still shows currency"); if (!/PAYMENT 30 /.test(od)) bad.push("SO payment: " + (od.match(/PAYMENT .{0,30}/) || [""])[0]);
+    // A-POL-1: the PO form — copy before delete on the second row, the row still one row; consignment reads "Consignment"
+    _where = "PO form lines";
+    const po41 = d9.pos.find(p => p.number === "PO-2026-0041");
+    for (const mode of ["firm", "consignment"]) {
+      const draft = { ...po41, id: undefined, number: "PO-TEST-" + mode, status: "Draft", pricingMode: mode };
+      const { OrderForm } = require(path.resolve("./src/PurchaseOrderForm"));
+      const fh = renderToStaticMarkup(React.createElement(OrderForm, { order: draft, setOrder: () => {}, contacts: d9.contacts, allSOs: d9.orders, allShipments: d9.shipments, lots: d9.lots, onSave: () => {}, onCancel: () => {} }));
+      const rows2 = fh.match(/grid-template-columns:0\.85fr 1\.4fr 0\.8fr 0\.7fr 0\.85fr minmax\(112px, 1\.1fr\) 38px 38px[\s\S]*?🗑<\/button>/g) || [];
+      if (!rows2.length) { bad.push(mode + ": the second row is not the 8-cell row (form not reached?)"); continue; }
+      rows2.forEach(r => { const ic = r.indexOf(">⧉</button>"), id = r.indexOf("🗑</button>"); if (ic < 0 || ic > id) bad.push(mode + ": copy is not before delete on the second row"); });
+      if (mode === "consignment" && !rows2.every(r => />Consignment<\/div>/.test(r))) bad.push("consignment: the line total does not read Consignment");
+      if (mode === "firm" && rows2.some(r => />Consignment<\/div>/.test(r))) bad.push("firm: Consignment shown on a priced line");
+    }
+    // A-PS-1: no Copy tab
+    _where = "planning sheet";
+    const PS = require(path.resolve("./src/PlanningSheet")).default; const ph = renderToStaticMarkup(React.createElement(PS, { tabs: [{ id: "t1", name: "week 40", rows: [] }], setTabs: () => {}, log: [], setLog: () => {}, contacts: [], catalog: [] }));
+    if (/Copy tab/.test(ph)) bad.push("the planning sheet still offers Copy tab");
+    if (!bad.length) { passed++; console.log(`  \u2713 order views (Order details, payment 30 days, the SO's 9 columns + the PO's total row, client box), PO line copy before delete (firm + consignment), no Copy tab, ${links.length} document links in the PO view`); }
+    else { failed++; console.log("  \u2717 views / copy / links — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 views / copy / links —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
   else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }

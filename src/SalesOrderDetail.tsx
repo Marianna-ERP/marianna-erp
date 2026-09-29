@@ -1,10 +1,12 @@
 // SalesOrderDetail.tsx — v6.99.68 (A-AUD-2, owner): moved out of SalesOrders.tsx unchanged; the module's shared helpers are imported from it.
 import React, { useState } from "react";
 import SOMarginCard from "./SOMarginCard";
-import { Card, Lbl, SectionTitle, cancelledDocSet, ActionButton } from "./ui";
+import { Card, Lbl, SectionTitle, cancelledDocSet, ActionButton, DocLink } from "./ui";
 import { PAGE_MAX } from "./ui";
 import { SO_STATUSES } from "./types";
 import { computedSOLinks } from "./documents.domain";
+import { paymentText } from "./po.domain";   // v6.99.76 (A-SV-4)
+import { effectiveCounts } from "./pricingUnit.domain";
 import { effectiveSoStatus, isShippedOrLater } from "./statusOwnership.domain";
 import { actualDeliveryDate, deliveryDelayDays, deliveryEventFor } from "./so.domain";
 import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, quantityLabel, documentTotals } from "./pricingUnit.domain";
@@ -283,12 +285,10 @@ export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, o
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                   <thead>
                     <tr style={{ background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-                      <th style={{ padding: "8px 6px", textAlign: "left", fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>SOURCE</th>
-                      <th style={{ padding: "8px 6px", textAlign: "left", fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>PRODUCT</th>
-                      <th style={{ padding: "8px 6px", textAlign: "center", fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>KL.</th>
-                      <th style={{ padding: "8px 6px", textAlign: "right", fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>QTY</th>
-                      <th style={{ padding: "8px 6px", textAlign: "right", fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>PRICE</th>
-                      <th style={{ padding: "8px 6px", textAlign: "right", fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>TOTAL</th>
+                      {/* v6.99.76 (A-SV-1, owner): Source · Product · Origin · Kl · Packaging · Boxes · Qty · Unit price · Total — the PO's box */}
+                      {["Source", "Product", "Origin", "Kl.", "Packaging", "Boxes", "Qty kg", "Unit price", "Total"].map((h, i) => (
+                        <th key={i} style={{ padding: "8px 6px", textAlign: i >= 5 ? "right" : i === 3 ? "center" : "left", fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>{h.toUpperCase()}</th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
@@ -300,9 +300,12 @@ export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, o
                           <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef) : ""} /></td>
                           <td style={{ padding: "10px 6px" }}>
                             <div style={{ fontWeight: 600 }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</div>
-                            <div style={{ fontSize: 11, color: "#888" }}>{it.size} · {it.origin} · {it.packaging}{it.pallets ? ` · ${it.pallets} pallets` : ""}</div>
+                            {(it.size || it.coloration) && <div style={{ fontSize: 10.5, color: "#AAA" }}>{[it.size, it.coloration].filter(Boolean).join(" · ")}</div>}
                           </td>
+                          <td style={{ padding: "10px 6px", color: "#555" }}>{it.origin || "—"}</td>
                           <td style={{ padding: "10px 6px", textAlign: "center" }}><QualityBadge quality={it.quality} /></td>
+                          <td style={{ padding: "10px 6px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
+                          <td style={{ padding: "10px 6px", textAlign: "right", color: "#555" }}>{(() => { const bx = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PACKAGING_TYPES_REF || []).boxes; return bx ? fmtNum(bx) : "—"; })()}</td>
                           <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 600 }}>
                             {fmtNum(it.qty)} kg
                             {av.hasOverage && (
@@ -323,9 +326,13 @@ export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, o
                     })}
                   </tbody>
                   <tfoot>
-                    <tr style={{ borderTop: "2px solid #E5E7EB" }}>
-                      <td colSpan={5} style={{ padding: "10px 6px", textAlign: "right", fontSize: 11, color: "#888", fontWeight: 700, letterSpacing: "0.06em" }}>TOTAL · {(() => { const t = documentTotals(order.items, PACKAGING_TYPES_REF, order.fxRate); return `${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} boxes · ${t.pallets.toLocaleString("pl-PL")} pallets`; })()}</td>
-                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700, fontSize: 15 }}>{fmtMoney(total, order.currency)}</td>
+                    {/* v6.99.76 (A-SV-1, owner): the PO's total row — boxes, kg and value under their own columns */}
+                    <tr style={{ background: "#F9FAFB" }}>
+                      <td colSpan={5} style={{ padding: "10px 6px", fontWeight: 700, color: "#111" }}>Total</td>
+                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PACKAGING_TYPES_REF || []).boxes) || 0), 0)) || "—"}</td>
+                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + (parseFloat(it.qty) || 0), 0))} kg</td>
+                      <td></td>
+                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -339,7 +346,7 @@ export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, o
                     <div style={{ marginBottom: 8 }}>
                       <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SALES INVOICES</div>
                       {computedLinks.linkedInvoices.map(inv => (
-                        <div key={inv} style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div>
+                        <DocLink key={inv} num={inv} from={order.number}>                        <div style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div></DocLink>
                       ))}
                     </div>
                   )}
@@ -352,8 +359,8 @@ export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, o
                       {computedLinks.linkedShipments.map(s => {
                         const dead = cancelledDocSet(shipments).has(String(s));
                         return (
-                          <div key={s} title={dead ? "Cancelled — kept on record, no longer active" : undefined}
-                            style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: dead ? "#FEF2F2" : "#F3E8FF", border: `1px solid ${dead ? "#FECACA" : "#DDD6FE"}`, borderRadius: 5, fontSize: 11, fontWeight: 600, color: dead ? "#B91C1C" : "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace", ...(dead ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px" } : {}) }}>{s}</div>
+                          <DocLink key={s} num={s} from={order.number}><div title={dead ? "Cancelled — kept on record, no longer active" : undefined}
+                            style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: dead ? "#FEF2F2" : "#F3E8FF", border: `1px solid ${dead ? "#FECACA" : "#DDD6FE"}`, borderRadius: 5, fontSize: 11, fontWeight: 600, color: dead ? "#B91C1C" : "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace", ...(dead ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px" } : {}) }}>{s}</div></DocLink>
                         );
                       })}
                     </div>
@@ -370,24 +377,27 @@ export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, o
 
             <div>
               <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>CLIENT</SectionTitle>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>{order.client?.name || "—"}</div>
-                <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>NIP {order.client?.nip || "—"}</div>
-                <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>{order.client?.address || "—"}</div>
-                <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>{order.client?.contact || "—"}</div>
+                <SectionTitle>CLIENT</SectionTitle>{/* v6.99.76 (A-SV-2, owner): Client · NIP/VAT · Contact · e-mail — the PO's supplier box */}
+                {(() => { const cl: any = order.client || {}; const row = (lbl: string, v: any, mono = false) => <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>{lbl}</div><div style={{ fontSize: 12, color: "#444", fontFamily: mono ? "ui-monospace, Menlo, monospace" : "inherit" }}>{v || "—"}</div></div>;
+                  return <div style={{ fontSize: 12 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginBottom: 8 }}>{cl.name || "—"}</div>
+                    {row("NIP / VAT", cl.vatEuId || cl.nip, true)}
+                    {row("Contact", [cl.contact, cl.phone].filter(Boolean).join(" · "))}
+                    <div><div style={{ fontSize: 10, color: "#888" }}>Email</div>{cl.email ? <a href={`mailto:${cl.email}`} style={{ fontSize: 12, color: "#2563EB", textDecoration: "none" }}>{cl.email}</a> : <div style={{ fontSize: 12, color: "#444" }}>—</div>}</div>
+                  </div>; })()}
               </Card>
 
               <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>TERMS</SectionTitle>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <SectionTitle>ORDER DETAILS</SectionTitle>{/* v6.99.76 (A-SV-3, owner): was TERMS — one field per line, the PO's font; currency left to the totals */}
+                <div style={{ display: "grid", gap: 10, fontSize: 12 }}>
                   <div><div style={{ fontSize: 10, color: "#888" }}>ORDER DATE</div><div style={{ fontWeight: 500 }}>{fmtDate(order.orderDate)}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>DELIVERY DATE</div><div style={{ fontWeight: 500 }}>{fmtDate(order.deliveryDate)}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>SELL INCOTERM</div><div style={{ fontWeight: 600 }}>{order.sellIncoterm || "—"}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>CURRENCY</div><div style={{ fontWeight: 600 }}>{order.currency} {order.fxLockedAt ? "🔒" : ""}</div></div>
-                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>PAYMENT TERMS</div><div style={{ fontWeight: 500 }}>{order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms}</div></div>
-                  <div style={{ gridColumn: "span 2" }}><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${(destination && (LOCATION_TYPES[destination.legacyType] || LOCATION_TYPES[destination.type])?.icon) || "📍"} ${destinationLabel}` : "—"}</div></div>
-                  {order.importPermitNo && <div><div style={{ fontSize: 10, color: "#888" }}>IMPORT PERMIT NO.</div><div style={{ fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{order.importPermitNo}</div></div>}
-                  {order.acidNo && <div><div style={{ fontSize: 10, color: "#888" }}>ACID NO.</div><div style={{ fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{order.acidNo}</div></div>}
+                  <div><div style={{ fontSize: 10, color: "#888" }}>EXPECTED LOADING DATE</div><div style={{ fontWeight: 500 }}>{fmtDate(order.expectedLoadingDate)}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>EXPECTED DELIVERY DATE</div><div style={{ fontWeight: 500 }}>{fmtDate(order.deliveryDate)}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>SALES INCOTERM</div><div style={{ fontWeight: 600 }}>{order.sellIncoterm || "—"}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>DESTINATION</div><div style={{ fontWeight: 500 }}>{destinationLabel !== "—" ? `${(destination && (LOCATION_TYPES[destination.legacyType] || LOCATION_TYPES[destination.type])?.icon) || "📍"} ${destinationLabel}` : "—"}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order)}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>IMPORT PERMIT NO.</div><div style={{ fontWeight: 500 }}>{order.importPermitNo || "—"}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>ACID NO.</div><div style={{ fontWeight: 500 }}>{order.acidNo || "—"}</div></div>
                 </div>
               </Card>
 

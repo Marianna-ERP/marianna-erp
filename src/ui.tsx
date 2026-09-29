@@ -124,13 +124,23 @@ export function cancelledDocSet(...lists: any[][]): Set<string> {
   return s;
 }
 
-export function DocRef({ num, cancelledSet, style = {}, prefix = "" }: any) {
+export function DocRef({ num, cancelledSet, style = {}, prefix = "", from = "" }: any) {
   if (num == null || num === "") return null;
   const cancelled = cancelledSet && cancelledSet.has(String(num));
   const struck = cancelled
     ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px", color: "#B91C1C", opacity: 0.8 }
     : {};
-  return <span title={cancelled ? "Cancelled — kept on record, no longer active" : undefined} style={{ ...style, ...struck }}>{prefix}{num}</span>;
+  return <DocLink num={num} from={from}><span title={cancelled ? "Cancelled — kept on record, no longer active" : undefined} style={{ ...style, ...struck }}>{prefix}{num}</span></DocLink>;
+}
+
+// ── v6.99.79 (A-NAV-1, owner 28 Sept): a document number takes you to its document ─────────────────────────────────
+// App provides `open`; any number it can resolve (PO, SO, shipment, lot, invoice) becomes a link. Outside App (tests,
+// print) nothing changes: the number renders exactly as before. A click never also triggers the row it sits in.
+export const DocNavContext = React.createContext<null | { open: (num: string, from?: string) => void; canOpen: (num: string) => boolean }>(null);
+export function DocLink({ num, from = "", children }: any) {
+  const nav = React.useContext(DocNavContext);
+  if (!nav || !nav.canOpen(String(num))) return <>{children}</>;
+  return <a href={`#open/${encodeURIComponent(String(num))}`} data-doclink="1" title={`Open ${num}`} onClick={e => { e.preventDefault(); e.stopPropagation(); nav.open(String(num), from ? String(from) : ""); }} style={{ textDecoration: "none", cursor: "pointer" }}>{children}</a>;
 }
 
 // ── In-app dialogs (P2-6) ────────────────────────────────────────────────────

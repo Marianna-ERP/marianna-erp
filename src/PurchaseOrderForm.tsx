@@ -6,7 +6,7 @@ import { FX_RATES } from "./fx";
 import { ItemVarietyPicker } from "./ProductPicker";
 import { PAGE_MAX } from "./ui";
 import { cnCodeForItem } from "./productCatalog";
-import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES } from "./po.domain";
+import { derivePOLineQuantities, paymentDaysFor, paymentBasisOf, paymentTermsLabel, PAYMENT_BASES, copyPOLine } from "./po.domain";
 import { documentTotals, totalsLine, effectiveCounts } from "./pricingUnit.domain";
 import { handoverPointForIncoterm, namedPlacePoolForIncoterm, handoverSentence } from "./tradeFlow.domain";
 import { isEstimatedLine } from "./so.domain";
@@ -84,6 +84,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
   const WAREHOUSE_ADDRESS = ((unifiedLocations(contacts || []).find((l: any) => ["WAREHOUSE", "OWN"].includes(String(l.legacyType))) || {}) as any).address || (warehouseAddressLocations(contacts || [])[0] || {}).name || "";
   const addItem = () => setOrder(o => ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", boxes: "", unitPrice: "", currency: o.currency || "PLN", packaging: "" }] }));
   const removeItem = (idx) => setOrder(o => ({ ...o, items: o.items.filter((_, i) => i !== idx) }));
+  const copyItem = (idx) => setOrder(o => ({ ...o, items: copyPOLine(o.items, idx, nextId()) }));   // v6.99.77 (A-POL-1)
   const sSupplier = (name) => sf("supplier", suppliers.find(s => s.name === name) || null);
 
   const total = netTotal(order.items);
@@ -384,7 +385,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                       ? <div style={{ padding: "8px 10px", border: "1px dashed #D8B4FE", borderRadius: 6, fontSize: 12, color: "#7C3AED", background: "#FAF5FF", fontWeight: 600 }} title="Consignment — the producer's price is settled from your sales">Consignment ⚖</div>
                       : <Inp type="number" value={it.unitPrice} onChange={e => si(i, "unitPrice", e.target.value)} placeholder="e.g. 2.80" />}</div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 0.8fr 0.7fr 1fr 1.1fr 38px", gap: 8, alignItems: "end", marginTop: 8 }}>   {/* coloration · packaging · boxes · pallets · CN/HS · line total · delete */}
+                  <div style={{ display: "grid", gridTemplateColumns: "0.85fr 1.4fr 0.8fr 0.7fr 0.85fr minmax(112px, 1.1fr) 38px 38px", gap: 8, alignItems: "end", marginTop: 8 }}>   {/* coloration · packaging · boxes · pallets · CN/HS · line total · copy · delete — v6.99.77 (A-POL-1, owner): two rows kept; copy sits before delete on THIS row; the line total keeps room for "Consignment" */}
                     <div><Lbl>Coloration</Lbl><Inp value={it.coloration} onChange={e => si(i, "coloration", e.target.value)} placeholder="przełamany / red / etc." /></div>
                     <div><Lbl>Packaging</Lbl><Inp value={it.packaging} onChange={e => { const v = e.target.value; const pk = (PO_PACKAGING_TYPES || []).find((p: any) => String(p.label).toLowerCase() === String(v).toLowerCase()); si(i, "packaging", v); si(i, "packagingId", pk ? pk.id : null); }} placeholder="pick a packaging type, or type it" list="po-packaging-types" />
                       <datalist id="po-packaging-types">{(PO_PACKAGING_TYPES || []).map((p: any) => <option key={p.id} value={p.label} />)}</datalist></div>
@@ -401,7 +402,10 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                     </div>
                     </>; })()}
                     <div><Lbl>CN / HS code</Lbl><Inp value={it.cnCode ?? ""} onChange={e => si(i, "cnCode", e.target.value)} placeholder="e.g. 0808 10" title="Customs tariff code for this item — carried to the SO and shipment" /></div>
-                    <div><Lbl>Line total</Lbl><div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div></div>
+                    <div><Lbl>Line total</Lbl>{(order.pricingMode || "firm") === "consignment"
+                      ? <div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#7C3AED", whiteSpace: "nowrap" }} title="Consignment: priced from the sales later">Consignment</div>
+                      : <div style={{ padding: "8px 10px", fontSize: 13, fontWeight: 700, color: "#111", whiteSpace: "nowrap" }}>{lineTotal.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</div>}</div>
+                    <button onClick={() => copyItem(i)} title="Copy this line — the copy lands right under it; change what differs (e.g. the size)" disabled={isLocked} style={{ height: 33, padding: "0 6px", border: "1px solid #2563EB", borderRadius: 6, background: "#fff", color: "#2563EB", fontSize: 14, fontWeight: 800, cursor: isLocked ? "not-allowed" : "pointer", opacity: isLocked ? 0.4 : 1 }}>⧉</button>
                     <button onClick={() => removeItem(i)} title="Delete this line" disabled={order.items.length <= 1} style={{ height: 33, padding: "0 6px", border: "1px solid #DC2626", borderRadius: 6, background: "#DC2626", color: "#fff", fontSize: 13, fontWeight: 800, cursor: order.items.length <= 1 ? "not-allowed" : "pointer", opacity: order.items.length <= 1 ? 0.4 : 1 }}>🗑</button>
                   </div>
                 </div>

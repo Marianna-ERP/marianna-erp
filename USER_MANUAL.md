@@ -134,6 +134,24 @@ default); the PO shows only a provisional chip.
 
 ---
 
+### Links, views and small changes (v6.99.76–79)
+
+- **Document numbers are links.** In a PO's or SO's *Linked documents* box (and
+  wherever a document number chip is shown) a click opens that document in its
+  module; a blue strip offers **Back to …** the document you came from. With an
+  unsaved form open, the usual "leave?" question comes first.
+- **PO view:** *Order details* (was Terms), *Loading date*, *Expected delivery
+  date*; Payment now shows what the PO holds (e.g. *30 days from invoice date*).
+- **SO view:** line items in the PO's columns (Source, Product, Origin, Kl.,
+  Packaging, Boxes, Qty, Unit price, Total) with the PO's total row; the Client box
+  shows Client, NIP/VAT, Contact, e-mail; *Order details* lists order date, expected
+  loading and delivery dates, sales incoterm, destination, payment, import permit and
+  ACID, one per line.
+- **PO form: ⧉ copies a line** — the copy lands under it with every field, so only
+  what differs (e.g. the size) is changed. On a consignment PO the line total reads
+  *Consignment*.
+- **Planning sheet:** *Copy tab* is gone; Ctrl+V of rows from Excel still works.
+
 ### What the units take from the documents (v6.99.73–75)
 
 - **A truck loads where its goods are.** Each truck's loading place and date come from
