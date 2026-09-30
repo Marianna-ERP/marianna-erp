@@ -221,6 +221,28 @@ corrections (with reason) and opening balances only. Wrong manual entries are
 
 ---
 
+### The list and the lot view (v6.99.81)
+
+- **Status** is one plain word: Expected, In transit, In stock, Shipped, Delivered,
+  Cancelled. The stored value is unchanged.
+- **Product** reads item — variety; size, packaging, origin; producer.
+- **Arrived · age**: a stock lot shows its arrival date and days on stock (green,
+  amber, red); a direct lot shows *Direct* with its loading and delivery dates and no
+  count; an expected lot shows its expected date.
+- **Location & flow**: a direct lot always reads *Direct · producer → client*, and its
+  Import/Export comes from the PO and the sale even before a shipment exists.
+- **Quantity**: free in green, reserved in orange.
+- **Value PLN** is the lot's value in its own state — *in stock*, *delivered* or
+  *expected* — with the cost per kg beneath. It is no longer 0 for goods that went
+  direct.
+- **+100 % under a lot number** means the same goods were loaded on two shipments
+  (last season's trucks and then the sea shipment); hover to see which. Settings →
+  integrity check lists them. Kept as history.
+- **Lot view**: three header lines (lot; product, size, packaging, origin; class,
+  location and flow); the value block follows the rule above; the workbench has a
+  light header led by the PO number and the supplier's reference; the cost-breakdown
+  box is gone (the header shows the cost per kg); linked documents are links.
+
 ## 6. Sales Orders
 
 An SO records the sale: client, **sell incoterm + destination** (the

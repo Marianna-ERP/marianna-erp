@@ -88,7 +88,11 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   const amber = { ...inp, border: "1px solid #F59E0B", background: "#FFFBEB" };
   const btn: any = { fontSize: 11.5, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 7, padding: "5px 10px", cursor: "pointer" };
 
-  function Cell({ r, ri, ci }: { r: SheetRow; ri: number; ci: number }) {
+  // v6.99.82 (A-PS-3, owner 29 Sept — "I can move between cells but typing does nothing"): this was a COMPONENT declared
+  // inside the sheet, so every re-render of the sheet (the focus outline moving is one) gave React a new component type
+  // and it re-created the cell — the input you had just clicked was thrown away and the keystrokes went nowhere.
+  // It is a plain function now: the inputs live in the table and survive the sheet's re-renders.
+  function cell(r: SheetRow, ri: number, ci: number) {
     const c = SHEET_COLUMNS[ci]; const v = r.cells[c.key]; const dis = !!r.frozen;
     const focus = () => setSel({ row: ri, col: ci });
     const k = `${r.id}-${c.key}-${JSON.stringify(v ?? "")}`;
@@ -161,7 +165,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
                     <button title={r.frozen ? "unfreeze" : "freeze on loading day"} onClick={() => toggleFreeze(ri)} style={{ border: "none", background: "none", cursor: "pointer" }}>{r.frozen ? "🔒" : "🔓"}</button>
                     <button title="delete the row" onClick={() => deleteRow(ri)} style={{ border: "none", background: "none", cursor: "pointer", color: "#B91C1C", fontWeight: 800 }}>Delete</button>
                   </td>
-                  {SHEET_COLUMNS.map((c, ci) => <td key={c.key} style={{ border: "1px solid #E5E7EB", padding: 0, outline: sel.row === ri && sel.col === ci ? "2px solid #2563EB" : undefined }}><Cell r={r} ri={ri} ci={ci} /></td>)}
+                  {SHEET_COLUMNS.map((c, ci) => <td key={c.key} style={{ border: "1px solid #E5E7EB", padding: 0, outline: sel.row === ri && sel.col === ci ? "2px solid #2563EB" : undefined }}>{cell(r, ri, ci)}</td>)}
                 </tr>
               ))}
             </tbody>

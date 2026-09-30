@@ -1,6 +1,7 @@
 // InventoryLot.tsx — v6.99.68 (A-AUD-2, owner): moved out of Inventory.tsx unchanged; the module's shared helpers are imported from it.
+import { lotValue } from "./lotView.domain";   // v6.99.81 (A-IN)
 import React, { useState } from "react";
-import { Card, ActionButton } from "./ui";
+import { Card, ActionButton, DocLink } from "./ui";
 import { PAGE_MAX } from "./ui";
 import { PrintLogo } from "./brand";
 import { buildTraceTree } from "./trace.domain";
@@ -10,7 +11,7 @@ import { fmtNum } from "./format";
 import { issueReportNumber } from "./reportNumbers";
 import { localTodayISO, formatDMY } from "./dates";
 import { gradeSplit, inspectionTotals } from "./seasonOps.domain";
-import { INSPECTION_CONTEXTS, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel, totalCost, valueInStock } from "./Inventory";
+import { INSPECTION_CONTEXTS, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel } from "./Inventory";
 import { SeasonActions } from "./InventoryWindows";
 
 export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [], season = null , userName = "" }: any) {
@@ -20,8 +21,6 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
   const seasonInspections = season?.inspections || [];   // v6.99.17 (A-R13-9): ONE inspections store — the legacy card reads it too
   const res = lotReservations(lot, liveSOs, { lots: allLots, shipments });
   const cpk = costPerKg(lot);
-  const total = totalCost(lot);
-  const value = valueInStock(lot);
   const variance = (lot.receivedKg || 0) - (lot.expectedKg || 0);
   const shippedOutKg = Math.max(0, (lot.receivedKg || 0) - (lot.physicalKg || 0) - (lot.damagedKg || 0) - (lot.wasteKg || 0));   // v6.99.34 (A-R24-1)
 
@@ -64,8 +63,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 6 }}>{lot.number}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
                 <StatusBadge status={lot.status} />
-                <QualityBadge quality={lot.quality} />
-                <VarianceBadge expected={lot.expectedKg} actual={lot.receivedKg} />
+                <VarianceBadge expected={lot.expectedKg} actual={lot.receivedKg} lot={lot} />
               </div>
               {/* v6.59.0: the supplier — asked far more often than the packaging. */}
               {(() => { const po = (pos || []).find((x: any) => String(x.number) === String(lot.poRef));
@@ -73,13 +71,17 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                 // v6.65.0 (owner request): the supplier must read as a different kind of
                 // information than the product — amber, smaller caps, not near-black.
                 return sup ? <div style={{ fontSize: 11.5, fontWeight: 700, color: "#0369A1", letterSpacing: "0.03em", textTransform: "uppercase", marginBottom: 2 }}>{sup}</div> : null; })()}
-              <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.origin || "—"} · {lot.packaging}</div>
-              <div style={{ marginTop: 10 }}><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} pos={pos} /></div>
+              {/* v6.99.81 (A-IN-8, owner): line 2 — product, item, size, packaging, origin; line 3 — class, location and flow */}
+              <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.packaging || "—"} · {lot.origin || "—"}</div>
+              <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}><QualityBadge quality={lot.quality} /><LocationPill locationId={lot.locationId} lot={lot} /><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} pos={pos} /></div>
             </div>
             <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 11, color: "#888" }}>Value of physical stock</div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111" }}>{fmtMoney(value)}</div>
-              <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(cpk)}/kg · received {fmtNum(lot.receivedKg)} kg</div>
+              {/* v6.99.81 (A-IN-7/8, owner): the value in the lot's own state — in stock · delivered · expected — and the cost per kg; received kg lives in the breakdown below */}
+              {(() => { const v = lotValue(lot, cpk); return <>
+                <div style={{ fontSize: 11, color: "#888" }}>Value {v.label !== "—" ? <span style={{ fontWeight: 700, color: v.label === "in stock" ? "#16A34A" : v.label === "expected" ? "#B45309" : "#0F766E" }}>{v.label}</span> : null}</div>
+                <div style={{ fontSize: 26, fontWeight: 700, color: "#111" }}>{fmtMoney(v.pln)}</div>
+                <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(cpk)}/kg</div>
+              </>; })()}
             </div>
           </div>
 
@@ -312,7 +314,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
               })()}
 
               {/* Inspections (v6.2) — recordable at any stage */}
-              {season && <LotWorkbench lot={lot} shipments={shipments} inspections={season.inspections} claims={season.claims || []} orders={liveSOs} settlements={season.settlements || []} contacts={contacts} />}
+              {season && <LotWorkbench lot={lot} pos={pos} shipments={shipments} inspections={season.inspections} claims={season.claims || []} orders={liveSOs} settlements={season.settlements || []} contacts={contacts} />}
               {season && <SeasonActions lot={lot} {...season} />}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ Record inspection</button>}>INSPECTIONS{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
@@ -479,7 +481,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                   <div>
                     <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>PURCHASE ORDER</div>
                     {lot.poRef ? (
-                      <div style={{ padding: "6px 10px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6, fontSize: 12.5, color: "#1D4ED8", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", display: "inline-block" }}>{lot.poRef}</div>
+                      <DocLink num={lot.poRef} from={lot.number}><div style={{ padding: "6px 10px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6, fontSize: 12.5, color: "#1D4ED8", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", display: "inline-block" }}>{lot.poRef}</div></DocLink>
                     ) : <span style={{ fontSize: 12, color: "#AAA" }}>—</span>}
                   </div>
                   <div>
@@ -487,71 +489,18 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                     {soRefsFor(lot, liveSOs, shipments).length > 0 ? (
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                         {soRefsFor(lot, liveSOs, shipments).map(s => (
-                          <div key={s.number} title={`${s.clientName || ""}${s.status && s.status !== "—" ? ` · ${s.status}` : ""}${s.viaShipment ? ` · linked via shipment ${s.viaShipment}` : ""}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                          <DocLink key={s.number} num={s.number} from={lot.number}><div title={`${s.clientName || ""}${s.status && s.status !== "—" ? ` · ${s.status}` : ""}${s.viaShipment ? ` · linked via shipment ${s.viaShipment}` : ""}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
                             {s.number}{s.viaShipment ? <span style={{ fontSize: 9, color: "#16A34A", fontWeight: 700, marginLeft: 4 }}>via {s.viaShipment}</span> : null}
-                          </div>
+                          </div></DocLink>
                         ))}
                       </div>
                     ) : <span style={{ fontSize: 12, color: "#AAA" }}>Not yet linked</span>}
                   </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>CURRENT LOCATION</div>
-                    <LocationPill locationId={lot.locationId} lot={lot} />
-                    {lot.directFlow && <div style={{ fontSize: 11, color: "#92400E", marginTop: 4 }}>{lot.destinationText || "Direct destination"}</div>}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>DATES</div>
-                    <div style={{ fontSize: 12, color: "#444" }}>
-                      {lot.directFlow ? (
-                        <>
-                          Loading / pickup: <span style={{ fontWeight: 500 }}>{lot.loadingDate || "—"}</span><br />
-                          ETA destination: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span><br />
-                          <span style={{ color: "#92400E", fontSize: 11 }}>Direct flow · not received into our warehouse</span>
-                        </>
-                      ) : (
-                        <>
-                          {/* v6.51.0 (user ruling): the production date is the producer's
-                              harvest/packing date — nothing in the current workflow captures
-                              it, so it was blank on every lot. Hidden from the UI; the field
-                              stays in the data model for when producer documents feed it. */}
-                          {lot.productionDate ? <>Production: <span style={{ fontWeight: 500 }}>{lot.productionDate}</span><br /></> : null}
-                          Arrival: <span style={{ fontWeight: 500 }}>{lot.arrivalDate || "—"}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
+                  {/* v6.99.81 (A-IN-11, owner): the location and the dates left this box — they are in the header and the Arrived column */}
                 </div>
               </Card>
 
-              {/* Cost breakdown */}
-              <Card>
-                <SectionTitle>COST BREAKDOWN</SectionTitle>
-                {(lot.costs || []).map((c, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "8px 0", borderBottom: i < lot.costs.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: "#444" }}>{c.label}</div>
-                      <div style={{ fontSize: 10.5, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace", marginTop: 1 }}>{c.source}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{fmtMoney(c.pln)}</div>
-                      {c.currency && c.currency !== "PLN" && (
-                        <div style={{ fontSize: 10, color: "#888", marginTop: 1 }}>({fmtMoney(c.amount, c.currency)})</div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                <div style={{ marginTop: 8, padding: "10px 0 0", borderTop: "2px solid #E5E7EB", display: "flex", justifyContent: "space-between" }}>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>Total cost</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#111" }}>{fmtMoney(total)}</div>
-                </div>
-                <div style={{ marginTop: 8, padding: "10px 12px", background: "#F9FAFB", borderRadius: 8, display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 11.5, color: "#666" }}>Cost per kg (PLN)</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{fmtMoney(cpk)}/kg</span>
-                </div>
-                <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", fontStyle: "italic", lineHeight: 1.5 }}>
-                  Costs accumulate as invoices arrive. Storage allocation (WINV) recalculates monthly.
-                </div>
-              </Card>
+              {/* v6.99.81 (A-IN-12, owner): the cost-breakdown box is gone — the header shows the value and the cost per kg */}
             </div>
           </div>
         </div>

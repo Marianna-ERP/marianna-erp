@@ -1,8 +1,9 @@
+import { lotStatusLabel, lotIsDirect, lotValue, lotArrivedCell, lotLoadedTwice } from "./lotView.domain";   // v6.99.81 (A-IN)
 import React, { useState, useMemo } from "react";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
 import { receiptMovement, gradeSplit, inspectionTotals, defectsFor, DEFECT_CATEGORIES, plateMismatch, inspectionVerdict, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, lotReceiptDate } from "./seasonOps.domain";
-import { SmallButton, ActionButton } from "./ui";
+import { SmallButton, ActionButton, DocLink } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
 import { claimsForLot } from "./claims.domain";
@@ -13,7 +14,7 @@ import { lotReservationsForStock, productsMatch as domainProductsMatch, soClient
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { unifiedLocations, locationById } from "./locations";
-import { localTodayISO } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
 import { settlementCostComponents } from "./consignment";
 import { recordAudit } from "./audit";
@@ -475,8 +476,9 @@ export function SectionTitle({ children }: any) {
   return <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 14 }}>{children}</div>;
 }
 export function StatusBadge({ status }: any) {
-  const s = LOT_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
-  return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{status}</span>;
+  // v6.99.81 (A-IN-4, owner): one plain word — Expected · In transit · In stock · Shipped · Delivered · Cancelled; the stored value is unchanged
+  const s = lotStatusLabel(status); const desc = (LOT_STATUSES[status] || {}).desc;
+  return <span title={desc || status} style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{s.label}</span>;
 }
 export function QualityBadge({ quality }: any) {
   const palette = {
@@ -490,10 +492,11 @@ export function QualityBadge({ quality }: any) {
 }
 export function LocationPill({ locationId, lot = null }: any) {
   const loc = locById(locationId);
-  // v6.45.0 (test-round): a DIRECT lot never sits in one of our locations — the
-  // goods go producer → client. Say so instead of showing an empty dash.
-  if (!loc && lot) {
-    const direct = !!lot.directFlow || lot.custodyType === "Direct" || /direct/i.test(String(lot.status || ""));
+  // v6.45.0 (test-round): a DIRECT lot never sits in one of our locations — the goods go producer → client.
+  // v6.99.81 (A-IN-5, owner): say so ALWAYS — the last movement leaves the producer's or the client's place on the lot,
+  // and that name was shown instead, as if the goods sat there.
+  if (lot) {
+    const direct = lotIsDirect(lot);
     if (direct) return (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#7C3AED" }}>
         <span style={{ fontSize: 11 }}>↗</span>
@@ -526,7 +529,10 @@ export function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], 
   // (SHP-2026-0002 in the test data: header EXPORT, goods rows IMPORT.)
   // v6.62.0: a lot that has never moved has no location and no flow to show —
   // it is Expected, not broken. A bare dash read as a failure.
-  if (!shs.length && !(lot.movements || []).length) return null;
+  // v6.99.81 (A-IN-5, owner): a lot that has not moved yet still has a flow when its PO and its sale are known — derived
+  // below from the two documents, exactly as for a moved lot; only a lot with neither shows nothing
+  const hasDocs = !!(pos || []).find((p: any) => String(p.number) === String(lot.poRef)) && (orders || []).some((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
+  if (!shs.length && !(lot.movements || []).length && !hasDocs) return null;
   for (const sh of shs) {
     // v6.99.67 (A-IN-1, owner): goods rows used to carry a COPY of the direction (written before the sale was known and never
     // re-derived — LOT-0119 read "import" beside LOT-0120's "export" on the same PO and sale). Only a USER'S choice on the
@@ -554,19 +560,20 @@ export function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], 
   return (
     <span title={lbl.hint} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", background: "#fff", border: `1px solid ${lbl.color}33`, borderRadius: 8, fontSize: 11.5, fontWeight: 700, color: lbl.color }}>
       {lbl.label}
-      <span style={{ fontWeight: 400, color: "#94A3B8", fontSize: 10.5 }}>· from shipment</span>
+      <span style={{ fontWeight: 400, color: "#94A3B8", fontSize: 10.5 }}>· {shs.length ? "from shipment" : "from the PO and the sale"}</span>
     </span>
   );
 }
 
-export function VarianceBadge({ expected, actual }: any) {
+export function VarianceBadge({ expected, actual, lot = null }: any) {
   if (!expected || !actual) return null;
   const delta = actual - expected;
   if (delta === 0) return null;
   const pct = ((delta / expected) * 100).toFixed(1);
   const isShort = delta < 0;
+  const twice = lot ? lotLoadedTwice(lot) : null;   // v6.99.81 (A-IN-1, owner): "+100 %" = the same goods loaded on two shipments — say which
   return (
-    <span title={`Expected ${expected.toLocaleString()} kg, received ${actual.toLocaleString()} kg`}
+    <span title={twice ? `Loaded on ${twice.join(" and again on ")} — received ${actual.toLocaleString()} kg against ${expected.toLocaleString()} kg expected (kept as history)` : `Expected ${expected.toLocaleString()} kg, received ${actual.toLocaleString()} kg`}
       style={{ background: isShort ? "#FEF3C7" : "#DBEAFE", color: isShort ? "#92400E" : "#1E40AF", padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.02em" }}>
       {delta > 0 ? "+" : ""}{pct}%
     </span>
@@ -586,12 +593,7 @@ function lotArrivalDate(lot: any): string | null {
   const ins = (lot.movements || []).filter((m: any) => m && !m.voided && m.type === "IN" && m.date).map((m: any) => String(m.date)).sort();
   return ins[0] || null;
 }
-function lotAgeDays(lot: any): number | null {
-  const d = lotArrivalDate(lot);
-  if (!d) return null;
-  const days = Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
-  return days < 0 ? 0 : days;
-}
+// v6.99.81: lotAgeDays retired — the Arrived · age column reads lotArrivedCell (lotView.domain)
 function ageColor(days: number): string { return days <= 7 ? "#16A34A" : days <= 14 ? "#D97706" : "#DC2626"; }
 
 export function totalCost(lot) {
@@ -1041,7 +1043,7 @@ export function CountWindow({ f, setF, lot, onClose, onSave }: any) {
 
 
 // ── v6.91.0: THE LOT WORKBENCH — one screen per lot, composed from the owning modules, storing nothing ──
-export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orders = [], settlements = [], contacts = [] }: any) {
+export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orders = [], settlements = [], contacts = [], pos = [] }: any) {
   const S = (v: any) => String(v ?? "").trim();
   const num = (v: any) => { const n = parseFloat(String(v ?? "")); return isFinite(n) ? n : 0; };
   // Arrival: the supplier-delivery (or any inbound) shipment that carried this lot
@@ -1069,19 +1071,22 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
     <div style={{ background: "#fff", border: "2px solid #1E293B", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
       {/* v6.99.34 (A-R24-6, owner): the title line is the ONE place where our lot number and the supplier's reference
           sit together — the only link between their vocabulary and ours. It is set in type you can read across the room. */}
-      <div style={{ background: "#0F172A", color: "#fff", padding: "10px 16px", display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "#94A3B8" }}>LOT WORKBENCH</span>
-        <span style={{ fontSize: 16, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{lot.number}</span>
-        {unit?.supplierRef ? <span style={{ fontSize: 13, fontWeight: 700, background: "#1D4ED8", padding: "2px 10px", borderRadius: 20 }}>supplier ref {unit.supplierRef}</span> : null}
-        <span style={{ fontSize: 13.5 }}>{lot.product}{lot.variety ? ` — ${lot.variety}` : ""}</span>
-        {lot.poRef ? <span style={{ fontSize: 12, color: "#CBD5E1" }}>· {lot.poRef}</span> : null}
-      </div>
+      {/* v6.99.81 (A-IN-9, owner): a light header, dark text; the PO number leads — this is where the producer's reference meets
+          our PO, the link that matters on a consignment — and the lot number and variety, already at the top of the page, are gone */}
+      {(() => { const po = (pos || []).find((p: any) => String(p.number) === String(lot.poRef)); const consignment = String(po?.pricingMode || "") === "consignment"; return (
+      <div style={{ background: "#F1F5F9", color: "#0F172A", padding: "10px 16px", display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap", borderBottom: "1px solid #E2E8F0" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "#64748B" }}>LOT WORKBENCH</span>
+        {lot.poRef ? <DocLink num={lot.poRef} from={lot.number}><span style={{ fontSize: 16, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace", color: "#1D4ED8" }}>{lot.poRef}</span></DocLink> : <span style={{ fontSize: 13, color: "#94A3B8" }}>no purchase order</span>}
+        {consignment ? <span style={{ fontSize: 11, fontWeight: 700, background: "#EDE9FE", color: "#6D28D9", padding: "2px 10px", borderRadius: 20 }}>consignment</span> : null}
+        {unit?.supplierRef ? <span style={{ fontSize: 13, fontWeight: 700, background: "#DBEAFE", color: "#1E40AF", padding: "2px 10px", borderRadius: 20 }}>supplier ref {unit.supplierRef}</span> : <span style={{ fontSize: 12, color: "#94A3B8" }}>no supplier reference yet</span>}
+        {po?.supplier?.name ? <span style={{ fontSize: 12.5, color: "#334155" }}>{po.supplier.name}</span> : null}
+      </div>); })()}
       <div style={{ padding: "12px 16px" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
         {tile("ARRIVAL", arrival ? <>{arrival.number} · {arrival.arrangedBy === "SUPPLIER" ? "supplier's truck" : "our shipment"}<br />{unit?.truckPlate || unit?.announcedPlate || "plates —"}{plateMismatch(unit) ? <b style={{ color: "#DC2626" }}> · plates differ from announced!</b> : ""}<br />{arrivedAt ? `arrived ${arrivedAt}` : (unit?.eta ? `ETA ${unit.eta}` : "not arrived")}</> : <span style={{ color: "#94A3B8" }}>no inbound shipment{lot.poRef ? " — register the supplier's truck on the PO" : ""}</span>)}
         {/* v6.99.17 (A-R13-7): RECEIPT tile removed — the quantity breakdown already shows expected / received / variance */}
         {tile("QUALITY", lastIns ? <>{lastIns.stage} {lastIns.date}<br />defects <b>{inspectionTotals(lastIns).totalPct}%</b> · <b style={{ color: lastIns.verdict === "Rejected" ? "#DC2626" : lastIns.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{lastIns.verdict}</b><br />{ins.length} inspection(s){lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</> : <span style={{ color: dueQC ? "#B45309" : "#94A3B8" }}>no inspection{dueQC ? ` — QC report due ${dueQC}` : ""}{lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</span>, lastIns ? "#111" : "#94A3B8")}
-        {tile("STOCK — AVAILABLE NOW", (() => { const a = lotAvailabilityByGrade(lot, orders); return <><div>class I <b>{a.I.toLocaleString("pl-PL")}</b> kg</div><div>class II <b>{a.II.toLocaleString("pl-PL")}</b> kg</div>{a.unsorted > 0 ? <div>unsorted {a.unsorted.toLocaleString("pl-PL")} kg</div> : null}<div style={{ color: "#94A3B8" }}>waste {g.waste.toLocaleString("pl-PL")} kg</div></>; })())}
+        {!lotIsDirect(lot) && tile("STOCK — AVAILABLE NOW", (() => { const a = lotAvailabilityByGrade(lot, orders); return <><div>class I <b>{a.I.toLocaleString("pl-PL")}</b> kg</div><div>class II <b>{a.II.toLocaleString("pl-PL")}</b> kg</div>{a.unsorted > 0 ? <div>unsorted {a.unsorted.toLocaleString("pl-PL")} kg</div> : null}<div style={{ color: "#94A3B8" }}>waste {g.waste.toLocaleString("pl-PL")} kg</div></>; })())}
         {tile("SALES", <>{sales.length ? sales.map((o: any) => { const kg = (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))).reduce((a: number, it: any) => a + num(it.qty), 0); return <div key={o.number}>{o.number} · <b>{Math.round(kg).toLocaleString("pl-PL")} kg</b>{o.items?.some((it: any) => it.grade === "II") ? " · II" : ""} · {o.status}</div>; }) : <span style={{ color: "#94A3B8" }}>no sales yet</span>}<span style={{ color: num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "#16A34A" : "#B45309" }}>{num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "fully sold" : `${Math.max(0, Math.round(num(lot.receivedKg) - soldKg - g.waste)).toLocaleString("pl-PL")} kg to sell`}</span></>)}
         {tile("SETTLEMENT (on the PO)", settlement ? <>{settlement.number ? settlement.number + " · " : ""}<b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? ` · closed ${settlement.closedAt}` : ""}<br />{settlement.commissionInvoiceId ? "commission invoice issued" : settlement.status === "Closed" ? "commission not yet invoiced — waiting for the Monday commission run" : "closes on the PO when the truck is sold"}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `not opened yet — on ${lot.poRef}` : "—"}</span>)}
       </div>
@@ -1521,10 +1526,10 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
 
         {/* Table */}
         <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 140px 130px 120px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 150px 140px 130px 120px", padding: "10px 18px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
             {/* v6.58.0: "LINKED" renamed LINKED DOCUMENTS; the quantity column now
                  states which figure is which rather than a bare pair. */}
-            {["LOT", "PRODUCT", "KL.", "STATUS", "LOCATION & FLOW", "QUANTITY", "VALUE PLN", "LINKED DOCUMENTS"].map((h, i) => (
+            {["LOT", "PRODUCT", "KL.", "STATUS", "LOCATION & FLOW", "ARRIVED · AGE", "QUANTITY", "VALUE PLN", "LINKED DOCUMENTS"].map((h, i) => (
               <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>
             ))}
           </div>
@@ -1534,26 +1539,22 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
             const res = lotReservations(l, liveSOs, { lots, shipments });
             const soList = soRefsFor(l, liveSOs, shipments);
             return (
-              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 140px 130px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
+              <div key={l.id} style={{ display: "grid", gridTemplateColumns: "150px 1fr 60px 110px 1fr 150px 140px 130px 120px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
                 onClick={() => { setSelectedId(l.id); setView("detail"); }}
                 onMouseEnter={e => e.currentTarget.style.background = "#FAFAFA"}
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
               >
                 <div>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{l.number}</div>
-                  <div style={{ marginTop: 3 }}><VarianceBadge expected={l.expectedKg} actual={l.receivedKg} /></div>
+                  <div style={{ marginTop: 3 }}><VarianceBadge expected={l.expectedKg} actual={l.receivedKg} lot={l} /></div>
                 </div>
+                {/* v6.99.81 (A-IN-2, owner): item — variety · size, packaging, origin (readable) · producer; the arrival moved to its own column */}
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#111" }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
-                  {/* v6.58.0: the supplier belongs here — "whose fruit is this"
-                      is asked far more often than the packaging. */}
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{l.product}{l.variety ? " — " + l.variety : ""}</div>
+                  <div style={{ fontSize: 12, color: "#334155", marginTop: 1 }}>{[l.size, l.packaging, l.origin].filter(Boolean).join(" · ") || "—"}</div>
                   {(() => { const po = (extPOs || []).find((x: any) => String(x.number) === String(l.poRef));
                     const sup = po?.supplier?.name || l.supplierName || "";
-                    return sup ? <div style={{ fontSize: 11.5, color: "#475569", fontWeight: 600 }}>{sup}</div> : null; })()}
-                  <div style={{ fontSize: 11, color: "#AAA" }}>{l.size || "—"} · {l.origin || "—"} · {l.packaging}</div>
-                  {(() => { const d = lotArrivalDate(l); const age = lotAgeDays(l); return d ? (
-                    <div style={{ fontSize: 10.5, marginTop: 2 }}><span style={{ color: "#94A3B8" }}>arrived {d}</span> <span style={{ fontWeight: 700, color: ageColor(age as number) }}>· {age} d</span></div>
-                  ) : null; })()}
+                    return sup ? <div style={{ fontSize: 11, color: "#64748B", marginTop: 1 }}>{sup}</div> : null; })()}
                 </div>
                 <div><QualityBadge quality={l.quality} /></div>
                 <div><StatusBadge status={l.status} /></div>
@@ -1561,25 +1562,29 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                   <LocationPill locationId={l.locationId} lot={l} />
                   <div style={{ marginTop: 3 }}><LotDirectionBadge lot={l} shipments={shipments} orders={liveSOs} pos={extPOs} compact /></div>
                 </div>
+                {/* v6.99.81 (A-IN-3, owner): stock lots count their days with us; a direct lot shows its dates and no count */}
+                <div>{(() => { const a = lotArrivedCell(l, localTodayISO()); const D = (d: any) => d ? formatDMY(d) : "—";
+                  if (a.kind === "stock") return <><div style={{ fontSize: 12, color: "#334155" }}>arrived {D(a.date)}</div>{a.days !== undefined && <div style={{ fontSize: 11, fontWeight: 700, color: ageColor(a.days) }}>{a.days} d on stock</div>}</>;
+                  if (a.kind === "direct") return <><div style={{ fontSize: 11.5, fontWeight: 700, color: "#7C3AED" }}>Direct</div><div style={{ fontSize: 11, color: "#64748B" }}>{a.loaded ? `loaded ${D(a.loaded)}` : ""}{a.delivered ? ` · delivered ${D(a.delivered)}` : ""}</div></>;
+                  if (a.kind === "expected") return <div style={{ fontSize: 11.5, color: "#B45309", fontWeight: 600 }}>expected {D(a.date)}</div>;
+                  return <span style={{ color: "#CCC" }}>—</span>; })()}</div>
                 <div>
-                  {/* v6.58.0: lead with the LOT'S OWN QUANTITY, whatever its
-                      booked/reserved/sold state. Previously a fully reserved lot
-                      showed "0 / 0" plus "19 422 reserved · 1 SO", which never
-                      answered "how much is in this lot". */}
                   {(() => {
                     const onHand = parseNum(l.physicalKg, 0) || parseNum(l.receivedKg, 0) || parseNum(l.expectedKg, 0);
                     const isExpected = !parseNum(l.physicalKg, 0) && !parseNum(l.receivedKg, 0) && parseNum(l.expectedKg, 0) > 0;
                     return <>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#111" }}>{fmtNum(onHand)} kg{isExpected ? <span style={{ fontSize: 10, color: "#B45309", fontWeight: 600 }}> expected</span> : null}</div>
-                      <div style={{ fontSize: 10.5, color: "#64748B" }}>{fmtNum(res.liveAvailable)} free · {fmtNum(res.totalReserved)} reserved</div>
+                      {/* v6.99.81 (A-IN-6, owner): free in green, reserved in orange */}
+                      <div style={{ fontSize: 10.5 }}><span style={{ color: "#16A34A", fontWeight: 700 }}>{fmtNum(res.liveAvailable)} free</span><span style={{ color: "#94A3B8" }}> · </span><span style={{ color: "#D97706", fontWeight: 700 }}>{fmtNum(res.totalReserved)} reserved</span></div>
                     </>;
                   })()}
                   {l.damagedKg > 0 && <div style={{ fontSize: 10.5, color: "#DC2626", fontWeight: 600 }}>{fmtNum(l.damagedKg)} damaged</div>}
                 </div>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{fmtMoney(valueInStock(l)).replace(" PLN", "")}</div>
-                  <div style={{ fontSize: 10, color: "#AAA" }}>{fmtMoney(cpk)}/kg</div>
-                </div>
+                {/* v6.99.81 (A-IN-7, owner): the value in the lot's own state — in stock · delivered · expected — never "0" for goods that went direct */}
+                <div>{(() => { const v = lotValue(l, cpk); return <>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{fmtMoney(v.pln).replace(" PLN", "")}</div>
+                  <div style={{ fontSize: 10, color: "#64748B" }}>{v.label !== "—" ? <span style={{ fontWeight: 700, color: v.label === "in stock" ? "#16A34A" : v.label === "expected" ? "#B45309" : "#0F766E" }}>{v.label}</span> : null}{v.label !== "—" ? " · " : ""}{fmtMoney(cpk)}/kg</div>
+                </>; })()}</div>
                 <div>
                   {l.poRef && <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={l.poRef} cancelledSet={cancelledRefs} /></div>}
                   {soList.slice(0, 2).map(s => (

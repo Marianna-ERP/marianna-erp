@@ -1,5 +1,6 @@
 import { lotReceiptDate } from "./seasonOps.domain";
 import { isRealISODate } from "./format";
+import { lotLoadedTwice } from "./lotView.domain";
 import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 import { missingPeopleInfo } from "./counterparty.domain";
 import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
@@ -709,6 +710,10 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     arr(inp.shipments).forEach((s: any) => walk(s, "Shipments", String(s.number || s.id), "", 0));
     arr(inp.invoices).forEach((i: any) => walk(i, "Invoices", String(i.number || i.id), "", 0));
   }
+
+  // v6.99.81 (A-IN-1, owner 29 Sept): a lot loaded on two shipments — the same goods received twice (SHP-2026-0016 as a
+  // truck, then SHP-2026-0021 by sea, before multimodal legs existed). Kept as history by the owner's ruling; named here.
+  arr(inp.lots).forEach((l: any) => { const by = lotLoadedTwice(l); if (by) add("warning", "LOT_LOADED_TWICE", "Inventory", String(l.number || l.id), `${l.number}: loaded on ${by.join(" and again on ")} — received ${Number(l.receivedKg || 0).toLocaleString("pl-PL")} kg against ${Number(l.expectedKg || 0).toLocaleString("pl-PL")} kg expected`); });
 
   // Stable sort: errors first, then warnings, then info; preserve discovery order within.
   const rank = { error: 0, warning: 1, info: 2 } as const;

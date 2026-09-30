@@ -80,6 +80,7 @@
     "../src/legacy.ts",
     "../src/format.ts",
     "../src/autoBackup.domain.ts",
-    "../src/customsImport.domain.ts"
+    "../src/customsImport.domain.ts",
+    "../src/lotView.domain.ts"
   ]
 }

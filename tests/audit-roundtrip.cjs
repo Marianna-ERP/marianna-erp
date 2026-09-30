@@ -2593,3 +2593,37 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.79 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.81 — the inventory list and the lot view say what a lot is (A-IN, owner 29 Sept) ══
+(function v69981(){
+  console.log("\n══ 82. v6.99.81: status words · direct lots · value by state · arrived/age · the two shipments behind +100 % ══");
+  const L = B("lotView.domain.js"); const I = B("integrityCheck.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json", "the owner's 28 Sept file"); if (!fx) return;
+  const d = require(fx); const lot = n => d.lots.find(l => l.number === n);
+  t("A-IN-4: one plain word per status, the stored value untouched", () => {
+    eq(L.lotStatusLabel("Direct Expected").label, "Expected"); eq(L.lotStatusLabel("Expected").label, "Expected"); eq(L.lotStatusLabel("In Stock").label, "In stock");
+    eq(L.lotStatusLabel("Shipped Out").label, "Shipped"); eq(L.lotStatusLabel("Delivered (direct)").label, "Delivered"); eq(L.lotStatusLabel("Blocked · PO Cancelled").label, "Cancelled"); eq(L.lotStatusLabel("Cancelled").label, "Cancelled");
+    eq(new Set(d.lots.map(l => L.lotStatusLabel(l.status).label)).size <= 6, true, "her file uses at most six words");
+  });
+  t("A-IN-7: the value in the lot's own state — in stock · delivered · expected — never 0 for goods that went direct", () => {
+    const v = (n) => { const l = lot(n); const costs = (l.costs || []).reduce((s, c) => s + (c.pln || 0), 0); const cpk = costs / (l.receivedKg || l.expectedKg || 1); return L.lotValue(l, cpk); };
+    eq(v("LOT-2026-0009").label, "in stock"); eq(Math.round(v("LOT-2026-0009").pln), 21247, "5 616 kg in stock at its cost");
+    eq(v("LOT-2026-0001").label, "delivered"); eq(Math.round(v("LOT-2026-0001").pln), 14089, "a direct lot is worth what was delivered");
+    eq(v("LOT-2026-0004").label, "expected"); eq(Math.round(v("LOT-2026-0004").pln), 3740); eq(v("LOT-2026-0021").label, "shipped");
+    eq(v("LOT-2026-0031").label, "—"); eq(v("LOT-2026-0031").pln, 0, "a cancelled lot has no value");
+    eq(d.lots.filter(l => !/Cancelled/.test(l.status) && L.lotValue(l, 1).pln === 0).length, 0, "every live lot in her file now shows a value");
+  });
+  t("A-IN-3: stock lots count their days; direct lots show dates and no count; expected lots their date", () => {
+    const a9 = L.lotArrivedCell(lot("LOT-2026-0009"), "2026-09-29"); eq(a9.kind, "stock"); eq(a9.date, "2026-07-24"); eq(a9.days, 67);
+    const a1 = L.lotArrivedCell(lot("LOT-2026-0001"), "2026-09-29"); eq(a1.kind, "direct"); eq(a1.loaded, "2026-07-23"); eq(a1.delivered, "2026-07-23"); eq(a1.days, undefined, "never a count for a direct lot");
+    const a4 = L.lotArrivedCell(lot("LOT-2026-0004"), "2026-09-29"); eq(a4.kind, "expected"); eq(a4.date, "2026-07-23");
+    ok(L.lotIsDirect(lot("LOT-2026-0016")) && !L.lotIsDirect(lot("LOT-2026-0009")));
+  });
+  t("A-IN-1: the +100 % lots name their two shipments; the integrity check lists all 19 as warnings", () => {
+    eq(L.lotLoadedTwice(lot("LOT-2026-0026")).join(" + "), "SHP-2026-0021 + SHP-2026-0016"); eq(L.lotLoadedTwice(lot("LOT-2026-0001")), null); eq(L.lotLoadedTwice(lot("LOT-2026-0021")), null, "two trucks feeding one lot as expected is not a double load");
+    const r = I.checkIntegrity({ contacts: d.contacts, pos: d.pos, lots: d.lots, orders: d.orders, shipments: d.shipments, invoices: d.invoices || [] });
+    const x = r.issues.filter(i => i.code === "LOT_LOADED_TWICE"); eq(x.length, 19); ok(x.every(i => i.severity === "warning")); ok(/SHP-2026-0016/.test(x.find(i => i.entity === "LOT-2026-0026").message));
+  });
+  console.log("v6.99.81 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

@@ -337,6 +337,37 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     else { failed++; console.log("  \u2717 views / copy / links — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 views / copy / links —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
+// v6.99.81 (A-IN, owner 29 Sept): the inventory list and the lot view on her 28 Sept file
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [] };
+    const Inv = require(path.resolve("./src/Inventory")).default;
+    _where = "inventory list";
+    const lh = renderToStaticMarkup(React.createElement(Inv, { ...c9 })); const lt = T(lh);
+    ["ARRIVED · AGE", "d on stock", "expected 23/07/2026", "Direct · producer → client", ">Delivered<", ">In stock<", ">Expected<", ">Shipped<"].forEach(w => { if (!(w.startsWith(">") ? lh.includes(w) : lt.includes(w))) bad.push("list lacks " + JSON.stringify(w)); });
+    const badgeWords = (lh.match(/border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap">([^<]*)</g) || []).map(x => x.replace(/.*">/, "").replace("<", ""));
+    if (badgeWords.some(w => /\(direct\)|Shipped Out|Direct Expected/.test(w))) bad.push("a stored status word leaked onto a badge: " + badgeWords.filter(w => /\(|Out|Direct/.test(w)).join(","));
+    if (!/color:#16A34A;font-weight:700">[\d\s]+ free</.test(lh) || !/color:#D97706;font-weight:700">[\d\s]+ reserved</.test(lh)) bad.push("free/reserved colours");
+    const zeros = (lh.match(/font-weight:600;color:#111">0,00<\/div><div style="font-size:10px;color:#64748B"><span[^>]*>(in stock|delivered|expected|shipped)</g) || []).length; if (zeros > 0) bad.push(`${zeros} live lots still show a 0,00 value`);
+    if (!/title="Loaded on SHP-2026-0021 and again on SHP-2026-0016/.test(lh)) bad.push("the +100 % badge does not name its two shipments");
+    if (/arrived 02\.03\.2026 · 2\d\d d/.test(lt)) bad.push("a direct lot still counts days on stock");
+    _where = "lot view LOT-2026-0026 (direct, delivered)";
+    const v26 = renderToStaticMarkup(React.createElement(Inv, { ...c9, initialSelectedNumber: "LOT-2026-0026" })); const t26 = T(v26);
+    if (!/Value delivered/.test(t26)) bad.push("lot view value label"); if (/received [\d\s]+ kg\b/.test((t26.match(/Value delivered.{0,120}/) || [""])[0])) bad.push("received-kg line still under the value");
+    if (/COST BREAKDOWN/.test(t26)) bad.push("cost breakdown box still there"); if (/CURRENT LOCATION|ETA destination/.test(t26)) bad.push("location / dates still in Linked documents");
+    if (/background:#0F172A;color:#fff/.test(v26)) bad.push("workbench header still dark"); if (!/LOT WORKBENCH.{0,200}PO-2026-00/.test(t26)) bad.push("workbench header does not lead with the PO");
+    if (/STOCK — AVAILABLE NOW/.test(t26)) bad.push("stock tile shown on a direct lot");
+    const nav = { open: () => {}, canOpen: n => /^(SO|SHP|LOT|PO)-/.test(n) }; const UI = require(path.resolve("./src/ui"));
+    const v26n = renderToStaticMarkup(React.createElement(UI.DocNavContext.Provider, { value: nav }, React.createElement(Inv, { ...c9, initialSelectedNumber: "LOT-2026-0026" })));
+    const links = (v26n.match(/data-doclink="1"[^>]*title="Open ([^"]+)"/g) || []).map(x => x.match(/Open ([^"]+)/)[1]); if (!links.some(n => /^PO-/.test(n))) bad.push("lot view links: " + links.join(","));
+    _where = "lot view LOT-2026-0009 (in stock)";
+    const v9 = T(renderToStaticMarkup(React.createElement(Inv, { ...c9, initialSelectedNumber: "LOT-2026-0009" })));
+    if (!/Value in stock/.test(v9)) bad.push("stock lot value label"); if (!/STOCK — AVAILABLE NOW/.test(v9)) bad.push("stock tile missing on a stock lot");
+    if (!bad.length) { passed++; console.log("  \u2713 inventory: list (status words, arrived/age, direct flow, colours, value by state, the +100 % explained), lot view (value label, no cost box, light workbench led by the PO, links)"); }
+    else { failed++; console.log("  \u2717 inventory — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 inventory —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
   else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }
