@@ -68,8 +68,14 @@ export function soShipmentProgress(order: any, shipments: any[]): SoShipmentProg
   let movedKg = 0, deliveredKg = 0, bookedKg = 0;
   const seen = new Set<string>();
 
+  // v6.99.84 (A-SO-5, owner 30 Sept): an SO selling straight from a PO (sourceType PO) also counts the shipments that carry
+  // that PO's goods with no SO of their own — the supplier's truck created from the PO (SHP-2026-0036 for SO-2026-0026 never
+  // counted, so the order could never be invoiced). Only rows with no soRef are counted, capped at what the SO sources.
+  const srcPOs = new Set((order?.items || []).filter((it: any) => S(it.sourceType) === "PO" && S(it.sourceRef)).map((it: any) => S(it.sourceRef)));
   (shipments || []).filter(LIVE).forEach(sh => {
-    const rows = (sh.goods || []).filter((g: any) => S(g.soRef) === soNo);
+    const own = (sh.goods || []).filter((g: any) => S(g.soRef) === soNo);
+    const viaPO = !own.length && srcPOs.size && !(sh.soRefs || []).length ? (sh.goods || []).filter((g: any) => !S(g.soRef) && srcPOs.has(S(g.poRef))) : [];
+    const rows = own.length ? own : viaPO;
     // A shipment with no per-row soRef but naming this order in its header still
     // carries it — older shipments were built that way.
     const kg = rows.length
@@ -87,6 +93,7 @@ export function soShipmentProgress(order: any, shipments: any[]): SoShipmentProg
   // ALL OR NOTHING (owner ruling): 1 kg of slack absorbs whole-box rounding,
   // never a real remainder. An order with 1 000 kg still to load has NOT shipped
   // — that is the whole point of knowing what is left.
+  movedKg = Math.min(movedKg, orderedKg); deliveredKg = Math.min(deliveredKg, orderedKg);   // v6.99.84: a PO truck can carry more than one SO buys
   const allMoved = orderedKg > 0 && movedKg >= orderedKg - 1;
   const allDelivered = orderedKg > 0 && deliveredKg >= orderedKg - 1;
   return { orderedKg, movedKg, deliveredKg, bookedKg, shipments: Array.from(seen), allMoved, allDelivered };

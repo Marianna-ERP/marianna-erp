@@ -31,7 +31,7 @@ function sourcesLot(it: any, lot: any): boolean {
   return false;
 }
 
-export interface VarietyLine { lotNumber: string; product: string; variety: string; receivedKg: number; classIKg: number; classIIKg: number; wasteKg: number; soldKg: number; soldKgII: number; salesPLN: number; salesPLNII: number; pricePerKgPLN: number; pricePerKgPLNII: number; onStockKg: number; }
+export interface VarietyLine { lotNumber: string; product: string; variety: string; receivedKg: number; expectedKg: number; classIKg: number; classIIKg: number; wasteKg: number; soldKg: number; soldKgII: number; salesPLN: number; salesPLNII: number; pricePerKgPLN: number; pricePerKgPLNII: number; onStockKg: number; }
 
 export interface POSettlementCalc {
   poNumber: string; lines: VarietyLine[];
@@ -39,6 +39,12 @@ export interface POSettlementCalc {
   producerRecoveriesPLN: number; netPLN: number;
   ratePLNperEUR: number; netSalesEUR: number; commissionPct: number; commissionEUR: number; netAfterCommissionEUR: number;
   provisionalEUR: number; differenceEUR: number; expectedCreditNoteEUR: number; extraInvoiceEUR: number; transferEUR: number;
+  // v6.99.84 (A-ST-1/3, owner 30 Sept): the "EUR" fields are in the PO's CURRENCY (EUR, USD or PLN) — `currency` names it.
+  // correction = the producer's credit note (−) or extra invoice (+) against net sales BEFORE commission (ruling 30 Sept);
+  // balance = correction − our commission invoice, i.e. what moves after compensation (+ we owe the producer, − he owes us);
+  // provisionalPaid / stillToTransfer: from the producer's provisional invoice in the register (null when it is not there).
+  currency: string; provisionalCurrency: string; provisionalOriginal: number; correctionEUR: number; balanceEUR: number;
+  provisionalPaidEUR: number | null; stillToTransferEUR: number | null; salesBasis: "invoice" | "order" | "mixed";
   fullySold: boolean; warnings: string[];
 }
 
@@ -48,16 +54,27 @@ export function defaultTruckRate(po: any, lots: any[], orders: any[], invoices: 
   const sinvs = (invoices || []).filter(i => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "SO" && soNums.has(String(l.number))))
     .sort((a, b) => String(a.issueDate || "").localeCompare(String(b.issueDate || "")));
   const last = sinvs.slice(-1)[0];
-  if (last && String(last.currency || "").toUpperCase() === "EUR" && num(last.fxRate) > 0) return num(last.fxRate);
-  if (num(po?.fxRate) > 0 && String(po?.currency || "").toUpperCase() === "EUR") return num(po.fxRate);
+  const poCur = String(po?.currency || "EUR").toUpperCase();   // v6.99.84 (A-ST-1): the rate of the PO's currency, whichever it is
+  if (poCur === "PLN") return 1;
+  if (last && String(last.currency || "").toUpperCase() === poCur && num(last.fxRate) > 0) return num(last.fxRate);
+  if (num(po?.fxRate) > 0) return num(po.fxRate);
   return 0;
 }
 
 export function computePOSettlement(input: {
   po: any; lots: any[]; orders: any[]; invoices?: any[]; shipments?: any[]; claims?: any[];
-  ratePLNperEUR: any; provisionalEUR?: any; commissionPct: any;
+  ratePLNperEUR: any; provisionalEUR?: any; commissionPct: any; provisionalCurrency?: any; provisionalRate?: any; provisionalInvoiceNo?: any;
 }): POSettlementCalc {
   const { po, lots, orders } = input;
+  const currency = S(po?.currency || "EUR").toUpperCase() || "EUR";
+  // v6.99.84 (A-ST-1): each sale in PLN at ITS document's rate — the sales invoice's locked rate once invoiced, the order's until then
+  const bases = new Set<string>();
+  const soRate = (o: any): number => {
+    if (S(o?.currency || "PLN").toUpperCase() === "PLN") { return 1; }
+    const inv = (input.invoices || []).find((i: any) => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && num(i.fxRate) > 0 && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
+    if (inv) { bases.add("invoice"); return num(inv.fxRate); }
+    bases.add("order"); return num(o?.fxRate) || 1;
+  };
   const myLots = lotsOfPO(po, lots);
   const warnings: string[] = [];
   const liveOrders = (orders || []).filter(o => o && o.status !== "Draft" && o.status !== "Cancelled");
@@ -65,7 +82,7 @@ export function computePOSettlement(input: {
     let soldKg = 0, soldKgII = 0, salesPLN = 0, salesPLNII = 0;
     liveOrders.forEach(o => (o.items || []).forEach((it: any) => {
       if (!sourcesLot(it, lot)) return;
-      const kg = num(it.qty); const fx = num(o.fxRate) || 1;
+      const kg = num(it.qty); const fx = soRate(o);
       const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice);
       const isII = /\bII\b|class ?2|klasa ?2|second/i.test(String(it.quality || it.grade || ""));
       if (isII) { soldKgII += kg; salesPLNII += kg * price * fx; } else { soldKg += kg; salesPLN += kg * price * fx; }
@@ -74,7 +91,9 @@ export function computePOSettlement(input: {
     const received = num(lot.receivedKg);
     const wasteKg = num(g.waste);
     const onStock = Math.max(0, r0(received - wasteKg - soldKg - soldKgII));
-    return { lotNumber: lot.number, product: lot.product || "", variety: lot.variety || "", receivedKg: r0(received), classIKg: r0(num(g.I)), classIIKg: r0(num(g.II)), wasteKg: r0(wasteKg),
+    // v6.99.84 (A-ST-4): a direct lot is received only when its truck is Delivered — until then the table shows what is expected
+    const expectedKg = received > 0 ? 0 : r0(num(lot.expectedKg));
+    return { lotNumber: lot.number, product: lot.product || "", variety: lot.variety || "", receivedKg: r0(received), expectedKg, classIKg: r0(num(g.I)), classIIKg: r0(num(g.II)), wasteKg: r0(wasteKg),
       soldKg: r0(soldKg), soldKgII: r0(soldKgII), salesPLN: r2(salesPLN), salesPLNII: r2(salesPLNII),
       pricePerKgPLN: soldKg > 0 ? r2(salesPLN / soldKg) : 0, pricePerKgPLNII: soldKgII > 0 ? r2(salesPLNII / soldKgII) : 0, onStockKg: onStock };
   });
@@ -125,20 +144,33 @@ export function computePOSettlement(input: {
   producerRecoveriesPLN = r2(producerRecoveriesPLN); thirdPartyRecoveriesPLN = r2(thirdPartyRecoveriesPLN);
 
   const netPLN = r2(grossPLN - creditNotesPLN - expensesPLN - producerRecoveriesPLN);
-  const rate = num(input.ratePLNperEUR);
-  if (!(rate > 0)) warnings.push("No PLN→EUR rate on this settlement — take the last sales invoice's rate and add the bank's EUR purchase cost.");
+  const rate = currency === "PLN" ? 1 : num(input.ratePLNperEUR);
+  if (!(rate > 0)) warnings.push(`No PLN→${currency} rate on this settlement — take the last sales invoice's rate and add the bank's ${currency} purchase cost.`);
   const netSalesEUR = rate > 0 ? r2(netPLN / rate) : 0;
   const pct = num(input.commissionPct);
   const commissionEUR = r2(netSalesEUR * pct / 100);
   const netAfterCommissionEUR = r2(netSalesEUR - commissionEUR);
-  const provisionalEUR = r2(num(input.provisionalEUR));
+  // v6.99.84 (A-ST-1): the provisional invoice in ITS currency, converted to the PO's through PLN when they differ
+  const provCur = S(input.provisionalCurrency || currency).toUpperCase() || currency; const provAmt = num(input.provisionalEUR);
+  const provPLN = provCur === "PLN" ? provAmt : provCur === currency ? provAmt * rate : provAmt * num(input.provisionalRate);
+  const provisionalEUR = r2(provCur === currency ? provAmt : (rate > 0 ? provPLN / rate : 0));
+  if (provAmt > 0 && provCur !== currency && provCur !== "PLN" && !(num(input.provisionalRate) > 0)) warnings.push(`The provisional invoice is in ${provCur} — enter its PLN rate.`);
   const differenceEUR = r2(netSalesEUR - provisionalEUR);
   const fullySold = lines.every(l => l.onStockKg <= 1);
   if (!fullySold) warnings.push(`Not fully sold: ${lines.filter(l => l.onStockKg > 1).map(l => `${l.variety || l.lotNumber} ${l.onStockKg} kg on stock`).join(", ")} — this is an INTERIM report.`);
   return { poNumber: po.number, lines, grossPLN, creditNotesPLN, warehousePLN, additionalPLN, thirdPartyRecoveriesPLN, expensesPLN, producerRecoveriesPLN, netPLN,
     ratePLNperEUR: rate, netSalesEUR, commissionPct: pct, commissionEUR, netAfterCommissionEUR,
     provisionalEUR, differenceEUR, expectedCreditNoteEUR: provisionalEUR > 0 ? r2(Math.max(0, -differenceEUR)) : 0, extraInvoiceEUR: provisionalEUR > 0 ? r2(Math.max(0, differenceEUR)) : 0,
-    transferEUR: r2(netAfterCommissionEUR), fullySold, warnings };
+    transferEUR: r2(netAfterCommissionEUR), fullySold, warnings,
+    currency, provisionalCurrency: provCur, provisionalOriginal: r2(provAmt),
+    correctionEUR: provisionalEUR > 0 ? differenceEUR : 0, balanceEUR: provisionalEUR > 0 ? r2(differenceEUR - commissionEUR) : r2(netAfterCommissionEUR),
+    ...(() => { const no = S(input.provisionalInvoiceNo); const pinv = no ? (input.invoices || []).find((i: any) => i && i.kind !== "SALES" && i.paymentStatus !== "Cancelled" && S(i.number).replace(/\s/g, "").toUpperCase() === no.replace(/\s/g, "").toUpperCase()) : null;
+      if (!pinv || !(provisionalEUR > 0)) return { provisionalPaidEUR: null, stillToTransferEUR: null };
+      const paidOwn = (pinv.payments || []).reduce((a: number, p: any) => a + num(p.amount), 0) || num(pinv.paidAmount);
+      const pc = S(pinv.currency || provCur).toUpperCase(); const paidPLN = pc === "PLN" ? paidOwn : paidOwn * (num(pinv.fxRate) || (pc === currency ? rate : num(input.provisionalRate)));
+      const paidPO = r2(pc === currency ? paidOwn : (rate > 0 ? paidPLN / rate : 0));
+      return { provisionalPaidEUR: paidPO, stillToTransferEUR: r2(Math.max(0, provisionalEUR - paidPO) + (differenceEUR - commissionEUR)) }; })(),
+    salesBasis: (bases.has("invoice") && bases.has("order") ? "mixed" : bases.has("invoice") ? "invoice" : "order") as any };
 }
 
 /** The SALES REPORT rows in the owner's template: item = variety + class; waste rows carry kg only. */
@@ -160,8 +192,8 @@ export function expectedProducerCreditNote(po: any, calc: POSettlementCalc, deps
   const fx = calc.ratePLNperEUR || 1;
   return { id: deps.nextId(), noteType: "CREDIT", direction: "incoming", issuedBy: "COUNTERPARTY", status: "Expected",
     partyName: po.supplier?.name || "Producer", partyId: po.supplier?.id ?? null, category: "Consignment adjustment",
-    amount: calc.expectedCreditNoteEUR, currency: "EUR", fxRate: fx, amountPLN: r2(calc.expectedCreditNoteEUR * fx),
-    reason: `Expected: ${po.number} provisional ${calc.provisionalEUR.toLocaleString("pl-PL")} EUR → net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} EUR before commission`,
+    amount: calc.expectedCreditNoteEUR, currency: calc.currency || "EUR", fxRate: fx, amountPLN: r2(calc.expectedCreditNoteEUR * fx),
+    reason: `Expected: ${po.number} provisional ${calc.provisionalEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"} → net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"} before commission`,
     date: deps.todayISO(), relatedRef: po.number, expected: true };
 }
 
@@ -170,12 +202,12 @@ export function commissionInvoiceDraft(po: any, calc: POSettlementCalc, settleme
   const fx = calc.ratePLNperEUR || 1;
   return { id: deps.nextId(), kind: "SALES", category: "COMMISSION", number: "", isProforma: false,
     counterparty: { id: po.supplier?.id ?? null, name: po.supplier?.name || "Producer", nip: po.supplier?.nip || "", address: po.supplier?.address || "" },
-    issueDate: deps.todayISO(), saleDate: deps.todayISO(), dueDate: deps.todayISO(), currency: "EUR", fxRate: fx,
+    issueDate: deps.todayISO(), saleDate: deps.todayISO(), dueDate: deps.todayISO(), currency: calc.currency || "EUR", fxRate: fx,
     netAmount: calc.commissionEUR, vatRate: 0, grossAmount: calc.commissionEUR, netPLN: r2(calc.commissionEUR * fx), grossPLN: r2(calc.commissionEUR * fx),
     paymentStatus: "Draft", paidAmount: 0, payments: [],
-    positions: [{ name: `Commission ${calc.commissionPct}% — ${po.number}${settlement.number ? " · " + settlement.number : ""} — net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} EUR`, quantity: 1, unit: "service", vatRate: 0, grossTotal: calc.commissionEUR }],
+    positions: [{ name: `Commission ${calc.commissionPct}% — ${po.number}${settlement.number ? " · " + settlement.number : ""} — net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"}`, quantity: 1, unit: "service", vatRate: 0, grossTotal: calc.commissionEUR }],
     links: [{ type: "PO", number: po.number }, ...(settlement.number ? [{ type: "SET", number: settlement.number }] : [])],
-    source: `Commission run — ${po.number}`, notes: `Compensation proposal: offset ${calc.commissionEUR.toLocaleString("pl-PL")} EUR against the producer's invoice; transfer ${calc.transferEUR.toLocaleString("pl-PL")} EUR.` };
+    source: `Commission run — ${po.number}`, notes: `Compensation proposal: offset ${calc.commissionEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"} against the producer's invoice; transfer ${calc.transferEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"}.` };
 }
 
 /** The Monday run: every CLOSED settlement without a commission invoice gets one (per truck). */

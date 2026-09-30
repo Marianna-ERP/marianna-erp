@@ -899,7 +899,9 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any
   const v = inspectionVerdict(ins);
   const checks: any[] = ins.externalChecks || [];
   const setCheck = (i: number, k: string, val: any) => set("externalChecks", checks.map((c, j) => j === i ? { ...c, [k]: val } : c));
-  const setTol = (categoryName: string, val: any) => set("tolerances", { ...(ins.tolerances || {}), [categoryName]: parseFloat(val) || 0 });
+  // v6.99.83 (A-QC-1, owner 30 Sept): the field kept snapping back to 0 — clearing it stored 0 at once. Keep the text as typed;
+  // an empty or unfinished value counts as 0 only when the report is judged (inspectionVerdict).
+  const setTol = (categoryName: string, val: any) => set("tolerances", { ...(ins.tolerances || {}), [categoryName]: val === "" ? "" : (isFinite(parseFloat(val)) ? parseFloat(val) : val) });
   return (
     <QhWindow draft={ins} title="🔬 Quality inspection" subtitle={`${lot.number} · ${lot.product}${lot.variety ? " — " + lot.variety : ""}`} colour="#0E7490" onClose={onClose} onSave={() => onSave(ins)} saveLabel="Save report">
       <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>HEADER</div>
@@ -939,7 +941,7 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any
             {d.name && !defectsFor(cat, lot.product).some((x: any) => x.name === d.name) && <option value={d.name}>{d.name}</option>}
           </Sel>
           <input type="number" step="0.01" placeholder="% found" value={d.pct ?? ""} onChange={e => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, pct: e.target.value } : x))} style={qhInp} />
-          <div style={{ fontSize: 10.5, color: "#94A3B8", textAlign: "center" }}>tol. {(ins.tolerances || {})[d.category] ?? 0} %</div>
+          <div style={{ fontSize: 10.5, color: "#94A3B8", textAlign: "center" }}>tol. {parseFloat((ins.tolerances || {})[d.category]) || 0} %</div>
           <ActionButton action="close" onClick={() => set("defects", ins.defects.filter((_: any, k: number) => k !== i))} />
         </div>
       ))}

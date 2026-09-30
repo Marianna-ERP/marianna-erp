@@ -17,7 +17,7 @@ export default function QualityReportDoc({ x, lot, no, supplierRef = "", inline 
   const section = { fontWeight: 800, margin: "20px 0 6px", fontSize: 12.5, letterSpacing: "0.03em" } as any;
   const green = "#166534", red = "#B91C1C";
   return (
-    <div id={`insp-print-${x.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff", fontFamily: "Arial", fontSize: 12, padding: 20 }}>
+    <div id={`insp-print-${x.id}`} style={{ ...(inline ? { position: "static" } : { position: "absolute", left: -10000, top: 0 }), width: 780, background: "#fff", fontFamily: "Arial", fontSize: 12, padding: 20 } as any}>{/* v6.99.84 (A-ST-5): inline = in the page's flow — parked off-page inside the settlement's print copy, it printed blank */}
       <div style={{ display: "flex", alignItems: "flex-start", borderBottom: "2px solid #111", paddingBottom: 10, marginBottom: 10 }}>
         <PrintLogo width={180} />
         <div style={{ marginLeft: "auto", textAlign: "right" }}><div style={{ fontSize: 15, fontWeight: 800 }}>QUALITY REPORT</div><div style={{ fontSize: 13, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace" }}>{no || ""}</div></div>

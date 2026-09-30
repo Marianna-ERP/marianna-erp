@@ -466,7 +466,8 @@ export function unitGaps(u: any): Array<"pickup place" | "delivery place" | "loa
 // Several POs on one SO: each truck follows the goods it carries, never the SO. A load line → its goods row → its PO:
 // on EXW / FCA the PO's named place is the producer's site and the PO's loading date is the day. Goods from stock load
 // at the lot's location. A truck whose goods come from two places is named, never silently given one of them.
-export interface LoadPlace { id: any; text: string; ref: string; date: string; }
+export interface LoadPlace { id: any; text: string; ref: string; date: string; deliveryId?: any; deliveryText?: string; }
+const SUPPLIER_DELIVERS = /^(DAP|DPU|DDP|CPT|CIP|CFR|CIF|DAT)$/;
 const samePlace = (aId: any, aText: any, bId: any, bText: any) => (aId != null && aId !== "" && bId != null && bId !== "") ? String(aId) === String(bId) : S(aText).toLowerCase() === S(bText).toLowerCase() && !!S(aText);
 export function truckLoadPlaces(sh: any, u: any, pos: any[] = [], lots: any[] = []): LoadPlace[] {
   const out: LoadPlace[] = [];
@@ -476,7 +477,10 @@ export function truckLoadPlaces(sh: any, u: any, pos: any[] = [], lots: any[] = 
     const lot = (lots || []).find((l: any) => String(l.number) === String(g.lotRef)) || null;
     let p: LoadPlace | null = null;
     if (po && ["EXW", "FCA"].includes(S(po.buyIncoterm).toUpperCase()) && (po.destinationLocationId != null || S(po.destinationText))) p = { id: po.destinationLocationId ?? null, text: S(po.destinationText || po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate) };
-    else if (lot && (lot.locationId != null || S(lot.locationText))) p = { id: lot.locationId ?? null, text: S(lot.locationText), ref: S(lot.number), date: "" };
+    // v6.99.83 (A-UN-5, owner 30 Sept): on a supplier-delivered PO (DDP, DAP, CIF…) the truck loads at the SUPPLIER and delivers to
+    // the PO's destination — the lot's location (where it will arrive) is never the loading place; a lot's location counts only in stock
+    else if (po && SUPPLIER_DELIVERS.test(S(po.buyIncoterm).toUpperCase()) && S(po.supplier?.name || po.supplier)) p = { id: null, text: S(po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate), deliveryId: po.destinationLocationId ?? null, deliveryText: S(po.destinationText) };
+    else if (lot && num(lot.physicalKg) > 0 && (lot.locationId != null || S(lot.locationText))) p = { id: lot.locationId ?? null, text: S(lot.locationText), ref: S(lot.number), date: "" };
     if (p && !out.some(q => samePlace(q.id, q.text, p!.id, p!.text))) out.push(p);
   });
   return out;

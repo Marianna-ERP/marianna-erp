@@ -151,7 +151,10 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 // v6.99.59 (A-OW/SU/BK/CU): the shipment editor — Close button, Header → Booking → Units, booking on one line, ports still shown
 { try { const ShMod = require(path.resolve("./src/Shipments"));
     const d4 = JSON.parse(fs.readFileSync(file, "utf8"));
-    const sh = (d4.shipments || []).find((s) => String(s.mode || "").toLowerCase() === "multimodal" && (s.legs || []).length > 1) || d4.shipments[0];
+    // the booking stage is open only while the shipment is being arranged — pick one that still is (a Delivered one folds it away)
+    const arranging = (s) => !["Delivered", "Closed", "Cancelled"].includes(String(s.status || ""));
+    const multi = (d4.shipments || []).filter((s) => String(s.mode || "").toLowerCase() === "multimodal" && (s.legs || []).length > 1);
+    const sh = multi.find(arranging) || multi[0] || d4.shipments[0];
     _where = "shipment editor " + sh.number;
     const html = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: d4.shipments, setShipments: () => {}, contacts: d4.contacts, lots: d4.lots, orders: d4.orders, pos: d4.pos, initialSelectedNumber: sh.number }));
     const iB = html.indexOf("Booking (sea"), iU = html.indexOf("Loading place");
@@ -367,6 +370,35 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     if (!bad.length) { passed++; console.log("  \u2713 inventory: list (status words, arrived/age, direct flow, colours, value by state, the +100 % explained), lot view (value label, no cost box, light workbench led by the PO, links)"); }
     else { failed++; console.log("  \u2717 inventory — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 inventory —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
+// v6.99.84 (A-ST, A-PO-C1, owner 30 Sept) — pl-PL groups thousands only from 5 digits (2564,14 but 39 448,28): PO-2026-0043's settlement box, its two reports, and the PO list markers
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [], poSettlements: d9.poSettlements, settlements: d9.poSettlements, inspections: d9.inspections || [] };
+    const POm = require(path.resolve("./src/PurchaseOrders"));
+    _where = "PO-2026-0043 settlement";
+    const po = d9.pos.find(p => p.number === "PO-2026-0043");
+    const box = renderToStaticMarkup(React.createElement(POm.TruckSettlementCard, { order: po, lots: d9.lots, orders: d9.orders, invoices: d9.invoices || [], shipments: d9.shipments, claims: d9.claims || [], inspections: d9.inspections || [], contacts: d9.contacts, settlements: d9.poSettlements, setSettlements: () => {} }));
+    const bt = T(box);
+    ["IN PLN", "Sales (excl. VAT) 171 600,00 PLN", "IN EUR · rate 4.35", "Sales after costs 39 448,28 EUR", "Our commission 6.5% 2564,14 EUR", "1 · Vega-Pro Kft. issues an EXTRA INVOICE 2448,28 EUR", "2 · we issue our COMMISSION INVOICE 2564,14 EUR", "3 · after compensation Vega-Pro Kft. owes us 115,86 EUR", "14 300 expected", "Transport and other costs"].forEach(w => { if (!bt.includes(w)) bad.push("box lacks " + JSON.stringify(w)); });
+    if (/Transfer after compensation|Gross sales|Net sales /.test(bt)) bad.push("an old label survived");
+    const labels = (box.match(/<div><\/div><div style="color:#0F766E">ARRIVED<\/div>/) || []).length; if (!labels) bad.push("the label row has no spacer over Variety · lot");
+    if (!/SOLD<\/div><div style="color:#B45309">LEFT/.test(box) || !/span 3;color:#16A34A/.test(box.replace(/grid-column:span 3;color:#16A34A;text-align:center/, "span 3;color:#16A34A"))) bad.push("SOLD does not span its three columns");
+    if (!/<option[^>]*>USD<\/option>/.test(box)) bad.push("provisional currency choice missing");
+    const srep = (box.match(/id="sales-report-doc-[^"]+"[\s\S]*?(?=<div id="qc-report-)/) || [""])[0]; const st = T(srep);
+    ["Sales report", "Raport sprzedaży", "Producer", "Vega-Pro Kft.", "PO-2026-0043", "3 · After compensation — Vega-Pro Kft. owes us 115,86 EUR"].forEach(w => { if (!st.includes(w)) bad.push("sales report lacks " + JSON.stringify(w)); });
+    if (!/<img[^>]*src="data:image/.test(srep)) bad.push("sales report without the company logo");
+    const qrep = (box.match(/id="qc-report-[^"]+"[\s\S]*$/) || [""])[0];
+    if (/id="insp-print-[^"]+" style="position:absolute;left:-10000px/.test(qrep)) bad.push("quality report still parked off the page inside the print copy");
+    if (!/id="insp-print-/.test(qrep)) bad.push("no quality report for LOT-2026-0126");
+    _where = "PO list";
+    const lh = renderToStaticMarkup(React.createElement(POm.default, { ...c9 })); const lt = T(lh);
+    if (!/>Consignment( \(\d+\))?<\/button>/.test(lh)) bad.push("no Consignment filter"); const iC = lh.search(/>Consignment( \(\d+\))?<\/button>/), iE = lh.indexOf("Estimated only"); if (iE >= 0 && iC > iE) bad.push("Consignment filter is not before Estimated only");
+    if (!/PO-2026-0043<\/div>\s*<div style="display:flex;gap:4px;margin-top:2px"><span[^>]*>consignment<\/span>/.test(lh)) bad.push("PO-2026-0043 lacks its consignment line under the number");
+    if (!bad.length) { passed++; console.log("  \u2713 PO-2026-0043 settlement: PLN → EUR → the three steps (extra invoice 2 448,28 · commission 2 564,14 · Vega-Pro owes us 115,86), labels over their columns, 14 300 expected; sales report on the template with the logo; quality report in the page; PO list consignment line + filter"); }
+    else { failed++; console.log("  \u2717 settlement / reports / PO list — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 settlement / reports / PO list —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }

@@ -21,6 +21,7 @@ import { isEstimatedLine, planPackingResult } from "./so.domain";
 import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
+import SalesReportDoc from "./SalesReportDoc";   // v6.99.84 (A-ST-6)
 import { PACKAGING_SEED } from "./packaging.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
@@ -450,7 +451,8 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
   const rate = rec?.ratePLNperEUR ?? defRate;
   const pctDefault = rateRec ? (commissionPctForSales(rateRec, 0) ?? rateRec.pct) : 0;
   const pct = rec?.commissionPct ?? pctDefault;
-  const calc = computePOSettlement({ po: order, lots, orders, invoices, shipments, claims, ratePLNperEUR: rate, provisionalEUR: rec?.provisionalEUR, commissionPct: pct });
+  const calc = computePOSettlement({ po: order, lots, orders, invoices, shipments, claims, ratePLNperEUR: rate, provisionalEUR: rec?.provisionalEUR, commissionPct: pct, provisionalCurrency: rec?.provisionalCurrency, provisionalRate: rec?.provisionalRate, provisionalInvoiceNo: rec?.provisionalInvoiceNo });
+  const cur = calc.currency; const provCur = calc.provisionalCurrency; const prodName = order.supplier?.name || "the producer";   // v6.99.84 (A-ST-1)
   const bandPct = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, calc.grossPLN) : null;
   const upd = (patch: any) => setSettlements && setSettlements((prev: any[]) => { const all = prev || []; const cur = all.find((s: any) => String(s.poNumber) === String(order.number)); if (cur) return all.map((s: any) => s === cur ? { ...s, ...patch } : s); return [...all, { id: nextId(), poNumber: order.number, status: "Open", ratePLNperEUR: rate, commissionPct: pct, ...patch }]; });
   const fmt = (n: number, c = "PLN") => `${(n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${c}`;
@@ -472,21 +474,25 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
     <Card style={{ marginBottom: 16, borderLeft: "4px solid #7C3AED" }}>
       <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: closed ? "#16A34A" : "#B45309" }}>{closed ? `CLOSED ${rec.closedAt}` : (calc.fullySold ? "FULLY SOLD — ready to close" : "INTERIM")}</span>}>Truck settlement — {order.number}{rec?.number ? ` · ${rec.number}` : ""}</SectionTitle>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
-        <div><Lbl>Rate PLN→EUR (last sales invoice + bank cost)</Lbl><input type="number" step="0.0001" disabled={closed} value={rate || ""} onChange={e => upd({ ratePLNperEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
+        <div><Lbl>{cur === "PLN" ? "Rate — the PO is in PLN" : `Rate PLN→${cur} (last sales invoice + bank cost)`}</Lbl><input type="number" step="0.0001" disabled={closed || cur === "PLN"} value={cur === "PLN" ? 1 : (rate || "")} onChange={e => upd({ ratePLNperEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
         <div><Lbl>Commission % {bandPct != null ? `(band → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pct ?? ""} onChange={e => upd({ commissionPct: parseFloat(e.target.value) || 0 })} style={inp} /></div>
         <div><Lbl>Producer's provisional invoice no.</Lbl><input disabled={closed} value={rec?.provisionalInvoiceNo || ""} onChange={e => upd({ provisionalInvoiceNo: e.target.value })} style={inp} /></div>
-        <div><Lbl>Provisional value (EUR)</Lbl><input type="number" disabled={closed} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
+        <div><Lbl>Provisional value</Lbl><div style={{ display: "grid", gridTemplateColumns: provCur !== cur && provCur !== "PLN" ? "1fr 64px 76px" : "1fr 64px", gap: 4 }}>
+          <input type="number" disabled={closed} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} />
+          <select disabled={closed} value={provCur} onChange={e => upd({ provisionalCurrency: e.target.value })} title="v6.99.84 (A-ST-1): the currency the producer invoiced in" style={inp}>{["EUR", "USD", "PLN"].map(c => <option key={c}>{c}</option>)}</select>
+          {provCur !== cur && provCur !== "PLN" && <input type="number" step="0.0001" disabled={closed} value={rec?.provisionalRate ?? ""} placeholder="PLN rate" title={`PLN per 1 ${provCur}`} onChange={e => upd({ provisionalRate: parseFloat(e.target.value) || 0 })} style={inp} />}
+        </div></div>
       </div>
       <div id={`sales-report-${order.id}`} style={{ fontSize: 11.5 }}>
         {/* v6.99.36 (A-R25-1, owner): grouped headers, figures right-aligned with separators, a totals row, the currency named once. */}
         <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontWeight: 700, color: "#64748B", fontSize: 9.5, textAlign: "right" }}>
           <div style={{ textAlign: "left" }} />
-          <div style={{ gridColumn: "span 1", color: "#0F766E" }}>ARRIVED</div><div style={{ gridColumn: "span 3", color: "#7C3AED" }}>SORTED INTO</div><div style={{ gridColumn: "span 2", color: "#16A34A" }}>SOLD</div><div style={{ color: "#B45309" }}>LEFT</div><div />
+          <div />{/* v6.99.84 (A-ST-4): the spacer over VARIETY · LOT — without it every label sat one column to the left */}<div style={{ color: "#0F766E" }}>ARRIVED</div><div style={{ gridColumn: "span 3", color: "#7C3AED", textAlign: "center" }}>SORTED INTO</div><div style={{ gridColumn: "span 3", color: "#16A34A", textAlign: "center" }}>SOLD</div><div style={{ color: "#B45309" }}>LEFT</div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontWeight: 700, color: "#94A3B8", fontSize: 10, textAlign: "right" }}><div style={{ textAlign: "left" }}>VARIETY · LOT</div><div>RECEIVED kg</div><div>CLASS I kg</div><div>CLASS II kg</div><div>WASTE kg</div><div>SOLD I kg</div><div>SOLD II kg</div><div>VALUE ({"PLN"})</div><div>ON STOCK kg</div></div>
         {calc.lines.map(l => <div key={l.lotNumber} style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, padding: "4px 0", borderTop: "1px solid #F1F5F9", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
           <div style={{ textAlign: "left" }}><b>{l.variety || l.product}</b> <span style={{ color: "#94A3B8" }}>{l.lotNumber}</span></div>
-          <div>{Math.round(l.receivedKg).toLocaleString("pl-PL")}</div>
+          <div>{l.receivedKg ? Math.round(l.receivedKg).toLocaleString("pl-PL") : (l.expectedKg ? <span style={{ color: "#94A3B8" }} title="direct delivery — received when the truck is Delivered">{Math.round(l.expectedKg).toLocaleString("pl-PL")} expected</span> : "0")}</div>
           <div>{Math.round(l.classIKg).toLocaleString("pl-PL")}</div>
           <div>{Math.round(l.classIIKg).toLocaleString("pl-PL")}</div>
           <div style={{ color: "#94A3B8" }}>{Math.round(l.wasteKg).toLocaleString("pl-PL")}</div>
@@ -501,19 +507,42 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
             {[T.r, T.i, T.ii, T.w, T.si, T.sii].map((n: number, k: number) => <div key={k}>{Math.round(n).toLocaleString("pl-PL")}</div>)}
             <div>{fmt(T.v).replace(" PLN", "")}</div><div>{Math.round(T.s).toLocaleString("pl-PL")}</div>
           </div>; })()}
-        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "3px 14px" }}>
-          <div>Gross sales <b>{fmt(calc.grossPLN)}</b></div><div>Client credit notes <b>−{fmt(calc.creditNotesPLN)}</b></div><div>Warehouse service <b>−{fmt(calc.warehousePLN)}</b></div>
-          <div>Additional costs (transport…) <b>−{fmt(calc.additionalPLN)}</b></div><div>Third-party recoveries <b>+{fmt(calc.thirdPartyRecoveriesPLN)}</b></div><div>Producer recoveries <b>−{fmt(calc.producerRecoveriesPLN)}</b></div>
-          <div>Net sales <b>{fmt(calc.netPLN)}</b></div><div>Rate <b>{calc.ratePLNperEUR || "—"}</b></div><div>Net sales <b>{fmt(calc.netSalesEUR, "EUR")}</b></div>
-          <div>Commission {calc.commissionPct}% <b>{fmt(calc.commissionEUR, "EUR")}</b></div><div>Net after commission <b>{fmt(calc.netAfterCommissionEUR, "EUR")}</b></div><div>Provisional <b>{fmt(calc.provisionalEUR, "EUR")}</b></div>
-          <div style={{ color: "#7C3AED" }}>Expected credit note from producer <b>{fmt(calc.expectedCreditNoteEUR, "EUR")}</b></div><div style={{ color: "#B45309" }}>Extra invoice expected <b>{fmt(calc.extraInvoiceEUR, "EUR")}</b></div><div style={{ color: "#16A34A" }}>Transfer after compensation <b>{fmt(calc.transferEUR, "EUR")}</b></div>
+        {/* v6.99.84 (A-ST-1/2/3, owner 30 Sept): PLN at each document's rate → the PO's currency at one rate → what moves, in the ruled order */}
+        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: "#64748B", letterSpacing: "0.06em", marginBottom: 3 }}>IN PLN</div>
+            <div title={calc.salesBasis === "invoice" ? "the sales invoices, at their locked rates" : "the sales orders, at their rates — replaced by the invoices once issued"}>Sales (excl. VAT) <b>{fmt(calc.grossPLN)}</b></div>
+            <div title="credit notes given to the client on these sales (claims)">Client credit notes <b>−{fmt(calc.creditNotesPLN)}</b></div>
+            <div title="our sorting / storage / handling costs on the lots">Warehouse service <b>−{fmt(calc.warehousePLN)}</b></div>
+            <div title="transport and other costs on the shipments carrying the truck and on the sales' own shipments">Transport and other costs <b>−{fmt(calc.additionalPLN)}</b></div>
+            <div title="claims settled by anyone but the producer — e.g. a carrier (Claims module)">Recovered from third parties <b>+{fmt(calc.thirdPartyRecoveriesPLN)}</b></div>
+            <div title="claims raised against the producer (Claims module) — deducted from his payout">Claims against the producer <b>−{fmt(calc.producerRecoveriesPLN)}</b></div>
+            <div style={{ marginTop: 2 }}>Sales after costs <b>{fmt(calc.netPLN)}</b></div>
+          </div>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: "#64748B", letterSpacing: "0.06em", marginBottom: 3 }}>IN {cur}{cur !== "PLN" ? ` · rate ${calc.ratePLNperEUR || "—"}` : ""}</div>
+            <div>Sales after costs <b>{fmt(calc.netSalesEUR, cur)}</b></div>
+            <div>Our commission {calc.commissionPct}% <b>{fmt(calc.commissionEUR, cur)}</b></div>
+            <div>Due to {prodName} after commission <b>{fmt(calc.netAfterCommissionEUR, cur)}</b></div>
+            <div>Provisional invoice <b>{fmt(calc.provisionalEUR, cur)}</b>{provCur !== cur && calc.provisionalOriginal ? <span style={{ color: "#94A3B8" }}> ({fmt(calc.provisionalOriginal, provCur)})</span> : null}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: "#64748B", letterSpacing: "0.06em", marginBottom: 3 }}>WHAT MOVES</div>
+            {calc.provisionalEUR ? <>
+              <div style={{ color: calc.correctionEUR >= 0 ? "#B45309" : "#6D28D9" }}>1 · {prodName} issues {calc.correctionEUR >= 0 ? "an EXTRA INVOICE" : "a CREDIT NOTE"} <b>{fmt(Math.abs(calc.correctionEUR), cur)}</b></div>
+              <div>2 · we issue our COMMISSION INVOICE <b>{fmt(calc.commissionEUR, cur)}</b></div>
+              <div style={{ color: "#15803D", fontWeight: 700 }}>3 · after compensation {calc.balanceEUR >= 0 ? `we owe ${prodName}` : `${prodName} owes us`} <b>{fmt(Math.abs(calc.balanceEUR), cur)}</b></div>
+              {calc.stillToTransferEUR != null && <div style={{ fontSize: 11, color: "#64748B" }}>provisional paid {fmt(calc.provisionalPaidEUR || 0, cur)} · {calc.stillToTransferEUR >= 0 ? `still to transfer to ${prodName}` : `${prodName} still owes us`} <b>{fmt(Math.abs(calc.stillToTransferEUR), cur)}</b></div>}
+              {calc.stillToTransferEUR == null && rec?.provisionalInvoiceNo && <div style={{ fontSize: 10.5, color: "#94A3B8" }}>the provisional invoice {rec.provisionalInvoiceNo} is not in the register — assumed paid</div>}
+            </> : <div style={{ color: "#94A3B8" }}>Enter the producer's provisional invoice to see the correction and the balance.</div>}
+          </div>
         </div>
         {calc.warnings.map((w, i) => <div key={i} style={{ marginTop: 6, fontSize: 11, color: "#B45309" }}>⚠ {w}</div>)}
         <div style={{ marginTop: 8, fontSize: 10, color: "#94A3B8" }}>SALES REPORT rows (template): {rows.map(r => `${r.item} ${r.soldKg} kg${r.amountEUR ? " · " + r.amountEUR.toLocaleString("pl-PL") + " EUR" : ""}`).join(" · ")}</div>
       </div>
       {/* v6.99.36 (A-R25-4/5, owner): the reports read as documents, and closing a settlement is confirmed in place — with a way back. */}
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={() => printHtmlNode(`sales-report-${order.id}`, `${order.number} — Sales report`)} style={docBtn("#0E7490", "#F0FDFA")}>📄 Sales report</button>
+        <button onClick={() => { if (!lastReportNumber("SRP", order.number)) issueReportNumber("SRP", order.number, "", "Purchase orders"); setTimeout(() => printHtmlNode(`sales-report-doc-${order.id}`, `${order.number} — Sales report`), 60); }} style={docBtn("#0E7490", "#F0FDFA")}>📄 Sales report</button>
         <button onClick={() => exportVegaProSalesReport({ completionDate: localTodayISO(), shipmentRef: (order.supplierRef || (shipments || []).find((s: any) => (s.poRefs || []).includes(order.number) && s.supplierRef)?.supplierRef || ""), poNumber: order.number }, rows, { pct: calc.commissionPct, eur: calc.commissionEUR })} style={docBtn("#7C3AED", "#F5F3FF")} title="the producer's own sheet layout, ready to upload">⬇ Producer's template</button>
         <button onClick={() => { myIns.forEach((x: any) => { if (!lastReportNumber("QR", String(x.id))) issueReportNumber("QR", `${x.lotNumber} · inspection ${x.date}`, "", "Purchase orders"); }); setTimeout(() => printHtmlNode(`qc-report-${order.id}`, `${order.number} — Quality reports`), 60); }} disabled={!myIns.length} style={{ ...docBtn("#B45309", "#FFFBEB"), opacity: myIns.length ? 1 : 0.45, cursor: myIns.length ? "pointer" : "not-allowed" }}>🔬 Quality report ({myIns.length})</button>
         {!closed && setSettlements && (
@@ -531,6 +560,9 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
             style={docBtn("#DC2626", "#FEF2F2")} title="possible until the commission invoice is issued">↩ Re-open settlement</button>
         )}
         {closed && rec?.commissionInvoiceId && <span style={{ fontSize: 11, color: "#94A3B8" }}>commission invoiced — the settlement is final</span>}
+      </div>
+      <div id={`sales-report-doc-${order.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff" }}>
+        <SalesReportDoc order={order} calc={calc} no={lastReportNumber("SRP", order.number)} today={localTodayISO()} producerName={prodName} supplierRef={order.supplierRef || (shipments || []).find((s2: any) => (s2.poRefs || []).includes(order.number) && s2.supplierRef)?.supplierRef || ""} />
       </div>
       <div id={`qc-report-${order.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff" }}>
         {/* v6.99.37 (QA-1, owner ruling): the settlement prints the SAME quality report the lot prints —
@@ -774,6 +806,7 @@ export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: ex
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
   const [estOnly, setEstOnly] = useState(false);   // v6.99.56 (A-PL-4): POs still carrying an estimated line
+  const [consOnly, setConsOnly] = useState(false);   // v6.99.84 (A-PO-C1): consignment POs
   const [filterSupplier, setFilterSupplier] = useState("All");
 
   // KPIs
@@ -819,6 +852,7 @@ export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: ex
     return orders.filter(o => {
       if (!archiveShow(o)) return false;   // v6.99.54 (AR-4)
       if (estOnly && !((o.items || []).some((it: any) => isEstimatedLine(it)) && o.status !== "Cancelled")) return false;   // v6.99.56 (A-PL-4)
+      if (consOnly && String(o.pricingMode || "") !== "consignment") return false;   // v6.99.84 (A-PO-C1)
       if (filterStatus === "Active" && !activeStatuses.has(o.status)) return false;
       if (filterStatus !== "All" && filterStatus !== "Active" && o.status !== filterStatus) return false;
       if (filterSupplier !== "All" && o.supplier?.name !== filterSupplier) return false;
@@ -830,7 +864,7 @@ export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: ex
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, search, filterStatus, filterSupplier, estOnly, archive]);
+  }, [orders, search, filterStatus, filterSupplier, estOnly, consOnly, archive]);
 
   function reflectCancelledPOInInventory(po: any) {
     if (!extSetLots || !po?.number) return;
@@ -1233,6 +1267,9 @@ ${blockNote}`.trim(),
         {/* Filters — compact single row of dropdowns */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search PO#, supplier, product…" style={{ flex: "1 1 240px", minWidth: 200, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
+          {(() => { const n = (orders || []).filter((o: any) => o.status !== "Cancelled" && String(o.pricingMode || "") === "consignment" && archiveShow(o)).length; return (
+            <button onClick={() => setConsOnly(!consOnly)} title="v6.99.84 (A-PO-C1): consignment POs — priced from the sales, settled with the producer"
+              style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${consOnly ? "#6D28D9" : "#DDD6FE"}`, background: consOnly ? "#6D28D9" : "#F5F3FF", color: consOnly ? "#fff" : "#6D28D9", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>Consignment{n ? ` (${n})` : ""}</button>); })()}
           {(() => { const n = (orders || []).filter((o: any) => o.status !== "Cancelled" && (o.items || []).some((it: any) => isEstimatedLine(it)) && archiveShow(o)).length; return (
             <button onClick={() => setEstOnly(!estOnly)} title="v6.99.56 (A-PL-4): POs whose quantities are still estimated — close them with the producer's packing list"
               style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${estOnly ? "#B45309" : "#FDE68A"}`, background: estOnly ? "#B45309" : "#FFFBEB", color: estOnly ? "#fff" : "#92400E", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>≈ Estimated only ({n})</button>); })()}
@@ -1277,7 +1314,12 @@ ${blockNote}`.trim(),
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
               >
                 <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}{o.status !== "Cancelled" && (o.items || []).some((it: any) => isEstimatedLine(it)) ? <span title="quantities still estimated — enter the producer's packing list" style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#92400E", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: "0 6px", fontFamily: "inherit" }}>≈ estimated</span> : null}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
+                  {/* v6.99.84 (A-PO-C1, owner): the markers on their own line under the number — consignment and estimated */}
+                  {o.status !== "Cancelled" && (String(o.pricingMode || "") === "consignment" || (o.items || []).some((it: any) => isEstimatedLine(it))) && <div style={{ display: "flex", gap: 4, marginTop: 2 }}>
+                    {String(o.pricingMode || "") === "consignment" && <span title="consignment — priced from the sales, settled with the producer" style={{ fontSize: 10, fontWeight: 800, color: "#6D28D9", background: "#EDE9FE", border: "1px solid #DDD6FE", borderRadius: 10, padding: "0 6px" }}>consignment</span>}
+                    {(o.items || []).some((it: any) => isEstimatedLine(it)) && <span title="quantities still estimated — enter the producer's packing list" style={{ fontSize: 10, fontWeight: 800, color: "#92400E", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: "0 6px" }}>≈ estimated</span>}
+                  </div>}
                   <div style={{ marginTop: 3 }}><VarianceBadge variance={o.variance} /></div>
                 </div>
                 <div>

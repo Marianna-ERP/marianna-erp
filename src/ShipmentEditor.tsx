@@ -64,6 +64,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     const legs = (d.legs || []).map((l: any) => String(l.mode || "") !== "Road" ? l : { ...l, vehicles: (l.vehicles || []).map((u: any) => {
       const n = truckPlaceNote(d, u, pos || [], lots || []); const x = { ...u };
       if (n.proposal && x.pickupLocationId == null && !String(x.pickupText || "").trim()) { x.pickupLocationId = n.proposal.id; x.pickupText = n.proposal.text; }
+      if (n.proposal && (n.proposal.deliveryId != null || n.proposal.deliveryText) && x.deliveryLocationId == null && !String(x.deliveryText || "").trim()) { x.deliveryLocationId = n.proposal.deliveryId ?? null; x.deliveryText = n.proposal.deliveryText || ""; }   // v6.99.83 (A-UN-5)
       if (!x.plannedLoadingDate) { const dt = n.proposal && isRealISODate(n.proposal.date) ? n.proposal.date : (isRealISODate(soLoad) ? soLoad : ""); if (dt) x.plannedLoadingDate = dt; }
       if (JSON.stringify(x) !== JSON.stringify(u)) touched = true; return x; }) });
     return touched ? { ...d, legs } : d;
@@ -246,7 +247,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
         if (load.length) { unit.load = load; }   // v6.99.8: NOT manual — it takes the remainder now and re-derives with the goods later
         // v6.99.75 (A-UN-1, owner): the truck loads where ITS goods are — their PO's place and loading date, not the shipment's first PO
         const n = truckPlaceNote(prev, unit, pos || [], lots || []);
-        if (n.proposal) { unit.pickupLocationId = n.proposal.id; unit.pickupText = n.proposal.text; if (isRealISODate(n.proposal.date)) unit.plannedLoadingDate = n.proposal.date; }
+        if (n.proposal) { unit.pickupLocationId = n.proposal.id; unit.pickupText = n.proposal.text; if (isRealISODate(n.proposal.date)) unit.plannedLoadingDate = n.proposal.date; if (n.proposal.deliveryId != null || n.proposal.deliveryText) { unit.deliveryLocationId = n.proposal.deliveryId ?? null; unit.deliveryText = n.proposal.deliveryText || ""; } }
         else if (n.twoPlaces) { unit.pickupLocationId = null; unit.pickupText = ""; }
         // in a multimodal shipment the truck drives to the port of loading, never to the SO's destination
         if ((prev.legs || []).some((l: any, k: number) => k > 0 && ["sea", "air", "rail"].includes(String(l.mode || "").toLowerCase()))) { const b = (prev.bookings || [])[0] || {}; unit.deliveryLocationId = b.polId ?? null; unit.deliveryText = b.pol || ""; }
@@ -910,7 +911,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             <div><Lbl>Invoice ref</Lbl><Inp value={c.invoiceRef} onChange={e => updateCost(i, "invoiceRef", e.target.value)} /></div>
             <div><Lbl>&nbsp;</Lbl>{(isFreightCostType(c.type) && !draft.supplierManagedTransport && String(c.source || "").startsWith("LEGCAR:"))
               ? <span title="Derived from the unit prices — set the unit's price to 0 to remove it" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", height: 34, width: "100%", color: "#9CA3AF", fontSize: 14 }}>🔒</span>
-              : <button onClick={() => removeCost(i)} title="Delete this cost line" style={{ height: 34, width: "100%", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, cursor: "pointer", fontSize: 13 }}>✕</button>}</div>
+              : <SmallButton kind="delete" title="Delete this cost line" onClick={() => removeCost(i)}>Delete</SmallButton>}</div>
           </div>)}
           {(() => {
             // v6.4.0: per-currency subtotals + PLN total + EUR equivalent.
@@ -968,7 +969,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                     const refValue = locked ? autoRef : d.ref;
                     const stateOpts = STATES.includes(d.status) ? STATES : [d.status, ...STATES];
                     const linkInfo = inspectLink(d.link);
-                    return <div key={d.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.85fr 0.85fr 1.5fr 32px", gap: 8, marginBottom: 7, alignItems: "end" }}>
+                    return <div key={d.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.85fr 0.85fr 1.5fr 76px", gap: 8, marginBottom: 7, alignItems: "end" }}>
                       <div><Lbl>Type</Lbl><Inp value={d.type} onChange={e => updateDoc(i, "type", e.target.value)} /></div>
                       <div><Lbl>Ref {locked ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· {isBL ? "from leg" : "from clearance"}</span> : null}</Lbl><Inp value={refValue} onChange={e => updateDoc(i, "ref", e.target.value)} disabled={locked} title={isBL ? "Taken from the sea/rail leg's BL number" : (isExportDecl ? "Taken from the lot's export clearance (SAD/MRN) in Inventory" : "")} style={locked ? { background: "#F9FAFB", color: "#666" } : undefined} /></div>
                       <div><Lbl>State</Lbl><Sel value={d.status} onChange={e => updateDoc(i, "status", e.target.value)}>{stateOpts.map((s: string) => <option key={s} value={s}>{s}</option>)}</Sel></div>
@@ -983,8 +984,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                           title="Paste the Dropbox share link for the signed scan"
                           style={d.link && !linkInfo.ok ? { borderColor: "#FCA5A5", background: "#FEF2F2" } : undefined} />
                       </div>
-                      <button onClick={() => removeDoc(i)} title="Remove this document row"
-                        style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, padding: "8px 0", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>✕</button>
+                      <SmallButton kind="remove" title="Remove this document row" onClick={() => removeDoc(i)}>Remove</SmallButton>
                     </div>;
                   })}
                   <div style={{ fontSize: 10.5, color: "#9CA3AF", marginTop: 8, lineHeight: 1.45 }}>

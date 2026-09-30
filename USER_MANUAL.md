@@ -196,6 +196,26 @@ another shipment, the app names that shipment and refuses. The clearance
 status gains **Exited**; the sales invoice's detail shows *exit confirmed* or
 *exit not confirmed yet* per truck, straight from the shipments.
 
+### The truck settlement (consignment POs, v6.99.84)
+
+The box works in three columns:
+
+1. **In PLN** — sales excl. VAT (from the sales invoices at their locked rates, or the
+   sales orders until invoiced), less client credit notes, warehouse service, transport
+   and other costs, claims against the producer, plus what third parties paid back.
+2. **In the PO's currency** (EUR, USD or PLN) at the one rate in the box — sales after
+   costs, our commission, what the producer is due after commission, and his provisional
+   invoice (entered in its own currency; a third currency asks for its PLN rate).
+3. **What moves**, as agreed with the producer: (1) he issues a credit note or an extra
+   invoice for the difference between his provisional and the sales before commission;
+   (2) we issue our commission invoice; (3) after compensation — who owes whom, and, when
+   his provisional invoice is in the register, what is still to transfer.
+
+A direct lot shows its expected kilos until the truck is Delivered. **Sales report**
+prints on the company template; **Quality report** prints the lot's reports. A sales
+order selling straight from a PO can be invoiced as soon as the supplier's truck is
+Loaded. The PO list marks consignment POs and has a *Consignment* filter.
+
 ## 5. Inventory
 
 Inventory is **event-driven**: lots are created by PO confirmation, received

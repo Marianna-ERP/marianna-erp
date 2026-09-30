@@ -2627,3 +2627,70 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.81 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.83 — the tolerance field can be cleared; a supplier-delivered truck loads at the supplier (owner 30 Sept) ══
+(function v69983(){
+  console.log("\n══ 83. v6.99.83: QC tolerance as typed · supplier-delivered trucks (DDP) load at the supplier, deliver to the PO's destination ══");
+  const M = B("shipmentModel.domain.js"); const Q = B("seasonOps.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T11-51-38.json", "the owner's 30 Sept file"); if (!fx) return;
+  const d = require(fx); const po = d.pos.find(p => p.number === "PO-2026-0043"); const sh = d.shipments.find(s => s.number === "SHP-2026-0036");
+  t("A-UN-5: PO-2026-0043 (DDP, consignment) — the truck loads at Vega-Pro and delivers to AGRO-MAX, never at the client", () => {
+    const u = sh.legs[0].vehicles[0]; const n = M.truckPlaceNote(sh, u, d.pos, d.lots);
+    ok(n.proposal, "a proposal"); eq(n.proposal.text, "Vega-Pro Kft."); eq(n.proposal.ref, "PO-2026-0043"); eq(n.proposal.date, "2026-06-02");
+    eq(String(n.proposal.deliveryId), "178843262998053100"); ok(/AGRO-MAX/.test(n.proposal.deliveryText));
+    ok(n.mismatch, "the stored pickup (the client's site) is named as wrong");
+    const expectedLot = d.lots.find(l => l.number === "LOT-2026-0126"); eq(expectedLot.physicalKg || 0, 0, "an expected lot's location is never a loading place");
+  });
+  t("A-UN-5: a supplier-delivered shipment is born with its places and dates", () => {
+    const born = Q.supplierDeliveryFromPO(po, { nextId: (() => { let i = 1; return () => i++; })(), nextNumber: () => "SHP-TEST-1", todayISO: () => "2026-09-30" }, { plate: "HU 123", driver: "", eta: "2026-06-12", supplierRef: "VP-1" });
+    const u = born.legs[0].vehicles[0]; eq(u.pickupText, "Vega-Pro Kft."); eq(String(u.deliveryLocationId), "178843262998053100"); eq(u.plannedLoadingDate, "2026-06-02"); eq(u.plannedDeliveryDate, "2026-06-12");
+    eq(M.unitGaps(u).length, 0, "nothing left for the red rings");
+  });
+  t("A-QC-1: a cleared tolerance stays cleared on the report and counts as 0 when it is judged", () => {
+    const ins = { ...d.inspections[0], tolerances: { Unacceptable: 0, Progressive: "", Major: 2, Minor: 3 } };
+    const v = Q.inspectionVerdict(ins); ok(v, "verdict computed with an empty tolerance"); 
+    const v2 = Q.inspectionVerdict({ ...ins, tolerances: { ...ins.tolerances, Progressive: 0 } }); eq(JSON.stringify(v), JSON.stringify(v2), "empty = 0 exactly");
+  });
+  console.log("v6.99.83 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.84 — the truck settlement in PLN and the PO's currency; what moves; the SO sold from a PO can be invoiced (owner 30 Sept) ══
+(function v69984(){
+  console.log("\n══ 84. v6.99.84: settlement currencies · the three steps after the sales · an SO sold straight from a PO counts its truck ══");
+  const P = B("poSettlement.domain.js"); const SO = B("statusOwnership.domain.js"); const r2 = v => Math.round(v * 100) / 100;
+  const fx = FX.needFixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json", "the owner's 30 Sept 13:13 file"); if (!fx) return;
+  const d = require(fx); const po = d.pos.find(p => p.number === "PO-2026-0043"); const rec = d.poSettlements.find(s => s.poNumber === "PO-2026-0043");
+  const calc = (over = {}) => P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: d.shipments, claims: d.claims || [], ratePLNperEUR: rec.ratePLNperEUR, provisionalEUR: rec.provisionalEUR, commissionPct: rec.commissionPct, provisionalInvoiceNo: rec.provisionalInvoiceNo, ...over });
+  t("A-ST-3: PO-2026-0043 at 6.5 % — Vega-Pro's EXTRA INVOICE 2 448,28, our commission 2 564,14, after compensation Vega-Pro owes us 115,86 EUR", () => {
+    const r = calc(); eq(r.currency, "EUR"); eq(r.grossPLN, 171600); eq(r.netSalesEUR, 39448.28); eq(r.commissionEUR, 2564.14); eq(r.netAfterCommissionEUR, 36884.14);
+    eq(r.correctionEUR, 2448.28, "net sales before commission − provisional (ruling 30 Sept)"); eq(r.extraInvoiceEUR, 2448.28); eq(r.expectedCreditNoteEUR, 0);
+    eq(r.balanceEUR, -115.86, "the producer owes us"); eq(r.stillToTransferEUR, null, "his provisional invoice is not in the register"); eq(r.salesBasis, "order");
+    const low = calc({ provisionalEUR: 41000 }); eq(low.correctionEUR, -1551.72); eq(low.expectedCreditNoteEUR, 1551.72, "a provisional above the sales → a credit note"); eq(low.balanceEUR, -4115.86);
+  });
+  t("A-ST-3: with the provisional in the register, what is still to transfer — unpaid, or paid in full", () => {
+    const unpaid = [{ kind: "COST", number: "EUR258/2026", currency: "EUR", fxRate: 4.30, grossAmount: 37000, payments: [], paymentStatus: "Issued" }];
+    eq(calc({ invoices: unpaid }).stillToTransferEUR, 36884.14, "nothing paid yet: the whole balance due");
+    const paid = [{ ...unpaid[0], payments: [{ amount: 37000 }], paymentStatus: "Paid" }];
+    const r = calc({ invoices: paid }); eq(r.provisionalPaidEUR, 37000); eq(r.stillToTransferEUR, -115.86, "paid in full: Vega-Pro owes us 115,86");
+  });
+  t("A-ST-1: the provisional in its own currency; a PO in PLN needs no rate; an EUR sale at its invoice's locked rate", () => {
+    const usd = calc({ provisionalEUR: 40000, provisionalCurrency: "USD", provisionalRate: 4.0 }); eq(usd.provisionalEUR, r2(40000 * 4.0 / 4.35), "40 000 USD × 4.00 ÷ 4.35"); eq(usd.provisionalCurrency, "USD"); eq(usd.provisionalOriginal, 40000);
+    eq(calc({ provisionalEUR: 40000, provisionalCurrency: "USD" }).warnings.some(w => /enter its PLN rate/.test(w)), true, "a third currency without its rate is named");
+    const pln = P.computePOSettlement({ po: { ...po, currency: "PLN" }, lots: d.lots, orders: d.orders, invoices: [], shipments: d.shipments, ratePLNperEUR: 0, provisionalEUR: 160000, provisionalCurrency: "PLN", commissionPct: 6.5 });
+    eq(pln.currency, "PLN"); eq(pln.ratePLNperEUR, 1); eq(pln.netSalesEUR, 171600, "in PLN nothing is converted"); eq(pln.warnings.some(w => /rate/.test(w)), false);
+    const eurSO = d.orders.map(o => o.number === "SO-2026-0026" ? { ...o, currency: "EUR", fxRate: 4.20, items: o.items.map(it => ({ ...it, unitPrice: 14 })) } : o);
+    const inv = [{ kind: "SALES", number: "FV2026/06/1", fxRate: 4.30, paymentStatus: "Issued", links: [{ type: "SO", number: "SO-2026-0026" }] }];
+    const byOrder = P.computePOSettlement({ po, lots: d.lots, orders: eurSO, invoices: [], shipments: d.shipments, ratePLNperEUR: 4.35, commissionPct: 0 });
+    const byInv = P.computePOSettlement({ po, lots: d.lots, orders: eurSO, invoices: inv, shipments: d.shipments, ratePLNperEUR: 4.35, commissionPct: 0 });
+    eq(byOrder.salesBasis, "order"); eq(byInv.salesBasis, "invoice"); eq(r2(byInv.grossPLN / byOrder.grossPLN), r2(4.30 / 4.20), "the invoice's rate replaces the order's");
+  });
+  t("A-ST-4: a direct lot shows its expected kilos until the truck is Delivered", () => { const l = calc().lines[0]; eq(l.receivedKg, 0); eq(l.expectedKg, 14300); });
+  t("A-SO-5: SO-2026-0026 counts the supplier's truck SHP-2026-0036 made from its PO — invoiceable once Loaded", () => {
+    const so = d.orders.find(o => o.number === "SO-2026-0026"); const at = st => d.shipments.map(s => s.number === "SHP-2026-0036" ? { ...s, status: st } : s);
+    eq(SO.isShippedOrLater(so, at("Booked")), false); eq(SO.effectiveSoStatus(so, at("Loaded")), "Shipped"); eq(SO.isShippedOrLater(so, at("Loaded")), true); eq(SO.effectiveSoStatus(so, at("Delivered")), "Delivered");
+    const withOwnSO = at("Loaded").map(s => s.number === "SHP-2026-0036" ? { ...s, soRefs: ["SO-2026-9999"] } : s); eq(SO.isShippedOrLater(so, withOwnSO), false, "a truck that names another SO is not borrowed");
+  });
+  console.log("v6.99.84 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

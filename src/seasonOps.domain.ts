@@ -22,7 +22,9 @@ export function supplierDeliveryFromPO(po: any, deps: { nextId: () => any; nextN
   }));
   const kg = goods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
   const unit = { id: deps.nextId(), kind: "truck", truckPlate: S(announce.plate), announcedPlate: S(announce.plate), driverName: S(announce.driver),
-    plannedLoadingDate: "", eta: S(announce.eta), supplierRef: S(announce.supplierRef), qtyKg: kg, carrierId: null, costAmount: 0, load: goods.map((g: any) => ({ goodsLineId: g.id, qtyKg: num(g.qtyKg) })) };
+    plannedLoadingDate: S(po.loadingDate), plannedDeliveryDate: S(announce.eta) || S(po.expectedDeliveryDate), eta: S(announce.eta), supplierRef: S(announce.supplierRef), qtyKg: kg, carrierId: null, costAmount: 0, load: goods.map((g: any) => ({ goodsLineId: g.id, qtyKg: num(g.qtyKg) })),
+    // v6.99.83 (A-UN-5, owner 30 Sept): the truck loads at the supplier and delivers to the PO's destination — it was born with neither
+    pickupLocationId: null, pickupText: S(po.supplier?.name || "supplier"), deliveryLocationId: po.destinationLocationId ?? null, deliveryText: S(po.destinationText) };
   return {
     id: deps.nextId(), number: deps.nextNumber(), status: "Booked", purpose: "INBOUND", arrangedBy: "SUPPLIER", mode: "Road",
     poRefs: [po.number], soRefs: [], lotRefs: goods.map((g: any) => g.lotRef).filter(Boolean), governingSoRef: null,
@@ -124,7 +126,8 @@ export function inspectionVerdict(ins: Inspection, tolerances?: Record<string, n
   rows: Array<{ category: string; pct: number; tolerance: number; net: number; acceptable: boolean }>; totalPct: number; totalTolerance: number; totalNet: number; acceptable: boolean; advice: string; recommendation: "Accept" | "Sort" | "Reject";
 } {
   const t = inspectionTotals(ins);
-  const tol0 = { ...DEFAULT_TOLERANCES, ...(tolerances || {}), ...(ins?.tolerances || {}), Unacceptable: 0 };   // v6.99.32 (QH-7): the report keeps the limits it was judged against
+  const tolRaw: any = { ...DEFAULT_TOLERANCES, ...(tolerances || {}), ...(ins?.tolerances || {}), Unacceptable: 0 };
+  const tol0: Record<string, number> = Object.fromEntries(Object.entries(tolRaw).map(([k, v]) => [k, num(v)]));   // v6.99.83 (A-QC-1): an empty field on the report is 0   // v6.99.32 (QH-7): the report keeps the limits it was judged against
   // v6.99.33 (owner): NET % = what exceeds the tolerance, never negative — it is the net figure the verdict reads.
   const rows = DEFECT_CATEGORIES.map(cat => {
     const pct = r2(t.byCategory[cat] || 0);
