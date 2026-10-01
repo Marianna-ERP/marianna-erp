@@ -459,6 +459,34 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     else { failed++; console.log("  \u2717 dates / governing order / receive — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 dates / governing order / receive —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
+// v6.99.87 (A-QC-2, A-SH-G2, A-SD-1..3, A-PT-1..3, owner 1 Oct): layouts and the removed sections
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.86_schema-v2_2026-10-01T14-46-09.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [], inspections: d9.inspections || [] };
+    _where = "lot view LOT-2026-0127 layout";
+    const Inv = require(path.resolve("./src/Inventory")).default;
+    const lt = T(renderToStaticMarkup(React.createElement(Inv, { ...c9, initialSelectedNumber: "LOT-2026-0127" })));
+    const at = w => lt.indexOf(w); const iL = at("LINKED DOCUMENTS"), iI = at("+ Record inspection") >= 0 ? at("+ Record inspection") : at("INSPECTIONS"), iM = at("MOVEMENT HISTORY"), iW = at("LOT WORKBENCH");
+    if (!(iW >= 0 && iL > iW && iM > iL)) bad.push(`lot view order: workbench ${iW}, linked ${iL}, movements ${iM}`);
+    _where = "shipment detail SHP-2026-0035";
+    const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const sh = d9.shipments.find(s => s.number === "SHP-2026-0035");
+    const dt = T(renderToStaticMarkup(React.createElement(Det, { shipment: sh, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onStuffing: () => {}, onDevanning: () => {}, onEdit: () => {} })));
+    const g = dt.indexOf("Goods"), to = dt.indexOf("Transport orders") >= 0 ? dt.indexOf("Transport orders") : dt.indexOf("TRANSPORT ORDERS"), fw = dt.indexOf("Containers — forwarder's reports"), dc = dt.indexOf("Documents");
+    if (!(g > 0 && fw > g)) bad.push(`goods not before the forwarder box (goods ${g}, forwarder ${fw})`); if (fw < 0) bad.push("forwarder box not retitled");
+    if (/Document register/.test(dt)) bad.push("the document register box is still separate"); if (!(dc > 0 && /Documents.{0,40}Transport order/.test(dt.slice(dc)))) bad.push("Documents does not start with the transport order line");
+    if (!/port of loading: which trucks went into which container/i.test(dt)) bad.push("forwarder box lacks its explanation");
+    _where = "shipment editor SHP-2026-0037 governing order";
+    const ShMod = require(path.resolve("./src/Shipments")); const eh = renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialSelectedNumber: "SHP-2026-0037" }));
+    if (!/<div style="grid-column:1 \/ -1">.{0,200}Governing order/.test(eh.replace(/\n/g, " "))) bad.push("the governing-order block is not on a line of its own");
+    _where = "parties";
+    const Con = require(path.resolve("./src/Contacts")).default; const wh = d9.contacts.find(c => /Warehouse/i.test(String(c.type || ""))) || d9.contacts[0];
+    const ph = T(renderToStaticMarkup(React.createElement(Con, { ...c9, initialSelectedId: wh.id, initialViewMode: "people" })));
+    if (/WAREHOUSE AGREEMENT|Charged through our forwarder/.test(ph)) bad.push("the agreement section or the forwarder box is still there");
+    if (!bad.length) { passed++; console.log("  \u2713 lot view (Linked documents → Inspections → Movement history → Notes on the right), shipment view (Goods under the transport, one Documents box, the forwarder box explained), governing order on its own line, Parties without the agreement and the forwarder box"); }
+    else { failed++; console.log("  \u2717 layouts — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 layouts —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
   else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }

@@ -2,7 +2,6 @@ import { referencesToContact } from "./referenceGuards";
 import { setUserCountries } from "./counterparty.domain";
 import { recordAudit } from "./audit";
 import { currentUser } from "./permissions.domain";
-import { WAREHOUSE_SERVICES } from "./financePlus.domain";
 
 import DateInput from "./DateInput";
 import React, { useState, useMemo, useRef } from "react";
@@ -387,20 +386,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               </div>
             </div>
           )}
-          {allTypes.includes("Warehouse") && (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>WAREHOUSE AGREEMENT (v6.99.1, FN-6 — owner ruling 6 Sept)</div>
-              <label style={{ fontSize: 11.5, display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}><input type="checkbox" checked={!!form.invoicedViaForwarder} onChange={e => sf("invoicedViaForwarder", e.target.checked)} /> Charged through our forwarder — no direct invoice from this warehouse (port / transshipment warehouse such as Silvertech); no expected warehouse invoice is generated</label>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-                <div><Lbl>Type</Lbl><Sel value={form.agreement?.type || "per_service"} onChange={e => sf("agreement", { ...(form.agreement || {}), type: e.target.value })}><option value="per_service">Per service (tariff)</option><option value="fixed_monthly">Annual — fixed monthly fee, all-inclusive</option><option value="kg_day">Per kg-day</option><option value="pallet_day">Per pallet-day</option></Sel></div>
-                <div><Lbl>Monthly fee (PLN)</Lbl><Inp type="number" value={form.agreement?.fixedMonthlyPLN ?? ""} onChange={e => sf("agreement", { ...(form.agreement || {}), fixedMonthlyPLN: e.target.value })} /></div>
-                <div><Lbl>Rate per kg-day</Lbl><Inp type="number" step="0.001" value={form.agreement?.rateKgDayPLN ?? ""} onChange={e => sf("agreement", { ...(form.agreement || {}), rateKgDayPLN: e.target.value })} /></div>
-                <div><Lbl>Rate per pallet-day</Lbl><Inp type="number" step="0.01" value={form.agreement?.ratePalletDayPLN ?? ""} onChange={e => sf("agreement", { ...(form.agreement || {}), ratePalletDayPLN: e.target.value })} /></div>
-              </div>
-              <Lbl>Included services (not charged separately)</Lbl>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11.5 }}>{WAREHOUSE_SERVICES.map((s: string) => <label key={s} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={(form.agreement?.includedServices || []).includes(s)} onChange={() => { const cur = form.agreement?.includedServices || []; sf("agreement", { ...(form.agreement || {}), includedServices: cur.includes(s) ? cur.filter((x: string) => x !== s) : [...cur, s] }); }} />{s.replace("_", " ")}</label>)}</div>
-            </div>
-          )}
+          {/* v6.99.87 (A-PT-1/2, owner ruling 1 Oct): the warehouse agreement section and "Charged through our forwarder" are gone — the tariff above prices a warehouse; a fixed monthly fee is a warehouse invoice allocated to the cargo or the month; a site that does not invoice us is a Place */}
           {allTypes.includes("Supplier") && !canSeeCommission && (
             <div style={{ fontSize: 11.5, color: "#94A3B8", padding: "6px 0" }}>Commission terms — visible to the owner and finance only (v6.81.0, D-57).</div>
           )}
@@ -1883,7 +1869,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
         </div>
 
         {/* Detail panel */}
-        {selected && (
+        {selected && viewMode === "companies" && (   // v6.99.87 (A-PT-3): the company panel shows on its own tab only; the selection is kept for coming back
           <CounterpartyDetailPanel
             counterparty={selected}
             onEditCompany={c => setModal(c)}

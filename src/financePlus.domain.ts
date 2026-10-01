@@ -70,16 +70,4 @@ export function poResult(po: any, lots: any[], orders: any[], shipments: any[]):
 }
 
 // ── FN-6: WAREHOUSE AGREEMENT (owner 6 Sept: annual, all-inclusive, or per unit) ──
-export type AgreementType = "per_service" | "kg_day" | "pallet_day" | "fixed_monthly";
-export interface WarehouseAgreement { type: AgreementType; rateKgDayPLN?: any; ratePalletDayPLN?: any; fixedMonthlyPLN?: any; includedServices?: string[]; extras?: Array<{ service: string; ratePLN: any; unit: string }>; validFrom?: string; notes?: string; }
-export const WAREHOUSE_SERVICES = ["unloading", "loading", "sorting", "repalletising", "labelling", "cold_storage", "handling"];
-export function expectedWarehouseMonthly(agreement: WarehouseAgreement | null | undefined, usage: { kgDays: number; palletDays: number; services: Record<string, number> }): { expectedPLN: number; lines: Array<{ label: string; pln: number }> } {
-  if (!agreement) return { expectedPLN: 0, lines: [] };
-  const lines: Array<{ label: string; pln: number }> = [];
-  if (agreement.type === "fixed_monthly") lines.push({ label: "Annual agreement — monthly fee", pln: r2(num(agreement.fixedMonthlyPLN)) });
-  if (agreement.type === "kg_day") lines.push({ label: `Storage ${Math.round(usage.kgDays).toLocaleString("pl-PL")} kg-days`, pln: r2(usage.kgDays * num(agreement.rateKgDayPLN)) });
-  if (agreement.type === "pallet_day") lines.push({ label: `Storage ${Math.round(usage.palletDays).toLocaleString("pl-PL")} pallet-days`, pln: r2(usage.palletDays * num(agreement.ratePalletDayPLN)) });
-  const included = new Set(agreement.includedServices || []);
-  (agreement.extras || []).forEach(x => { if (included.has(x.service)) return; const q = num(usage.services?.[x.service]); if (q > 0) lines.push({ label: `${x.service} × ${q}`, pln: r2(q * num(x.ratePLN)) }); });
-  return { expectedPLN: r2(lines.reduce((s, l) => s + l.pln, 0)), lines };
-}
+// v6.99.87 (A-PT-1, owner ruling 1 Oct): the warehouse agreement (FN-6) and its calculator are retired — nothing read them

@@ -1524,12 +1524,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     approx(r.revenuePLN, 60000); approx(r.purchasePLN, 40000); approx(r.landedOtherPLN, 3000); approx(r.directPLN, 2000); approx(r.concessionsPLN, 1000); approx(r.recoveriesPLN, 500);
     approx(r.marginPLN, 60000 - 1000 - 40000 - 3000 - 2000 + 500); approx(r.marginPerKg, 1.45); ok(r.fullySold);
   });
-  t("FN-6: an all-inclusive annual agreement bills the monthly fee only; extras only when not included", () => {
-    const agr = { type: "fixed_monthly", fixedMonthlyPLN: 12000, includedServices: ["unloading", "sorting"], extras: [{ service: "labelling", ratePLN: 0.5, unit: "box" }, { service: "sorting", ratePLN: 100, unit: "hour" }] };
-    const e = FP.expectedWarehouseMonthly(agr, { kgDays: 500000, palletDays: 0, services: { labelling: 1000, sorting: 6 } });
-    approx(e.expectedPLN, 12500, "12 000 fee + 500 labelling; sorting is included");
-    const kg = FP.expectedWarehouseMonthly({ type: "kg_day", rateKgDayPLN: 0.02 }, { kgDays: 500000, palletDays: 0, services: {} }); approx(kg.expectedPLN, 10000);
-  });
+  // v6.99.87 (A-PT-1, owner ruling 1 Oct): FN-6 retired with the agreement section — a fixed fee is a warehouse invoice
   console.log("v6.99.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
@@ -2767,5 +2762,39 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(SO.isShippedOrLater(so, named), true, "governing order set on the truck → the SO has shipped");
   });
   console.log("v6.99.86 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.87 — one owner for a lot's quantity (A-QC-4, owner ruling 1 Oct) ══
+(function v69987(){
+  console.log("\n══ 87. v6.99.87: the receipt owns a stock lot's kilos; the client's QC report owns a direct lot's ══");
+  const Q = B("seasonOps.domain.js"); const SD = B("shipments.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.86_schema-v2_2026-10-01T14-46-09.json", "the owner's 1 Oct 14:46 file"); if (!fx) return;
+  const d = require(fx); const l126 = d.lots.find(l => l.number === "LOT-2026-0126"), l127 = d.lots.find(l => l.number === "LOT-2026-0127");
+  t("the QC form pre-fills the RECEIVED kilos once received; LOT-2026-0127's 11 000 against its 10 985 receipt is named", () => {
+    eq(Q.blankInspection(l127, { nextId: () => 1, todayISO: () => "2026-10-01" }).orderedQty, 10985, "received, not expected"); eq(Q.blankInspection(l126, { nextId: () => 1, todayISO: () => "2026-10-01" }).orderedQty, 14300, "not received: expected");
+    const ins127 = d.inspections.find(i => i.lotNumber === "LOT-2026-0127"); const n = Q.inspectionQtyNote(ins127, l127);
+    ok(n, "named"); eq(n.kind, "receipt"); eq(n.lotKg, 10985); eq(n.reportKg, 11000);
+    eq(Q.inspectionQtyNote({ ...ins127, orderedQty: 10985 }, l127), null, "agreeing: nothing to say");
+    eq(Q.inspectionQtyNote(d.inspections.find(i => i.lotNumber === "LOT-2026-0126"), l126), null, "not delivered yet: nothing to compare");
+  });
+  t("the client's report owns a direct lot: LOT-2026-0126's truck delivered → 14 270 kg posted, not the loaded 14 300", () => {
+    eq(Q.clientReportKg("LOT-2026-0126", d.inspections, l126), 14270); eq(Q.clientReportKg("LOT-2026-0127", d.inspections, l127), null, "a warehouse check is not the client's");
+    const sh = { ...d.shipments.find(s => s.number === "SHP-2026-0036"), status: "Delivered", governingSoRef: "SO-2026-0026" };
+    let id = 900000; const deps = { todayISO: () => "2026-10-01", nextId: () => ++id, deliveredKgFor: n => Q.clientReportKg(n, d.inspections, d.lots.find(l => l.number === n)) };
+    const r = SD.postShipmentToLots(sh, d.lots, deps); const lot = r.lots.find(l => l.number === "LOT-2026-0126");
+    eq(lot.receivedKg, 14270, "received = the client's weighing"); const mv = lot.movements.filter(m => m.shipmentRef === "SHP-2026-0036");
+    eq(mv.map(m => m.type + " " + m.qtyKg).join(", "), "IN 14270, SHIP_OUT 14270", "a pass-through pair at 14 270"); eq(mv[1].soRef, "SO-2026-0026", "the sale named on the truck");
+    const noRep = SD.postShipmentToLots(sh, d.lots, { todayISO: () => "2026-10-01", nextId: () => ++id }).lots.find(l => l.number === "LOT-2026-0126"); eq(noRep.receivedKg, 14300, "no report: the loaded kilos");
+  });
+  t("a client report arriving after the delivery re-posts the direct pair to its kilos — and only that pair", () => {
+    const delivered = { ...l126, status: "Delivered (direct)", receivedKg: 14300, movements: [
+      { id: 1, type: "IN", qtyKg: 14300, date: "2026-06-12", shipmentRef: "SHP-2026-0036", note: "IN via SHP-2026-0036 — direct flow (ownership at handover)" },
+      { id: 2, type: "SHIP_OUT", qtyKg: 14300, date: "2026-06-12", shipmentRef: "SHP-2026-0036", note: "SHIP_OUT via SHP-2026-0036 — client collection / direct pass-through" },
+      { id: 3, type: "ADJUST", qtyKg: -5, date: "2026-06-13", note: "other" } ] };
+    const r = Q.repostDirectToReport(delivered, 14270); eq(r.movements.map(m => m.qtyKg).join(","), "14270,14270,-5"); ok(/per the client's QC report/.test(r.movements[0].note));
+    eq(Q.repostDirectToReport(r, 14270), r, "already at the report: unchanged");
+  });
+  console.log("v6.99.87 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();

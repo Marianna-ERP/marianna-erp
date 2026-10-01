@@ -28,7 +28,8 @@ import PlanningSheet from "./PlanningSheet";   // v6.99.63 — ShipmentBoard (th
 import { isEstimatedLine } from "./so.domain";
 import { companyForTransportOrder } from "./useLocalStoredState";
 import { EditShipmentModal } from "./ShipmentEditor";
-import CustomsImportModal from "./CustomsImportModal";   // v6.99.72 (A-CU-3)
+import CustomsImportModal from "./CustomsImportModal";
+import { clientReportKg } from "./seasonOps.domain";   // v6.99.87   // v6.99.72 (A-CU-3)
 import { CreateShipmentModal } from "./ShipmentCreate";
 import { ShipmentDetail } from "./ShipmentDetail";
 import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDocuments";
@@ -1149,7 +1150,9 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
       <SectionTitle right={<span style={{ display: "flex", gap: 6 }}>
         {trucks.length > 0 && <SmallButton kind={mode === "stuff" ? "dark" : "default"} onClick={() => { setMode(mode === "stuff" ? "" : "stuff"); setRows([{ containerNumber: "", seal: "", feeders: [] }]); }}>Forwarder's loading report (POL)</SmallButton>}
         {containers.length > 0 && shipment.purpose === "INBOUND" && <SmallButton kind={mode === "devan" ? "dark" : "default"} onClick={() => { setMode(mode === "devan" ? "" : "devan"); setRows([{ containerId: containers[0]?.id, truckPlate: "", kg: "", destKind: "WAREHOUSE", soNumber: "" }]); }}>De-vanning report (POD) → onward shipments</SmallButton>}
-      </span>}>Forwarder's reports</SectionTitle>
+      </span>}>Containers — forwarder's reports</SectionTitle>
+      {/* v6.99.87 (A-SD-3, owner): what the two reports do */}
+      <div style={{ fontSize: 11, color: "#64748B", marginTop: -6, marginBottom: 8 }}>At the port of loading: which trucks went into which container (number, seal) — fills each container's cargo on the sea transport order and its customs line. At the port of discharge: which container goes onto which truck and where (our warehouse or a client's order) — creates the onward shipments.</div>
       <div style={{ fontSize: 11, color: "#64748B", marginBottom: 8 }}>
         We never record stuffing or de-vanning ourselves — the forwarder reports it. Enter the report once: containers (with the trucks that fed them) are created at the POL; at the POD the onward transfer and delivery shipments are created from where each truck goes.
       </div>
@@ -1758,7 +1761,7 @@ export default function Shipments({ archive = null,
     // Batch 3a: posting is engine-driven and keyed off the EXPLICIT canonical
     // purpose (shipments.domain, tested) — no more inference from soRefs.
     const purpose = derivePurpose(sh);
-    setLots(prev => postShipmentToLots(sh, prev, { todayISO, nextId }).lots);
+    setLots(prev => postShipmentToLots(sh, prev, { todayISO, nextId, deliveredKgFor: (n: string) => clientReportKg(n, extInspections || [], (prev || []).find((l: any) => String(l.number) === n)) }).lots);   // v6.99.87 (A-QC-4)
     if (purpose === "OUTBOUND") {
       // v6.79.0 (W-1): derived — only a Draft is promoted to Confirmed; Shipped/Delivered come from the shipments.
       setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Confirmed" : o.status } : o));

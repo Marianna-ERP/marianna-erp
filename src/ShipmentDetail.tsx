@@ -1,4 +1,5 @@
 // ShipmentDetail.tsx — v6.99.68 (A-AUD-2, owner): moved out of Shipments.tsx unchanged; the module's shared helpers are imported from it.
+import { documentRegister } from "./shipmentModel.domain";
 import React from "react";
 import { customsGaps, customsComplete, customsSummary, customsApplies } from "./customs.domain";
 import { SmallButton, DocRef, cancelledDocSet } from "./ui";
@@ -9,7 +10,7 @@ import { lotStockCheck } from "./receipts.domain";
 import { nextShipmentAction, canonicalStatus } from "./shipments.domain";
 import { protocolsForShipment, assignmentCheck } from "./loadingProtocol.domain";
 import { shipmentWarnings } from "./moduleGuards.domain";
-import { BillingBadge, Card, ChecklistLine, DocumentRegisterCard, ForwarderReports, MODE_CONFIG, ModeBadge, SectionTitle, StatusBadge, costTypeLabel, fmtMoney, fmtNum, legDisplayStatus, locationTextFromFields, parseNum, pillStyle, providerById, providerName, roadTruckCount, shipmentCostPLN, shipmentKg, shipmentSORefs, td, th, transportUnitsForLeg } from "./Shipments";
+import { BillingBadge, Card, ChecklistLine, ForwarderReports, MODE_CONFIG, ModeBadge, SectionTitle, StatusBadge, costTypeLabel, fmtMoney, fmtNum, legDisplayStatus, locationTextFromFields, parseNum, pillStyle, providerById, providerName, roadTruckCount, shipmentCostPLN, shipmentKg, shipmentSORefs, td, th, transportUnitsForLeg } from "./Shipments";
 import { TransportOrdersCard } from "./ShipmentDocuments";
 
 export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], packagingTypes = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim, onStuffing = null, onDevanning = null, onMarkTOSent = null }: any) {
@@ -103,8 +104,14 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
         </div>; })}
       </Card>
       <TransportOrdersCard packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} onMarkSent={onMarkTOSent} onCompose={onEmail ? (cid: any, li: number) => onEmail(cid, li) : null} />
+      {/* v6.99.87 (A-SD-1, owner): the goods right under the route and the transport orders */}
+      <Card>
+        <SectionTitle>Goods</SectionTitle>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}><thead><tr style={{ color: "#888", textAlign: "left", borderBottom: "1px solid #E5E7EB" }}><th style={th}>Product</th><th style={th}>Origin</th><th style={th}>Quality / size</th><th style={th}>Packaging</th><th style={th}>PO / SO / Lot</th><th style={{ ...th, textAlign: "right" }}>Qty kg</th><th style={{ ...th, textAlign: "right" }}>Pallets</th></tr></thead><tbody>{(shipment.goods || []).map(g => <tr key={g.id} style={{ borderBottom: "1px solid #F1F5F9" }}><td style={td}><strong>{g.product}{g.variety ? " — " + g.variety : ""}</strong><div style={{ color: "#888", fontSize: 11 }}>{g.description}</div></td><td style={td}>{g.origin || "-"}</td><td style={td}>{g.quality || "-"} / {g.size || "-"}</td><td style={td}>{g.packaging || "-"}</td><td style={td}><div>{g.poRef || "-"}</div><div>{g.soRef || soPills.join(", ") || "-"}</div><div>{g.lotRef || "-"}</div></td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.pallets)}</td></tr>)}</tbody></table>
+      </Card>
       {onStuffing && <ForwarderReports shipment={shipment} orders={orders} onStuffing={onStuffing} onDevanning={onDevanning} />}
-      <DocumentRegisterCard shipment={shipment} protocols={protocolsForShipment(shipment)} />
+      {/* v6.99.87 (A-SD-2, owner ruling): the document register merged into Documents below */}
+
       <Card>
         {/* v6.58.0: the four face boxes (route / dates / on board / carrier)
             are REMOVED on user ruling — route read shipment-level location
@@ -202,10 +209,6 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
       </Card>
     </div>
 
-    <Card>
-      <SectionTitle>Goods</SectionTitle>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}><thead><tr style={{ color: "#888", textAlign: "left", borderBottom: "1px solid #E5E7EB" }}><th style={th}>Product</th><th style={th}>Origin</th><th style={th}>Quality / size</th><th style={th}>Packaging</th><th style={th}>PO / SO / Lot</th><th style={{ ...th, textAlign: "right" }}>Qty kg</th><th style={{ ...th, textAlign: "right" }}>Pallets</th></tr></thead><tbody>{(shipment.goods || []).map(g => <tr key={g.id} style={{ borderBottom: "1px solid #F1F5F9" }}><td style={td}><strong>{g.product}{g.variety ? " — " + g.variety : ""}</strong><div style={{ color: "#888", fontSize: 11 }}>{g.description}</div></td><td style={td}>{g.origin || "-"}</td><td style={td}>{g.quality || "-"} / {g.size || "-"}</td><td style={td}>{g.packaging || "-"}</td><td style={td}><div>{g.poRef || "-"}</div><div>{g.soRef || soPills.join(", ") || "-"}</div><div>{g.lotRef || "-"}</div></td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.qtyKg)}</td><td style={{ ...td, textAlign: "right" }}>{fmtNum(g.pallets)}</td></tr>)}</tbody></table>
-    </Card>
 
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
       <Card>
@@ -219,6 +222,13 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
       </Card>
       <Card>
         <SectionTitle>Documents</SectionTitle>
+        {/* v6.99.87 (A-SD-2): the transport order and the loading protocols, from the shipment (read-only), with the register's status colours */}
+        {documentRegister(shipment, protocolsForShipment(shipment)).filter((r: any) => r.kind === "Transport order" || r.kind === "Loading protocol").map((r: any, i: number) => (
+          <div key={"reg-" + i} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 6, borderBottom: "1px solid #F3F4F6", padding: "6px 0", fontSize: 12, alignItems: "center" }}>
+            <div><b>{r.kind}</b> <span style={{ color: "#94A3B8", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.ref}</span></div>
+            <span style={{ fontSize: 10.5, fontWeight: 700, color: r.status === "Returned" || r.status === "Have it" || r.status === "N/A" ? "#16A34A" : r.status === "Sent" ? "#0284C7" : "#B45309" }}>{r.status}</span>
+            <span style={{ fontSize: 10.5, color: "#94A3B8" }}>{r.date || ""}</span>
+          </div>))}
         {/* v6.47.0: the register now shows WHERE each signed original is. Files can't
             live in the browser's storage, so each row carries a Dropbox share link. */}
         {(() => {

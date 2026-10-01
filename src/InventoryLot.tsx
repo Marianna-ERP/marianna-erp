@@ -322,6 +322,38 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
               {/* Inspections (v6.2) — recordable at any stage */}
               {season && <LotWorkbench lot={lot} pos={pos} shipments={shipments} inspections={season.inspections} claims={season.claims || []} orders={liveSOs} settlements={season.settlements || []} contacts={contacts} />}
               {season && <SeasonActions lot={lot} {...season} />}
+              {/* v6.99.87 (A-QC-2, owner): Inspections, Movement history and Notes moved to the right column, under Linked documents */}
+            </div>
+
+            {/* Right column */}
+            <div>
+              {/* Linked docs */}
+              <Card style={{ marginBottom: 16 }}>
+                <SectionTitle>LINKED DOCUMENTS</SectionTitle>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>PURCHASE ORDER</div>
+                    {lot.poRef ? (
+                      <DocLink num={lot.poRef} from={lot.number}><div style={{ padding: "6px 10px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6, fontSize: 12.5, color: "#1D4ED8", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", display: "inline-block" }}>{lot.poRef}</div></DocLink>
+                    ) : <span style={{ fontSize: 12, color: "#AAA" }}>—</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>SALES ORDERS ({soRefsFor(lot, liveSOs, shipments).length})</div>
+                    {soRefsFor(lot, liveSOs, shipments).length > 0 ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                        {soRefsFor(lot, liveSOs, shipments).map(s => (
+                          <DocLink key={s.number} num={s.number} from={lot.number}><div title={`${s.clientName || ""}${s.status && s.status !== "—" ? ` · ${s.status}` : ""}${s.viaShipment ? ` · linked via shipment ${s.viaShipment}` : ""}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                            {s.number}{s.viaShipment ? <span style={{ fontSize: 9, color: "#16A34A", fontWeight: 700, marginLeft: 4 }}>via {s.viaShipment}</span> : null}
+                          </div></DocLink>
+                        ))}
+                      </div>
+                    ) : <span style={{ fontSize: 12, color: "#AAA" }}>Not yet linked</span>}
+                  </div>
+                  {/* v6.99.81 (A-IN-11, owner): the location and the dates left this box — they are in the header and the Arrived column */}
+                </div>
+              </Card>
+
+              {/* v6.99.81 (A-IN-12, owner): the cost-breakdown box is gone — the header shows the value and the cost per kg */}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle right={<button onClick={onInspect} style={{ fontSize: 11, padding: "4px 10px", border: "1px solid #0E7490", background: "#fff", color: "#0E7490", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>+ Record inspection</button>}>INSPECTIONS{(lot.inspections || []).length ? ` (${lot.inspections.length})` : ""}</SectionTitle>
                 {(lot.inspections || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No inspections recorded. Record one when goods are checked on arrival, in storage, by a client, or at customs.</div>}
@@ -476,37 +508,6 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                   <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.5 }}>{lot.notes}</div>
                 </Card>
               )}
-            </div>
-
-            {/* Right column */}
-            <div>
-              {/* Linked docs */}
-              <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>LINKED DOCUMENTS</SectionTitle>
-                <div style={{ display: "grid", gap: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>PURCHASE ORDER</div>
-                    {lot.poRef ? (
-                      <DocLink num={lot.poRef} from={lot.number}><div style={{ padding: "6px 10px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6, fontSize: 12.5, color: "#1D4ED8", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", display: "inline-block" }}>{lot.poRef}</div></DocLink>
-                    ) : <span style={{ fontSize: 12, color: "#AAA" }}>—</span>}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 3 }}>SALES ORDERS ({soRefsFor(lot, liveSOs, shipments).length})</div>
-                    {soRefsFor(lot, liveSOs, shipments).length > 0 ? (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                        {soRefsFor(lot, liveSOs, shipments).map(s => (
-                          <DocLink key={s.number} num={s.number} from={lot.number}><div title={`${s.clientName || ""}${s.status && s.status !== "—" ? ` · ${s.status}` : ""}${s.viaShipment ? ` · linked via shipment ${s.viaShipment}` : ""}`} style={{ padding: "4px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 5, fontSize: 11, color: "#15803D", fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace" }}>
-                            {s.number}{s.viaShipment ? <span style={{ fontSize: 9, color: "#16A34A", fontWeight: 700, marginLeft: 4 }}>via {s.viaShipment}</span> : null}
-                          </div></DocLink>
-                        ))}
-                      </div>
-                    ) : <span style={{ fontSize: 12, color: "#AAA" }}>Not yet linked</span>}
-                  </div>
-                  {/* v6.99.81 (A-IN-11, owner): the location and the dates left this box — they are in the header and the Arrived column */}
-                </div>
-              </Card>
-
-              {/* v6.99.81 (A-IN-12, owner): the cost-breakdown box is gone — the header shows the value and the cost per kg */}
             </div>
           </div>
         </div>

@@ -385,7 +385,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
               })()}
             </div>
             {/* v6.99.86 (owner 1 Oct): a shipment made from a PO had no governing-order field at all — it shows the PO it comes from and lets the sale be chosen (a DDP truck going straight to a client) */}
-            {(String(draft.purpose || "").toUpperCase() === "INBOUND" || draft.arrangedBy === "SUPPLIER") && (draft.poRefs || []).length > 0 && <div><Lbl>Governing order <span style={{ color: "#BBB", fontWeight: 400 }}>· the purchase it comes from · the sale it goes to</span></Lbl>
+            {(String(draft.purpose || "").toUpperCase() === "INBOUND" || draft.arrangedBy === "SUPPLIER") && (draft.poRefs || []).length > 0 && <div style={{ gridColumn: "1 / -1" }}>{/* v6.99.87 (A-SH-G2, owner ruling): a line of its own, purchase and sale side by side */}<Lbl>Governing order <span style={{ color: "#BBB", fontWeight: 400 }}>· the purchase it comes from · the sale it goes to</span></Lbl>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F8FAFC" }}>{(draft.poRefs || []).join(", ")} <span style={{ color: "#94A3B8", fontSize: 11 }}>· purchase{(() => { const p = (pos || []).find((x: any) => (draft.poRefs || []).includes(x.number)); return p ? ` · ${p.buyIncoterm || ""} · ${p.supplier?.name || ""}` : ""; })()}</span></div>
                 <Sel value={draft.governingSoRef || ""} onChange={e => sf("governingSoRef", e.target.value || "")} title="the sale these goods go to — sets the client side; leave empty when the truck comes to our warehouse">

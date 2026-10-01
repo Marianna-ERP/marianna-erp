@@ -2,7 +2,7 @@ import { lotStatusLabel, lotIsDirect, lotValue, lotArrivedCell, lotLoadedTwice, 
 import React, { useState, useMemo } from "react";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
-import { receiptMovement, gradeSplit, inspectionTotals, defectsFor, DEFECT_CATEGORIES, plateMismatch, inspectionVerdict, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, lotReceiptDate } from "./seasonOps.domain";
+import { receiptMovement, gradeSplit, inspectionTotals, defectsFor, DEFECT_CATEGORIES, plateMismatch, inspectionVerdict, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, lotReceiptDate, inspectionQtyNote } from "./seasonOps.domain";
 import { SmallButton, ActionButton, DocLink } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
@@ -910,7 +910,8 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any
         <QhField label="Location of inspection"><Sel value={ins.stage} onChange={(e: any) => set("stage", e.target.value)}><option value="pre-unloading">On arrival / pre-unloading</option><option value="warehouse">In our warehouse</option><option value="client">At the client</option><option value="other">Other</option></Sel></QhField>
         <QhField label="Inspector"><input value={ins.inspector || ""} onChange={e => set("inspector", e.target.value)} style={qhInp} /></QhField>
         <QhField label="Temperature (°C)"><input value={ins.temperature ?? ""} onChange={e => set("temperature", e.target.value)} style={qhInp} /></QhField>
-        <QhField label={`Quantity delivered (${ins.unit || "kg"})`}><input type="number" value={ins.orderedQty ?? ""} onChange={e => set("orderedQty", e.target.value)} style={qhInp} /></QhField>
+        <QhField label={`Quantity delivered (${ins.unit || "kg"})`}><input type="number" value={ins.orderedQty ?? ""} onChange={e => set("orderedQty", e.target.value)} style={qhInp} />{(() => { const n = inspectionQtyNote(ins, lot); if (!n) return null; const k = (v: number) => Math.round(v).toLocaleString("pl-PL");
+          return <div style={{ fontSize: 10.5, fontWeight: 700, color: "#B45309", marginTop: 3 }}>{n.kind === "receipt" ? `⚠ the receipt says ${k(n.lotKg)} kg — correct the receipt if this report is right` : `the lot will be re-posted from ${k(n.lotKg)} to ${k(n.reportKg)} kg — the client's report owns a direct lot`}</div>; })()}</QhField>
         <QhField label={`Quantity checked (${ins.unit || "kg"})`} hint="same unit as delivered"><input type="number" value={ins.checkedQty ?? ""} onChange={e => set("checkedQty", e.target.value)} style={qhInp} /></QhField>
         <QhField label="Unit" hint="applies to both quantities"><Sel value={ins.unit || "kg"} onChange={(e: any) => { const u = e.target.value; const kpb = num((ins.externalChecks || []).find((c: any) => String(c.name).startsWith("Unit pack weight"))?.expected) || 0;
         setIns((x: any) => { const conv = (val: any) => { const n = num(val); if (!n || !kpb) return val; return u === "boxes" ? Math.round(n / kpb) : Math.round(n * kpb); };

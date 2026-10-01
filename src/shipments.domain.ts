@@ -40,7 +40,9 @@ export function derivePurpose(sh: any): ShipmentPurpose {
   return "INBOUND"; // PO_IMPORT / PO_EXPORT / unknown
 }
 
-export interface PostDeps { todayISO: () => string; nextId: () => number; }
+export interface PostDeps { todayISO: () => string; nextId: () => number;
+  /** v6.99.87 (A-QC-4, owner ruling 1 Oct): a DIRECT lot's delivered kilos are the client's QC report's — null when there is none */
+  deliveredKgFor?: (lotNumber: string) => number | null; }
 
 /** v6.99.22 (G-2): which grade this shipment takes out of the lot — from the goods row (copied from the SO line); "I" when not stated. */
 export function gradeOfGoodsForLot(sh: any, lot: any): "I" | "II" {
@@ -61,7 +63,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(sh.number)));
     if (hasMovement) return lot;
 
-    const qty = relatedGoods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
+    let qty = relatedGoods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
     const lastLeg = (sh.legs || [])[((sh.legs || []).length || 1) - 1] || {};
     const firstLeg = (sh.legs || [])[0] || {};
     const destId = lastLeg.toLocationId || sh.destinationLocationId || lot.locationId;
@@ -101,7 +103,8 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
         || (!!lot.poRef && (goodsSoRef || (sh.soRefs || []).length > 0));
       const notYetIn = !(num(lot.receivedKg) > 0) && currentPhysical <= 0;
       if (isDirectLot && notYetIn) {
-        const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;
+        const soRef = goodsSoRef || (sh.soRefs || [])[0] || (String(sh.governingSoRef || "").trim() || null);
+        const rep = deps.deliveredKgFor ? deps.deliveredKgFor(lot.number) : null; if (rep != null && rep > 0) qty = rep;   // v6.99.87 (A-QC-4)
         const inMove = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: fromId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — direct flow (ownership at handover)` };
         const soLineGrade = gradeOfGoodsForLot(sh, lot);   // v6.99.22 (G-2): the movement records WHICH GRADE left the lot
       const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: soLineGrade, fromId, toId: destIdFinal, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — client collection / direct pass-through` };
@@ -112,7 +115,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       // integrity checker reports overIssuedKg, but this posting path clamped the
       // excess silently — an over-issue arriving via a shipment was invisible.
       const overIssue = qty > currentPhysical ? Math.round((qty - currentPhysical) * 1000) / 1000 : 0;
-      const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;
+      const soRef = goodsSoRef || (sh.soRefs || [])[0] || (String(sh.governingSoRef || "").trim() || null);
       const note = `SHIP_OUT via ${sh.number}${(sh.soRefs || []).length ? ` for ${(sh.soRefs || []).join(", ")}` : ""}`;
       const movement = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: gradeOfGoodsForLot(sh, lot), fromId, toId: destId, soRef, shipmentRef: sh.number, note };
       return { ...lot, physicalKg: nextPhysical, overIssuedKg: Math.round(((num(lot.overIssuedKg)) + overIssue) * 1000) / 1000, status: nextPhysical <= 0 ? "Shipped Out" : lot.status, movements: [...(lot.movements || []), movement] };
@@ -134,7 +137,8 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     // an SO reference (the goods are sold, going straight to the client), it's a
     // pass-through, not a receipt into our stock. This is what produces the SHIP_OUT
     // that gives the SO its COGS.
-    const goodsAreSold = relatedGoods.some((g: any) => !!g.soRef) || (sh.soRefs || []).length > 0;
+    // v6.99.87: a PO's truck that names the sale it goes to (governing order, v6.99.86) carries sold goods — a supplier's DDP truck straight to the client
+    const goodsAreSold = relatedGoods.some((g: any) => !!g.soRef) || (sh.soRefs || []).length > 0 || !!String(sh.governingSoRef || "").trim();
     // v6.99.67 (A-IN-1): derived, not read from a copy — sold goods on an OUTBOUND shipment are a pass-through
     const goodsAreExport = String(sh.purpose || "").toUpperCase() === "OUTBOUND" || relatedGoods.some((g: any) => !!g.soRef);
     const isDirect = !!lot.directFlow || lot.custodyType === "Direct" || lot.status === "Direct Expected" || (goodsAreSold && goodsAreExport);
@@ -152,9 +156,10 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     // do not arrive again. Once received, the branch below posts the plain
     // SHIP_OUT, which is what the second leg of a multi-hop journey actually is.
     if (isDirect && notYetReceived) {
+      { const rep = deps.deliveredKgFor ? deps.deliveredKgFor(lot.number) : null; if (rep != null && rep > 0) qty = rep; }   // v6.99.87 (A-QC-4): the client's report owns a direct lot's kilos
       // Decision 2 (pass-through pair): goods enter our ownership at the handover
       // point and leave to the client in the same event — never our warehouse.
-      const soRef = goodsSoRef || (sh.soRefs || [])[0] || null;
+      const soRef = goodsSoRef || (sh.soRefs || [])[0] || (String(sh.governingSoRef || "").trim() || null);
       const inMove = { id: deps.nextId(), date, type: "IN", qtyKg: qty, fromId, toId: destId, soRef: null, shipmentRef: sh.number, note: `IN via ${sh.number} — direct flow (ownership at handover)` };
       const outMove = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: gradeOfGoodsForLot(sh, lot), fromId: destId, toId: destId, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} — direct pass-through to client` };
       return {

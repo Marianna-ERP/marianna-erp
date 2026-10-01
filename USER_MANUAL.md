@@ -174,6 +174,26 @@ default); the PO shows only a provisional chip.
 - **A date must exist.** The date field refuses 31/06 or 29/02 in a normal year;
   Settings → integrity check lists any such date already stored.
 
+### One owner for a lot's quantity, and the layouts (v6.99.87)
+
+- **Received in our warehouse → the receipt owns the quantity.** The quality report
+  pre-fills the received kilos; a different figure shows *the receipt says … kg —
+  correct the receipt if this report is right*.
+- **Delivered direct to the client → the client's quality report owns it.** Marking
+  the truck Delivered posts the report's kilos (no report yet: the loaded kilos); a
+  report saved after the delivery re-posts the lot to its kilos. The difference shows
+  as the lot's variance; the settlement takes sold kilos from the sale, the shortage
+  goes through the client's credit note.
+- A PO's truck that names its sale (governing order) delivers as a pass-through to
+  that sale.
+- **Lot view:** right column = Linked documents, Inspections, Movement history, Notes.
+- **Shipment view:** Goods sit right under the route and the transport orders; one
+  *Documents* box (the transport order and loading protocols first, then the stored
+  rows); *Containers — forwarder's reports* says what its two reports do.
+- **Edit shipment:** the governing order has a line of its own (purchase and sale side by side).
+- **Parties:** the warehouse agreement section and *Charged through our forwarder* are
+  gone; the company panel shows only on the Companies tab.
+
 ### Dates, the PO's truck and the direct receipt (v6.99.86)
 
 - **The list and the detail show the trucks' dates**: the actual loading and

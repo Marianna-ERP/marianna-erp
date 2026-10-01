@@ -78,7 +78,7 @@ export interface Inspection {
 }
 export function blankInspection(lot: any, deps: { nextId: () => any; todayISO: () => string; po?: any; tolerances?: Record<string, number> }, stage: Inspection["stage"] = "warehouse"): Inspection {
   return { id: deps.nextId(), lotNumber: S(lot?.number), poRef: lot?.poRef || "", stage, date: deps.todayISO(), inspector: "",
-    product: lot?.product || "", variety: lot?.variety || "", orderedQty: num(lot?.expectedKg) || "", checkedQty: "", unit: "kg", samplePct: 0, temperature: "",
+    product: lot?.product || "", variety: lot?.variety || "", orderedQty: num(lot?.receivedKg) || num(lot?.expectedKg) || "",   // v6.99.87 (A-QC-4): the received kilos once received checkedQty: "", unit: "kg", samplePct: 0, temperature: "",
     labellingBox: "Not checked", labellingProduct: "Not checked",
     measurements: [{ name: "Box weight", status: "Not checked" }, { name: "Calibre / count", status: "Not checked" }, { name: "Size (mm)", status: "Not checked" }, { name: "Unit / pack weight", status: "Not checked" }],
     finalWeightKg: "", expectedWeightKg: num(lot?.expectedKg) || "", defects: [], externalChecks: blankExternalChecks(lot, (deps as any).po), tolerances: (deps as any).tolerances || { ...DEFAULT_TOLERANCES }, verdict: "Pending", observations: "", links: [] };
@@ -377,4 +377,33 @@ export function beforeReceiptWarning(lot: any, dateISO: any): string {
   const rec = lotReceiptDate(lot); const d = S(dateISO).slice(0, 10);
   if (!rec || !d || d >= rec) return "";
   return `${d} is before the goods arrived (${rec}). The ledger replays in date order, so an act dated before the receipt takes from an empty lot and corrupts the class split. Use ${rec} or later.`;
+}
+
+// ─── v6.99.87 (A-QC-4, owner ruling 1 Oct): ONE OWNER FOR A LOT'S QUANTITY ─────────────────────────────────────────
+// Received in our warehouse → the receipt owns it; the QC form pre-fills the received kilos and names a different figure.
+// Delivered direct to the client → the client's QC report owns it: the delivery posts the report's kilos, and a report
+// that arrives after the delivery re-posts the direct pair to them.
+const isClientCheck = (x: any) => /client|customer|destination|arrival/i.test(String(x?.context || x?.stage || ""));
+/** The delivered kilos of a direct lot per the client's latest QC report (in kg; boxes converted when the box weight is known). */
+export function clientReportKg(lotNumber: string, inspections: any[], lot?: any): number | null {
+  const mine = (inspections || []).filter((x: any) => String(x?.lotNumber) === String(lotNumber) && isClientCheck(x) && num(x.orderedQty) > 0)
+    .sort((a: any, b: any) => String(b.date || b.createdAt || "").localeCompare(String(a.date || a.createdAt || "")));
+  const x = mine[0]; if (!x) return null;
+  if (String(x.unit || "kg") === "boxes") { const kpb = num(lot?.kgPerBox) || num(x.kgPerBox); return kpb > 0 ? Math.round(num(x.orderedQty) * kpb) : null; }
+  return num(x.orderedQty);
+}
+/** What the QC form says about its quantity against the lot's own (null when they agree or nothing is known). */
+export function inspectionQtyNote(ins: any, lot: any): { kind: "receipt" | "direct"; lotKg: number; reportKg: number } | null {
+  const rep = num(ins?.orderedQty); if (!(rep > 0) || String(ins?.unit || "kg") !== "kg") return null;
+  const rec = num(lot?.receivedKg); const direct = !!lot?.directFlow || lot?.custodyType === "Direct" || /direct/i.test(String(lot?.status || ""));
+  if (direct || isClientCheck(ins)) return rec > 0 && Math.abs(rec - rep) >= 1 ? { kind: "direct", lotKg: rec, reportKg: rep } : null;
+  return rec > 0 && Math.abs(rec - rep) >= 1 ? { kind: "receipt", lotKg: rec, reportKg: rep } : null;
+}
+/** A direct lot already delivered: its pass-through pair re-posted to the client's report (the movements keep their dates). */
+export function repostDirectToReport(lot: any, kg: number): any {
+  if (!(kg > 0)) return lot;
+  const pair = (m: any) => m && !m.voided && /direct flow|direct pass-thro|client collection/i.test(String(m.note || ""));
+  let touched = false;
+  const movements = (lot?.movements || []).map((m: any) => (pair(m) && (m.type === "IN" || m.type === "SHIP_OUT") && Math.abs(num(m.qtyKg) - kg) >= 0.5) ? (touched = true, { ...m, qtyKg: kg, note: `${m.note} · per the client's QC report` }) : m);
+  return touched ? { ...lot, movements } : lot;
 }

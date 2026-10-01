@@ -8,7 +8,7 @@ import { issueReportNumber, lastReportNumber } from "./reportNumbers";
 import { localTodayISO } from "./dates";
 import { nextId } from "./ids";
 import { r0 } from "./format";
-import { sortingJob as runSortingJob, gradeSplit, blankInspection, PEPPER_DEFECTS, applyStockCount, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning } from "./seasonOps.domain";
+import { sortingJob as runSortingJob, gradeSplit, blankInspection, PEPPER_DEFECTS, applyStockCount, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, clientReportKg, repostDirectToReport } from "./seasonOps.domain";
 import { recordAudit } from "./audit";
 import { CountWindow, Inp, InspectionWindow, MOVEMENT_TYPES, Sel, SortingWindow, locType, lotReservations, mergedLocations, normName, num, parseNum, printHtmlNodeInv, qhDelete, qhEdit, qhPrint, supplierRefOf, today } from "./Inventory";
 
@@ -509,6 +509,9 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
           const w = beforeReceiptWarning(lot, final.date); if (w) { window.alert("⚠ " + w); return; }
           setInspections && setInspections((prev: any[]) => (prev || []).some((p: any) => String(p.id) === String(final.id)) ? (prev || []).map((p: any) => String(p.id) === String(final.id) ? final : p) : [...(prev || []), final]);
           recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Quality inspection ${final.date} · defects ${inspectionVerdict(final).totalPct}% · ${final.verdict}` });
+          // v6.99.87 (A-QC-4): a direct lot already delivered takes the client's report's kilos — its pass-through pair is re-posted
+          { const kg = clientReportKg(lot.number, [final], lot); const direct = !!lot.directFlow || lot.custodyType === "Direct" || /direct/i.test(String(lot.status || ""));
+            if (kg && direct && setLots) { const next = repostDirectToReport(lot, kg); if (next !== lot) { setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? recompute(next, next.movements) : l)); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Delivered kilos re-posted to the client's QC report: ${Math.round(kg).toLocaleString("pl-PL")} kg` }); } } }
           setWin("");
         }} />
       )}
