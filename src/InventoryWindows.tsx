@@ -2,7 +2,7 @@
 import LocationPicker from "./LocationPicker";
 import QualityReportDoc from "./QualityReportDoc";
 import React, { useState } from "react";
-import { Lbl, useConfirm, ActionButton } from "./ui";
+import { Lbl, useConfirm, ActionButton, SmallButton } from "./ui";
 import { computeLotSettlement, currentCommissionPct, currentCommissionRate, commissionPctForSales } from "./consignment";
 import { issueReportNumber, lastReportNumber } from "./reportNumbers";
 import { localTodayISO } from "./dates";
@@ -537,6 +537,39 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
           setWin("");
         }} />
       )}
+    </div>
+  );
+}
+
+// ─── v6.99.86 (owner 1 Oct): receiving a supplier-delivered lot — the date is the truck's, not today's ─────────────────
+// Was a bare prompt for the kilos, posting the receipt on TODAY's date; LOT-2026-0127/0128 arrived on 14–15 June and
+// were booked in on 1 October. Now: kilos, the date proposed from the truck (actual unloading → planned delivery →
+// the PO's expected delivery), the place the stock goes to, and a note.
+export function ReceiveLotModal({ lot, suggested, locationName = "", onCancel, onConfirm }: any) {
+  const [kg, setKg] = useState(String(Math.round(parseFloat(String(lot?.expectedKg)) || 0)));
+  const [date, setDate] = useState(suggested?.date || localTodayISO());
+  const [note, setNote] = useState("");
+  const n = parseFloat(String(kg).replace(",", ".")) || 0; const exp = parseFloat(String(lot?.expectedKg)) || 0;
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, width: "100%", boxSizing: "border-box" };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={onCancel}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 460, maxWidth: "94vw", boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#111" }}>Receive {lot?.number}</div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{lot?.product}{lot?.variety ? " — " + lot.variety : ""} · delivered by the supplier, no shipment of ours</div>
+        </div>
+        <div style={{ padding: 22, display: "grid", gap: 12 }}>
+          <div><Lbl>Kilos actually received <span style={{ color: "#BBB", fontWeight: 400 }}>· expected {Math.round(exp).toLocaleString("pl-PL")} kg</span></Lbl><input type="number" value={kg} onChange={e => setKg(e.target.value)} style={inp} autoFocus />
+            {exp > 0 && n > 0 && Math.abs(n - exp) >= 1 && <div style={{ fontSize: 11, color: n < exp ? "#B45309" : "#0F766E", marginTop: 3, fontWeight: 600 }}>{n < exp ? "short" : "over"} by {Math.round(Math.abs(n - exp)).toLocaleString("pl-PL")} kg — recorded on the receipt</div>}</div>
+          <div><Lbl>Arrival date <span style={{ color: "#BBB", fontWeight: 400 }}>· from {suggested?.from || "today"}</span></Lbl><input type="date" value={date} onChange={e => setDate(e.target.value)} style={inp} /></div>
+          <div><Lbl>Into</Lbl><div style={{ ...inp, background: "#F8FAFC", color: "#334155" }}>{locationName || "the lot's location"}</div></div>
+          <div><Lbl>Note</Lbl><input value={note} onChange={e => setNote(e.target.value)} placeholder="optional" style={inp} /></div>
+        </div>
+        <div style={{ padding: "12px 22px", borderTop: "1px solid #EBEBEB", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <SmallButton onClick={onCancel}>Cancel</SmallButton>
+          <SmallButton kind="confirm" disabled={!(n > 0) || !date} onClick={() => onConfirm({ kg: n, date, note })}>Receive {n > 0 ? Math.round(n).toLocaleString("pl-PL") + " kg" : ""}</SmallButton>
+        </div>
+      </div>
     </div>
   );
 }

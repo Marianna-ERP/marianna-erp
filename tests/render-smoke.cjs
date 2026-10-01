@@ -434,6 +434,31 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     else { failed++; console.log("  \u2717 consignment — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 consignment —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
+// v6.99.86 (owner 1 Oct): the list and the detail show the trucks' dates; the governing order on a PO's truck; the receive window
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.85_schema-v2_2026-10-01T12-50-07.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [] };
+    const ShMod = require(path.resolve("./src/Shipments"));
+    _where = "shipments list — SHP-2026-0037";
+    const lh = renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {} }));
+    const li = lh.indexOf("SHP-2026-0037"); const row = lh.slice(li, li + 1600);
+    if (!/title="actual dates from the trucks[^"]*">2026-06-02 → 2026-06-15</.test(row)) bad.push("list row does not show the truck's actual dates: " + (T(row).slice(0, 160)));
+    _where = "shipment editor — SHP-2026-0037 governing order";
+    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialSelectedNumber: "SHP-2026-0037" })); const et = T(eh);
+    if (!/Governing order/.test(et)) bad.push("no governing-order field on the PO's truck"); if (!/PO-2026-0044 · purchase · DDP/.test(et)) bad.push("the purchase is not named"); if (!/— no sale: to our warehouse —/.test(et)) bad.push("the sale cannot be chosen");
+    _where = "shipment detail — SHP-2026-0037 dates";
+    const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const sh = d9.shipments.find(s => s.number === "SHP-2026-0037");
+    const dh = T(renderToStaticMarkup(React.createElement(Det, { shipment: sh, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, invoices: [], shipments: d9.shipments, onBack: () => {}, onEdit: () => {} })));
+    if (!/2026-06-02 loaded/.test(dh) || !/2026-06-15 unloaded/.test(dh)) bad.push("detail leg row lacks the actual dates: " + (dh.match(/LOADING .{0,60}/) || [""])[0]);
+    _where = "receive window";
+    const W = require(path.resolve("./src/InventoryWindows")); const M = require(path.resolve("./src/shipmentModel.domain")); const lot = d9.lots.find(l => l.number === "LOT-2026-0127"); const po = d9.pos.find(p => p.number === "PO-2026-0044");
+    const wh = renderToStaticMarkup(React.createElement(W.ReceiveLotModal, { lot, suggested: M.suggestedReceiptDate(lot, d9.shipments, po, "2026-10-01"), locationName: "Our warehouse", onCancel: () => {}, onConfirm: () => {} })); const wt = T(wh);
+    if (!/value="2026-06-15"/.test(wh)) bad.push("the window does not propose the truck's date"); if (!/from SHP-2026-0037 unloaded/.test(wt)) bad.push("the window does not say where the date comes from"); if (!/expected 11 000 kg/.test(wt)) bad.push("expected kilos"); if (!/Our warehouse/.test(wt)) bad.push("the place");
+    if (!bad.length) { passed++; console.log("  \u2713 trucks' dates on the list (2026-06-02 → 2026-06-15, actual) and the detail (loaded / unloaded); governing order on the PO's truck; the receive window dated 15 June from SHP-2026-0037"); }
+    else { failed++; console.log("  \u2717 dates / governing order / receive — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 dates / governing order / receive —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
   else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }

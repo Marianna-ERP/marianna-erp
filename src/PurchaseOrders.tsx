@@ -22,6 +22,8 @@ import { computePOSettlement, provisionalCandidates, provisionalFromInvoice, exp
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
 import SalesReportDoc from "./SalesReportDoc";   // v6.99.84 (A-ST-6)
+import { ReceiveLotModal } from "./InventoryWindows";   // v6.99.86
+import { suggestedReceiptDate } from "./shipmentModel.domain";
 import { PACKAGING_SEED } from "./packaging.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
@@ -789,7 +791,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
 
 export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], financeNotes: extFinanceNotes = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
-  const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
   const cancelledRefs = cancelledDocSet(extShipments, extSOs, extPOs);
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
@@ -1054,6 +1056,19 @@ ${blockNote}`.trim(),
     setView("form");
   }
 
+  // v6.99.86: the direct receipt (DDP / supplier-delivered) posted from the Receive window
+  const [receiveLot, setReceiveLot] = useState<any>(null);
+  function postDirectReceipt(l: any, kg: number, date: string, note: string) {
+    if (typeof extSetLots !== "function") return;
+    const locById = (id: any) => locationById(id, extContacts || []) as any; // v6.86.0
+    extSetLots((prev: any[]) => (prev || []).map((x: any) => {
+      if (x.id !== l.id) return x;
+      const mv = { ...receiptMovement(x, { kg, date, note: `Direct receipt (DDP) — ${x.poRef || "no PO"}${note ? " · " + note : ""}` }, { nextId }).movement, toId: x.locationId ?? null, soRef: null, shipmentRef: null };
+      return recomputeLotFromMovements({ ...x, directFlow: false, status: x.status === "Direct Expected" ? "Expected" : x.status }, [...(x.movements || []), mv], locById);
+    }));
+    recordAudit({ module: "Purchase orders", docType: "PO", docNumber: String(l.poRef || ""), action: "updated", summary: `${l.number} received ${Math.round(kg).toLocaleString("pl-PL")} kg on ${date} (direct receipt)` });
+    notifySaved(`receipt of ${l.number}`);
+  }
   async function deleteOrder() {
     // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
     const poNum = selected.number;
@@ -1181,23 +1196,10 @@ ${blockNote}`.trim(),
           onPackingResult={() => setPackingWindow(true)}   // v6.99.50 (TO-2): one window instead of a chain of prompts
           settlement={{ lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, financeNotes: extFinanceNotes, setInvoices: extSetInvoices }}
           onRegisterTruck={typeof extSetShipments === "function" ? () => setTruckWindow(true) : null}
-          onReceiveLot={async (l: any) => {
-            const expectedKg = parseFloat(String(l.expectedKg)) || 0;
-            // v6.89.0 (G1): ask the ACTUAL kilos; the variance is recorded on the receipt.
-            const typed = await uiPrompt({ title: `Receive ${l.number} — actual quantity`, message: `Expected ${Math.round(expectedKg).toLocaleString("pl-PL")} kg. Kilos actually received:`, defaultValue: String(Math.round(expectedKg)), confirmLabel: "Continue" });
-            if (typed === null) return;
-            const kg = parseFloat(String(typed).replace(",", ".")) || 0;
-            if (!(kg > 0)) { await uiAlert({ tone: "warn", title: "No quantity", message: "Enter the kilos actually received." }); return; }
-            if (l.locationId === null || l.locationId === undefined || l.locationId === "") { await uiAlert({ tone: "warn", title: "No destination", message: "v6.96.0 (IN-7): a receipt needs a place — set the PO's named place (or the lot's location) first." }); return; }
-            const ok = await uiConfirm({ tone: "warn", title: `Receive ${kg.toLocaleString("pl-PL")} kg of ${l.number} into stock?`, message: `Direct receipt (DDP / delivered by the supplier — no shipment of ours). The stock becomes available at the lot's location; the movement appears in its history and can be voided.`, confirmLabel: "Receive into stock" });
-            if (!ok || typeof extSetLots !== "function") return;
-            const today = localTodayISO();
-            const locById = (id: any) => locationById(id, extContacts || []) as any; // v6.86.0
-            extSetLots((prev: any[]) => (prev || []).map((x: any) => {
-              if (x.id !== l.id) return x;
-              const mv = { ...receiptMovement(x, { kg, date: today, note: `Direct receipt (DDP) — ${x.poRef || "no PO"}` }, { nextId }).movement, toId: x.locationId ?? null, soRef: null, shipmentRef: null };
-              return recomputeLotFromMovements({ ...x, directFlow: false, status: x.status === "Direct Expected" ? "Expected" : x.status }, [...(x.movements || []), mv], locById);
-            }));
+          onReceiveLot={(l: any) => {
+            // v6.99.86 (owner 1 Oct): a window instead of a bare prompt — kilos, the truck's date, the place; the posting is unchanged
+            if (l.locationId === null || l.locationId === undefined || l.locationId === "") { uiAlert({ tone: "warn", title: "No destination", message: "v6.96.0 (IN-7): a receipt needs a place — set the PO's named place (or the lot's location) first." }); return; }
+            setReceiveLot(l);
           }}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
           supplierTrucks={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled" && String(s.arrangedBy || "").toUpperCase() === "SUPPLIER")}   // v6.99.42 (hotfix): the box needs the shipment OBJECTS, not their numbers
@@ -1224,6 +1226,8 @@ ${blockNote}`.trim(),
             setEmailOrder(selected);
           }}
         />
+        {receiveLot && (() => { const po = (extPOs || []).find((p: any) => String(p.number) === String(receiveLot.poRef)) || null; const sug = suggestedReceiptDate(receiveLot, extShipments || [], po, localTodayISO()); const loc: any = locationById(receiveLot.locationId, extContacts || []);
+          return <ReceiveLotModal lot={receiveLot} suggested={sug} locationName={loc?.name || receiveLot.locationText || ""} onCancel={() => setReceiveLot(null)} onConfirm={({ kg, date, note }: any) => { postDirectReceipt(receiveLot, kg, date, note); setReceiveLot(null); }} />; })()}
       </>
     );
   }

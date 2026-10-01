@@ -12,7 +12,7 @@ import { protocolsForShipment, upsertProtocol, poGateReason } from "./loadingPro
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { shipmentPostBlockReason, newestFirst } from "./moduleGuards.domain";
 import { overShipReport, derivedBillingStatus } from "./shipments.domain";
-import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, documentRegister, costLinesByCarrierLeg, carrierOfUnit } from "./shipmentModel.domain";
+import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, documentRegister, costLinesByCarrierLeg, carrierOfUnit, shipmentDates } from "./shipmentModel.domain";
 import LoadPlans from "./LoadPlans";
 
 import { blankClaim, nextClaimNumber } from "./claims.domain";
@@ -1023,7 +1023,8 @@ function ShipmentListRow({ sh, active, onClick, contacts, planNumber = "" }: any
   const dead = isCancelled(sh);
   const na = dead ? null : nextShipmentAction(sh);
   const kg = (sh.goods || []).reduce((a, g) => a + parseNum(g.qtyKg), 0);
-  const dates = [sh.loadingDate, sh.expectedDeliveryDate].filter(Boolean).join(" \u2192 ");
+  // v6.99.86 (owner 1 Oct): the dates come from the units — the actual loading / unloading once entered, the planned ones until then (the header's creation-time dates were shown before, and never changed)
+  const sd = shipmentDates(sh); const dates = [sd.loaded || sd.plannedLoading, sd.delivered || sd.plannedDelivery].filter(Boolean).join(" \u2192 "); const actual = !!(sd.loaded || sd.delivered);
   return <div onClick={onClick}
     style={{ padding: "8px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: dead ? "#FEF2F2" : active ? "#F9FAFB" : "#fff", borderLeft: dead ? "4px solid #DC2626" : active ? "4px solid #111" : "4px solid transparent", minWidth: 0 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
@@ -1039,7 +1040,7 @@ function ShipmentListRow({ sh, active, onClick, contacts, planNumber = "" }: any
         — route read shipment-level locations that real data leaves unset, so
         it named the wrong place with confidence. Dates and quantity stay. */}
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, fontSize: 10.5, color: "#64748B", minWidth: 0 }}>
-      {dates && <span style={{ whiteSpace: "nowrap" }}>{dates}</span>}
+      {dates && <span style={{ whiteSpace: "nowrap", color: actual ? "#0F766E" : undefined, fontWeight: actual ? 600 : undefined }} title={actual ? "actual dates from the trucks (loaded / unloaded)" : "planned dates"}>{dates}</span>}
       {kg > 0 && <span style={{ whiteSpace: "nowrap" }}>{Math.round(kg).toLocaleString("pl-PL")} kg</span>}
     </div>
   </div>;

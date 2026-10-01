@@ -13,6 +13,7 @@ must keep handling. They are business data: this repository must stay **private*
 | `marianna-erp_v6.99.79_schema-v2_2026-09-29T11-01-43.json` | The owner's 29 Sept file with her season workbook imported into the planning sheet (six week tabs, 37 rows). | sheet-typing |
 | `marianna-erp_v6.99.82_schema-v2_2026-09-30T11-51-38.json` | The owner's 30 Sept file: a consignment DDP purchase (PO-2026-0043, Vega-Pro → AGRO-MAX), its expected lot, the supplier-delivered shipment SHP-2026-0036 and a QC report at the client. | round-trip 83 |
 | `marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json` | The owner's 30 Sept 13:13 file: PO-2026-0043's settlement record (rate 4.35, commission 6.5 %, provisional EUR258/2026 = 37 000 EUR) and SO-2026-0026 (PLN) selling from it. | round-trip 84, render-smoke |
+| `marianna-erp_v6.99.85_schema-v2_2026-10-01T12-50-07.json` | The owner's 1 Oct file: PO-2026-0044 (DDP, consignment) with its supplier truck SHP-2026-0037 carrying actual loading / unloading dates, and LOT-2026-0127/0128 received on 1 Oct though they arrived mid-June. | round-trip 86, render-smoke |
 | `CC529C_26PL445010003K5TB3_1.xml` | The agent's release for export (AES IE-529) for truck WRA5749J/WRA5925F, 5 May 2026. | round-trip 61 |
 | `CC599C_26PL445010003K5TB3_1.xml` | The exit confirmation (IE-599) of the same declaration: left the EU 12 May 2026 at IT137103. | A-CU-3 |
 | `CC599C_26PL445010003B8HB3_1.xml` | A second exit confirmation (truck WR367HW/WPYTP71, exit 18 May 2026 at IT137100). | A-CU-3 |

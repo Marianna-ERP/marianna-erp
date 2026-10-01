@@ -80,7 +80,7 @@ export function soShipmentProgress(order: any, shipments: any[]): SoShipmentProg
     // carries it — older shipments were built that way.
     const kg = rows.length
       ? rows.reduce((a: number, g: any) => a + num(g.qtyKg), 0)
-      : ((sh.soRefs || []).map(S).includes(soNo) && !(sh.goods || []).some((g: any) => g.soRef)
+      : (((sh.soRefs || []).map(S).includes(soNo) || S(sh.governingSoRef) === soNo) && !(sh.goods || []).some((g: any) => g.soRef)
           ? (sh.goods || []).reduce((a: number, g: any) => a + num(g.qtyKg), 0) : 0);
     if (kg <= 0) return;
     seen.add(S(sh.number));

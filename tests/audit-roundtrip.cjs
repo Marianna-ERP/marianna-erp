@@ -2741,3 +2741,31 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.85 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.86 — the dates a shipment shows, the receipt's date, the governing order on a PO's truck (owner 1 Oct) ══
+(function v69986(){
+  console.log("\n══ 86. v6.99.86: dates from the trucks · the receipt dated by the truck · the sale on a PO's truck ══");
+  const M = B("shipmentModel.domain.js"); const SO = B("statusOwnership.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.85_schema-v2_2026-10-01T12-50-07.json", "the owner's 1 Oct file"); if (!fx) return;
+  const d = require(fx); const sh = d.shipments.find(s => s.number === "SHP-2026-0037"); const po = d.pos.find(p => p.number === "PO-2026-0044"); const lot = d.lots.find(l => l.number === "LOT-2026-0127");
+  t("SHP-2026-0037: planned 2 → 15 June from its truck, loaded 2 June, unloaded 15 June — the header held no date at all", () => {
+    const x = M.shipmentDates(sh); eq(x.plannedLoading, "2026-06-02"); eq(x.plannedDelivery, "2026-06-15"); eq(x.loaded, "2026-06-02"); eq(x.delivered, "2026-06-15"); eq(sh.loadingDate, undefined, "the stored header had nothing to show");
+    const bare = M.shipmentDates({ ...sh, legs: sh.legs.map(l => ({ ...l, vehicles: l.vehicles.map(u => ({ ...u, loadedAt: "", unloadedAt: "" })) })) }); eq(bare.loaded, ""); eq(bare.delivered, ""); eq(bare.plannedDelivery, "2026-06-15");
+    eq(M.shipmentDates({ loadingDate: "2026-05-01", expectedDeliveryDate: "2026-05-09", legs: [] }).plannedLoading, "2026-05-01", "a shipment with no units falls back to its header");
+  });
+  t("the receipt of LOT-2026-0127 is dated by its truck's unloading (15 June), not today — and says where the date comes from", () => {
+    const s1 = M.suggestedReceiptDate(lot, d.shipments, po, "2026-10-01"); eq(s1.date, "2026-06-15"); eq(s1.from, "SHP-2026-0037 unloaded");
+    const noActual = d.shipments.map(s => s.number === "SHP-2026-0037" ? { ...s, legs: s.legs.map(l => ({ ...l, vehicles: l.vehicles.map(u => ({ ...u, unloadedAt: "" })) })) } : s);
+    const s2 = M.suggestedReceiptDate(lot, noActual, po, "2026-10-01"); eq(s2.date, "2026-06-15"); eq(s2.from, "SHP-2026-0037 planned delivery");
+    const s3 = M.suggestedReceiptDate(lot, [], po, "2026-10-01"); eq(s3.date, "2026-06-14"); eq(s3.from, "PO-2026-0044 expected delivery");
+    eq(M.suggestedReceiptDate({ number: "LOT-X" }, [], null, "2026-10-01").date, "2026-10-01", "nothing known: today");
+    eq((lot.movements || [])[0].date, "2026-10-01", "the owner's file shows the fault: booked in on 1 October");
+  });
+  t("a PO's truck can name its sale: a governing SO on an inbound shipment counts for that order's status", () => {
+    const so = { number: "SO-TEST-1", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-2026-0044", qty: 14300 }] };
+    const named = d.shipments.map(s => s.number === "SHP-2026-0037" ? { ...s, status: "Loaded", governingSoRef: "SO-TEST-1" } : s);
+    eq(SO.isShippedOrLater(so, named), true, "governing order set on the truck → the SO has shipped");
+  });
+  console.log("v6.99.86 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

@@ -384,6 +384,16 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                 );
               })()}
             </div>
+            {/* v6.99.86 (owner 1 Oct): a shipment made from a PO had no governing-order field at all — it shows the PO it comes from and lets the sale be chosen (a DDP truck going straight to a client) */}
+            {(String(draft.purpose || "").toUpperCase() === "INBOUND" || draft.arrangedBy === "SUPPLIER") && (draft.poRefs || []).length > 0 && <div><Lbl>Governing order <span style={{ color: "#BBB", fontWeight: 400 }}>· the purchase it comes from · the sale it goes to</span></Lbl>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F8FAFC" }}>{(draft.poRefs || []).join(", ")} <span style={{ color: "#94A3B8", fontSize: 11 }}>· purchase{(() => { const p = (pos || []).find((x: any) => (draft.poRefs || []).includes(x.number)); return p ? ` · ${p.buyIncoterm || ""} · ${p.supplier?.name || ""}` : ""; })()}</span></div>
+                <Sel value={draft.governingSoRef || ""} onChange={e => sf("governingSoRef", e.target.value || "")} title="the sale these goods go to — sets the client side; leave empty when the truck comes to our warehouse">
+                  <option value="">— no sale: to our warehouse —</option>
+                  {(orders || []).filter((o: any) => o.status !== "Cancelled" && (String(draft.governingSoRef) === String(o.number) || (o.items || []).some((it: any) => (it.sourceType === "PO" && (draft.poRefs || []).includes(String(it.sourceRef))) || (it.sourceType === "STOCK" && (draft.goods || []).some((g: any) => String(g.lotRef) === String(it.sourceRef)))))).map((o: any) => <option key={o.number} value={o.number}>{o.number} · {o.client?.name || "(client)"}</option>)}
+                </Sel>
+              </div>
+            </div>}
             {String(draft.purpose || "").toUpperCase() !== "INBOUND" && draft.arrangedBy !== "SUPPLIER" && <div><Lbl>Governing sales order <span style={{ color: "#BBB", fontWeight: 400 }}>· sets destination</span></Lbl>
               {/* v6.99.44 (H-6, owner): chosen at creation — shown, not re-asked; a re-sale can still change it */}
               {!govChange && draft.governingSoRef ? (
@@ -551,7 +561,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "120px 140px 1fr", gap: 9 }}>
               <div><Lbl>Mode</Lbl><Sel value={leg.mode} onChange={e => updateLeg(i, "mode", e.target.value)}>{LEG_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
-              <div><Lbl>Status</Lbl><Sel value={leg.status} onChange={e => updateLeg(i, "status", e.target.value)}>{LEG_STATUSES.map(st => <option key={st}>{st}</option>)}</Sel></div>
+              <div><Lbl>Status</Lbl><Sel value={leg.status || "Booked"} onChange={e => updateLeg(i, "status", e.target.value)}>{LEG_STATUSES.map(st => <option key={st}>{st}</option>)}</Sel></div>
               <div style={{ alignSelf: "end", fontSize: 11, color: "#64748B" }} title="v6.99.8 (owner ruling): the leg keeps mode and status; places, dates and times live on each UNIT below and print on the transport order">places · dates · times → on the units</div>
             </div>
             {/* v6.99.44 (L-1, owner): the STOPS list retired — a groupage tour is expressed by the units' loading and delivery places, which come from the grouped documents. Nothing downstream read the stops. Stored leg.stops retire at the DDL. */}

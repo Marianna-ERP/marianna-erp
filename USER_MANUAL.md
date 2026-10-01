@@ -174,6 +174,18 @@ default); the PO shows only a provisional chip.
 - **A date must exist.** The date field refuses 31/06 or 29/02 in a normal year;
   Settings → integrity check lists any such date already stored.
 
+### Dates, the PO's truck and the direct receipt (v6.99.86)
+
+- **The list and the detail show the trucks' dates**: the actual loading and
+  unloading once entered (in green), the planned ones until then.
+- **A shipment made from a PO shows its governing order**: the purchase it comes
+  from, and the sale it goes to, which you can choose (a DDP truck straight to a
+  client). Naming the sale makes it count for that order's status.
+- **Receiving a supplier-delivered lot** opens a window: the kilos, the arrival
+  date proposed from the truck (its actual unloading, else its planned delivery,
+  else the PO's expected delivery) — never today's date by default — the place the
+  stock goes to, and a note.
+
 ### Customs files (v6.99.72)
 
 The agent sends two e-mails per truck: the **release for export (CC529C)** on

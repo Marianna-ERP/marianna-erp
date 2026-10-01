@@ -31,7 +31,7 @@ export function supplierDeliveryFromPO(po: any, deps: { nextId: () => any; nextN
     supplierRef: S(announce.supplierRef), supplierId: po.supplier?.id ?? null,
     originText: po.supplier?.name || "supplier", destinationLocationId: po.destinationLocationId ?? null, destinationText: po.destinationText || "",
     expectedDeliveryDate: S(announce.eta) || po.deliveryDate || "",
-    legs: [{ mode: "Road", fromText: po.supplier?.name || "supplier", toLocationId: po.destinationLocationId ?? null, toText: po.destinationText || "", carrierId: null, costAmount: 0, costCurrency: po.currency || "PLN", costFxRate: 1, vehicles: [unit] }],
+    legs: [{ mode: "Road", status: "Booked", fromText: po.supplier?.name || "supplier", toLocationId: po.destinationLocationId ?? null, toText: po.destinationText || "", carrierId: null, costAmount: 0, costCurrency: po.currency || "PLN", costFxRate: 1, vehicles: [unit] }],
     goods, costs: [], documents: [], notes: `Supplier-delivered (${po.buyIncoterm || "DDP"}) — tracked, not paid. Created from ${po.number}.`, createdAt: deps.todayISO(),
   };
 }

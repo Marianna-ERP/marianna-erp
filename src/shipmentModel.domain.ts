@@ -523,3 +523,26 @@ export function containerPlaceNote(sh: any, u: any): { pol: string | null; pod: 
   const podOff = (b.podId != null || S(b.pod)) && (u.deliveryLocationId != null || S(u.deliveryText)) && !samePlace(u.deliveryLocationId, u.deliveryText, b.podId, b.pod);
   return { pol: polOff ? S(b.pol) : null, pod: podOff ? S(b.pod) : null };
 }
+
+// ── v6.99.86 (owner 1 Oct): the dates a shipment SHOWS — planned and actual, from its units ─────────────────────────
+// The list showed the header's dates stored at creation and the detail the leg's planned dates; neither read the units,
+// where the planned dates live and where the actual loading / unloading are entered. One reader for both.
+export interface ShipmentDates { plannedLoading: string; plannedDelivery: string; loaded: string; delivered: string; }
+export function shipmentDates(sh: any): ShipmentDates {
+  const units = allUnits(sh).map(x => x.unit); const legs = sh?.legs || [];
+  const pick = (vals: string[], last = false) => { const v = vals.map(S).filter(Boolean).sort(); return last ? (v[v.length - 1] || "") : (v[0] || ""); };
+  return {
+    plannedLoading: pick(units.map((u: any) => u.plannedLoadingDate)) || pick(legs.map((l: any) => l.plannedPickupDate)) || S(sh?.loadingDate),
+    plannedDelivery: pick(units.map((u: any) => u.plannedDeliveryDate), true) || pick(legs.map((l: any) => l.plannedDeliveryDate), true) || S(sh?.expectedDeliveryDate),
+    loaded: pick(units.map((u: any) => u.loadedAt)),
+    delivered: pick(units.map((u: any) => u.deliveredAt || u.unloadedAt || u.dischargedAt), true),
+  };
+}
+/** When a lot delivered by the supplier is received: the truck's actual unloading, else its planned delivery, else the PO's. */
+export function suggestedReceiptDate(lot: any, shipments: any[], po: any, todayISO: string): { date: string; from: string } {
+  const sh = (shipments || []).find((s: any) => String(s?.status) !== "Cancelled" && (s.goods || []).some((g: any) => String(g.lotRef) === String(lot?.number)));
+  if (sh) { const d = shipmentDates(sh); if (d.delivered) return { date: d.delivered, from: `${sh.number} unloaded` }; if (d.plannedDelivery) return { date: d.plannedDelivery, from: `${sh.number} planned delivery` }; }
+  if (S(po?.expectedDeliveryDate)) return { date: S(po.expectedDeliveryDate), from: `${po.number} expected delivery` };
+  if (S(lot?.arrivalDate)) return { date: S(lot.arrivalDate), from: "the lot's expected arrival" };
+  return { date: todayISO, from: "today" };
+}
