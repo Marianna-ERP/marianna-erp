@@ -400,6 +400,40 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     else { failed++; console.log("  \u2717 settlement / reports / PO list — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 settlement / reports / PO list —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
+// v6.99.85 (A-CS-1..5): the provisional from the register, the consignment lot's value, the Finance positions
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const po = d9.pos.find(p => p.number === "PO-2026-0043");
+    const provInv = { id: 7001, kind: "COST", number: "EUR258/2026", currency: "EUR", fxRate: 4.30, netAmount: 37000, grossAmount: 37000, paymentStatus: "Issued", counterparty: { id: po.supplier.id, name: po.supplier.name }, links: [{ type: "PO", number: "PO-2026-0043" }], payments: [], issueDate: "2026-06-05", dueDate: "2026-07-05" };
+    const POm = require(path.resolve("./src/PurchaseOrders"));
+    _where = "settlement box — provisional from the register";
+    const rec = { ...d9.poSettlements[0], provisionalInvoiceId: 7001, provisionalCurrency: "EUR", provisionalRate: 4.30 };
+    const box = renderToStaticMarkup(React.createElement(POm.TruckSettlementCard, { order: po, lots: d9.lots, orders: d9.orders, invoices: [provInv], shipments: d9.shipments, claims: [], inspections: d9.inspections || [], contacts: d9.contacts, settlements: [rec], setSettlements: () => {}, financeNotes: [] }));
+    const bt = T(box);
+    if (!/<option value="7001"[^>]*>EUR258\/2026 · 37[\s\u00a0\u202f]000,00 EUR net · Issued<\/option>/.test(box)) bad.push("the producer's invoice is not offered from the register");
+    if (!/provisional paid 0,00 EUR · still to transfer to Vega-Pro Kft. 36 884,14 EUR/.test(bt)) bad.push("still to transfer not shown: " + (bt.match(/provisional paid.{0,80}/) || [""])[0]);
+    if (/assumed paid|register it as a cost invoice/.test(bt)) bad.push("the 'not in the register' hint shows although the invoice is picked");
+    _where = "inventory — consignment lot";
+    const Inv = require(path.resolve("./src/Inventory")).default;
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: [], poSettlements: d9.poSettlements };
+    const lh = T(renderToStaticMarkup(React.createElement(Inv, { ...c9 })));
+    const i126 = lh.indexOf("LOT-2026-0126"); const row = lh.slice(i126, i126 + 420);
+    if (!/provisional · ≈ 11,26 PLN\/kg/.test(row)) bad.push("list: no provisional value on LOT-0126: " + row.slice(0, 200));
+    const vh = T(renderToStaticMarkup(React.createElement(Inv, { ...c9, initialSelectedNumber: "LOT-2026-0126" })));
+    if (!/Consignment — priced at settlement/.test(vh) || !/provisional · ≈ 11,26 PLN\/kg/.test(vh)) bad.push("lot view: consignment value block");
+    const lh0 = T(renderToStaticMarkup(React.createElement(Inv, { ...c9, poSettlements: [] }))); const r0 = lh0.slice(lh0.indexOf("LOT-2026-0126"), lh0.indexOf("LOT-2026-0126") + 400);
+    if (!/consignment priced at settlement/.test(r0)) bad.push("list without a provisional: no 'priced at settlement'");
+    _where = "finance — consignment positions";
+    const Fin = require(path.resolve("./src/Finance")).default;
+    const fh = renderToStaticMarkup(React.createElement(Fin, { ...c9, financeNotes: [], claims: [], userName: "Hazem Osman", users: [] })); const ft = T(fh);
+    if (!/CONSIGNMENT POSITIONS/.test(ft)) bad.push("no consignment positions card");
+    const fi = ft.indexOf("PO-2026-0043"); const frow = ft.slice(fi, fi + 500);
+    ["Vega-Pro Kft.", "14 300", "171 600,00 PLN", "36 884,14 EUR", "37 000,00 EUR", "not in the register", "Vega-Pro Kft. owes us 115,86 EUR", "OPEN"].forEach(w => { if (!frow.includes(w)) bad.push("positions row lacks " + JSON.stringify(w)); });
+    if (!bad.length) { passed++; console.log("  \u2713 consignment: the provisional picked from the register (still to transfer 36 884,14), LOT-0126 ≈ 11,26 PLN/kg provisional / priced at settlement, the Finance positions row"); }
+    else { failed++; console.log("  \u2717 consignment — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 consignment —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
   else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }

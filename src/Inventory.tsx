@@ -1,4 +1,4 @@
-import { lotStatusLabel, lotIsDirect, lotValue, lotArrivedCell, lotLoadedTwice } from "./lotView.domain";   // v6.99.81 (A-IN)
+import { lotStatusLabel, lotIsDirect, lotValue, lotArrivedCell, lotLoadedTwice, consignmentHint } from "./lotView.domain";   // v6.99.81 (A-IN)
 import React, { useState, useMemo } from "react";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { lotAvailabilityByGrade } from "./so.domain";
@@ -1583,7 +1583,13 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                   {l.damagedKg > 0 && <div style={{ fontSize: 10.5, color: "#DC2626", fontWeight: 600 }}>{fmtNum(l.damagedKg)} damaged</div>}
                 </div>
                 {/* v6.99.81 (A-IN-7, owner): the value in the lot's own state — in stock · delivered · expected — never "0" for goods that went direct */}
-                <div>{(() => { const v = lotValue(l, cpk); return <>
+                <div>{(() => { const v = lotValue(l, cpk); const ch = cpk > 0 ? { consignment: false, provisionalPerKgPLN: null } : consignmentHint(l, extPOs || [], extSettlements || [], lots || []);
+                  // v6.99.85 (A-CS-4): a consignment lot has no cost until its settlement — say so, and show the producer's provisional value per kg when known
+                  if (ch.consignment) return <>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#6D28D9" }}>{ch.provisionalPerKgPLN != null ? "≈ " + fmtMoney(ch.provisionalPerKgPLN * v.kg).replace(" PLN", "") : "consignment"}</div>
+                    <div style={{ fontSize: 10, color: "#64748B" }}>{ch.provisionalPerKgPLN != null ? <>provisional · ≈ {fmtMoney(ch.provisionalPerKgPLN)}/kg</> : "priced at settlement"}</div>
+                  </>;
+                  return <>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{fmtMoney(v.pln).replace(" PLN", "")}</div>
                   <div style={{ fontSize: 10, color: "#64748B" }}>{v.label !== "—" ? <span style={{ fontWeight: 700, color: v.label === "in stock" ? "#16A34A" : v.label === "expected" ? "#B45309" : "#0F766E" }}>{v.label}</span> : null}{v.label !== "—" ? " · " : ""}{fmtMoney(cpk)}/kg</div>
                 </>; })()}</div>

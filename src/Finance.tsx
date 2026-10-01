@@ -1,4 +1,4 @@
-import { ModulePage, ActionButton } from "./ui";
+import { ModulePage, ActionButton, DocLink } from "./ui";
 import { useUnsavedGuard } from "./unsaved";
 import { useConfirm, SmallButton } from "./ui";
 import { allocateInvoiceCostsToLots } from "./costAllocation";
@@ -16,6 +16,7 @@ import { canOpenFinance } from "./permissions.domain";
 import { isShippedOrLater } from "./statusOwnership.domain";
 import { upsertBudget, budgetVariance, BUDGET_MEASURES } from "./budgets.domain";
 import { applyPaymentEvent as bankApplyPaymentEvent } from "./payments.domain";
+import { consignmentPositions } from "./poSettlement.domain";
 import React, { useMemo, useState } from "react";
 import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { computeSOMargin } from "./marginCalculations";
@@ -246,6 +247,40 @@ function ClientRiskCard({ invoices = [], orders = [], contacts = [] }: any) {
 }
 
 // ── v6.98.1: STATEMENT OF ACCOUNT — per client or supplier, per currency, printable ──
+
+// ─── v6.99.85 (A-CS-5, owner 30 Sept): every consignment position at a glance — the figures the settlement box computes ──
+export function ConsignmentPositionsCard({ pos = [], lots = [], orders = [], invoices = [], shipments = [], claims = [], financeNotes = [], poSettlements = [] }: any) {
+  const rows = consignmentPositions({ pos, lots, orders, invoices, shipments, claims, financeNotes, poSettlements });
+  if (!rows.length) return null;
+  const m = (v: number, c = "PLN") => `${(v || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${c}`;
+  const kg = (v: number) => Math.round(v || 0).toLocaleString("pl-PL");
+  const cols = "120px 1.3fr 90px 90px 90px 1fr 1fr 1fr 1.2fr";
+  const th: any = { fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.06em", textAlign: "right" };
+  const stateChip = (st: string) => <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 10, background: st === "closed" ? "#DCFCE7" : st === "interim" ? "#FEF3C7" : "#EDE9FE", color: st === "closed" ? "#166534" : st === "interim" ? "#92400E" : "#6D28D9" }}>{st === "closed" ? "CLOSED" : st === "interim" ? "INTERIM" : "OPEN"}</span>;
+  const balanceText = (r: any) => { const v = r.stillToTransfer != null ? r.stillToTransfer : r.balance; return !r.provisional ? `${m(r.netAfterCommission, r.currency)} due` : v >= 0 ? `we owe ${m(v, r.currency)}` : `${r.producer || "producer"} owes us ${m(-v, r.currency)}`; };
+  return (
+    <Card style={{ marginBottom: 18 }}>
+      <SectionTitle>CONSIGNMENT POSITIONS <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#94A3B8" }}>· {rows.length} PO{rows.length === 1 ? "" : "s"} · the same figures as each PO's settlement box</span></SectionTitle>
+      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, padding: "4px 0", borderBottom: "1px solid #E5E7EB" }}>
+        {["PO", "PRODUCER", "RECEIVED", "SOLD kg", "ON STOCK", "SALES AFTER COSTS", "DUE AFTER COMMISSION", "PROVISIONAL", "BALANCE"].map((h, i) => <div key={i} style={{ ...th, textAlign: i < 2 ? "left" : "right" }}>{h}</div>)}
+      </div>
+      {rows.map(r => (
+        <div key={r.poNumber} style={{ display: "grid", gridTemplateColumns: cols, gap: 8, padding: "7px 0", borderBottom: "1px solid #F1F5F9", fontSize: 12, alignItems: "center", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+          <div style={{ textAlign: "left" }}><DocLink num={r.poNumber}><b style={{ color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.poNumber}</b></DocLink><div>{stateChip(r.state)}{r.settlementNumber ? <span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6 }}>{r.settlementNumber}</span> : null}</div></div>
+          <div style={{ textAlign: "left" }}>{r.producer || "—"}{(r.rateMissing && r.currency !== "PLN") || r.pctMissing ? <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700 }}>{[r.rateMissing && r.currency !== "PLN" ? "no rate" : "", r.pctMissing ? "no commission %" : ""].filter(Boolean).join(" · ")}</div> : null}</div>
+          <div>{r.receivedKg ? kg(r.receivedKg) : r.expectedKg ? <span style={{ color: "#94A3B8" }}>{kg(r.expectedKg)} exp.</span> : "0"}</div>
+          <div>{kg(r.soldKg)}</div>
+          <div style={{ color: r.onStockKg > 0 ? "#B45309" : "#94A3B8" }}>{kg(r.onStockKg)}</div>
+          <div>{m(r.netPLN)}</div>
+          <div>{m(r.netAfterCommission, r.currency)}<div style={{ fontSize: 10, color: "#94A3B8" }}>commission {r.commissionPct}%</div></div>
+          <div>{r.provisional ? <>{m(r.provisional, r.currency)}<div style={{ fontSize: 10, color: "#94A3B8" }}>{r.provisionalPaid == null ? "not in the register" : r.provisionalPaid >= r.provisional ? "paid" : `paid ${m(r.provisionalPaid, r.currency)}`}</div></> : <span style={{ color: "#94A3B8" }}>—</span>}</div>
+          <div style={{ fontWeight: 700, color: r.provisional ? ((r.stillToTransfer ?? r.balance) >= 0 ? "#B45309" : "#15803D") : "#111" }}>{balanceText(r)}</div>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
 function StatementCard({ invoices = [], financeNotes = [] }: any) {
   const [side, setSide] = React.useState<"client" | "supplier">("client");
   const [name, setName] = React.useState("");
@@ -1009,6 +1044,7 @@ export default function Finance({
               </Card>
             </div>
 
+            <ConsignmentPositionsCard pos={pos} lots={lots} orders={orders} invoices={invoices} shipments={shipments} claims={claims} financeNotes={financeNotes} poSettlements={poSettlements} />
             <Card style={{ marginBottom: 18 }}>
               <SectionTitle>P/L BY SALES ORDER</SectionTitle>
               <div style={{ fontSize: 10.5, color: "#64748B", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 7, padding: "7px 10px", marginTop: 10 }}>

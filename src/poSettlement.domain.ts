@@ -63,7 +63,7 @@ export function defaultTruckRate(po: any, lots: any[], orders: any[], invoices: 
 
 export function computePOSettlement(input: {
   po: any; lots: any[]; orders: any[]; invoices?: any[]; shipments?: any[]; claims?: any[];
-  ratePLNperEUR: any; provisionalEUR?: any; commissionPct: any; provisionalCurrency?: any; provisionalRate?: any; provisionalInvoiceNo?: any;
+  ratePLNperEUR: any; provisionalEUR?: any; commissionPct: any; provisionalCurrency?: any; provisionalRate?: any; provisionalInvoiceNo?: any; financeNotes?: any[];
 }): POSettlementCalc {
   const { po, lots, orders } = input;
   const currency = S(po?.currency || "EUR").toUpperCase() || "EUR";
@@ -71,18 +71,32 @@ export function computePOSettlement(input: {
   const bases = new Set<string>();
   const soRate = (o: any): number => {
     if (S(o?.currency || "PLN").toUpperCase() === "PLN") { return 1; }
-    const inv = (input.invoices || []).find((i: any) => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && num(i.fxRate) > 0 && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
-    if (inv) { bases.add("invoice"); return num(inv.fxRate); }
-    bases.add("order"); return num(o?.fxRate) || 1;
+    const inv = (input.invoices || []).find((i: any) => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && !i.isProforma && num(i.fxRate) > 0 && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
+    return inv ? num(inv.fxRate) : (num(o?.fxRate) || 1);
   };
   const myLots = lotsOfPO(po, lots);
   const warnings: string[] = [];
   const liveOrders = (orders || []).filter(o => o && o.status !== "Draft" && o.status !== "Cancelled");
+  // v6.99.85 (A-CS-2, owner 30 Sept): once an SO is invoiced, its sales are the INVOICES' net (excl. VAT) less the client's
+  // credit notes on them — the order's lines only until then. The invoice total is spread over the order's lines in
+  // proportion to their ordered values (an invoice does not name lots), so class I / II keep their shares.
+  const salesInvoicesOf = (o: any) => (input.invoices || []).filter((i: any) => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && !i.isProforma && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
+  const invNetPLN = (i: any) => num(i.netPLN) || num(i.netAmount) * (num(i.fxRate) || 1);
+  const noteSignedPLN = (n: any) => (n.noteType === "DEBIT" ? 1 : -1) * Math.abs(num(n.amountPLN) || num(n.amount) * (num(n.fxRate) || 1));
+  const invoiceFacts = new Map<string, { factor: number; notesPLN: number; invoiced: boolean }>();
+  const factsOf = (o: any) => {
+    const k = String(o.number); if (invoiceFacts.has(k)) return invoiceFacts.get(k)!;
+    const invs = salesInvoicesOf(o); const ids = new Set(invs.map((i: any) => String(i.id)));
+    const orderedPLN = (o.items || []).reduce((a: number, it: any) => { const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice); return a + num(it.qty) * price * soRate(o); }, 0);
+    const invoicedPLN = invs.reduce((a: number, i: any) => a + invNetPLN(i), 0);
+    const notesPLN = (input.financeNotes || []).filter((n: any) => n && n.direction === "outgoing" && ids.has(String(n.invoiceId)) && !/Cancelled|Void/i.test(String(n.status || ""))).reduce((a: number, n: any) => a + noteSignedPLN(n), 0);
+    const facts = { factor: invs.length && orderedPLN > 0 ? invoicedPLN / orderedPLN : 1, notesPLN, invoiced: invs.length > 0 }; bases.add(invs.length ? "invoice" : "order"); invoiceFacts.set(k, facts); return facts;
+  };
   const lines: VarietyLine[] = myLots.map(lot => {
     let soldKg = 0, soldKgII = 0, salesPLN = 0, salesPLNII = 0;
     liveOrders.forEach(o => (o.items || []).forEach((it: any) => {
       if (!sourcesLot(it, lot)) return;
-      const kg = num(it.qty); const fx = soRate(o);
+      const kg = num(it.qty); const fx = soRate(o) * factsOf(o).factor;
       const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice);
       const isII = /\bII\b|class ?2|klasa ?2|second/i.test(String(it.quality || it.grade || ""));
       if (isII) { soldKgII += kg; salesPLNII += kg * price * fx; } else { soldKg += kg; salesPLN += kg * price * fx; }
@@ -102,11 +116,13 @@ export function computePOSettlement(input: {
   // client credit notes: concession postings on the sourcing SOs, this truck's kg share of each SO
   let creditNotesPLN = 0;
   liveOrders.forEach(o => {
-    const adj = (o.claimAdjustments || o.adjustments || []).filter((a: any) => String(a?.source || "").startsWith("claim:"));
-    if (!adj.length) return;
     const truckKg = (o.items || []).filter((it: any) => myLots.some(l => sourcesLot(it, l))).reduce((s: number, it: any) => s + num(it.qty), 0);
     const soKg = (o.items || []).reduce((s: number, it: any) => s + num(it.qty), 0);
     if (!(truckKg > 0) || !(soKg > 0)) return;
+    const facts = factsOf(o);
+    // v6.99.85 (A-CS-2): invoiced → the credit / debit notes on the invoices are the truth; not yet → the claim postings on the order
+    if (facts.invoiced) { creditNotesPLN += -facts.notesPLN * Math.min(1, truckKg / soKg); return; }
+    const adj = (o.claimAdjustments || o.adjustments || []).filter((a: any) => String(a?.source || "").startsWith("claim:"));
     adj.forEach((a: any) => { creditNotesPLN += Math.abs(num(a.pln ?? a.amountPLN)) * Math.min(1, truckKg / soKg); });
   });
   creditNotesPLN = r2(creditNotesPLN);
@@ -229,4 +245,44 @@ export function commissionRun(settlements: POSettlementRecord[], pos: any[], cal
 export function nextSettlementNumberPO(settlements: POSettlementRecord[], year: number): string {
   const n = (settlements || []).map(s => String(s.number || "")).filter(x => x.startsWith(`SET-${year}-`)).map(x => parseInt(x.slice(-4), 10) || 0).reduce((a, b) => Math.max(a, b), 0);
   return `SET-${year}-${String(n + 1).padStart(4, "0")}`;
+}
+
+
+// ─── v6.99.85 (A-CS-1, owner 30 Sept): the producer's provisional invoice comes from the register, not from typing ───
+/** Cost invoices from this producer (or linked to the PO) — the candidates for the provisional invoice. */
+export function provisionalCandidates(po: any, invoices: any[]): any[] {
+  const sid = String(po?.supplier?.id ?? ""); const sname = S(po?.supplier?.name).toLowerCase();
+  return (invoices || []).filter((i: any) => i && i.kind !== "SALES" && i.paymentStatus !== "Cancelled" && (
+    (i.links || []).some((l: any) => l.type === "PO" && String(l.number) === String(po?.number)) ||
+    (sid && String(i.counterparty?.id ?? "") === sid) || (sname && S(i.counterparty?.name).toLowerCase() === sname)));
+}
+/** What the settlement record takes from a chosen invoice: its net (excl. VAT) in its own currency, at its rate. */
+export function provisionalFromInvoice(inv: any): Partial<POSettlementRecord> & { provisionalInvoiceId: any; provisionalCurrency: string; provisionalRate: number } {
+  const cur = S(inv?.currency || "PLN").toUpperCase();
+  return { provisionalInvoiceId: inv?.id ?? null, provisionalInvoiceNo: S(inv?.number), provisionalEUR: r2(num(inv?.netAmount)), provisionalCurrency: cur, provisionalRate: cur === "PLN" ? 1 : (num(inv?.fxRate) || 0) };
+}
+
+// ─── v6.99.85 (A-CS-3): the producer's EXTRA INVOICE is expected in the register exactly as his credit note is ────────
+export function expectedProducerExtraInvoice(po: any, calc: POSettlementCalc, deps: { nextId: () => any; todayISO: () => string }): any | null {
+  if (!(calc.extraInvoiceEUR > 0)) return null;
+  const fx = calc.ratePLNperEUR || 1;
+  return { id: deps.nextId(), noteType: "DEBIT", direction: "incoming", issuedBy: "COUNTERPARTY", status: "Expected",
+    partyName: po.supplier?.name || "Producer", partyId: po.supplier?.id ?? null, category: "Consignment adjustment",
+    amount: calc.extraInvoiceEUR, currency: calc.currency || "EUR", fxRate: fx, amountPLN: r2(calc.extraInvoiceEUR * fx),
+    reason: `Expected: ${po.number} provisional ${calc.provisionalEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"} → net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"} before commission — compensated against our commission invoice of ${calc.commissionEUR.toLocaleString("pl-PL")} ${calc.currency || "EUR"}`,
+    date: deps.todayISO(), relatedRef: po.number, expected: true };
+}
+
+// ─── v6.99.85 (A-CS-5): every consignment position at a glance (Finance) ─────────────────────────────────────────────
+export interface ConsignmentPosition { poNumber: string; producer: string; currency: string; state: "open" | "interim" | "closed"; settlementNumber: string; receivedKg: number; expectedKg: number; soldKg: number; onStockKg: number; netPLN: number; commissionPct: number; netAfterCommission: number; provisional: number; provisionalPaid: number | null; balance: number; stillToTransfer: number | null; rateMissing: boolean; pctMissing: boolean; }
+export function consignmentPositions(inp: { pos: any[]; lots: any[]; orders: any[]; invoices?: any[]; shipments?: any[]; claims?: any[]; financeNotes?: any[]; poSettlements?: any[] }): ConsignmentPosition[] {
+  return (inp.pos || []).filter(p => p && String(p.pricingMode || "") === "consignment" && p.status !== "Cancelled").map(po => {
+    const rec: any = (inp.poSettlements || []).find((s: any) => String(s.poNumber) === String(po.number)) || {};
+    const rate = rec.ratePLNperEUR ?? defaultTruckRate(po, inp.lots, inp.orders, inp.invoices || []);
+    const calc = computePOSettlement({ po, lots: inp.lots, orders: inp.orders, invoices: inp.invoices || [], shipments: inp.shipments || [], claims: inp.claims || [], financeNotes: inp.financeNotes || [], ratePLNperEUR: rate, provisionalEUR: rec.provisionalEUR, commissionPct: rec.commissionPct ?? 0, provisionalCurrency: rec.provisionalCurrency, provisionalRate: rec.provisionalRate, provisionalInvoiceNo: rec.provisionalInvoiceNo });
+    const sum = (k: keyof VarietyLine) => calc.lines.reduce((a, l) => a + num(l[k]), 0);
+    return { poNumber: po.number, producer: S(po.supplier?.name), currency: calc.currency, state: rec.status === "Closed" ? "closed" : (calc.fullySold ? "open" : "interim"), settlementNumber: S(rec.number),
+      receivedKg: sum("receivedKg"), expectedKg: sum("expectedKg"), soldKg: sum("soldKg") + sum("soldKgII"), onStockKg: sum("onStockKg"), netPLN: calc.netPLN, commissionPct: calc.commissionPct, netAfterCommission: calc.netAfterCommissionEUR,
+      provisional: calc.provisionalEUR, provisionalPaid: calc.provisionalPaidEUR, balance: calc.balanceEUR, stillToTransfer: calc.stillToTransferEUR, rateMissing: !(calc.ratePLNperEUR > 0), pctMissing: rec.commissionPct == null };
+  });
 }

@@ -18,7 +18,7 @@ import { locationById } from "./locations";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
 import { isEstimatedLine, planPackingResult } from "./so.domain";
-import { computePOSettlement, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
+import { computePOSettlement, provisionalCandidates, provisionalFromInvoice, expectedProducerExtraInvoice, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
 import SalesReportDoc from "./SalesReportDoc";   // v6.99.84 (A-ST-6)
@@ -443,7 +443,7 @@ export function LifecycleTimeline({ status }: any) {
 // ── v6.99.1 (FN-5): THE RESULT OF EVERY PURCHASE — the firm-price mirror of the consignment settlement ──
 
 // ── v6.90.0: THE TRUCK'S FINAL RESULT — settlement per PO (owner rulings V1…V6) ──
-export function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null }: any) {
+export function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null, financeNotes = [] }: any) {
   const rec: any = (settlements || []).find((s: any) => String(s.poNumber) === String(order.number)) || null;
   const producer = (contacts || []).find((c: any) => String(c.id) === String(order.supplier?.id)) || null;
   const rateRec = producer ? currentCommissionRate(producer, localTodayISO()) : null;
@@ -451,7 +451,8 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
   const rate = rec?.ratePLNperEUR ?? defRate;
   const pctDefault = rateRec ? (commissionPctForSales(rateRec, 0) ?? rateRec.pct) : 0;
   const pct = rec?.commissionPct ?? pctDefault;
-  const calc = computePOSettlement({ po: order, lots, orders, invoices, shipments, claims, ratePLNperEUR: rate, provisionalEUR: rec?.provisionalEUR, commissionPct: pct, provisionalCurrency: rec?.provisionalCurrency, provisionalRate: rec?.provisionalRate, provisionalInvoiceNo: rec?.provisionalInvoiceNo });
+  const calc = computePOSettlement({ po: order, lots, orders, invoices, shipments, claims, ratePLNperEUR: rate, provisionalEUR: rec?.provisionalEUR, commissionPct: pct, provisionalCurrency: rec?.provisionalCurrency, provisionalRate: rec?.provisionalRate, provisionalInvoiceNo: rec?.provisionalInvoiceNo, financeNotes });
+  const candidates = provisionalCandidates(order, invoices); const chosenInv = rec?.provisionalInvoiceId != null ? candidates.find((i: any) => String(i.id) === String(rec.provisionalInvoiceId)) || null : null;   // v6.99.85 (A-CS-1)
   const cur = calc.currency; const provCur = calc.provisionalCurrency; const prodName = order.supplier?.name || "the producer";   // v6.99.84 (A-ST-1)
   const bandPct = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, calc.grossPLN) : null;
   const upd = (patch: any) => setSettlements && setSettlements((prev: any[]) => { const all = prev || []; const cur = all.find((s: any) => String(s.poNumber) === String(order.number)); if (cur) return all.map((s: any) => s === cur ? { ...s, ...patch } : s); return [...all, { id: nextId(), poNumber: order.number, status: "Open", ratePLNperEUR: rate, commissionPct: pct, ...patch }]; });
@@ -467,6 +468,8 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
     upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, commissionPct: pct });
     const cn = expectedProducerCreditNote(order, calc, { nextId, todayISO: localTodayISO });
     if (cn && typeof setFinanceNotes === "function") { setFinanceNotes((prev: any[]) => [...(prev || []), cn]); upd({ expectedCreditNoteId: cn.id }); }
+    const dn = expectedProducerExtraInvoice(order, calc, { nextId, todayISO: localTodayISO });   // v6.99.85 (A-CS-3): the other direction is expected too
+    if (dn && typeof setFinanceNotes === "function") { setFinanceNotes((prev: any[]) => [...(prev || []), dn]); upd({ expectedExtraInvoiceId: dn.id }); }
     recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: "status", summary: `Truck settlement ${number} closed${calc.fullySold ? "" : " (interim)"} — net sales ${calc.netSalesEUR.toLocaleString("pl-PL")} EUR, commission ${calc.commissionEUR.toLocaleString("pl-PL")} EUR${cn ? ", expected credit note " + cn.amount.toLocaleString("pl-PL") + " EUR" : ""}` });
   }
   const myIns = (inspections || []).filter((x: any) => calc.lines.some(l => String(l.lotNumber) === String(x.lotNumber)));
@@ -476,11 +479,16 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
         <div><Lbl>{cur === "PLN" ? "Rate — the PO is in PLN" : `Rate PLN→${cur} (last sales invoice + bank cost)`}</Lbl><input type="number" step="0.0001" disabled={closed || cur === "PLN"} value={cur === "PLN" ? 1 : (rate || "")} onChange={e => upd({ ratePLNperEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
         <div><Lbl>Commission % {bandPct != null ? `(band → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pct ?? ""} onChange={e => upd({ commissionPct: parseFloat(e.target.value) || 0 })} style={inp} /></div>
-        <div><Lbl>Producer's provisional invoice no.</Lbl><input disabled={closed} value={rec?.provisionalInvoiceNo || ""} onChange={e => upd({ provisionalInvoiceNo: e.target.value })} style={inp} /></div>
+        <div><Lbl>Producer's provisional invoice</Lbl>
+          <select disabled={closed} value={rec?.provisionalInvoiceId ?? ""} title="v6.99.85 (A-CS-1): the producer's invoice from the register — its net, currency, rate and payments follow; type it only when it is not registered yet" onChange={e => { const inv = candidates.find((i: any) => String(i.id) === e.target.value); upd(inv ? provisionalFromInvoice(inv) : { provisionalInvoiceId: null }); }} style={inp}>
+            <option value="">{candidates.length ? "— not from the register (type it) —" : "— no invoice from this producer in the register —"}</option>
+            {candidates.map((i: any) => <option key={i.id} value={i.id}>{i.number} · {(i.netAmount || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {i.currency} net · {i.paymentStatus}</option>)}
+          </select>
+          {!chosenInv && <input disabled={closed} value={rec?.provisionalInvoiceNo || ""} placeholder="invoice no. (typed)" onChange={e => upd({ provisionalInvoiceNo: e.target.value })} style={{ ...inp, marginTop: 4 }} />}</div>
         <div><Lbl>Provisional value</Lbl><div style={{ display: "grid", gridTemplateColumns: provCur !== cur && provCur !== "PLN" ? "1fr 64px 76px" : "1fr 64px", gap: 4 }}>
-          <input type="number" disabled={closed} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} />
-          <select disabled={closed} value={provCur} onChange={e => upd({ provisionalCurrency: e.target.value })} title="v6.99.84 (A-ST-1): the currency the producer invoiced in" style={inp}>{["EUR", "USD", "PLN"].map(c => <option key={c}>{c}</option>)}</select>
-          {provCur !== cur && provCur !== "PLN" && <input type="number" step="0.0001" disabled={closed} value={rec?.provisionalRate ?? ""} placeholder="PLN rate" title={`PLN per 1 ${provCur}`} onChange={e => upd({ provisionalRate: parseFloat(e.target.value) || 0 })} style={inp} />}
+          <input type="number" disabled={closed || !!chosenInv} value={rec?.provisionalEUR ?? ""} onChange={e => upd({ provisionalEUR: parseFloat(e.target.value) || 0 })} style={inp} />
+          <select disabled={closed || !!chosenInv} value={provCur} onChange={e => upd({ provisionalCurrency: e.target.value })} title="v6.99.84 (A-ST-1): the currency the producer invoiced in" style={inp}>{["EUR", "USD", "PLN"].map(c => <option key={c}>{c}</option>)}</select>
+          {provCur !== cur && provCur !== "PLN" && <input type="number" step="0.0001" disabled={closed || !!chosenInv} value={rec?.provisionalRate ?? ""} placeholder="PLN rate" title={`PLN per 1 ${provCur}`} onChange={e => upd({ provisionalRate: parseFloat(e.target.value) || 0 })} style={inp} />}
         </div></div>
       </div>
       <div id={`sales-report-${order.id}`} style={{ fontSize: 11.5 }}>
@@ -533,7 +541,7 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
               <div>2 · we issue our COMMISSION INVOICE <b>{fmt(calc.commissionEUR, cur)}</b></div>
               <div style={{ color: "#15803D", fontWeight: 700 }}>3 · after compensation {calc.balanceEUR >= 0 ? `we owe ${prodName}` : `${prodName} owes us`} <b>{fmt(Math.abs(calc.balanceEUR), cur)}</b></div>
               {calc.stillToTransferEUR != null && <div style={{ fontSize: 11, color: "#64748B" }}>provisional paid {fmt(calc.provisionalPaidEUR || 0, cur)} · {calc.stillToTransferEUR >= 0 ? `still to transfer to ${prodName}` : `${prodName} still owes us`} <b>{fmt(Math.abs(calc.stillToTransferEUR), cur)}</b></div>}
-              {calc.stillToTransferEUR == null && rec?.provisionalInvoiceNo && <div style={{ fontSize: 10.5, color: "#94A3B8" }}>the provisional invoice {rec.provisionalInvoiceNo} is not in the register — assumed paid</div>}
+              {calc.stillToTransferEUR == null && rec?.provisionalInvoiceNo && <div style={{ fontSize: 10.5, color: "#94A3B8" }}>the provisional invoice {rec.provisionalInvoiceNo} is not in the register — register it as a cost invoice and pick it above to follow its payments</div>}
             </> : <div style={{ color: "#94A3B8" }}>Enter the producer's provisional invoice to see the correction and the balance.</div>}
           </div>
         </div>
@@ -779,7 +787,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
+export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], financeNotes: extFinanceNotes = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
@@ -1171,7 +1179,7 @@ ${blockNote}`.trim(),
             : [] /* v6.80.0 (D-42): EXW/FCA/FOB/CIF goods arrive on OUR shipment — the receipt is posted there */}
           ctxOrders={extSOs}
           onPackingResult={() => setPackingWindow(true)}   // v6.99.50 (TO-2): one window instead of a chain of prompts
-          settlement={{ lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, setInvoices: extSetInvoices }}
+          settlement={{ lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, financeNotes: extFinanceNotes, setInvoices: extSetInvoices }}
           onRegisterTruck={typeof extSetShipments === "function" ? () => setTruckWindow(true) : null}
           onReceiveLot={async (l: any) => {
             const expectedKg = parseFloat(String(l.expectedKg)) || 0;

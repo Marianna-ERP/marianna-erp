@@ -211,6 +211,15 @@ The box works in three columns:
    (2) we issue our commission invoice; (3) after compensation — who owes whom, and, when
    his provisional invoice is in the register, what is still to transfer.
 
+Since v6.99.85: the **provisional invoice is picked from the register** (the producer's
+cost invoices) — its net, currency, rate and payments follow, so *still to transfer* is
+automatic; once a sale is invoiced, **the invoices' net less their credit notes** are the
+sales (the order only until then); closing expects **both** the producer's credit note and
+his extra invoice in the register; a **consignment lot** shows *priced at settlement* and,
+once the provisional is known, ≈ PLN/kg provisional; **Finance → Consignment positions**
+lists every consignment PO with sold / on stock, sales after costs, due after commission,
+the provisional and its payment, and who owes whom.
+
 A direct lot shows its expected kilos until the truck is Delivered. **Sales report**
 prints on the company template; **Quality report** prints the lot's reports. A sales
 order selling straight from a PO can be invoiced as soon as the supplier's truck is

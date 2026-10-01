@@ -59,3 +59,15 @@ export function lotLoadedBy(lot: any): string[] {
   return Array.from(new Set(liveIns(lot).map((m: any) => S(m.shipmentRef || m.ref)).filter(Boolean)));
 }
 export function lotLoadedTwice(lot: any): string[] | null { const by = lotLoadedBy(lot); return by.length > 1 && num(lot?.receivedKg) > num(lot?.expectedKg) ? by : null; }
+
+// ─── v6.99.85 (A-CS-4): a consignment lot has no cost until the settlement — say so, and show the provisional value ──
+export function consignmentHint(lot: any, pos: any[], poSettlements: any[], lots: any[]): { consignment: boolean; provisionalPerKgPLN: number | null } {
+  const po = (pos || []).find((p: any) => String(p.number) === String(lot?.poRef));
+  if (!po || String(po.pricingMode || "") !== "consignment") return { consignment: false, provisionalPerKgPLN: null };
+  const rec: any = (poSettlements || []).find((s: any) => String(s.poNumber) === String(po.number));
+  const amt = num(rec?.provisionalEUR); if (!(amt > 0)) return { consignment: true, provisionalPerKgPLN: null };
+  const cur = S(rec?.provisionalCurrency || po.currency || "EUR").toUpperCase();
+  const rate = cur === "PLN" ? 1 : (num(rec?.provisionalRate) || num(rec?.ratePLNperEUR) || num(po.fxRate));
+  const kg = (lots || []).filter((l: any) => String(l.poRef) === String(po.number) && !/Cancelled/i.test(S(l.status))).reduce((a: number, l: any) => a + (num(l.receivedKg) || num(l.expectedKg)), 0);
+  return { consignment: true, provisionalPerKgPLN: rate > 0 && kg > 0 ? Math.round(amt * rate / kg * 100) / 100 : null };
+}

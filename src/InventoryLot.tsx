@@ -1,5 +1,5 @@
 // InventoryLot.tsx — v6.99.68 (A-AUD-2, owner): moved out of Inventory.tsx unchanged; the module's shared helpers are imported from it.
-import { lotValue } from "./lotView.domain";   // v6.99.81 (A-IN)
+import { lotValue, consignmentHint } from "./lotView.domain";   // v6.99.81 (A-IN)
 import React, { useState } from "react";
 import { Card, ActionButton, DocLink } from "./ui";
 import { PAGE_MAX } from "./ui";
@@ -77,7 +77,13 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
             </div>
             <div style={{ textAlign: "right" }}>
               {/* v6.99.81 (A-IN-7/8, owner): the value in the lot's own state — in stock · delivered · expected — and the cost per kg; received kg lives in the breakdown below */}
-              {(() => { const v = lotValue(lot, cpk); return <>
+              {(() => { const v = lotValue(lot, cpk); const ch = cpk > 0 ? { consignment: false, provisionalPerKgPLN: null } : consignmentHint(lot, pos || [], (season?.settlements) || [], allLots || []);
+                if (ch.consignment) return <>{/* v6.99.85 (A-CS-4) */}
+                  <div style={{ fontSize: 11, color: "#6D28D9", fontWeight: 700 }}>Consignment — priced at settlement</div>
+                  <div style={{ fontSize: 26, fontWeight: 700, color: "#6D28D9" }}>{ch.provisionalPerKgPLN != null ? "≈ " + fmtMoney(ch.provisionalPerKgPLN * v.kg) : "—"}</div>
+                  <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{ch.provisionalPerKgPLN != null ? `provisional · ≈ ${fmtMoney(ch.provisionalPerKgPLN)}/kg` : "no provisional invoice yet"}</div>
+                </>;
+                return <>
                 <div style={{ fontSize: 11, color: "#888" }}>Value {v.label !== "—" ? <span style={{ fontWeight: 700, color: v.label === "in stock" ? "#16A34A" : v.label === "expected" ? "#B45309" : "#0F766E" }}>{v.label}</span> : null}</div>
                 <div style={{ fontSize: 26, fontWeight: 700, color: "#111" }}>{fmtMoney(v.pln)}</div>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(cpk)}/kg</div>

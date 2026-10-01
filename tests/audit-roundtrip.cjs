@@ -2680,7 +2680,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const pln = P.computePOSettlement({ po: { ...po, currency: "PLN" }, lots: d.lots, orders: d.orders, invoices: [], shipments: d.shipments, ratePLNperEUR: 0, provisionalEUR: 160000, provisionalCurrency: "PLN", commissionPct: 6.5 });
     eq(pln.currency, "PLN"); eq(pln.ratePLNperEUR, 1); eq(pln.netSalesEUR, 171600, "in PLN nothing is converted"); eq(pln.warnings.some(w => /rate/.test(w)), false);
     const eurSO = d.orders.map(o => o.number === "SO-2026-0026" ? { ...o, currency: "EUR", fxRate: 4.20, items: o.items.map(it => ({ ...it, unitPrice: 14 })) } : o);
-    const inv = [{ kind: "SALES", number: "FV2026/06/1", fxRate: 4.30, paymentStatus: "Issued", links: [{ type: "SO", number: "SO-2026-0026" }] }];
+    const inv = [{ kind: "SALES", number: "FV2026/06/1", currency: "EUR", fxRate: 4.30, netAmount: 14300 * 14 / 5, paymentStatus: "Issued", links: [{ type: "SO", number: "SO-2026-0026" }] }];   // v6.99.85: an invoice brings its net as well as its rate (the SO prices per 5 kg box → 2.80/kg)
     const byOrder = P.computePOSettlement({ po, lots: d.lots, orders: eurSO, invoices: [], shipments: d.shipments, ratePLNperEUR: 4.35, commissionPct: 0 });
     const byInv = P.computePOSettlement({ po, lots: d.lots, orders: eurSO, invoices: inv, shipments: d.shipments, ratePLNperEUR: 4.35, commissionPct: 0 });
     eq(byOrder.salesBasis, "order"); eq(byInv.salesBasis, "invoice"); eq(r2(byInv.grossPLN / byOrder.grossPLN), r2(4.30 / 4.20), "the invoice's rate replaces the order's");
@@ -2692,5 +2692,52 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const withOwnSO = at("Loaded").map(s => s.number === "SHP-2026-0036" ? { ...s, soRefs: ["SO-2026-9999"] } : s); eq(SO.isShippedOrLater(so, withOwnSO), false, "a truck that names another SO is not borrowed");
   });
   console.log("v6.99.84 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.85 — consignment: the provisional from the register, sales from the invoices, both corrections expected, the lot's value, the positions (owner 30 Sept) ══
+(function v69985(){
+  console.log("\n══ 85. v6.99.85: consignment improvements ══");
+  const P = B("poSettlement.domain.js"); const L = B("lotView.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json", "the owner's 30 Sept 13:13 file"); if (!fx) return;
+  const d = require(fx); const po = d.pos.find(p => p.number === "PO-2026-0043"); const rec = d.poSettlements.find(s => s.poNumber === "PO-2026-0043");
+  const provInv = { id: 7001, kind: "COST", number: "EUR258/2026", currency: "EUR", fxRate: 4.30, netAmount: 37000, grossAmount: 37000, paymentStatus: "Issued", counterparty: { id: po.supplier.id, name: po.supplier.name }, links: [{ type: "PO", number: "PO-2026-0043" }], payments: [] };
+  const base = (over = {}) => P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: d.shipments, claims: d.claims || [], ratePLNperEUR: 4.35, commissionPct: 6.5, provisionalEUR: 37000, provisionalInvoiceNo: "EUR258/2026", ...over });
+  t("A-CS-1: the producer's invoice is offered from the register and fills the record — net, currency, rate; a stranger's invoice is not offered", () => {
+    const cands = P.provisionalCandidates(po, [provInv, { id: 7002, kind: "COST", number: "X/1", counterparty: { name: "Someone else" }, paymentStatus: "Issued" }, { id: 7003, kind: "SALES", number: "FV/1", counterparty: { name: po.supplier.name } }]);
+    eq(cands.map(c => c.id).join(","), "7001"); const rec2 = P.provisionalFromInvoice(provInv);
+    eq(rec2.provisionalInvoiceId, 7001); eq(rec2.provisionalInvoiceNo, "EUR258/2026"); eq(rec2.provisionalEUR, 37000); eq(rec2.provisionalCurrency, "EUR"); eq(rec2.provisionalRate, 4.30);
+    const withIt = base({ invoices: [provInv] }); eq(withIt.stillToTransferEUR, 36884.14, "in the register, unpaid: the whole balance is still to transfer");
+    const paid = base({ invoices: [{ ...provInv, payments: [{ amount: 37000 }], paymentStatus: "Paid" }] }); eq(paid.provisionalPaidEUR, 37000); eq(paid.stillToTransferEUR, -115.86);
+  });
+  t("A-CS-2: once SO-2026-0026 is invoiced, the sales are the invoice's net; a client credit note on it reduces them; before that, the order", () => {
+    const inv = { id: 8001, kind: "SALES", number: "FV2026/07/1", currency: "PLN", fxRate: 1, netAmount: 170000, netPLN: 170000, paymentStatus: "Issued", links: [{ type: "SO", number: "SO-2026-0026" }] };
+    eq(base().grossPLN, 171600, "from the order"); eq(base().salesBasis, "order");
+    const r = base({ invoices: [inv] }); eq(r.grossPLN, 170000, "the invoice's net replaces the order's value"); eq(r.salesBasis, "invoice"); eq(r.lines[0].soldKg, 14300, "kilos stay the order's");
+    const cn = { id: 9001, noteType: "CREDIT", direction: "outgoing", invoiceId: 8001, amount: 5000, currency: "PLN", fxRate: 1, amountPLN: 5000, status: "Issued" };
+    const r2 = base({ invoices: [inv], financeNotes: [cn] }); eq(r2.creditNotesPLN, 5000); eq(r2.netPLN, 165000);
+    const dn = { ...cn, id: 9002, noteType: "DEBIT", amount: 1000, amountPLN: 1000 }; eq(base({ invoices: [inv], financeNotes: [cn, dn] }).creditNotesPLN, 4000, "a debit note goes the other way");
+    eq(base({ invoices: [{ ...inv, isProforma: true }] }).salesBasis, "order", "a proforma is not an invoice");
+  });
+  t("A-CS-3: closing expects the producer's EXTRA INVOICE in the register, as it already expected his credit note", () => {
+    const r = base(); const dn = P.expectedProducerExtraInvoice(po, r, { nextId: () => 1, todayISO: () => "2026-09-30" });
+    ok(dn, "expected"); eq(dn.noteType, "DEBIT"); eq(dn.direction, "incoming"); eq(dn.status, "Expected"); eq(dn.amount, 2448.28); eq(dn.currency, "EUR"); eq(dn.amountPLN, 10650.02); ok(/compensated against our commission invoice of 2564,14 EUR/.test(dn.reason));
+    eq(P.expectedProducerCreditNote(po, r, { nextId: () => 1, todayISO: () => "2026-09-30" }), null, "no credit note when an extra invoice is due");
+    const low = base({ provisionalEUR: 41000 }); eq(P.expectedProducerExtraInvoice(po, low, { nextId: () => 1, todayISO: () => "x" }), null); ok(P.expectedProducerCreditNote(po, low, { nextId: () => 1, todayISO: () => "x" }));
+  });
+  t("A-CS-4: LOT-2026-0126 is a consignment lot — priced at settlement; with the provisional invoice, ≈ 11,13 PLN/kg provisional", () => {
+    const lot = d.lots.find(l => l.number === "LOT-2026-0126");
+    const h0 = L.consignmentHint(lot, d.pos, [], d.lots); eq(h0.consignment, true); eq(h0.provisionalPerKgPLN, null);
+    const h1 = L.consignmentHint(lot, d.pos, [rec], d.lots); eq(h1.provisionalPerKgPLN, 11.26, "37 000 EUR × 4.35 ÷ 14 300 kg");
+    const h2 = L.consignmentHint(lot, d.pos, [{ ...rec, provisionalCurrency: "PLN", provisionalEUR: 160000 }], d.lots); eq(h2.provisionalPerKgPLN, 11.19);
+    eq(L.consignmentHint(d.lots.find(l => l.number === "LOT-2026-0009"), d.pos, [rec], d.lots).consignment, false, "a firm-price lot is not consignment");
+  });
+  t("A-CS-5: the consignment positions — one row per consignment PO, the settlement box's own figures", () => {
+    const rows = P.consignmentPositions({ pos: d.pos, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: d.shipments, claims: d.claims || [], financeNotes: [], poSettlements: d.poSettlements });
+    ok(rows.length >= 1); const r = rows.find(x => x.poNumber === "PO-2026-0043"); ok(r, "PO-0043 listed");
+    eq(r.producer, "Vega-Pro Kft."); eq(r.currency, "EUR"); eq(r.state, "open", "fully sold, not closed"); eq(r.soldKg, 14300); eq(r.expectedKg, 14300); eq(r.netPLN, 171600); eq(r.netAfterCommission, 36884.14); eq(r.provisional, 37000); eq(r.balance, -115.86); eq(r.pctMissing, false);
+    ok(rows.every(x => d.pos.find(p => p.number === x.poNumber).pricingMode === "consignment"), "only consignment POs");
+  });
+  console.log("v6.99.85 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
