@@ -174,6 +174,40 @@ default); the PO shows only a provisional chip.
 - **A date must exist.** The date field refuses 31/06 or 29/02 in a normal year;
   Settings → integrity check lists any such date already stored.
 
+### A company's addresses (v6.99.97)
+
+Every address of a company — the main one and any further delivery or warehouse site —
+now keeps an id of its own. Before, a second or third address would have been confused
+with the first one (no company in the data had one yet). An address keeps its id when the
+company is saved.
+
+### Groupage — one truck, several orders (v6.99.92–96)
+
+- **Create window:** after choosing the first sales order (or purchase order), add more
+  with **+ add a sales order (groupage)** — one drop each (or one pickup each for POs).
+  The shipment carries every order's goods rows; there is no single governing order.
+- **The tour** shows on the truck in the editor: the loading stops come from where the
+  goods are (the lot's warehouse; the PO's place for goods not yet received), the drops
+  from each sales order's destination and delivery date. Set the order of the drops with
+  ↑ ↓ — that order is all the truck stores. A sales order without a destination is named
+  in red.
+- **The transport order** of a groupage truck prints the tour: each loading and each
+  drop in order, with its kilos and its sales order. Single-drop orders print as before.
+- **Goods already in stock load where the lot is** (not at the producer).
+- Every window's **Close** button is drawn again.
+
+### Delete, Withdraw, Cancel — and the shipment view (v6.99.88–91)
+
+- **Delete** removes a record. A PO or SO can be deleted only while it is a Draft and
+  nothing depends on it (no sale, shipment, received stock or invoice); the window
+  names what blocks it, and the audit log keeps the deletion.
+- **Withdraw** keeps the record, marked **Withdrawn** — for anything already sent to
+  the producer or the client, or with history (PO, SO, shipment, invoice).
+- **Cancel** only closes a form or a window and goes back.
+- **Shipment view:** Operational checklist | Documents on one row, Costs / billing |
+  Notes on the next; the Route / legs row names the trucks' carriers and the booking's
+  forwarder (older shipments had theirs written once onto their trucks and booking).
+
 ### One owner for a lot's quantity, and the layouts (v6.99.87)
 
 - **Received in our warehouse → the receipt owns the quantity.** The quality report

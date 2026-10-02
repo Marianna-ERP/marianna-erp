@@ -2597,7 +2597,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const d = require(fx); const lot = n => d.lots.find(l => l.number === n);
   t("A-IN-4: one plain word per status, the stored value untouched", () => {
     eq(L.lotStatusLabel("Direct Expected").label, "Expected"); eq(L.lotStatusLabel("Expected").label, "Expected"); eq(L.lotStatusLabel("In Stock").label, "In stock");
-    eq(L.lotStatusLabel("Shipped Out").label, "Shipped"); eq(L.lotStatusLabel("Delivered (direct)").label, "Delivered"); eq(L.lotStatusLabel("Blocked · PO Cancelled").label, "Cancelled"); eq(L.lotStatusLabel("Cancelled").label, "Cancelled");
+    eq(L.lotStatusLabel("Shipped Out").label, "Shipped"); eq(L.lotStatusLabel("Delivered (direct)").label, "Delivered"); eq(L.lotStatusLabel("Blocked · PO Cancelled").label, "Withdrawn"); eq(L.lotStatusLabel("Cancelled").label, "Withdrawn");   // v6.99.89 (A-NM-1): the owner's word
     eq(new Set(d.lots.map(l => L.lotStatusLabel(l.status).label)).size <= 6, true, "her file uses at most six words");
   });
   t("A-IN-7: the value in the lot's own state — in stock · delivered · expected — never 0 for goods that went direct", () => {
@@ -2796,5 +2796,91 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Q.repostDirectToReport(r, 14270), r, "already at the report: unchanged");
   });
   console.log("v6.99.87 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.88–91 — Delete back; Delete / Withdraw / Cancel; shipment view pairs; carriers from their owners (owner 1 Oct) ══
+(function v69991(){
+  console.log("\n══ 88–91. v6.99.88–91: the delete action · Withdrawn · carriers and forwarders from their owners ══");
+  const F = B("format.js"); const M = B("shipmentModel.domain.js"); const L = B("lotView.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.87_schema-v2_2026-10-01T16-29-32.json", "the owner's 1 Oct 16:29 file"); if (!fx) return;
+  const d = require(fx); const src = require("fs").readFileSync(require("path").join(__dirname, "../src/ui.tsx"), "utf8");
+  t("A-DEL-1: every action a screen names exists — the missing 'delete' made every Delete button vanish", () => {
+    const known = new Set(Array.from(src.matchAll(/^\s+([a-zA-Z]+):\s+\{ icon:/gm)).map(m => m[1])); ok(known.has("delete"), "delete is in the list"); ok(known.has("withdrawDoc"));
+    const fs = require("fs"), path = require("path"); const dir = path.join(__dirname, "../src"); const used = new Set();
+    fs.readdirSync(dir).filter(f => f.endsWith(".tsx")).forEach(f => { for (const m of fs.readFileSync(path.join(dir, f), "utf8").matchAll(/<ActionButton action="([a-zA-Z]+)"/g)) used.add(m[1] + "@" + f); });
+    // the same fault hides 17 Close buttons ('close' is missing too) — registered as A-DEL-2 for the next batch (rule 2); until then it is the ONLY one allowed
+    const missing = Array.from(new Set(Array.from(used).filter(x => !known.has(x.split("@")[0])).map(x => x.split("@")[0]))); eq(missing.join(", "), "", "an ActionButton naming an unknown action draws nothing — v6.99.92 (A-DEL-2): 'close' added, none left");
+  });
+  t("A-NM-1: the stored 'Cancelled' reads 'Withdrawn' everywhere; other statuses untouched", () => {
+    eq(F.statusWord("Cancelled"), "Withdrawn"); eq(F.statusWord("Blocked · PO Cancelled"), "Blocked · PO Withdrawn"); eq(F.statusWord("Confirmed"), "Confirmed"); eq(F.statusWord(""), "");
+    eq(L.lotStatusLabel("Cancelled").label, "Withdrawn");
+  });
+  t("A-SD-5: SHP-0030 / -0031 get their leg carrier on their trucks and their forwarder on their booking — once; SHP-0034 / -0035 already have their owners", () => {
+    const s30 = d.shipments.find(s => s.number === "SHP-2026-0030"), s31 = d.shipments.find(s => s.number === "SHP-2026-0031"), s35 = d.shipments.find(s => s.number === "SHP-2026-0035");
+    const h31 = M.healProviderOwners(s31); ok(h31.notes.some(n => /forwarder written onto/.test(n)), h31.notes.join(" | ")); eq(String((h31.sh.bookings || [])[0].forwarderId), String(s31.legs[1].forwarderId));
+    eq(M.healProviderOwners(h31.sh).notes.length, 0, "a second pass changes nothing");
+    const h30 = M.healProviderOwners(s30); eq(h30.notes.length, 0, "SHP-0030's trucks and booking already carried them");
+    eq(M.healProviderOwners(s35).notes.length, 0, "the current way: nothing to write");
+    const full = M.healShipmentModel(s31); eq(full.changed, true); ok((full.notes || []).length > 0, "the notes reach the audit log");
+  });
+  console.log("v6.99.91 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.92–95 — Close back; stock loads where it is; groupage from the first window; the tour of a truck (owner 1 Oct) ══
+(function v69995(){
+  console.log("\n══ 92–95. v6.99.92–95: Close · stock loads at its lot · the groupage tour from the lots and the orders ══");
+  const M = B("shipmentModel.domain.js"); const SD = B("shipments.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.87_schema-v2_2026-10-01T16-29-32.json", "the owner's 1 Oct 16:29 file"); if (!fx) return;
+  const d = require(fx); const sh = d.shipments.find(s => s.number === "SHP-2026-0039"); const u = sh.legs[0].vehicles[0]; const lot127 = d.lots.find(l => l.number === "LOT-2026-0127");
+  t("A-GR-1: SHP-2026-0039's goods are in stock at AGRO-HURT — the truck loads there, not at Vega-Pro", () => {
+    const n = M.truckPlaceNote(sh, u, d.pos, d.lots); ok(n.proposal, "a proposal"); eq(String(n.proposal.id), String(lot127.locationId)); ok(/^LOT-/.test(n.proposal.ref), "from the lot, not the PO: " + n.proposal.ref);
+    const notYet = d.lots.map(l => l.number === "LOT-2026-0127" || l.number === "LOT-2026-0128" ? { ...l, physicalKg: 0, receivedKg: 0 } : l);
+    const n2 = M.truckPlaceNote(sh, u, d.pos, notYet); eq(n2.proposal && n2.proposal.ref, "PO-2026-0044", "not yet received: the PO's place again");
+  });
+  t("A-GR-3: the tour — 1 loading (AGRO-HURT, 14 265 kg), 3 drops from the three orders; the order is the truck's", () => {
+    const tour = M.truckTour(sh, u, d.pos, d.lots, d.orders); eq(tour.isTour, true); eq(tour.loads.length, 1); eq(tour.loads[0].kg, 14265); eq(String(tour.loads[0].id), String(lot127.locationId));
+    eq(tour.drops.map(x => x.soNumber + ":" + x.kg).join(","), "SO-2026-0027:1650,SO-2026-0028:11630,SO-2026-0029:985");
+    ok(tour.drops.every(x => !x.missing), "all three orders name a destination"); eq(tour.drops[2].placeText, "MJ VEG Bronisze");
+    const seq = M.moveDrop(tour, "SO-2026-0029", -1); eq(seq.join(","), "SO-2026-0027,SO-2026-0029,SO-2026-0028");
+    const t2 = M.truckTour(sh, { ...u, stopOrder: ["SO-2026-0029", "SO-2026-0027"] }, d.pos, d.lots, d.orders); eq(t2.drops.map(x => x.soNumber).join(","), "SO-2026-0029,SO-2026-0027,SO-2026-0028", "stored order first, the rest by date");
+    const gaps = M.tourGaps(u, tour); ok(!gaps.includes("delivery place"), "a tour truck is not asked one delivery place"); ok(!gaps.some(g => /destination of/.test(g)));
+    const noDest = d.orders.map(o => o.number === "SO-2026-0027" ? { ...o, destinationLocationId: null, destinationText: "" } : o);
+    eq(M.tourGaps(u, M.truckTour(sh, u, d.pos, d.lots, noDest)).filter(g => /destination of/.test(g)).join(","), "destination of SO-2026-0027", "a missing destination is named");
+    eq(M.truckTour(d.shipments.find(s => s.number === "SHP-2026-0037"), d.shipments.find(s => s.number === "SHP-2026-0037").legs[0].vehicles[0], d.pos, d.lots, d.orders).isTour, false, "a single-drop truck is not a tour");
+  });
+  t("A-GR-2: a groupage built from the first window carries every order's goods rows, each with its own SO", () => {
+    let id = 990000; const deps = { todayISO: () => "2026-10-01", nextId: () => ++id };
+    const so27 = d.orders.find(o => o.number === "SO-2026-0027"), so28 = d.orders.find(o => o.number === "SO-2026-0028");
+    const base = { id: 1, number: "SHP-TEST", goods: [], soRefs: [], poRefs: [], legs: [{ mode: "Road", vehicles: [] }] };
+    const g = SD.appendSourceGoods(SD.appendSourceGoods(base, "SO", so27, d.lots, deps), "SO", so28, d.lots, deps);
+    eq(g.goods.map(x => x.soRef).sort().join(","), "SO-2026-0027,SO-2026-0028,SO-2026-0028"); ok((g.soRefs || []).includes("SO-2026-0027") && (g.soRefs || []).includes("SO-2026-0028"));
+  });
+  console.log("v6.99.95 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.97 — a company's addresses each keep an exact id of their own (A-ID-1) ══
+(function v69997(){
+  console.log("\n══ 97. v6.99.97: site ids exact for every address ══");
+  const L = B("locations.js");
+  t("A-ID-1: with today's company ids the formula collapses address 1 and 2 onto 0; a further address now gets an exact id of its own", () => {
+    const big = 1788432629980530, small = 1234;
+    eq(L.warehouseCpLocId(big, 1), L.warehouseCpLocId(big, 0), "the fault: the formula cannot tell them apart");
+    ok(!L.exactSiteId(big, 1)); ok(L.exactSiteId(small, 1));
+    eq(L.newSiteId(big, 0), L.warehouseCpLocId(big, 0), "the main address keeps the value every stored reference holds");
+    const a1 = L.newSiteId(big, 1), a2 = L.newSiteId(big, 2); ok(Number.isSafeInteger(a1) && Number.isSafeInteger(a2)); ok(a1 !== a2 && a1 !== L.warehouseCpLocId(big, 0), "three distinct ids");
+    eq(L.newSiteId(small, 2), L.warehouseCpLocId(small, 2), "a small id keeps the formula");
+  });
+  t("A-ID-1: stamping gives a warehouse's three addresses three ids, and a second pass keeps them; the location list uses them", () => {
+    const wh = { id: 1788432629980530, name: "AGRO-HURT", type: "Warehouse", types: ["Warehouse"], address: "ul. Główna 1, Grójec", extraAddresses: ["Chłodnia 2, Grójec", { address: "Magazyn 3, Grójec" }] };
+    const r1 = L.stampSiteIds([wh]); const c1 = r1.contacts[0]; const ids = [c1.siteId, ...c1.extraAddresses.map(a => a.siteId)];
+    eq(new Set(ids.map(String)).size, 3, "three distinct: " + ids.join(", ")); eq(String(c1.siteId), String(L.warehouseCpLocId(wh.id, 0)));
+    const r2 = L.stampSiteIds(r1.contacts); eq(r2.changed, false, "stable"); eq(r2.contacts[0].extraAddresses.map(a => a.siteId).join(","), c1.extraAddresses.map(a => a.siteId).join(","));
+    const locs = L.counterpartyLocations ? L.counterpartyLocations(r1.contacts) : []; if (locs.length) eq(new Set(locs.map(l => String(l.id))).size, locs.length, "no two locations share an id");
+    const wl = L.warehouseAddressLocations(r1.contacts); eq(new Set(wl.map(l => String(l.id))).size, 3, "the warehouse list has three places");
+  });
+  console.log("v6.99.97 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();

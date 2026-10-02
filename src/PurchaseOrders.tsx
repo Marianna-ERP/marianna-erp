@@ -1,3 +1,4 @@
+import { statusWord } from "./format";
 import { newestFirst } from "./moduleGuards.domain";
 import QualityReportDoc from "./QualityReportDoc";
 import { lastReportNumber, issueReportNumber } from "./reportNumbers";
@@ -162,7 +163,7 @@ export function Sel({ value, onChange = () => {}, children, style = {}, disabled
 }
 export function StatusBadge({ status }: any) {
   const s = PO_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
-  return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{status}</span>;
+  return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{statusWord(status)}</span>;
 }
 export function QualityBadge({ quality }: any) {
   const palette = {
@@ -431,7 +432,7 @@ export function LifecycleTimeline({ status }: any) {
           </React.Fragment>
         );
       })}
-      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Cancelled</span>}
+      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Withdrawn</span>}
     </div>
   );
 }
@@ -1069,7 +1070,29 @@ ${blockNote}`.trim(),
     recordAudit({ module: "Purchase orders", docType: "PO", docNumber: String(l.poRef || ""), action: "updated", summary: `${l.number} received ${Math.round(kg).toLocaleString("pl-PL")} kg on ${date} (direct receipt)` });
     notifySaved(`receipt of ${l.number}`);
   }
+  // v6.99.89 (A-NM-1, owner ruling 1 Oct): DELETE removes a PO that never left us (Draft) and that nothing depends on,
+  // with its untouched expected lots; anything sent to the producer or with history is WITHDRAWN (kept, marked Withdrawn).
   async function deleteOrder() {
+    const poNum = selected.number;
+    const deps = poDependents(selected);
+    if (deps.length) { await uiAlert({ tone: "warn", title: `${poNum} can't be deleted`, message: `It has ${deps.join(", ")}. Unlink them first — or Withdraw the PO: it stays on record, marked Withdrawn.` }); return; }
+    if (selected.status !== "Draft") { await uiAlert({ tone: "warn", title: `${poNum} can't be deleted`, message: `It is ${selected.status} — it has gone out to the producer. Withdraw it instead: it stays on record, marked Withdrawn.` }); return; }
+    const myLots = (extLots || []).filter((l: any) => String(l.poRef) === String(poNum));
+    if (!(await uiConfirm({ tone: "danger", title: `Delete ${poNum}?`, message: `The PO is removed${myLots.length ? ` with its ${myLots.length} expected lot${myLots.length === 1 ? "" : "s"}` : ""}. The audit log keeps the record of the deletion.`, confirmLabel: "Delete" }))) return;
+    setOrders(prev => prev.filter(o => o.id !== selected.id));
+    if (myLots.length && typeof extSetLots === "function") extSetLots((prev: any[]) => (prev || []).filter((l: any) => String(l.poRef) !== String(poNum)));
+    recordAudit({ module: "Purchase orders", docType: "PO", docNumber: poNum, action: "deleted", summary: `${poNum} deleted (Draft, nothing depended on it)${myLots.length ? ` with ${myLots.map((l: any) => l.number).join(", ")}` : ""}` });
+    setSelected(null); setView("list");
+  }
+  function poDependents(po: any): string[] {
+    const poNum = po.number;
+    const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+    const hasShipment = (extShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
+    const moved = (extLots || []).some((l: any) => String(l.poRef) === String(poNum) && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || (l.movements || []).some((m: any) => m && !m.voided)));
+    const invoiced = (extInvoices || []).some((i: any) => i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "PO" && String(l.number) === String(poNum)));
+    return [hasLinkedSO && "a sales order", hasShipment && "a shipment", moved && "received / moved inventory", invoiced && "an invoice"].filter(Boolean) as string[];
+  }
+  async function withdrawOrder() {
     // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
     const poNum = selected.number;
     const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
@@ -1100,10 +1123,10 @@ ${blockNote}`.trim(),
   });
     if (hasLinkedSO || hasShipment || lotReceivedOrMoved) {
       const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
-      await uiAlert({ tone: "warn", title: "PO has dependents", message: `PO ${poNum} can't be cancelled or deleted: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.` });
+      await uiAlert({ tone: "warn", title: "PO has dependents", message: `PO ${poNum} can't be withdrawn: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.` });
       return;
     }
-    if (!(await uiConfirm({ tone: "danger", title: `Cancel PO ${selected.number}?`, message: "Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.", confirmLabel: "Cancel PO", cancelLabel: "Keep" }))) return;
+    if (!(await uiConfirm({ tone: "danger", confirmLabel: "Withdraw", title: `Withdraw ${selected.number}?`, message: "Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.", cancelLabel: "Keep" }))) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     setOrders(prev => prev.map(o => o.id === selected.id ? cancelled : o));
     reflectCancelledPOInInventory(cancelled);
@@ -1209,6 +1232,7 @@ ${blockNote}`.trim(),
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}
           onDelete={deleteOrder}
+          onWithdraw={withdrawOrder}
           onPrint={async () => {
             if (selected.status === "Draft") {
               await uiAlert({ tone: "warn", title: "Draft PO", message: "Cannot print or share a draft PO. Confirm the order first." });
@@ -1288,7 +1312,7 @@ ${blockNote}`.trim(),
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             <option value="Active">Active</option>
             <option value="All">All statuses</option>
-            {Object.keys(PO_STATUSES).map(s => <option key={s} value={s}>{s}</option>)}
+            {Object.keys(PO_STATUSES).map(s => <option key={s} value={s}>{statusWord(s)}</option>)}
           </select>
           {(() => {
             const counts: Record<string, number> = {};

@@ -5,6 +5,7 @@ import { SmallButton, ActionButton } from "./ui";
 import { isCancelled } from "./cancellation.domain";
 import { formatDMY } from "./dates";
 import { nextId } from "./ids";
+import { appendSourceGoods } from "./shipments.domain";   // v6.99.94
 import { placeForPrint } from "./locations";
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
 
@@ -12,6 +13,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
   const [sourceType, setSourceType] = useState("PO");
   const [governingSoPrompt, setGoverningSoPrompt] = useState(null); // v6.34.0: {po, sos} when a multi-SO PO needs a pick
   const [ref, setRef] = useState(""); // v6.18.14 (#4): no PO pre-selected — force a choice
+  const [moreRefs, setMoreRefs] = useState<string[]>([]);   // v6.99.94 (A-GR-2, owner): groupage — more SOs (several drops) or POs (several pickups) on one shipment
   // Which PO line ids are loaded on this shipment (default: all). Lets the user load
   // a subset of a multi-product PO.
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
@@ -197,6 +199,13 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
         }
       }
     }
+    // v6.99.94 (A-GR-2): a groupage takes every ticked order's goods; no single governing order — each goods row keeps its own SO / PO / lot
+    if (moreRefs.length) {
+      let g: any = sh; const kind = sourceType === "PO" ? "PO" : "SO";
+      moreRefs.forEach(no => { const doc = (kind === "PO" ? (pos || []) : (orders || [])).find((x: any) => String(x.number) === String(no)); if (doc) g = appendSourceGoods(g, kind, doc, lots || [], { todayISO: () => new Date().toISOString().slice(0, 10), nextId }); });
+      g = { ...g, groupage: true, ...(kind === "SO" ? { governingSoRef: null } : {}) };
+      onCreate(g); return;
+    }
     onCreate(sh);
   }
   return <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
@@ -212,6 +221,17 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
             <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(""); }}><option value="PO">From PO</option><option value="SO">From SO</option>{/* v6.99.43 (M-2, owner): Manual retired — a transfer between our warehouses is a movement, a return to the producer is the lot's Return action */}</Sel></div>
             {draftUnsourced > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 11.5, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px" }}>{(selectedSO as any)?.number} is a draft with {draftUnsourced} unsourced line{draftUnsourced > 1 ? "s" : ""} — source them from the PO first (the truck needs to know where it loads).</div>}
             <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{[...(pos || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{[...(orders || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((o: any) => o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}{o.status === "Draft" ? " — draft (the client may still change)" : ""}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
+            {(sourceType === "PO" || sourceType === "SO") && ref && (() => {   // v6.99.94 (A-GR-2): groupage from the first window
+              const pool = (sourceType === "PO" ? (pos || []).filter((p: any) => !isCancelled(p) && p.status !== "Draft") : (orders || []).filter((o: any) => !isCancelled(o) && o.status !== "Draft")).filter((x: any) => String(x.number) !== String(ref));
+              return <div style={{ gridColumn: "1 / -1" }}><Lbl>Groupage <span style={{ color: "#BBB", fontWeight: 400 }}>· {sourceType === "SO" ? "more sales orders on the same truck — one drop each" : "more purchase orders on the same truck — one pickup each"}</span></Lbl>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                  {moreRefs.map(no => <span key={no} style={{ padding: "3px 8px", borderRadius: 12, background: "#EEF2FF", color: "#3730A3", fontSize: 12, fontWeight: 700 }}>{no} <SmallButton kind="remove" title="Take it off the groupage" onClick={() => setMoreRefs(m => m.filter(x => x !== no))}>Remove</SmallButton></span>)}
+                  <Sel value="" onChange={e => { const v = e.target.value; if (v) setMoreRefs(m => m.includes(v) ? m : [...m, v]); }} style={{ maxWidth: 360 }}>
+                    <option value="">{moreRefs.length ? "+ add another" : `+ add a ${sourceType === "SO" ? "sales" : "purchase"} order (groupage)`}</option>
+                    {pool.filter((x: any) => !moreRefs.includes(String(x.number))).map((x: any) => <option key={x.number} value={x.number}>{x.number} · {sourceType === "SO" ? (x.client?.name || "") : (x.supplier?.name || "")}</option>)}
+                  </Sel>
+                  {moreRefs.length > 0 && <span style={{ fontSize: 11.5, color: "#3730A3", fontWeight: 700 }}>Groupage · {moreRefs.length + 1} {sourceType === "SO" ? "drops" : "pickups"}</span>}
+                </div></div>; })()}
             <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => setForm(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             {/* v6.92.0 (A-R8-7): the freight currency belongs to the unit price, not to the shipment. */}
           </div>

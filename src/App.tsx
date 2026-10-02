@@ -421,7 +421,7 @@ export default function App() {
   const navigateRef = useRef<(m: string) => void>(() => {});   // v6.99.58 (A-US-2)
   useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); } catch {} }; window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
   // v6.99.9: shipments healed once — unit kg mirrors in step with the derived figure; stale zero-amount leg-freight lines removed.
-  useEffect(() => { setShipments((prev: any[]) => { let changed = false; const next = (prev || []).map((s: any) => { const r = healShipmentModel(s); if (r.changed) changed = true; return r.sh; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setShipments((prev: any[]) => { let changed = false; const next = (prev || []).map((s: any) => { const r = healShipmentModel(s); if (r.changed) changed = true; (r.notes || []).forEach((n: string) => recordAudit({ module: "Shipments", docType: "Shipment", docNumber: String(s.number || ""), action: "updated", summary: `${n} (one source: v6.99.91)` })); return r.sh; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // v6.99.40 (A-ADDR): every stored address is split into its parts ONCE — street · postcode · city · country.
   // What cannot be split (a market address, a PO box) keeps its whole text in the street line and is flagged for review;

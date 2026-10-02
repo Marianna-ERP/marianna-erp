@@ -131,7 +131,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: an
   );
 }
 
-export function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+export function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onWithdraw = null, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -159,8 +159,9 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
             </>;
           })()}
           {order.status === "Cancelled"
-            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Cancelled — read-only</span>
+            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Withdrawn — read-only</span>
             : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
+          {order.status !== "Cancelled" && onWithdraw && <ActionButton action="withdrawDoc" onClick={onWithdraw} />}{/* v6.99.89 (A-NM-1) */}
           <ActionButton action="delete" onClick={onDelete} />
         </div>
       </div>

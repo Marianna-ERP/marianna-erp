@@ -1,8 +1,10 @@
+import { statusWord } from "./format";
 // ── v6.99.0: EXCEL EXPORT — every list exports what you see (rows as filtered, columns as shown) ──
 import * as XLSX from "xlsx";
 export interface XlsxColumn { key: string; label: string; fmt?: (v: any, row: any) => any; }
 export function exportRowsToXlsx(filename: string, rows: any[], columns: XlsxColumn[], sheetName = "Export"): void {
-  const data = (rows || []).map(r => { const o: any = {}; columns.forEach(c => { const v = c.fmt ? c.fmt(r[c.key], r) : r[c.key]; o[c.label] = v === undefined || v === null ? "" : v; }); return o; });
+  // v6.99.89 (A-NM-1): a status column says "Withdrawn", never "Cancelled"
+  const data = (rows || []).map(r => { const o: any = {}; columns.forEach(c => { let v = c.fmt ? c.fmt(r[c.key], r) : r[c.key]; if (typeof v === "string" && /status/i.test(String(c.key))) v = statusWord(v); o[c.label] = v === undefined || v === null ? "" : v; }); return o; });
   const ws = XLSX.utils.json_to_sheet(data, { header: columns.map(c => c.label) });
   ws["!cols"] = columns.map(c => ({ wch: Math.min(48, Math.max(10, c.label.length + 2, ...data.slice(0, 200).map(d => String(d[c.label] ?? "").length + 1))) }));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));

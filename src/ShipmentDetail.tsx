@@ -70,7 +70,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
             : <span title="v6.80.0 (D-41): an outbound delivery's freight is a DIRECT cost of the sale — it lands in the SO margin, never in lot landed cost." style={{ fontSize: 11, color: "#94A3B8", alignSelf: "center" }}>Direct cost of sale — not allocated to lots</span>}
           <SmallButton onClick={onApplyInventory} title="Normally automatic on Loaded/Arrived — use only to re-post after editing goods.">Re-post inventory</SmallButton>
           {!["Closed", "Cancelled"].includes(canonicalStatus(shipment.status)) &&
-            <SmallButton kind="red" onClick={() => onQuickStatus("Cancelled")} title="Cancel this shipment — it stays on record (read-only) but no longer counts toward the PO/SO.">Cancel shipment</SmallButton>}
+            <SmallButton kind="red" onClick={() => onQuickStatus("Cancelled")} title="v6.99.89 (A-NM-1): Withdraw — the shipment stays on record, marked Withdrawn. Withdraw this shipment — it stays on record (read-only) but no longer counts toward the PO/SO.">Withdraw shipment</SmallButton>}
         </div>
       </div>
     </Card>
@@ -84,8 +84,11 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
             {/* v6.58.0 (user ruling): each leg names its OWN carrier or
                 forwarder — a road+sea shipment has two providers and the
                 header can only show one. */}
-            {(() => { const prov = providerName(leg.carrierId || leg.forwarderId || (leg.mode === "Sea" || leg.mode === "Air" ? shipment.forwarderId : shipment.carrierId), contacts);
-              return prov ? <div style={{ fontSize: 10, color: "#475569", marginTop: 4, maxWidth: 66, overflowWrap: "break-word" }} title={leg.forwarderId ? "Forwarder" : "Carrier"}>{prov}</div> : null; })()}
+            {(() => { // v6.99.91 (A-SD-5, one source): a road leg names its trucks' carriers, a sea / air / rail leg its booking's forwarder
+              const isSea = ["Sea", "Air", "Rail"].includes(String(leg.mode || "")); const b0 = (shipment.bookings || [])[0];
+              const ids = isSea ? [b0?.forwarderId].filter((x: any) => x != null && x !== "") : Array.from(new Set((leg.vehicles || []).map((u: any) => u.carrierId).filter((x: any) => x != null && x !== "").map(String)));
+              const prov = ids.map((id: any) => providerName(id, contacts)).filter(Boolean).join(" + ");
+              return prov ? <div style={{ fontSize: 10, color: "#475569", marginTop: 4, maxWidth: 66, overflowWrap: "break-word" }} title={isSea ? "Forwarder (from the booking)" : "Carrier (from the trucks)"}>{prov}</div> : null; })()}
           </div>
           <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>LOADING</div><div style={{ fontSize: 12, color: "#333" }}>{((leg.vehicles || []).map((u: any) => String(u.pickupText || "").trim()).find(Boolean)) || locationTextFromFields(leg.fromLocationId, leg.fromCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{(() => { const u = (leg.vehicles || []); const planned = u.map((x: any) => String(x.plannedLoadingDate || "")).filter(Boolean).sort()[0] || String(leg.plannedPickupDate || "").slice(0, 10); const actual = u.map((x: any) => String(x.loadedAt || "")).filter(Boolean).sort()[0]; return actual ? <><b style={{ color: "#0F766E" }}>{actual}</b><span style={{ color: "#94A3B8", fontSize: 10.5 }}> loaded{planned && planned !== actual ? ` · planned ${planned}` : ""}</span></> : (planned || "-"); })()}</div></div>
           <div><div style={{ fontSize: 10.5, color: "#888", fontWeight: 700 }}>UNLOADING</div><div style={{ fontSize: 12, color: "#333" }}>{((leg.vehicles || []).map((u: any) => String(u.deliveryText || "").trim()).find(Boolean)) || locationTextFromFields(leg.toLocationId, leg.toCustom)}</div><div style={{ fontSize: 11, color: "#888" }}>{(() => { const u = (leg.vehicles || []); const planned = u.map((x: any) => String(x.plannedDeliveryDate || "")).filter(Boolean).sort().slice(-1)[0] || String(leg.plannedDeliveryDate || "").slice(0, 10); const actual = u.map((x: any) => String(x.deliveredAt || x.unloadedAt || x.dischargedAt || "")).filter(Boolean).sort().slice(-1)[0]; return actual ? <><b style={{ color: "#0F766E" }}>{actual}</b><span style={{ color: "#94A3B8", fontSize: 10.5 }}> unloaded{planned && planned !== actual ? ` · planned ${planned}` : ""}</span></> : (planned || "-"); })()}</div></div>
@@ -103,7 +106,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
           </div>
         </div>; })}
       </Card>
-      <TransportOrdersCard packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} onMarkSent={onMarkTOSent} onCompose={onEmail ? (cid: any, li: number) => onEmail(cid, li) : null} />
+      <TransportOrdersCard orders={orders} pos={pos} lots={lots} packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} onMarkSent={onMarkTOSent} onCompose={onEmail ? (cid: any, li: number) => onEmail(cid, li) : null} />
       {/* v6.99.87 (A-SD-1, owner): the goods right under the route and the transport orders */}
       <Card>
         <SectionTitle>Goods</SectionTitle>
@@ -112,6 +115,11 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
       {onStuffing && <ForwarderReports shipment={shipment} orders={orders} onStuffing={onStuffing} onDevanning={onDevanning} />}
       {/* v6.99.87 (A-SD-2, owner ruling): the document register merged into Documents below */}
 
+    </div>
+
+
+    {/* v6.99.90 (A-SD-4, owner): checklist | documents on one row; costs / billing | notes on the next (costs takes the full row when there are no notes) */}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
       <Card>
         {/* v6.58.0: the four face boxes (route / dates / on board / carrier)
             are REMOVED on user ruling — route read shipment-level location
@@ -207,19 +215,6 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
           </>;
         })()}
       </Card>
-    </div>
-
-
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-      <Card>
-        <SectionTitle>Costs / billing</SectionTitle>
-        {(shipment.costs || []).map(c => <div key={c.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, borderBottom: "1px solid #F1F5F9", padding: "8px 0" }}>
-          <div><div style={{ fontSize: 12, fontWeight: 700 }}>{costTypeLabel(c.type)} - {providerName(c.supplierId, contacts)}</div><div style={{ fontSize: 11, color: "#888" }}>{c.invoiceStatus} {c.invoiceRef ? `- ${c.invoiceRef}` : ""} - {c.notes}</div></div>
-          <div style={{ textAlign: "right" }}><div style={{ fontSize: 12, fontWeight: 800 }}>{fmtMoney(c.amount, c.currency)}</div><div style={{ fontSize: 11, color: "#888" }}>{fmtMoney(c.amountPLN, "PLN")}</div></div>
-        </div>)}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}><div style={{ fontSize: 12, color: "#888" }}>Cost / kg: <strong style={{ color: "#111" }}>{shipmentKg(shipment) ? fmtMoney(shipmentCostPLN(shipment) / shipmentKg(shipment), "PLN") : "-"}</strong></div><div style={{ fontSize: 15, fontWeight: 850 }}>{fmtMoney(shipmentCostPLN(shipment), "PLN")}</div></div>
-        {/* v6.58.0: the three action buttons moved to the shipment header. */}
-      </Card>
       <Card>
         <SectionTitle>Documents</SectionTitle>
         {/* v6.99.87 (A-SD-2): the transport order and the loading protocols, from the shipment (read-only), with the register's status colours */}
@@ -263,6 +258,17 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
         )}
       </Card>
     </div>
-    {shipment.notes && <Card><SectionTitle>Notes</SectionTitle><div style={{ fontSize: 12.5, color: "#555", whiteSpace: "pre-line" }}>{shipment.notes}</div></Card>}
+    <div style={{ display: "grid", gridTemplateColumns: shipment.notes ? "1fr 1fr" : "1fr", gap: 14 }}>
+      <Card>
+        <SectionTitle>Costs / billing</SectionTitle>
+        {(shipment.costs || []).map(c => <div key={c.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, borderBottom: "1px solid #F1F5F9", padding: "8px 0" }}>
+          <div><div style={{ fontSize: 12, fontWeight: 700 }}>{costTypeLabel(c.type)} - {providerName(c.supplierId, contacts)}</div><div style={{ fontSize: 11, color: "#888" }}>{c.invoiceStatus} {c.invoiceRef ? `- ${c.invoiceRef}` : ""} - {c.notes}</div></div>
+          <div style={{ textAlign: "right" }}><div style={{ fontSize: 12, fontWeight: 800 }}>{fmtMoney(c.amount, c.currency)}</div><div style={{ fontSize: 11, color: "#888" }}>{fmtMoney(c.amountPLN, "PLN")}</div></div>
+        </div>)}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}><div style={{ fontSize: 12, color: "#888" }}>Cost / kg: <strong style={{ color: "#111" }}>{shipmentKg(shipment) ? fmtMoney(shipmentCostPLN(shipment) / shipmentKg(shipment), "PLN") : "-"}</strong></div><div style={{ fontSize: 15, fontWeight: 850 }}>{fmtMoney(shipmentCostPLN(shipment), "PLN")}</div></div>
+        {/* v6.58.0: the three action buttons moved to the shipment header. */}
+      </Card>
+      {shipment.notes && <Card><SectionTitle>Notes</SectionTitle><div style={{ fontSize: 12.5, color: "#555", whiteSpace: "pre-line" }}>{shipment.notes}</div></Card>}
+    </div>
   </div>;
 }

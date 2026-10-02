@@ -1,3 +1,4 @@
+import { statusWord } from "./format";
 import { chooseDepartment, departmentBlockReason } from "./fakturowniaDepartments.domain";
 import { customsForInvoice } from "./customsClearance.domain";   // v6.99.72 (A-CU-3)
 import { effectiveSoStatus } from "./statusOwnership.domain";
@@ -64,7 +65,7 @@ function daysUntil(d: string) { if (!d) return null; const t = new Date(localTod
 
 // v6.30.1: fall back to OTHER so an unknown/legacy category can never crash the render.
 function CatBadge({ cat }: { cat: InvoiceCategory }) { const m = CATEGORY_META[cat] || CATEGORY_META.OTHER; return <span style={{ background: m.bg, color: m.color, padding: "2px 8px", borderRadius: 6, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{cat}</span>; }
-function StatusBadge({ s }: { s: PaymentStatus }) { const m = STATUS_META[s] || STATUS_META.Draft; return <span style={{ background: m.bg, color: m.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{s}</span>; }
+function StatusBadge({ s }: { s: PaymentStatus }) { const m = STATUS_META[s] || STATUS_META.Draft; return <span style={{ background: m.bg, color: m.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{statusWord(s)}</span>; }
 function DirPill({ inv }: { inv: Invoice }) { const r = invoiceDirection(inv) === "receivable"; return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: r ? "#16A34A" : "#DC2626", fontWeight: 600 }}><span style={{ fontSize: 13 }}>{r ? "↑" : "↓"}</span>{r ? "Receivable" : "Payable"}</span>; }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -636,7 +637,7 @@ export default function Invoices(props: any) {
             {(["All", "receivable", "payable"] as const).map(d => <button key={d} onClick={() => setFDir(d)} style={{ padding: "6px 12px", borderRadius: 20, border: "1px solid", borderColor: fDir === d ? "#111" : "#E5E7EB", background: fDir === d ? "#111" : "#fff", color: fDir === d ? "#fff" : "#555", fontSize: 12, cursor: "pointer", textTransform: "capitalize" }}>{d}</button>)}
           </div>
           <Sel value={fStatus} onChange={(e: any) => setFStatus(e.target.value)} style={{ width: 150 }}>
-            {["All", ...Object.keys(STATUS_META)].map(s => <option key={s}>{s}</option>)}
+            {["All", ...Object.keys(STATUS_META)].map(s => <option key={s} value={s}>{statusWord(s)}</option>)}
           </Sel>
         </div>
 
@@ -701,7 +702,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark issued</button>}
           {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
-          {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel invoice</button>}
+          {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Withdraw invoice</button>}
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
           {(() => {

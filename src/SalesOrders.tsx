@@ -1,3 +1,4 @@
+import { statusWord } from "./format";
 import { newestFirst } from "./moduleGuards.domain";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 import { SmallButton, notifySaved } from "./ui";
@@ -399,7 +400,7 @@ export function Sel({ value, onChange = () => {}, children, style = {}, disabled
 }
 export function StatusBadge({ status }: any) {
   const s = SO_STATUSES[status] || { bg: "#F3F4F6", color: "#6B7280" };
-  return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{status}</span>;
+  return <span style={{ background: s.bg, color: s.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{statusWord(status)}</span>;
 }
 export function QualityBadge({ quality }: any) {
   const palette = {
@@ -1125,8 +1126,22 @@ export default function SalesOrders({ archive = null,
     setCollectionFor(null);
   }
 
+  // v6.99.89 (A-NM-1, owner ruling 1 Oct): DELETE removes an SO that never left us (Draft) with no shipment and no invoice;
+  // anything confirmed to the client or with history is WITHDRAWN (kept, marked Withdrawn — the former "Cancel").
   async function deleteOrder() {
-    if (!(await uiConfirm({ tone: "danger", title: `Cancel SO ${selected.number}?`, message: "Reservations will be released and any linked SHIP_OUT will be reversed in Inventory.", confirmLabel: "Cancel SO", cancelLabel: "Keep" }))) return;
+    const no = selected.number;
+    const shipped = (extShipments || []).some((sh: any) => sh && sh.status !== "Cancelled" && ((sh.soRefs || []).includes(no) || String(sh.governingSoRef) === String(no) || (sh.goods || []).some((g: any) => String(g.soRef) === String(no))));
+    const invoiced = (extInvoices || []).some((i: any) => i && i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(no)));
+    const blockers = [shipped && "a shipment", invoiced && "an invoice"].filter(Boolean);
+    if (blockers.length) { await uiAlert({ tone: "warn", title: `${no} can't be deleted`, message: `It has ${blockers.join(" and ")}. Withdraw it instead: it stays on record, marked Withdrawn.` }); return; }
+    if (selected.status !== "Draft") { await uiAlert({ tone: "warn", title: `${no} can't be deleted`, message: `It is ${selected.status} — it has gone out to the client. Withdraw it instead: it stays on record, marked Withdrawn.` }); return; }
+    if (!(await uiConfirm({ tone: "danger", title: `Delete ${no}?`, message: "The order is removed. The audit log keeps the record of the deletion.", confirmLabel: "Delete" }))) return;
+    setOrders(prev => prev.filter(p => p.id !== selected.id));
+    recordAudit({ module: "Sales orders", docType: "SO", docNumber: no, action: "deleted", summary: `${no} deleted (Draft, no shipment, no invoice)` });
+    setSelected(null); setView("list");
+  }
+  async function withdrawOrder() {
+    if (!(await uiConfirm({ tone: "danger", title: `Withdraw ${selected.number}?`, message: "Reservations will be released and any linked SHIP_OUT will be reversed in Inventory. The order stays on record, marked Withdrawn.", confirmLabel: "Withdraw", cancelLabel: "Keep" }))) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     reverseCancelledSOInInventory(cancelled);
     setOrders(prev => prev.map(p => p.id === selected.id ? cancelled : p));
@@ -1233,6 +1248,7 @@ export default function SalesOrders({ archive = null,
           }}
           onIssueInvoice={() => setInvoiceOrder(selected)}
           onDelete={deleteOrder}
+          onWithdraw={withdrawOrder}
           onRecordCollection={() => setCollectionFor(selected)}
           onRecordClientClaim={() => {
             // v6.63.0 (D-13): one claims UI — this button now opens the Claims module

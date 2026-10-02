@@ -1,3 +1,4 @@
+import { nextId } from "./ids";
 import { dataKey } from "./useLocalStoredState";
 import { formatAddress as _fmtAddr, parseAddress as _parseAddr } from "./address.domain";
 const formatAddressOneLine = (a: any) => _fmtAddr(a, { oneLine: true });
@@ -427,7 +428,7 @@ export function stampSiteIds(contacts: any[]): { contacts: any[]; changed: boole
     if (Array.isArray(c.extraAddresses)) {
       n.extraAddresses = c.extraAddresses.map((a: any, i: number) => {
         const obj = typeof a === "string" ? { address: a } : { ...a };
-        if (obj.siteId == null && String(obj.address || "").trim()) { obj.siteId = warehouseCpLocId(c.id, i + 1); changed = true; }
+        if (obj.siteId == null && String(obj.address || "").trim()) { obj.siteId = newSiteId(c.id, i + 1); changed = true; }   // v6.99.97 (A-ID-1)
         return obj;
       });
     }
@@ -439,6 +440,17 @@ export function stampSiteIds(contacts: any[]): { contacts: any[]; changed: boole
 export function warehouseCpLocId(contactId: any, addressIndex: number): number {
   return WAREHOUSE_CP_LOC_BASE + Number(contactId) * 100 + Number(addressIndex || 0);
 }
+// v6.99.97 (A-ID-1): company ids are now ~1.8 × 10^15, so base + id × 100 + n (~1.8 × 10^17) is beyond a number's exact range
+// and address 1, 2… round onto address 0. A company's MAIN address keeps the formula (every stored reference already holds that
+// value); a further address gets its id from the id counter when the formula would not be exact. Once given, the stored siteId
+// is the address's id everywhere (rule 7) — nothing re-derives it.
+export function exactSiteId(contactId: any, addressIndex: number): boolean {
+  const v = WAREHOUSE_CP_LOC_BASE + Number(contactId) * 100 + Number(addressIndex || 0);
+  return Number.isSafeInteger(v) && Number.isSafeInteger(Number(contactId) * 100);
+}
+export function newSiteId(contactId: any, addressIndex: number): number {
+  return (Number(addressIndex || 0) === 0 || exactSiteId(contactId, addressIndex)) ? warehouseCpLocId(contactId, addressIndex) : nextId();
+}
 
 // Build (and register) Location entries for warehouse counterparties' addresses.
 // Registration is idempotent and additive so locById/locText resolve them in
@@ -446,8 +458,8 @@ export function warehouseCpLocId(contactId: any, addressIndex: number): number {
 export function warehouseAddressLocations(contacts: any[]): Location[] {
   const out: Location[] = [];
   (contacts || []).filter(isWarehouseContact).forEach((c: any) => {
-    contactAddresses(c).forEach(({ address, index }) => {
-      const id = warehouseCpLocId(c.id, index);
+    contactAddresses(c).forEach(({ address, index, siteId }) => {
+      const id = siteId ?? warehouseCpLocId(c.id, index);   // v6.99.97 (A-ID-1): the stored id owns it
       const name = index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`;
       out.push({ id, type: "RentedWarehouse", legacyType: "OWN", name, country: c.country || "", address: address || undefined });
     });
@@ -478,8 +490,8 @@ export function warehouseLocationOptions(contacts: any[]): Location[] {
 export function warehouseDestinationOptions(contacts: any[]): { id: number; contactId: any; name: string; address: string }[] {
   const out: { id: number; contactId: any; name: string; address: string }[] = [];
   (contacts || []).filter(isWarehouseContact).forEach((c: any) => {
-    contactAddresses(c).forEach(({ address, index }) => {
-      out.push({ id: warehouseCpLocId(c.id, index), contactId: c.id, name: c.name, address });
+    contactAddresses(c).forEach(({ address, index, siteId }) => {
+      out.push({ id: siteId ?? warehouseCpLocId(c.id, index), contactId: c.id, name: c.name, address });   // v6.99.97 (A-ID-1)
     });
   });
   return out;

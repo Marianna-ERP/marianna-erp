@@ -1,3 +1,4 @@
+import { statusWord } from "./format";
 import { ModuleHeader, ActionButton, notifySaved } from "./ui";
 import React, { useMemo, useState } from "react";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
@@ -991,7 +992,7 @@ export function StatusBadge({ status, shipment = null }: any) {
 }
 function StatusBadgeInner({ status, label }: any) {
   const s = SHIPMENT_STATUSES[status] || SHIPMENT_STATUSES.Booked;
-  return <span style={{ background: s.bg, color: s.color, padding: "3px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{label ?? status}</span>;
+  return <span style={{ background: s.bg, color: s.color, padding: "3px 10px", borderRadius: 999, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{statusWord(label ?? status)}</span>;
 }
 export function ModeBadge({ mode }: any) {
   const m = MODE_CONFIG[mode] || MODE_CONFIG.Road;
@@ -1874,8 +1875,8 @@ export default function Shipments({ archive = null,
       }}
       onClose={() => setProtocolShipment(null)}
     />}
-    {printShipment && <TransportOrderPrintModal pos={pos} packagingTypes={packagingTypes} shipment={printShipment} contacts={contacts} orders={orders} onSaveTerms={(text) => saveOrderTerms(printShipment, text)} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} onEmail={() => { const sh = printShipment; setPrintShipment(null); setEmailShipment(sh); }} />}
-    {emailShipment && <TransportOrderEmailModal pos={pos} packagingTypes={packagingTypes} shipment={emailShipment} contacts={contacts} orders={orders} onClose={() => setEmailShipment(null)} onMarkSent={() => markConfirmationSent(emailShipment)} />}
+    {printShipment && <TransportOrderPrintModal lots={lots} pos={pos} packagingTypes={packagingTypes} shipment={printShipment} contacts={contacts} orders={orders} onSaveTerms={(text) => saveOrderTerms(printShipment, text)} onClose={() => setPrintShipment(null)} onMarkSent={() => markConfirmationSent(printShipment)} onEmail={() => { const sh = printShipment; setPrintShipment(null); setEmailShipment(sh); }} />}
+    {emailShipment && <TransportOrderEmailModal lots={lots} pos={pos} packagingTypes={packagingTypes} shipment={emailShipment} contacts={contacts} orders={orders} onClose={() => setEmailShipment(null)} onMarkSent={() => markConfirmationSent(emailShipment)} />}
     </div>
   </div>;
 }

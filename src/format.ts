@@ -30,3 +30,7 @@ export function isRealISODate(v: any): boolean {
   const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
   return mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth(y, mo);
 }
+
+// v6.99.89 (A-NM-1, owner ruling 1 Oct): the stored status "Cancelled" is shown as "Withdrawn" on every screen, print and
+// export — Cancel only ever means "go back". The stored value stays (many checks read it; the data is not migrated).
+export function statusWord(s: any): string { const v = String(s ?? ""); return v === "Cancelled" ? "Withdrawn" : v.replace(/\bCancelled\b/g, "Withdrawn"); }

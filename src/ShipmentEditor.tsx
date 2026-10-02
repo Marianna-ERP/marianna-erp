@@ -6,7 +6,7 @@ import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow
 import { SmallButton, useConfirm } from "./ui";
 import { derivedBillingStatus, legKgChecks, autoFillSingleUnitKg } from "./shipments.domain";
 import { clearanceLinesFor, crossCheckClearance, parseCustomsFile, findClearanceHome, applyCustomsFile, detachClearance, CLEARANCE_STATUSES, CUSTOMS_FILE_LABEL } from "./customsClearance.domain";   // v6.99.72 (A-CU-3)
-import { truckPlaceNote, fillFromBooking, followBookingPlace, containerPlaceNote, unitGaps } from "./shipmentModel.domain";   // v6.99.75 (A-UN)
+import { truckPlaceNote, fillFromBooking, followBookingPlace, containerPlaceNote, unitGaps, truckTour, moveDrop } from "./shipmentModel.domain";   // v6.99.75 (A-UN)
 import { isRealISODate } from "./format";
 import { containerRecorder, allocationRemaining, unitKg, allocateGoodsToTrucks, setFeeders, feedersOf, cutOffWarnings, stuffingViolations, blankBooking, setUnitLoad, addFeederChecked, truckRemainingForFeeding, autoAllocate, carrierOfUnit, followBookingDates } from "./shipmentModel.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
@@ -613,6 +613,22 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   </div>}
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
                   {uMode === "Road" && <div><Lbl>Trailer plate</Lbl><Inp value={u.trailerPlate || ""} onChange={e => updateVehicle(i, ui, "trailerPlate", e.target.value)} /></div>}
+                  {uMode === "Road" && (() => {   // v6.99.95 (A-GR-3, owner ruling): a groupage truck's TOUR — from the lots and the SOs; only the order is the truck's
+                    const tour = truckTour(draft, u, pos || [], lots || [], orders || []); if (!tour.isTour) return null;
+                    const nm = (id: any, text: any) => { const p = placeForPrint(id, text, contacts || []); return p.name || String(text || "") || "—"; };
+                    const kg = (v: number) => Math.round(v).toLocaleString("pl-PL") + " kg";
+                    return <div style={{ gridColumn: "1 / -1", border: "1px solid #C7D2FE", background: "#EEF2FF", borderRadius: 8, padding: "8px 10px", marginBottom: 6 }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#3730A3", letterSpacing: "0.06em", marginBottom: 4 }}>TOUR · {tour.loads.length} LOADING · {tour.drops.length} UNLOADING <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#6366F1" }}>· places from the lots and the orders; set the order of the drops</span></div>
+                      {tour.loads.map((l, k) => <div key={"l" + k} style={{ fontSize: 12, color: "#1E1B4B" }}>Load {k + 1} · <b>{nm(l.id, l.text)}</b> · {kg(l.kg)} <span style={{ color: "#6366F1" }}>({l.refs.join(", ")})</span></div>)}
+                      {tour.drops.map((dr, k) => <div key={dr.soNumber} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#1E1B4B", marginTop: 2 }}>
+                        <span style={{ display: "inline-flex", gap: 2 }}>
+                          <button disabled={k === 0} onClick={() => updateVehicle(i, ui, "stopOrder", moveDrop(tour, dr.soNumber, -1))} title="earlier in the tour" style={{ border: "1px solid #C7D2FE", background: "#fff", borderRadius: 4, padding: "0 5px", cursor: k === 0 ? "default" : "pointer", opacity: k === 0 ? 0.35 : 1 }}>↑</button>
+                          <button disabled={k === tour.drops.length - 1} onClick={() => updateVehicle(i, ui, "stopOrder", moveDrop(tour, dr.soNumber, 1))} title="later in the tour" style={{ border: "1px solid #C7D2FE", background: "#fff", borderRadius: 4, padding: "0 5px", cursor: k === tour.drops.length - 1 ? "default" : "pointer", opacity: k === tour.drops.length - 1 ? 0.35 : 1 }}>↓</button>
+                        </span>
+                        Unload {k + 1} · {dr.missing ? <b style={{ color: "#DC2626" }}>no destination — set it on {dr.soNumber}</b> : <b>{nm(dr.placeId, dr.placeText)}</b>} · {dr.soNumber}{dr.client ? ` · ${dr.client}` : ""} · {kg(dr.kg)}{dr.date ? ` · ${dr.date}` : ""}
+                      </div>)}
+                    </div>;
+                  })()}
                   {(() => {   // v6.99.75 (A-UN-1/2/4): where this unit loads — from ITS goods (truck) or its booking (container); red while empty
                     const tn = uMode === "Road" ? truckPlaceNote(draft, u, pos || [], lots || []) : null; const cn = uMode !== "Road" ? containerPlaceNote(draft, u) : null;
                     const gaps = unitGaps(u); const red = !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || "")); const ringU = (k: string) => (red && (gaps as string[]).includes(k)) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : undefined;

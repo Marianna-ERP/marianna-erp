@@ -1,14 +1,14 @@
 // ShipmentDocuments.tsx — v6.99.68 (A-AUD-2, owner): moved out of Shipments.tsx unchanged; the module's shared helpers are imported from it.
 import React, { useState } from "react";
 import { SmallButton, ActionButton } from "./ui";
-import { jobsByCarrierLeg, effectiveLoad, unitGaps } from "./shipmentModel.domain";
+import { jobsByCarrierLeg, effectiveLoad, truckTour, tourGaps } from "./shipmentModel.domain";
 import { grossForGoodsLine } from "./packaging.domain";
 import { formatDMY } from "./dates";
 import { printHtmlNode } from "./documentService";
 import { placeForPrint } from "./locations";
 import { COMPANY, Card, FieldPrint, Inp, LOGO_DATA_URL, Lbl, SectionTitle, Sel, blankTransportUnit, cargoVariance, fmtMoney, fmtNum, locationTextFromFields, parseNum, providerById, providerCosts, providerIdsForShipment, providerLegs, providerRoleForLeg, providerRolePL, providerUnitsForLeg, shipmentCostPLN, todayISO } from "./Shipments";
 
-export function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders = [], customTerms = "", pos = [], packagingTypes = [] }: any) {
+export function TransportOrderDocument({ shipment, contacts, providerId, legIds, orders = [], customTerms = "", pos = [], packagingTypes = [], lots = [] }: any) {
   const docNo = shipment.transportOrderNo || shipment.number;
   const effectiveProviderId = providerId || shipment.carrierId || shipment.forwarderId;
   const provider: any = providerById(effectiveProviderId, contacts) || {};
@@ -150,6 +150,27 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
         <FieldPrint en="Carrier / contractor" pl="Zleceniobiorca" value={`${provider.name || "TBA"}\n${provider.address || ""}\nNIP ${provider.nip || "-"}`} />
         <FieldPrint en="Transport units" pl="Liczba pojazdow / jednostek" value={`${units.length || 1} unit(s) / pojazd(y)`} />
         {(() => {
+          // v6.99.96 (A-GR-4, owner ruling 1 Oct): a groupage truck prints its TOUR — loading stops from the lots, drops from the
+          // SOs, in the truck's order, each with its cargo; a single-drop truck prints exactly as before
+          const tours = orderUnits.map((u: any) => ({ u, t: truckTour(shipment, u, pos || [], lots || [], orders || []) })).filter((x: any) => x.t.isTour);
+          if (tours.length) {
+            const pl = (id: any, text: any) => { const p = placeForPrint(id, text, contacts || []); return p.line || p.name || String(text || "") || "TBA"; };
+            const k = (v: number) => `${Math.round(v).toLocaleString("pl-PL")} kg`;
+            return (
+              <div style={{ gridColumn: "1 / -1", border: "1px solid #ccc", padding: "4px 6px" }}>
+                <div style={{ fontWeight: 800 }}>Route stops / Punkty trasy</div>
+                {tours.map(({ u, t }: any, ti: number) => <div key={ti} style={{ marginTop: ti ? 6 : 2 }}>
+                  {tours.length > 1 && <div style={{ fontWeight: 700, fontSize: 10 }}>{u.truckPlate || `unit ${ti + 1}`}</div>}
+                  {[...t.loads.map((l: any, i: number) => ({ kind: "Loading / Zaladunek", n: i + 1, place: pl(l.id, l.text), what: `${k(l.kg)}`, date: u.plannedLoadingDate || "" })),
+                    ...t.drops.map((dr: any, i: number) => ({ kind: "Unloading / Rozladunek", n: i + 1, place: dr.missing ? `TBA — ${dr.soNumber} has no destination` : pl(dr.placeId, dr.placeText), what: `${k(dr.kg)} · ${dr.soNumber}${dr.client ? " · " + dr.client : ""}`, date: dr.date }))]
+                    .map((st: any, si: number) => <div key={si} style={{ display: "flex", gap: 6 }}>
+                      <div style={{ fontWeight: 800, minWidth: 14 }}>{si + 1}.</div>
+                      <div style={{ fontWeight: 700, minWidth: 92 }}>{st.kind}</div>
+                      <div style={{ flex: 1 }}>{st.place}{st.date ? ` — ${st.date}` : ""} — {st.what}</div>
+                    </div>)}
+                </div>)}
+              </div>);
+          }
           const extraStops = providerScopedLegs.flatMap((l: any) => l.stops || []);
           if (!extraStops.length) return (<>
             <FieldPrint en="Loading place" pl="Miejsce zaladunku" value={loadingPlaceFinal} />
@@ -251,7 +272,7 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
   );
 }
 
-export function TransportOrderPrintModal({ shipment, contacts, orders = [], onSaveTerms = () => {}, onClose, onMarkSent, onEmail, pos = [], packagingTypes = [] }: any) {
+export function TransportOrderPrintModal({ shipment, contacts, orders = [], lots = [], onSaveTerms = () => {}, onClose, onMarkSent, onEmail, pos = [], packagingTypes = [] }: any) {
   const providerIds = providerIdsForShipment(shipment);
   const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
   // Which legs go on this order. Default: the legs belonging to the chosen provider.
@@ -303,14 +324,14 @@ export function TransportOrderPrintModal({ shipment, contacts, orders = [], onSa
       )}
       <div style={{ padding: 22, background: "#ECECEC" }}>
         <div id="transport-order-print" style={{ width: "190mm", margin: "0 auto", background: "#fff", boxShadow: "0 3px 16px rgba(0,0,0,0.18)" }}>
-          <TransportOrderDocument pos={pos} packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} providerId={providerId} legIds={legIds} orders={orders} customTerms={termsText} />
+          <TransportOrderDocument lots={lots} pos={pos} packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} providerId={providerId} legIds={legIds} orders={orders} customTerms={termsText} />
         </div>
       </div>
     </div>
   </div>;
 }
 
-export function TransportOrderEmailModal({ shipment, contacts, orders = [], onClose, onMarkSent, pos = [], packagingTypes = [] }: any) {
+export function TransportOrderEmailModal({ shipment, contacts, orders = [], lots = [], onClose, onMarkSent, pos = [], packagingTypes = [] }: any) {
   const providerIds = providerIdsForShipment(shipment);
   const [providerId, setProviderId] = useState(providerIds[0] || shipment.carrierId || shipment.forwarderId || "");
   const provider: any = providerById(providerId, contacts) || {};
@@ -351,7 +372,7 @@ export function TransportOrderEmailModal({ shipment, contacts, orders = [], onCl
         <div><Lbl>Provider</Lbl><Sel value={providerId} onChange={e => setProviderId(e.target.value)}>{providerIds.map(id => { const p: any = providerById(id, contacts) || {}; return <option key={id} value={id}>{p.name || id}</option>; })}</Sel></div><div><Lbl>TO</Lbl><Inp value={recipient || "(no email — set it on this carrier in Contacts, or reselect the carrier above)"} disabled style={{ background: "#F9FAFB", color: recipient ? "#111" : "#B45309" }} /></div>
         <div><Lbl>SUBJECT</Lbl><Inp value={subject} onChange={e => setSubject(e.target.value)} /></div>
         <div><Lbl>MESSAGE</Lbl><textarea value={body} onChange={e => setBody(e.target.value)} rows={10} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6 }} /></div>
-        <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument pos={pos} packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} providerId={providerId} legIds={providerLegList.map((l: any) => String(l.id))} orders={orders} customTerms={shipment.customOrderTerms || ""} /></div></div>
+        <div style={{ position: "absolute", left: -99999, top: 0 }}><div id="transport-order-email-doc" style={{ width: "190mm" }}><TransportOrderDocument lots={lots} pos={pos} packagingTypes={packagingTypes} shipment={shipment} contacts={contacts} providerId={providerId} legIds={providerLegList.map((l: any) => String(l.id))} orders={orders} customTerms={shipment.customOrderTerms || ""} /></div></div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", borderTop: "1px solid #F3F4F6", paddingTop: 14 }}>
           <SmallButton onClick={onClose}>Cancel</SmallButton>
           <SmallButton onClick={() => printHtmlNode("transport-order-email-doc", `${shipment.number} — ${(providerById(providerId, contacts) || {}).name || providerId}`)} kind="blue">① Save PDF</SmallButton>
@@ -362,7 +383,7 @@ export function TransportOrderEmailModal({ shipment, contacts, orders = [], onCl
   </div>;
 }
 
-export function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null, onCompose = null, packagingTypes = [] }: any) {
+export function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null, onCompose = null, packagingTypes = [], orders = [], pos = [], lots = [] }: any) {
   const variance = cargoVariance(shipment, packagingTypes || []);
   const jobs = jobsByCarrierLeg(shipment);
   if (!jobs.length) return null;
@@ -388,7 +409,7 @@ export function TransportOrdersCard({ shipment, contacts = [], onMarkSent = null
           <div style={{ display: "flex", gap: 6 }}>
             {onCompose && <SmallButton onClick={() => onCompose(j.carrierId, j.legIndex)}>Order</SmallButton>}
             {(() => {   // v6.99.39 (G-5, owner): the order names places and dates — it cannot be SENT until its units carry them
-              const gaps: string[] = (j.units || []).flatMap((u: any) => unitGaps(u));   // v6.99.75 (A-UN-4): the one rule — the editor outlines the same fields in red
+              const gaps: string[] = (j.units || []).flatMap((u: any) => tourGaps(u, truckTour(shipment, u, pos || [], lots || [], orders || [])));   // v6.99.95 (A-GR-3): a tour truck needs every drop's destination, not one delivery place   // v6.99.75 (A-UN-4): the one rule — the editor outlines the same fields in red
               // v6.99.50 (TO-5, owner): the carrier needs pallets and gross weight — derivable from an ESTIMATE with a packaging; without that the order says nothing about the load
               { const g0 = (shipment.goods || []); const anyKg = g0.some((g: any) => parseNum(g.qtyKg) > 0); const anyPk = g0.some((g: any) => grossForGoodsLine(g, packagingTypes || []).pallets > 0); if (!anyKg) gaps.push("quantities (even estimated)"); else if (!anyPk) gaps.push("a packaging on the goods (pallets and gross derive from it)"); }
               const missing = Array.from(new Set(gaps)) as string[];

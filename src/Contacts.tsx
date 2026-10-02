@@ -8,7 +8,7 @@ import React, { useState, useMemo, useRef } from "react";
 import { Lbl, useConfirm, ActionButton, notifySaved } from "./ui";
 import { nextId } from "./ids";
 import { parseAddress, formatAddress, shortAddress } from "./address.domain";
-import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, readLocationOverrides, writeLocationOverride, LOCATIONS_ALL_BUILTIN } from "./locations";
+import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, readLocationOverrides, writeLocationOverride, LOCATIONS_ALL_BUILTIN, newSiteId } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -168,8 +168,8 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
   // operating-location candidates are this warehouse's own addresses (main + extra),
   // not the global list of every warehouse (which wrongly showed WH-01/WH-02).
   const warehouseLocations = form.id
-    ? contactAddresses(form).map(({ address, index }: any) => ({
-        id: warehouseCpLocId(form.id, index),
+    ? contactAddresses(form).map(({ address, index, siteId }: any) => ({
+        id: siteId ?? warehouseCpLocId(form.id, index),   // v6.99.97 (A-ID-1)
         name: index === 0 ? `${form.name || "Main address"} (main)` : `${form.name || "Site"} — ${address || `address ${index + 1}`}`,
         address,
       }))
@@ -191,7 +191,8 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
     const addr = { ...(cur.addr || {}), country: f.country || (cur.addr || {}).country || "", [k]: v };
     return { ...cur, addr, address: formatAddress(addr, { oneLine: true }) };   // the one-line text stays in step for legacy readers
   }) }));
-  const addExtraAddress = () => setForm(f => ({ ...f, extraAddresses: [...(f.extraAddresses || []), ""] }));
+  // v6.99.97 (A-ID-1): a new address gets its own id at once (from the counter when the formula would collide with the main one)
+  const addExtraAddress = () => setForm(f => ({ ...f, extraAddresses: [...(f.extraAddresses || []), (f.id != null ? { address: "", siteId: newSiteId(f.id, (f.extraAddresses || []).length + 1) } : "")] }));
   const removeExtraAddress = (i) => setForm(f => ({ ...f, extraAddresses: (f.extraAddresses || []).filter((_, idx) => idx !== i) }));
   // v6.6: seasonal commission rates (consignment sales)
   const setCommissionRate = (i, k, v) => setForm(f => ({ ...f, commissionRates: (f.commissionRates || []).map((r, idx) => idx === i ? { ...r, [k]: v } : r) }));
@@ -226,7 +227,9 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
     const normCommissions = form.commissionRates
       ? form.commissionRates.map((r: any) => ({ ...r, pct: numC(r.pct) }))
       : form.commissionRates;
-    const cleanExtra = (form.extraAddresses || []).map((a: any) => (typeof a === "string" ? a : a?.address || "")).filter((a: string) => String(a).trim());
+    // v6.99.97 (A-ID-1): an address keeps its id (and its structured parts) when the company is saved — flattening it to text
+    // threw the id away, so it was re-made on every save; only empty addresses are dropped
+    const cleanExtra = (form.extraAddresses || []).filter((a: any) => String(typeof a === "string" ? a : (a?.address || "")).trim());
     onSave({
       ...form,
       ...(t ? { warehouseTariff: normTariff } : {}),

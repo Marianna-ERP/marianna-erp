@@ -91,7 +91,12 @@ export const ACTIONS: Record<string, { icon: string; label: string; kind: string
   print:       { icon: "⎙",  label: "Print / PDF",        kind: "dark",   title: "Print or save as PDF" },
   email:       { icon: "✉",  label: "Email",              kind: "dark",   title: "Open the email draft" },
   save:        { icon: "",   label: "Save",               kind: "dark",   title: "Save changes" },
-  cancelDoc:   { icon: "",   label: "Cancel",             kind: "red",    title: "Cancel this document — it stays on record" },
+  // v6.99.92 (A-DEL-2): 'close' was missing too — 17 window headers drew no Close
+  close:       { icon: "",   label: "Close",              kind: "close",  title: "Close this window" },
+  // v6.99.88 (A-DEL-1): 'delete' was missing from this list, so every <ActionButton action="delete"> drew NOTHING (PO, SO, lot, cost rows)
+  delete:      { icon: "",   label: "Delete",             kind: "delete", title: "Delete this record — only while nothing depends on it" },
+  // v6.99.89 (A-NM-1, owner ruling 1 Oct): the status action is WITHDRAW — Cancel only ever means "go back"
+  withdrawDoc: { icon: "",   label: "Withdraw",           kind: "red",    title: "Withdraw this document — it stays on record, marked Withdrawn" },
   remove:      { icon: "✕",  label: "Remove",             kind: "red",    title: "Remove this line" },
   confirmDoc:  { icon: "✓",  label: "Confirm",            kind: "green",  title: "Confirm this document" },
   allocate:    { icon: "⇄",  label: "Allocate",           kind: "amber",  title: "Allocate costs" },

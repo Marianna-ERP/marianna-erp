@@ -379,7 +379,27 @@ export function syncUnitKgMirrors(sh: any): any {
   return { ...sh, legs };
 }
 /** v6.99.9: one-time heal on load — mirrors in step; stale zero-amount leg-freight lines removed once carrier×leg lines exist. */
-export function healShipmentModel(sh: any): { sh: any; changed: boolean } {
+/** v6.99.91 (A-SD-5, owner ruling 1 Oct — one source): the trucks own the carrier, the booking owns the forwarder. Older
+ *  shipments carried them on the leg; they are written ONCE onto the owners that have none (each change reported for the
+ *  audit log). The leg fields are left as they were and no screen reads them for this any more. */
+export function healProviderOwners(sh: any): { sh: any; notes: string[] } {
+  const notes: string[] = []; if (!sh || !Array.isArray(sh.legs)) return { sh, notes };
+  let bookings = Array.isArray(sh.bookings) ? sh.bookings.slice() : [];
+  const legs = sh.legs.map((l: any, li: number) => {
+    const mode = S(l?.mode).toLowerCase();
+    if (mode === "road" && l.carrierId != null && l.carrierId !== "") {
+      const vs = (l.vehicles || []).map((u: any) => { if (u && (u.carrierId == null || u.carrierId === "")) { notes.push(`${sh.number}: leg ${li + 1} carrier written onto truck ${u.truckPlate || u.id}`); return { ...u, carrierId: l.carrierId }; } return u; });
+      return { ...l, vehicles: vs };
+    }
+    if (["sea", "air", "rail"].includes(mode) && l.forwarderId != null && l.forwarderId !== "") {
+      if (!bookings.length) { bookings = [{ id: (num(sh.id) || 0) * 1000 + 801, number: "", forwarderId: l.forwarderId }]; notes.push(`${sh.number}: leg ${li + 1} forwarder written onto a new booking`); }
+      else if (bookings[0].forwarderId == null || bookings[0].forwarderId === "") { bookings[0] = { ...bookings[0], forwarderId: l.forwarderId }; notes.push(`${sh.number}: leg ${li + 1} forwarder written onto booking ${bookings[0].number || bookings[0].id}`); }
+    }
+    return l;
+  });
+  return notes.length ? { sh: { ...sh, legs, bookings }, notes } : { sh, notes };
+}
+export function healShipmentModel(sh: any): { sh: any; changed: boolean; notes?: string[] } {
   // v6.99.67 (A-IN-1, owner): goods rows carried a COPY of the trade direction from old versions; it is derived now — drop it
   let healedDir = false;
   if (sh && Array.isArray(sh.goods) && sh.goods.some((g: any) => g && g.tradeDirection !== undefined)) {
@@ -398,7 +418,8 @@ export function healShipmentModel(sh: any): { sh: any; changed: boolean } {
     if (cleaned.length !== costs.length) { next = { ...next, costs: cleaned }; changed = true; }
   }
   if (healedDir) changed = true;
-  return { sh: next, changed };
+  const own = healProviderOwners(next); if (own.notes.length) { next = own.sh; changed = true; }   // v6.99.91 (A-SD-5)
+  return { sh: next, changed, notes: own.notes };
 }
 
 
@@ -476,7 +497,10 @@ export function truckLoadPlaces(sh: any, u: any, pos: any[] = [], lots: any[] = 
     const po = (pos || []).find((p: any) => String(p.number) === String(g.poRef)) || null;
     const lot = (lots || []).find((l: any) => String(l.number) === String(g.lotRef)) || null;
     let p: LoadPlace | null = null;
-    if (po && ["EXW", "FCA"].includes(S(po.buyIncoterm).toUpperCase()) && (po.destinationLocationId != null || S(po.destinationText))) p = { id: po.destinationLocationId ?? null, text: S(po.destinationText || po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate) };
+    // v6.99.93 (A-GR-1, owner 1 Oct — my regression from v6.99.83): goods ALREADY IN STOCK load where the lot is (the lot owns its
+    // location); the PO's terms only say where goods not yet received will be collected
+    if (lot && num(lot.physicalKg) > 0 && (lot.locationId != null || S(lot.locationText))) p = { id: lot.locationId ?? null, text: S(lot.locationText), ref: S(lot.number), date: "" };
+    else if (po && ["EXW", "FCA"].includes(S(po.buyIncoterm).toUpperCase()) && (po.destinationLocationId != null || S(po.destinationText))) p = { id: po.destinationLocationId ?? null, text: S(po.destinationText || po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate) };
     // v6.99.83 (A-UN-5, owner 30 Sept): on a supplier-delivered PO (DDP, DAP, CIF…) the truck loads at the SUPPLIER and delivers to
     // the PO's destination — the lot's location (where it will arrive) is never the loading place; a lot's location counts only in stock
     else if (po && SUPPLIER_DELIVERS.test(S(po.buyIncoterm).toUpperCase()) && S(po.supplier?.name || po.supplier)) p = { id: null, text: S(po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate), deliveryId: po.destinationLocationId ?? null, deliveryText: S(po.destinationText) };
@@ -545,4 +569,44 @@ export function suggestedReceiptDate(lot: any, shipments: any[], po: any, todayI
   if (S(po?.expectedDeliveryDate)) return { date: S(po.expectedDeliveryDate), from: `${po.number} expected delivery` };
   if (S(lot?.arrivalDate)) return { date: S(lot.arrivalDate), from: "the lot's expected arrival" };
   return { date: todayISO, from: "today" };
+}
+
+// ── v6.99.95 (A-GR-3, owner ruling 1 Oct): THE TOUR OF A TRUCK, derived from the documents that own each fact ─────────
+// Loading stops = where its goods are (the lot's stock location; for goods not yet received the PO's place) — the lots and
+// POs own them. Unloading stops = the destinations of the SOs whose goods it carries, each with that SO's delivery date —
+// the SOs own them. The truck stores only the ORDER of its drops (unit.stopOrder: SO numbers). Nothing is typed twice.
+export interface TourLoad { id: any; text: string; refs: string[]; kg: number; }
+export interface TourDrop { soNumber: string; client: string; placeId: any; placeText: string; date: string; kg: number; missing: boolean; }
+export interface Tour { loads: TourLoad[]; drops: TourDrop[]; isTour: boolean; missing: string[]; }
+export function truckTour(sh: any, u: any, pos: any[] = [], lots: any[] = [], orders: any[] = []): Tour {
+  const loads: TourLoad[] = []; const drops: TourDrop[] = [];
+  (u?.load || []).filter((a: any) => num(a.qtyKg) > 0).forEach((a: any) => {
+    const g = (sh?.goods || []).find((x: any) => String(x.id) === String(a.goodsLineId)); if (!g) return;
+    const kg = num(a.qtyKg);
+    const lp = truckLoadPlaces(sh, { load: [a] }, pos, lots)[0];
+    if (lp) { const hit = loads.find(l => samePlace(l.id, l.text, lp.id, lp.text)); if (hit) { hit.kg += kg; if (!hit.refs.includes(lp.ref)) hit.refs.push(lp.ref); } else loads.push({ id: lp.id, text: lp.text, refs: [lp.ref], kg }); }
+    const soNo = S(g.soRef); if (!soNo) return;
+    const so = (orders || []).find((o: any) => String(o.number) === soNo) || null;
+    const hit = drops.find(dr => dr.soNumber === soNo);
+    if (hit) { hit.kg += kg; return; }
+    const placeId = so?.destinationLocationId ?? null; const placeText = S(so?.destinationText);
+    drops.push({ soNumber: soNo, client: S(so?.client?.name), placeId, placeText, date: S(so?.deliveryDate), kg, missing: placeId == null && !placeText });
+  });
+  const order: string[] = (u?.stopOrder || []).map(String);
+  drops.sort((x, y) => { const ix = order.indexOf(x.soNumber), iy = order.indexOf(y.soNumber); if (ix >= 0 || iy >= 0) return (ix < 0 ? 999 : ix) - (iy < 0 ? 999 : iy); return x.date.localeCompare(y.date) || x.soNumber.localeCompare(y.soNumber); });
+  loads.forEach(l => { l.kg = Math.round(l.kg * 1000) / 1000; }); drops.forEach(dr => { dr.kg = Math.round(dr.kg * 1000) / 1000; });
+  return { loads, drops, isTour: drops.length > 1 || loads.length > 1, missing: drops.filter(dr => dr.missing).map(dr => dr.soNumber) };
+}
+/** Move one drop up or down in the truck's stop order (the only thing the truck stores about its tour). */
+export function moveDrop(tour: Tour, soNumber: string, dir: -1 | 1): string[] {
+  const seq = tour.drops.map(dr => dr.soNumber); const i = seq.indexOf(soNumber); const j = i + dir;
+  if (i < 0 || j < 0 || j >= seq.length) return seq;
+  const out = seq.slice(); [out[i], out[j]] = [out[j], out[i]]; return out;
+}
+/** The transport order's gaps for a tour truck: every drop needs its SO's destination; the unit's own delivery place is not asked. */
+export function tourGaps(u: any, tour: Tour | null): string[] {
+  const base = unitGaps(u) as string[];
+  if (!tour || !tour.isTour) return base;
+  // the drops replace the one delivery place; the loading stops replace the one pickup place when there are any
+  return base.filter(g => g === "delivery place" ? false : g === "pickup place" ? !tour.loads.length : true).concat(tour.missing.map(n => `destination of ${n}`));
 }

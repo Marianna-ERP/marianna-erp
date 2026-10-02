@@ -487,6 +487,48 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     else { failed++; console.log("  \u2717 layouts — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 layouts —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
+// v6.99.88–91 (A-DEL-1, A-NM-1, A-SD-4, A-SD-5): Delete / Withdraw on the PO and SO views; the shipment view pairs; carriers on the leg row
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.87_schema-v2_2026-10-01T16-29-32.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [] };
+    const POm = require(path.resolve("./src/PurchaseOrders")); const SOm = require(path.resolve("./src/SalesOrders"));
+    _where = "PO view PO-2026-0044"; const pv = renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0044" }));
+    if (!/<button[^>]*background:#DC2626[^>]*>Delete<\/button>/.test(pv)) bad.push("PO view: no solid red Delete"); if (!/>Withdraw<\/button>/.test(pv)) bad.push("PO view: no Withdraw");
+    _where = "SO view SO-2026-0027"; const sv = renderToStaticMarkup(React.createElement(SOm.default, { ...c9, initialSelectedNumber: "SO-2026-0027" }));
+    if (!/>Delete<\/button>/.test(sv) || !/>Withdraw<\/button>/.test(sv)) bad.push("SO view: Delete / Withdraw missing");
+    const cancelledPO = d9.pos.find(p => p.status === "Cancelled"); if (cancelledPO) { const cv = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: cancelledPO.number }))); if (!/Withdrawn — read-only/.test(cv)) bad.push("a withdrawn PO does not say so"); if (/\bCancelled\b/.test(cv.replace(/Cancelled at/g, ""))) bad.push("the word Cancelled still shows on a withdrawn PO"); }
+    _where = "shipment view SHP-2026-0035"; const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const M = require(path.resolve("./src/shipmentModel.domain"));
+    const sh35 = d9.shipments.find(s => s.number === "SHP-2026-0035"); const dh = renderToStaticMarkup(React.createElement(Det, { shipment: sh35, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onEdit: () => {} })); const dt = T(dh);
+    if (!/AGRO-HURT[^|]{0,40}\+ Mikolaj Majewski|Mikolaj Majewski[^|]{0,40}\+ AGRO-HURT/.test(dt)) bad.push("road leg: the trucks' carriers not named: " + (dt.match(/Route \/ legs.{0,160}/) || [""])[0]); if (!/DCS TRAMACO/.test(dt)) bad.push("sea leg: the booking's forwarder not named");
+    const iCh = dt.indexOf("Operational checklist"), iDoc = dt.indexOf("Documents", iCh), iCost = dt.indexOf("Costs / billing"); if (!(iCh > 0 && iDoc > iCh && iCost > iDoc)) bad.push(`pairs order: checklist ${iCh}, documents ${iDoc}, costs ${iCost}`);
+    const sh31 = M.healShipmentModel(d9.shipments.find(s => s.number === "SHP-2026-0031")).sh; const d31 = T(renderToStaticMarkup(React.createElement(Det, { shipment: sh31, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onEdit: () => {} })));
+    if (!/TBX/.test(d31) || !/DCS TRAMACO/.test(d31)) bad.push("SHP-0031 after the heal: carrier / forwarder not shown");
+    if (!bad.length) { passed++; console.log("  \u2713 PO / SO views: solid red Delete + Withdraw; withdrawn reads Withdrawn; shipment view: checklist | documents, costs | notes; the leg row names the trucks' carriers and the booking's forwarder (SHP-0035, SHP-0031 after the heal)"); }
+    else { failed++; console.log("  \u2717 delete / withdraw / pairs / carriers — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 delete / withdraw / pairs / carriers —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
+// v6.99.92–96 (A-DEL-2, A-GR-2..4): Close drawn; the groupage picker; SHP-2026-0039's tour in the editor and on its transport order
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.87_schema-v2_2026-10-01T16-29-32.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [] };
+    _where = "a window header Close"; const SC = require(path.resolve("./src/ShipmentCreate")); const Cr = SC.CreateShipmentModal || SC.default;
+    const ch = renderToStaticMarkup(React.createElement(Cr, { pos: d9.pos, orders: d9.orders, lots: d9.lots, contacts: d9.contacts, shipments: d9.shipments, onCancel: () => {}, onCreate: () => {} }));
+    if (!/>Close<\/button>/.test(ch)) bad.push("the create window's header Close is not drawn");
+    _where = "SHP-2026-0039 editor tour"; const ShMod = require(path.resolve("./src/Shipments"));
+    const et = T(renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialSelectedNumber: "SHP-2026-0039" })));
+    ["TOUR · 1 LOADING · 3 UNLOADING", "Load 1 · AGRO-HURT", "14 265 kg", "Unload 1 ·", "SO-2026-0027", "Unload 3 · MJ VEG Bronisze · SO-2026-0029"].forEach(w => { if (!et.includes(w)) bad.push("editor tour lacks " + JSON.stringify(w)); });
+    if (/its goods are PO-2026-0044's/.test(et)) bad.push("the truck is still told to load at the producer");
+    _where = "SHP-2026-0039 transport order"; const SD = require(path.resolve("./src/ShipmentDocuments")); const sh0 = d9.shipments.find(s => s.number === "SHP-2026-0039");
+    // the truck has no carrier yet in the owner's file — an order is printed for a carrier, so one is given here
+    const carrier = d9.contacts.find(c => /Carrier/i.test(String(c.type || ""))) || d9.contacts[0]; const sh = { ...sh0, legs: sh0.legs.map((l, i) => i ? l : { ...l, vehicles: l.vehicles.map(u => ({ ...u, carrierId: carrier.id })) }) };
+    const th = T(renderToStaticMarkup(React.createElement(SD.TransportOrderDocument, { shipment: sh, contacts: d9.contacts, providerId: carrier.id, legIds: ["1"], orders: d9.orders, pos: d9.pos, lots: d9.lots, packagingTypes: d9.packagingTypes || [] })));
+    ["Route stops / Punkty trasy", "Loading / Zaladunek", "14 265 kg", "Unloading / Rozladunek", "1650 kg · SO-2026-0027", "11 630 kg · SO-2026-0028", "985 kg · SO-2026-0029"].forEach(w => { if (!th.includes(w)) bad.push("transport order lacks " + JSON.stringify(w)); });
+    if (!bad.length) { passed++; console.log("  \u2713 window header Close drawn; SHP-2026-0039: the tour in the editor (load at AGRO-HURT 14 265 kg, 3 drops) and on its transport order with the cargo per drop"); }
+    else { failed++; console.log("  \u2717 close / groupage — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 close / groupage —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
   else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }
