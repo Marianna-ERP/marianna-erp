@@ -70,7 +70,8 @@ export function proposeLinks(inv: any, ctx: { pos?: any[]; shipments?: any[]; lo
   const out: LinkProposal[] = [];
   const text = [inv?.notes, inv?.description, inv?.source, ...((inv?.positions || []).map((p: any) => p.name))].map(S).join(" ");
   const seen = new Set<string>();
-  (text.match(/\b(PO|SHP|LOT)-\d{4}-\d{4}\b/gi) || []).forEach(m => { const n = m.toUpperCase(); if (seen.has(n)) return; seen.add(n); out.push({ type: n.startsWith("PO") ? "PO" : n.startsWith("SHP") ? "SHIPMENT" : "LOT", number: n, reason: "number quoted on the invoice", confidence: "high" }); });
+  const quoted: string[] = Array.from(text.match(/\b(PO|SHP|LOT)-\d{4}-\d{4}\b/gi) || []);   // v6.99.98: typed — a strict compiler saw `string & never`
+  quoted.forEach(m => { const n = m.toUpperCase(); if (seen.has(n)) return; seen.add(n); out.push({ type: n.startsWith("PO") ? "PO" : n.startsWith("SHP") ? "SHIPMENT" : "LOT", number: n, reason: "number quoted on the invoice", confidence: "high" }); });
   const cpId = inv?.counterparty?.id; const cpName = S(inv?.counterparty?.name).toLowerCase();
   const gross = num(inv?.grossAmount) || num(inv?.netAmount);
   (ctx.shipments || []).forEach(sh => {
