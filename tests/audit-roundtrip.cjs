@@ -2921,3 +2921,33 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.105 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
+
+// ══ v6.99.108–109 — one class split from the ledger; a warehouse's invoice reaches the lots (owner 2 Oct) ══
+(function v699109(){
+  console.log("\n══ 108–109. v6.99.108–109: the class split · the warehouse invoice allocated by kilo-days ══");
+  const Q = B("seasonOps.domain.js"); const P = B("poSettlement.domain.js"); const W = B("warehouseAllocation.domain.js"); const SO = B("so.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the owner's 2 Oct file"); if (!fx) return;
+  const d = require(fx); const po = d.pos.find(p => p.number === "PO-2026-0044"); const l127 = d.lots.find(l => l.number === "LOT-2026-0127");
+  t("A-QC-6: LOT-2026-0127 — no sorting job: all 10 985 received kg are class I in the split, in the settlement and in the availability; a reclass moves kilos to II", () => {
+    const g = Q.gradeSplit(l127); eq(g.I, 10985); eq(g.II, 0); eq(g.waste, 0);
+    const calc = P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 6.5 });
+    const line = calc.lines.find(l => l.lotNumber === "LOT-2026-0127"); eq(line.classIKg, 10985, "was 0 before — the settlement read a sorting cache"); eq(line.soldKg, 10985);
+    const sorted = { ...l127, movements: [...l127.movements, { id: 9, type: "RECLASS", date: "2026-06-14", qtyKg: 1000, toGrade: "II", source: "sorting:x" }, { id: 10, type: "DAMAGE", date: "2026-06-14", qtyKg: 85, source: "sorting:x" }] };
+    const g2 = Q.gradeSplit(sorted); eq(g2.I, 9900); eq(g2.II, 1000); eq(g2.waste, 85);
+    const a = SO.lotAvailabilityByGrade({ ...sorted, physicalKg: 10985 }, []); eq(a.I, 9900); eq(a.II, 1000);
+    eq(Q.gradeSplit({ receivedKg: 500, grades: { I: 300, II: 150, waste: 50 }, movements: [] }).II, 150, "a record with no ledger keeps its cached split");
+  });
+  t("A-ST-7: AGRO-HURT's invoice spread over the lots that were there in June by kilo-days — 77 % / 23 % — and written as warehouse cost lines the settlement reads", () => {
+    const wh = d.contacts.find(c => /AGRO-HURT/i.test(c.name)); const sites = [wh.siteId];
+    eq(W.lotKgDaysAt(l127, sites, "2026-06-01", "2026-06-30"), 10985, "one day × 10 985 kg (in 14 June, out 15 June)"); eq(W.lotKgDaysAt(l127, sites, "2026-07-01", "2026-07-31"), 0);
+    const inv = { id: 7700, number: "TEST/06/2026", kind: "COST", netAmount: 1000, fxRate: 1, issueDate: "2026-06-30", counterparty: { id: wh.id, name: wh.name } };
+    const p = W.proposeWarehouseAllocation(inv, d.lots, sites, "2026-06-01", "2026-06-30"); eq(p.rows.length, 2); eq(p.totalPLN, 1000);
+    eq(p.rows.map(r => r.lotNumber + ":" + r.pln).join(","), "LOT-2026-0127:770.07,LOT-2026-0128:229.93");   // 10 985 / 14 265 = 77.007 % eq(Math.round(p.rows.reduce((a, r) => a + r.pln, 0) * 100) / 100, 1000, "the rows add up to the invoice");
+    let id = 1; const r = W.applyWarehouseAllocation(d.lots, inv, p.rows, wh.name, { nextId: () => ++id, todayISO: () => "2026-10-04" }); eq(r.touched.sort().join(","), "LOT-2026-0127,LOT-2026-0128");
+    const c127 = r.lots.find(l => l.number === "LOT-2026-0127").costs.find(c => c.source === "cinv:7700"); eq(c127.pln, 770.07); eq(c127.type, "warehouse"); ok(/kg-days/.test(c127.label));
+    const r2x = W.applyWarehouseAllocation(r.lots, inv, p.rows, wh.name, { nextId: () => ++id, todayISO: () => "2026-10-04" }); eq(r2x.lots.find(l => l.number === "LOT-2026-0127").costs.filter(c => c.source === "cinv:7700").length, 1, "re-allocating replaces, never doubles");
+    const calc = P.computePOSettlement({ po, lots: r.lots, orders: d.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 6.5 }); eq(calc.warehousePLN, 1000, "the settlement sees the warehouse cost");
+  });
+  console.log("v6.99.109 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();

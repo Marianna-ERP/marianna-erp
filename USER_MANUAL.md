@@ -196,6 +196,18 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Class split and warehouse costs (v6.99.108–109)
+
+- **One class split**, from the stock ledger: everything received that was not reclassified
+  to class II or written off as waste is class I. The lot's stock tile, the sales
+  availability, the settlement and the sales report all read the same split (before, the
+  settlement showed class I = 0 until a sorting job was done).
+- **A warehouse's invoice reaches the lots.** On a cost invoice from a warehouse company,
+  **Allocate to lots** spreads its net amount over the lots that were at that warehouse in
+  the chosen period, by kilo-days; you can adjust the amounts (they must add up to the
+  invoice). The allocation writes each lot's *warehouse* cost line, which the truck
+  settlement, the lot value and the P/L read. Allocating again replaces the earlier lines.
+
 ### Delete and Cancel — one standard (v6.99.99)
 
 - **Delete** on a PO, SO, shipment, lot, invoice, claim or company never erases it: the

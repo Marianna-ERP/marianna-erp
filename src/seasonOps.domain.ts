@@ -157,10 +157,18 @@ export function sortingJob(lot: any, inp: SortingInput, deps: { nextId: () => an
 }
 /** kg by grade for the sales report: I, II and waste; unsorted = physical − (I + II). */
 export function gradeSplit(lot: any): { I: number; II: number; waste: number; unsorted: number } {
-  const g = (lot?.movements || []).some((m: any) => m && !m.voided && (m.type === "RECLASS" || String(m.source || "").startsWith("sorting:"))) ? gradesFromLedger(lot) : (lot?.grades || {});   // v6.96.0 (IN-2): the ledger wins
-  const I = num(g.I), II = num(g.II), waste = num(g.waste);
-  const received = num(lot?.receivedKg);
-  return { I, II, waste, unsorted: Math.max(0, r0(received - I - II - waste)) };
+  // v6.99.108 (A-QC-6, owner 2 Oct — one source): the split is the LEDGER's, the same one the sales availability uses
+  // (gradeStockNow): everything received that was not reclassified to class II or written off as waste is class I. Before, the
+  // settlement read a cache written only by a sorting job, so an unsorted lot showed class I = 0 while 10 985 kg of class I were sold.
+  const live = (lot?.movements || []).filter((m: any) => m && !m.voided);
+  if (!live.length && lot?.grades && Object.keys(lot.grades).length) { const g = lot.grades; return { I: num(g.I), II: num(g.II), waste: num(g.waste), unsorted: 0 }; }   // a lot with no ledger at all (old records): its cached split
+  const sum = (f: (m: any) => boolean) => r0(live.filter(f).reduce((s: number, m: any) => s + num(m.qtyKg), 0));
+  const received = num(lot?.receivedKg) || sum((m: any) => m.type === "IN");
+  const toII = sum((m: any) => m.type === "RECLASS" && String(m.toGrade || "II").toUpperCase() === "II");
+  const backToI = sum((m: any) => m.type === "RECLASS" && String(m.toGrade).toUpperCase() === "I");
+  const waste = sum((m: any) => m.type === "DAMAGE" && String(m.source || "").startsWith("sorting:"));
+  const II = Math.max(0, r0(toII - backToI)); const I = Math.max(0, r0(received - II - waste));
+  return { I, II, waste, unsorted: 0 };
 }
 
 // ── STOCK COUNT ─────────────────────────────────────────────────────────────

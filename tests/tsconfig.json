@@ -47,6 +47,7 @@
     "../src/tradeFlow.domain.ts",
     "../src/types.ts",
     "../src/warehouseCharges.ts",
+    "../src/warehouseAllocation.domain.ts",
     "../src/claimCostChain.domain.ts",
     "../src/claimReadiness.domain.ts",
     "../src/statusOwnership.domain.ts",

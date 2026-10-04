@@ -1,3 +1,4 @@
+import { gradeSplit } from "./seasonOps.domain";
 import { paymentDaysOf } from "./legacy";
 // ─────────────────────────────────────────────────────────────────────────────
 // so.domain.ts — v6.95.0: SALES ORDER RULES (owner decisions SO-1…SO-9 + PO-10, 10 Sept 2026)
@@ -12,7 +13,7 @@ const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, ""
 export type Grade = "I" | "II";
 /** Kilos of a grade still available on a lot: sorted grade kg minus what other live SO lines of that grade reserve. */
 export function lotAvailabilityByGrade(lot: any, orders: any[], excludeOrderId?: any): { I: number; II: number; unsorted: number } {
-  const g = lot?.grades || {};
+  const g = gradeSplit(lot);   // v6.99.108 (A-QC-6): the ledger's split, one source
   const reserved = { I: 0, II: 0 };
   (orders || []).forEach(o => {
     if (!o || o.status === "Draft" || o.status === "Cancelled" || (excludeOrderId != null && String(o.id) === String(excludeOrderId))) return;

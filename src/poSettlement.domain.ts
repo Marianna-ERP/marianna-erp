@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
+import { gradeSplit } from "./seasonOps.domain";   // v6.99.108 (A-QC-6)
 // poSettlement.domain.ts — v6.90.0: THE TRUCK'S FINAL RESULT (settlement per PO)
 // Owner rulings 6 Sept 2026 (VEGA_PRO_REPORTING_MAPPING.md §1, §4, §5):
 //   V1 one PO = one truck → the settlement is FOR THE PO, summing its lots by variety
@@ -106,7 +107,7 @@ export function computePOSettlement(input: {
       const hit = sales.find(x => x.soNumber === String(o.number) && x.grade === (isII ? "II" : "I"));
       if (hit) { hit.kg = r0(hit.kg + kg); hit.pln = r2(hit.pln + kg * price * fx); } else sales.push({ soNumber: String(o.number), client: S(o.client?.name), grade: isII ? "II" : "I", kg: r0(kg), pln: r2(kg * price * fx), claims: Array.from(new Set(claimsOn)) });
     }));
-    const g = lot.grades || {};
+    const g = gradeSplit(lot);   // v6.99.108 (A-QC-6): the ledger's class split — the same the sales availability uses
     const received = num(lot.receivedKg);
     const wasteKg = num(g.waste);
     const onStock = Math.max(0, r0(received - wasteKg - soldKg - soldKgII));

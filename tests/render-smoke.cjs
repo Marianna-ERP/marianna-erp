@@ -544,6 +544,20 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     else { failed++; console.log("  \u2717 PO-2026-0044 view — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 PO-2026-0044 view —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
+// v6.99.108–109: the lot's class tile and the settlement show the ledger's split; the warehouse invoice offers Allocate to lots
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [], poSettlements: d9.poSettlements || [], claims: d9.claims || [], notes: d9.financeNotes || [] };
+    _where = "PO-2026-0044 settlement class I"; const POm = require(path.resolve("./src/PurchaseOrders")); const pt = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0044" })));
+    const i127 = pt.indexOf("LOT-2026-0127"); const row = pt.slice(i127, i127 + 160); if (!/10 985 10 985/.test(row.replace(/\s+/g, " "))) bad.push("settlement row: class I not 10 985: " + row.slice(0, 120));
+    _where = "invoice 128/09/2026 (AGRO-HURT)"; const Inv = require(path.resolve("./src/Invoices")).default;
+    const ih = T(renderToStaticMarkup(React.createElement(Inv, { ...c9, setInvoices: () => {}, setLots: () => {}, initialSelectedNumber: "128/09/2026" })));
+    if (!/Allocate to lots/.test(ih)) bad.push("the warehouse invoice offers no Allocate to lots: " + (ih.match(/128\/09\/2026.{0,100}/) || [""])[0]);
+    if (!bad.length) { passed++; console.log("  \u2713 the settlement shows class I = received for the unsorted lot; AGRO-HURT's invoice offers Allocate to lots"); }
+    else { failed++; console.log("  \u2717 class split / allocation — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 class split / allocation —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }
   else { failed++; console.log("  \u2717 button vocabulary (" + bf.length + "):"); bf.slice(0, 20).forEach(s => console.log("      " + s)); } }

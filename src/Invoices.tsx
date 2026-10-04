@@ -1,3 +1,4 @@
+import { proposeWarehouseAllocation, applyWarehouseAllocation } from "./warehouseAllocation.domain";   // v6.99.109 (A-ST-7)
 import { statusWord } from "./format";
 import { chooseDepartment, departmentBlockReason } from "./fakturowniaDepartments.domain";
 import { customsForInvoice } from "./customsClearance.domain";   // v6.99.72 (A-CU-3)
@@ -9,7 +10,7 @@ import { requiredLinkMissing, proposeLinks, defaultCostDueDate, matchInvoiceToCo
 import { periodGuard } from "./periodClose.domain";
 import { fxMissing } from "./fx";
 import DateInput from "./DateInput";
-import { useConfirm, notifySaved } from "./ui";
+import { useConfirm, notifySaved, SmallButton } from "./ui";
 import React, { useMemo, useState } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
 import { nextId } from "./ids";
@@ -306,6 +307,63 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
   );
 }
 
+// ─── v6.99.109 (A-ST-7): a warehouse's invoice allocated to its lots ──────────────────────────────────────────────────
+function warehouseOf(inv: any, contacts: any[]): any | null {
+  if (!inv || inv.kind === "SALES") return null;
+  const c = (contacts || []).find((x: any) => (inv.counterparty?.id != null && String(x.id) === String(inv.counterparty.id)) || (inv.counterparty?.name && String(x.name).toLowerCase() === String(inv.counterparty.name).toLowerCase()));
+  if (!c) return null;
+  const types = [c.type, ...(c.types || []), ...(c.roles || [])].map((t: any) => String(t || "").toLowerCase());   // a company carries its roles in `roles`
+  return types.some(t => /warehouse|magazyn|cold/.test(t)) ? c : null;
+}
+function monthBounds(iso: string): { from: string; to: string } {
+  const y = +String(iso || "").slice(0, 4), m = +String(iso || "").slice(5, 7); if (!y || !m) { const t = localTodayISO(); return monthBounds(t); }
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate(); const mm = String(m).padStart(2, "0");
+  return { from: `${y}-${mm}-01`, to: `${y}-${mm}-${String(last).padStart(2, "0")}` };
+}
+function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any) {
+  const wh = warehouseOf(inv, contacts); const sites = wh ? [wh.siteId, ...((wh.extraAddresses || []).map((a: any) => a && typeof a === "object" ? a.siteId : null))].filter((x: any) => x != null) : [];
+  const prior = inv.allocation || null; const mb = monthBounds(inv.serviceMonth ? inv.serviceMonth + "-01" : (inv.saleDate || inv.issueDate));
+  const [from, setFrom] = useState(prior?.from || mb.from); const [to, setTo] = useState(prior?.to || mb.to);
+  const siteKey = sites.join(","); const siteList = useMemo(() => siteKey ? siteKey.split(",") : [], [siteKey]);
+  const proposal = useMemo(() => proposeWarehouseAllocation(inv, lots || [], siteList, from, to), [inv, lots, from, to, siteList]);
+  const [over, setOver] = useState<Record<string, string>>({});
+  const rows = proposal.rows.map(r => ({ ...r, pln: over[r.lotNumber] !== undefined && over[r.lotNumber] !== "" ? (parseFloat(String(over[r.lotNumber]).replace(",", ".")) || 0) : r.pln }));
+  const sum = Math.round(rows.reduce((a, r) => a + r.pln, 0) * 100) / 100; const diff = Math.round((sum - proposal.totalPLN) * 100) / 100;
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 640, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB" }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>Allocate {inv.number} to lots</div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{wh?.name} · {proposal.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN net · spread by the kilo-days each lot spent at the warehouse in the period</div>
+        </div>
+        <div style={{ padding: 22 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
+            <div><Lbl>Period from</Lbl><input type="date" value={from} onChange={e => setFrom(e.target.value)} style={inp} /></div>
+            <div><Lbl>to</Lbl><input type="date" value={to} onChange={e => setTo(e.target.value)} style={inp} /></div>
+            <div><Lbl>Kilo-days found</Lbl><div style={{ ...inp, background: "#F8FAFC" }}>{proposal.kgDays.toLocaleString("pl-PL")} · {proposal.rows.length} lot{proposal.rows.length === 1 ? "" : "s"}</div></div>
+          </div>
+          {!sites.length && <div style={{ fontSize: 12, color: "#B45309", fontWeight: 700, marginBottom: 10 }}>This company has no site on record — give it an address in Parties first.</div>}
+          {sites.length > 0 && !proposal.rows.length && <div style={{ fontSize: 12, color: "#B45309", fontWeight: 700, marginBottom: 10 }}>No lot was at {wh?.name} between {from} and {to}. Check the period (the stock movements set the days).</div>}
+          {proposal.rows.length > 0 && <div style={{ border: "1px solid #EBEBEB", borderRadius: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.6fr 0.9fr 0.6fr 0.9fr", gap: 8, padding: "6px 10px", background: "#F9FAFB", fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>LOT</div><div>PRODUCT</div><div style={{ textAlign: "right" }}>KG-DAYS</div><div style={{ textAlign: "right" }}>SHARE</div><div style={{ textAlign: "right" }}>PLN</div></div>
+            {rows.map(r => <div key={r.lotNumber} style={{ display: "grid", gridTemplateColumns: "1.2fr 1.6fr 0.9fr 0.6fr 0.9fr", gap: 8, padding: "5px 10px", borderTop: "1px solid #F3F4F6", fontSize: 12, alignItems: "center" }}>
+              <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#1D4ED8" }}>{r.lotNumber}</div><div style={{ color: "#475569" }}>{r.product}</div>
+              <div style={{ textAlign: "right" }}>{r.kgDays.toLocaleString("pl-PL")}</div><div style={{ textAlign: "right", color: "#94A3B8" }}>{r.sharePct}%</div>
+              <div><input value={over[r.lotNumber] ?? r.pln} onChange={e => setOver(o => ({ ...o, [r.lotNumber]: e.target.value }))} style={{ ...inp, textAlign: "right", padding: "4px 6px" }} /></div>
+            </div>)}
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", borderTop: "2px solid #E5E7EB", fontSize: 12.5, fontWeight: 700 }}><span>Allocated</span><span style={{ color: Math.abs(diff) >= 0.005 ? "#DC2626" : "#15803D" }}>{sum.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} of {proposal.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN{Math.abs(diff) >= 0.005 ? ` · ${diff > 0 ? "+" : ""}${diff.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}` : " ✓"}</span></div>
+          </div>}
+        </div>
+        <div style={{ padding: "12px 22px", borderTop: "1px solid #EBEBEB", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <SmallButton onClick={onClose}>Cancel</SmallButton>
+          <SmallButton kind="confirm" disabled={!proposal.rows.length || Math.abs(diff) >= 0.005} title={Math.abs(diff) >= 0.005 ? "the rows must add up to the invoice" : ""} onClick={() => onApply(rows, from, to)}>Allocate</SmallButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Invoices(props: any) {
   // v6.75.0: the account's departments (each = one bank account in one currency)
   // and the stated default per currency. Fetched from Fakturownia on demand and
@@ -325,7 +383,8 @@ export default function Invoices(props: any) {
   // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
   const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("invoice", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
-    setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null, setOrders = null, closedPeriods = [] } = props;
+    setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null, setOrders = null, closedPeriods = [], setLots = null } = props;
+  const [allocFor, setAllocFor] = useState<any>(null);   // v6.99.109 (A-ST-7): the warehouse invoice being allocated to lots
   const [showImport, setShowImport] = useState(false); // v6.39.0
   // v6.39.0: everything a posted import touches, in one place.
   async function handleImportPost({ regs, flips, opCosts, whInvs }: any) {
@@ -591,7 +650,16 @@ export default function Invoices(props: any) {
       onNote={() => newNote(selected)}
       pushState={pushState && pushState.id === selected.id ? pushState : null}
       shipments={shipments}
+      onAllocate={(() => { const wh = warehouseOf(selected, contacts); return wh && setLots ? () => setAllocFor(selected) : null; })()}
+      allocatedLots={(lots || []).filter((l: any) => (l.costs || []).some((c: any) => String(c.source) === `cinv:${selected.id}`)).map((l: any) => l.number)}
     />
+    {allocFor && <WarehouseAllocationModal inv={allocFor} lots={lots} contacts={contacts} onClose={() => setAllocFor(null)} onApply={(rows: any[], from: string, to: string) => {
+      const wh = warehouseOf(allocFor, contacts); const r = applyWarehouseAllocation(lots || [], allocFor, rows, wh?.name || "Warehouse", { nextId, todayISO: localTodayISO });
+      setLots && setLots(() => r.lots);
+      setInvoices((prev: any[]) => (prev || []).map((i: any) => i.id === allocFor.id ? { ...i, allocation: { from, to, lots: rows.filter((x: any) => x.pln > 0).map((x: any) => ({ lot: x.lotNumber, pln: x.pln, kgDays: x.kgDays })) }, links: [...(i.links || []).filter((l: any) => l.type !== "LOT"), ...rows.filter((x: any) => x.pln > 0).map((x: any) => ({ type: "LOT", number: x.lotNumber }))] } : i));
+      recordAudit({ module: "Invoices", docType: "Invoice", docNumber: String(allocFor.number), action: "updated", summary: `allocated to ${r.touched.length} lot(s) by kg-days ${from}…${to}: ${rows.filter((x: any) => x.pln > 0).map((x: any) => `${x.lotNumber} ${x.pln.toLocaleString("pl-PL")} PLN`).join(", ")}` });
+      setAllocFor(null);
+    }} />}
     {paymentFor && (
       <PaymentEventModal inv={paymentFor} onClose={() => setPaymentFor(null)} onSave={savePaymentEvent} />
     )}
@@ -688,7 +756,7 @@ export default function Invoices(props: any) {
 }
 
 // ════════════════ DETAIL ════════════════
-function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null, shipments = [] }: any) {
+function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, onSend, onCopyPayload, onNote, pushState, onDeletePayment = null, shipments = [], onAllocate = null, allocatedLots = [] }: any) {
   // v6.99.72 (A-CU-3): what customs says about this invoice — read from the shipments' clearance lines, no store of its own
   const customs = inv.kind === "SALES" ? customsForInvoice(inv.number, shipments) : [];
   const locked = isLocked(inv);
@@ -704,6 +772,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
           {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete invoice</button>}
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
+          {onAllocate && inv.paymentStatus !== "Cancelled" && <SmallButton kind="amber" onClick={onAllocate} title="v6.99.109 (A-ST-7): spread this warehouse invoice over the lots that were at the warehouse in its period, by kilo-days — the lots' warehouse cost lines feed the settlement">{allocatedLots.length ? `Allocated to ${allocatedLots.length} lot${allocatedLots.length === 1 ? "" : "s"} · change` : "Allocate to lots"}</SmallButton>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
           {(() => {
             const evts = normalizeInvoicePayments(inv);
