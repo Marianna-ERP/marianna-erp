@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 // ══ G-A (owner 18 Sept): DERIVED-FROM-THE-LEDGER TEST ══
 // Every stored stock figure is recomputed from the lot's movements and compared. A drift means a screen or a
 // posting wrote a snapshot the ledger does not support — exactly how 20 kg of waste came to be sold as class I.

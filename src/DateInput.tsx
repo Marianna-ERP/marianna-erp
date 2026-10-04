@@ -1,3 +1,4 @@
+import { localTodayISO } from "./dates";
 import React from "react";
 import { daysInMonth } from "./format";
 // ── v6.81.0 (D-52): dd/mm/yyyy DATE INPUT ─────────────────────────────────────
@@ -21,7 +22,7 @@ export function dmyToIso(txt: string): string | null {
 // dd/mm/yyyy, `noFuture` for actual dates, `min` for a document's anchor (a lot's receipt, an order's date).
 // Out of range is shown, not silently accepted.
 export default function DateInput({ value, onChange, disabled, placeholder, style, title, min, max, noFuture }: any) {
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = localTodayISO();   // v6.99.122 (AUD-09)
   const hi = noFuture ? (max ? (max < todayISO ? max : todayISO) : todayISO) : max;
   const v = String(value || "").slice(0, 10);
   const tooEarly = !!(v && min && v < min); const tooLate = !!(v && hi && v > hi);

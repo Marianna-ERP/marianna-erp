@@ -83,7 +83,6 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
 
         <div style={{ padding: "12px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 8, alignItems: "center" }}>
           <button onClick={() => setTab("STOCK")} style={{ padding: "6px 14px", borderRadius: 7, border: tab === "STOCK" ? "1px solid #0369A1" : "1px solid #E5E7EB", background: tab === "STOCK" ? "#E0F2FE" : "#fff", color: tab === "STOCK" ? "#0369A1" : "#555", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📦 From Stock ({matchingLots.length})</button>
-          <button onClick={() => setTab("PO")} style={{ padding: "6px 14px", borderRadius: 7, border: tab === "PO" ? "1px solid #166534" : "1px solid #E5E7EB", background: tab === "PO" ? "#F0FDF4" : "#fff", color: tab === "PO" ? "#166534" : "#555", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🚚 From PO ({matchingPOLines.length})</button>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 11, color: "#888" }}>Filter by product:</span>
             <Inp value={filter} onChange={e => setFilter(e.target.value)} placeholder="e.g. Carrot" style={{ width: 200 }} />
@@ -114,6 +113,8 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
                   <div>
                     <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#0369A1" }}>{lot.number}</div>
                     {(lot as any).status && <span style={{ display: "inline-block", marginTop: 3, fontSize: 9.5, fontWeight: 700, padding: "1px 7px", borderRadius: 5, background: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }}>{(lot as any).status}</span>}
+                    {/* v6.99.127 (A-ONE-1): where the lot is — expected at the producer, in our stock, or direct — and the PO it comes from */}
+                    <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 2 }}>{(lot as any).lotState === "expected" ? "expected · not yet received" : (lot as any).lotState === "direct" ? "direct · producer → client" : (lot as any).lotState === "in stock" ? "in our stock" : (lot as any).lotState || ""}{(lot as any).poRef ? ` · from ${(lot as any).poRef}` : ""}</div>
                   </div>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}{(lot as any).variety ? " — " + (lot as any).variety : ""}</div>

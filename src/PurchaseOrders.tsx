@@ -467,7 +467,7 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
   const [askClose, setAskClose] = React.useState(false);
   const docBtn = (colour: string, bg: string): any => ({ padding: "7px 14px", borderRadius: 8, border: `1px solid ${colour}`, background: bg, color: colour, fontSize: 12.5, fontWeight: 800, cursor: "pointer" });
   function doClose() {
-    const number = nextSettlementNumberPO(settlements, new Date().getFullYear());
+    const number = rec?.number || nextSettlementNumberPO(settlements, new Date().getFullYear());   // v6.99.117 (AUD-27): a re-closed settlement keeps its number (it may be on a printed statement)
     upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, commissionPct: pct });
     const cn = expectedProducerCreditNote(order, calc, { nextId, todayISO: localTodayISO });
     if (cn && typeof setFinanceNotes === "function") { setFinanceNotes((prev: any[]) => [...(prev || []), cn]); upd({ expectedCreditNoteId: cn.id }); }
@@ -555,7 +555,7 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
       </div>
       {/* v6.99.36 (A-R25-4/5, owner): the reports read as documents, and closing a settlement is confirmed in place — with a way back. */}
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={() => { if (!lastReportNumber("SRP", order.number)) issueReportNumber("SRP", order.number, "", "Purchase orders"); setTimeout(() => printHtmlNode(`sales-report-doc-${order.id}`, `${order.number} — Sales report`), 60); }} style={docBtn("#0E7490", "#F0FDFA")}>📄 Sales report</button>
+        <button onClick={() => { if (!lastReportNumber("SRP", order.number)) issueReportNumber("SRP", order.number, "", "Purchase orders"); const sref = order.supplierRef || (shipments || []).find((s2: any) => (s2.poRefs || []).includes(order.number) && s2.supplierRef)?.supplierRef || ""; setTimeout(() => printHtmlNode(`sales-report-doc-${order.id}`, `Sales report ${order.number}${sref ? " · " + sref : ""} · ${prodName}`), 60); }}   /* v6.99.125 (A-ST-11): the PDF is named with the supplier's reference */ style={docBtn("#0E7490", "#F0FDFA")}>📄 Sales report</button>
         <button onClick={() => exportVegaProSalesReport({ completionDate: localTodayISO(), shipmentRef: (order.supplierRef || (shipments || []).find((s: any) => (s.poRefs || []).includes(order.number) && s.supplierRef)?.supplierRef || ""), poNumber: order.number }, rows, { pct: calc.commissionPct, eur: calc.commissionEUR })} style={docBtn("#7C3AED", "#F5F3FF")} title="the producer's own sheet layout, ready to upload">⬇ Producer's template</button>
         <button onClick={() => { myIns.forEach((x: any) => { if (!lastReportNumber("QR", String(x.id))) issueReportNumber("QR", `${x.lotNumber} · inspection ${x.date}`, "", "Purchase orders"); }); setTimeout(() => printHtmlNode(`qc-report-${order.id}`, `${order.number} — Quality reports`), 60); }} disabled={!myIns.length} style={{ ...docBtn("#B45309", "#FFFBEB"), opacity: myIns.length ? 1 : 0.45, cursor: myIns.length ? "pointer" : "not-allowed" }}>🔬 Quality report ({myIns.length})</button>
         {!closed && setSettlements && (
@@ -569,7 +569,9 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
         )}
         {closed && setSettlements && !rec?.commissionInvoiceId && (
           <button onClick={() => { if (!window.confirm(`Re-open settlement ${rec?.number || ""}? Its expected credit note is withdrawn and the figures become live again.`)) return;
-            upd({ status: "Open", closedAt: null }); recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: "status", summary: `Truck settlement ${rec?.number || ""} re-opened` }); }}
+            // v6.99.117 (AUD-27): the expected notes this close created are withdrawn (status Cancelled) — before, the confirmation promised it and nothing happened, so a re-close doubled them
+            { const ids = [rec?.expectedCreditNoteId, rec?.expectedExtraInvoiceId].filter((x: any) => x != null).map(String); if (ids.length && typeof setFinanceNotes === "function") setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => ids.includes(String(n.id)) ? { ...n, status: "Cancelled", cancelledAt: localTodayISO(), cancelReason: `settlement ${rec?.number || ""} re-opened` } : n)); }
+            upd({ status: "Open", closedAt: null, expectedCreditNoteId: null, expectedExtraInvoiceId: null }); recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: "status", summary: `Truck settlement ${rec?.number || ""} re-opened` }); }}
             style={docBtn("#DC2626", "#FEF2F2")} title="possible until the commission invoice is issued">↩ Re-open settlement</button>
         )}
         {closed && rec?.commissionInvoiceId && <span style={{ fontSize: 11, color: "#94A3B8" }}>commission invoiced — the settlement is final</span>}

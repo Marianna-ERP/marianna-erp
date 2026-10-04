@@ -108,7 +108,7 @@ export function lotStockCheck(goods: any[], lots: any[]): StockShort[] {
   Object.keys(wanted).forEach(ref => {
     const lot = (lots || []).find((l: any) => String(l.number ?? l.lotNumber ?? l.ref) === ref);
     if (!lot) return;                       // unknown lot cannot be judged
-    const avail = num(lot.qtyKg ?? lot.remainingKg ?? lot.availableKg);
+    const avail = num(lot.physicalKg ?? lot.qtyKg ?? lot.remainingKg ?? lot.availableKg);   // v6.99.112 (AUD-39): real lots carry physicalKg — the check never fired
     if (avail <= 0) return;                 // lot with no quantity recorded — nothing to assert
     if (wanted[ref] > avail + 1) {
       out.push({ lotRef: ref, product: String(lot.product || ""), availableKg: avail, requestedKg: wanted[ref], shortKg: Math.round((wanted[ref] - avail) * 10) / 10 });

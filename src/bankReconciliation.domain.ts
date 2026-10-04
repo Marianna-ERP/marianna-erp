@@ -191,7 +191,8 @@ export function matchBankLines(lines: BankLine[], invoices: any[], opts?: { tole
     const titleSq = squash(line.title);
 
     // ① the transfer title quotes the invoice number (whitespace-proof)
-    const byNumber = sameCur.filter(i => { const nsq = squash(i.number); return nsq.length >= 4 && titleSq.includes(nsq); });
+    // v6.99.119 (AUD-22): a whole-token match — "1/07/2026" must not be found inside "71/07/2026" (that paid invoice was suggested for a fresh transfer)
+    const byNumber = sameCur.filter(i => { const nsq = squash(i.number); if (nsq.length < 4) return false; const idx = titleSq.indexOf(nsq); if (idx < 0) return false; const before = titleSq[idx - 1], after = titleSq[idx + nsq.length]; return !(before && /[0-9]/.test(before)) && !(after && /[0-9]/.test(after)); });
     if (byNumber.length === 1) {
       const i = byNumber[0];
       return { ...base, rank: "NUMBER" as const, invoiceId: i.id, invoiceNumber: i.number, reason: `Transfer title quotes ${i.number}.` };

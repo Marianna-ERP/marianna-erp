@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 const fs = require("fs"); const path = require("path"); const { JSDOM } = require("jsdom");
 const dom = new JSDOM("<!doctype html><html><body><div id=r></div></body></html>", { url: "https://m.local/", pretendToBeVisual: true });
 global.window = dom.window; global.document = dom.window.document; global.HTMLElement = dom.window.HTMLElement; global.IS_REACT_ACT_ENVIRONMENT = true;

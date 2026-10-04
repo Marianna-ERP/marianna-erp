@@ -61,19 +61,26 @@ export function allocateShipmentCostsToLots(shipment: any, lots: any[], mapper: 
   if (!lotRefs.length) return lots;
 
   const goodsByLot = goodsKgByLot(shipment);
-  const totalKg =
-    (Object.values(goodsByLot) as number[]).reduce((s, v) => s + num(v), 0) || lotRefs.length;
+  // v6.99.118 (AUD-32): a lot with no goods row gets an average share — the denominator must count that share too, or the
+  // allocation exceeds the cost (3 000 → 4 500 PLN with one lot of two priced). Lots without goods share the goods' average.
+  const goodsKgTotal = (Object.values(goodsByLot) as number[]).reduce((s, v) => s + num(v), 0);
+  const withGoods = lotRefs.filter((n: any) => num(goodsByLot[n]) > 0).length; const avgKg = withGoods ? goodsKgTotal / withGoods : 1;
+  const kgOf = (n: any) => (num(goodsByLot[n]) > 0 ? num(goodsByLot[n]) : avgKg);
+  const totalKg = lotRefs.reduce((s: number, n: any) => s + kgOf(n), 0) || lotRefs.length;
   const prefix = shipmentAllocationSourcePrefix(shipment.number);
 
+  // v6.99.118 (AUD-33): the rounding remainder of each cost lands on the lot with the largest share, so the lines add up to the cost
+  const largest = lotRefs.slice().sort((a: any, b: any) => kgOf(b) - kgOf(a))[0];
+  const remainderOf = (c: any) => { const spread = lotRefs.reduce((s: number, n: any) => s + Math.round(num(c.amountPLN) * (totalKg ? kgOf(n) / totalKg : 1 / lotRefs.length) * 100) / 100, 0); return Math.round((num(c.amountPLN) - spread) * 100) / 100; };
   return (lots || []).map(lot => {
     if (!lotRefs.includes(lot.number)) return lot;
-    const lotKg = goodsByLot[lot.number] || totalKg / lotRefs.length;
+    const lotKg = kgOf(lot.number);
     const factor = totalKg ? lotKg / totalKg : 1 / lotRefs.length;
 
     // REPLACE-BY-SOURCE: drop every prior line this shipment wrote, then re-add.
     const kept = (lot.costs || []).filter((c: any) => !String(c.source || "").startsWith(prefix));
     const additions = (shipment.costs || []).map((c: any) => {
-      const pln = Math.round(num(c.amountPLN) * factor * 100) / 100;
+      const pln = Math.round((Math.round(num(c.amountPLN) * factor * 100) / 100 + (lot.number === largest ? remainderOf(c) : 0)) * 100) / 100;
       return {
         type: mapper.inventoryType(c.type),
         label: `${mapper.label(c.type)} (${shipment.number})`,

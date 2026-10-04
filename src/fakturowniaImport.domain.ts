@@ -206,7 +206,7 @@ export function buildCostInvoice(row: StagedRow, tag: ImportTag, link: { shipmen
   return {
     id: nextId(),
     kind: "COST",
-    category: "PURCHASE",
+    category: (tag === "FREIGHT" ? "FREIGHT" : tag === "CUSTOMS" ? "CUSTOMS" : tag === "WAREHOUSE" ? "WAREHOUSE" : tag === "GOODS" ? "PURCHASE" : "OTHER") as any,   // v6.99.120 (AUD-18): the tag names the category
     costScope: tag === "FREIGHT" || tag === "CUSTOMS" ? "SHIPMENT" : tag === "OVERHEAD" ? "OVERHEAD" : undefined,
     number: row.number,
     counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller },
@@ -215,7 +215,7 @@ export function buildCostInvoice(row: StagedRow, tag: ImportTag, link: { shipmen
     currency: row.currency, fxRate: row.fxRate || 1,
     netAmount: net, vatRate,
     positions: [], links,
-    paymentStatus: "Draft", paidAmount: 0,
+    paymentStatus: "Issued", paidAmount: 0,   // v6.99.120 (AUD-18, owner rule 11): a received invoice, open until the BANK clears it — Fakturownia's paid flag is never read
     notes: `Imported from Fakturownia${row.description ? ` — ${row.description}` : ""}`,
     attachment: null, creditNoteIds: [], allocation: null,
     fakturownia: { exported: false, fktId: row.fktId ?? null },

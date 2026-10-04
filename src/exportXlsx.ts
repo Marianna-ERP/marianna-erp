@@ -1,3 +1,4 @@
+import { localTodayISO } from "./dates";
 import { statusWord } from "./format";
 // ── v6.99.0: EXCEL EXPORT — every list exports what you see (rows as filtered, columns as shown) ──
 import * as XLSX from "xlsx";
@@ -10,7 +11,7 @@ export function exportRowsToXlsx(filename: string, rows: any[], columns: XlsxCol
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
   XLSX.writeFile(wb, filename.endsWith(".xlsx") ? filename : `${filename}.xlsx`);
 }
-export const stamp = () => new Date().toISOString().slice(0, 10);
+export const stamp = () => localTodayISO();   // v6.99.122 (AUD-09)
 
 /** v6.99.3: the Vega Pro SALES REPORT in exactly their sheet layout (owner-supplied template). */
 export function exportVegaProSalesReport(meta: { completionDate: string; shipmentRef: string; poNumber: string }, rows: Array<{ item: string; soldKg: number; unitEUR: number; amountEUR: number }>, commission: { pct: number; eur: number }, filename?: string): void {

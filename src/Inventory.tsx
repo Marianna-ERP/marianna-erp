@@ -5,7 +5,6 @@ import { lotAvailabilityByGrade } from "./so.domain";
 import { receiptMovement, gradeSplit, inspectionTotals, defectsFor, DEFECT_CATEGORIES, plateMismatch, inspectionVerdict, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, lotReceiptDate, inspectionQtyNote } from "./seasonOps.domain";
 import { SmallButton, ActionButton, DocLink } from "./ui";
 import DateInput from "./DateInput";
-import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
 import { claimsForLot } from "./claims.domain";
 import { fmtNum, statusWord } from "./format";
 import { Card, Lbl, useConfirm, DocRef, cancelledDocSet} from "./ui";
@@ -14,15 +13,14 @@ import { lotReservationsForStock, productsMatch as domainProductsMatch, soClient
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { unifiedLocations, locationById } from "./locations";
-import { localTodayISO, formatDMY } from "./dates";
+import { localTodayISO, formatDMY, addDaysISO } from "./dates";
 import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
-import { settlementCostComponents } from "./consignment";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
 import { r0 } from "./format";
 import { LotDetail } from "./InventoryLot";
-import { MovementModal, SettlementModal } from "./InventoryWindows";
+import { MovementModal } from "./InventoryWindows";
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 
@@ -1063,7 +1061,7 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
   const supplier = (contacts || []).find((c: any) => (c.type === "Supplier" || (c.roles || []).includes("Supplier")) && S(c.name) && (arrival?.supplierId != null ? String(c.id) === String(arrival.supplierId) : false));
   const reportDays = num(supplier?.reportDays) || num(supplier?.agreement?.qualityReportDays) || 0;
   const arrivedAt = S(unit?.arrivedAt || unit?.deliveredAt || receipt?.date || lot.arrivalDate);
-  const dueQC = arrivedAt && reportDays ? new Date(new Date(arrivedAt).getTime() + reportDays * 86400000).toISOString().slice(0, 10) : "";
+  const dueQC = arrivedAt && reportDays ? addDaysISO(arrivedAt, reportDays) : "";   // v6.99.122 (AUD-09)
   const tile = (title: string, body: any, color = "#111") => (
     <div style={{ background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
       <div style={{ fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{title}</div>
@@ -1126,7 +1124,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
   const [showMovement, setShowMovement] = useState(false);
   const [movementMode, setMovementMode] = useState<"movement" | "quality">("movement");
   const [sortingLot, setSortingLot] = useState(null); // v6.5: lot for the sorting-event modal
-  const [settlementLot, setSettlementLot] = useState(null); // v6.6: lot for the consignment settlement modal
+  // v6.99.123 (AUD-45): the old per-lot settlement window is gone — the truck settlement (PO view) is the one settlement
   const [editingMovement, setEditingMovement] = useState(null);
   const [showReturn, setShowReturn] = useState(false); // v6.18.12 (#4): return-to-warehouse modal
   const [showInspection, setShowInspection] = useState(false);
@@ -1258,15 +1256,8 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
     setShowReturn(false);
   }
 
-  async function deleteMovement(movId) {
-    if (!(await uiConfirm({ tone: "danger", title: "Delete movement", message: "Stock will be recalculated.", confirmLabel: "Delete" }))) return;
-    setLots(prev => prev.map(l => {
-      if (l.id !== selected.id) return l;
-      const baseLocationId = l.baseLocationId ?? (l.movements?.[0]?.fromId ?? l.locationId);
-      const movements = (l.movements || []).filter(m => m.id !== movId);
-      return recomputeLotFromMovements({ ...l, baseLocationId }, movements);
-    }));
-  }
+  // v6.99.123 (AUD-45): deleteMovement removed — a movement is voided (kept, struck through), never erased
+
   // v6.18.17 (C): void a wrongly-entered MANUAL movement/reclass/claim. The entry is
   // kept in the lot's history (shown red, read-only) for the record, but excluded from
   // the stock recompute. System events (IN / SHIP_OUT / REVERSAL) can't be voided here —
@@ -1338,9 +1329,10 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
       });
       return;
     }
-    if (!(await uiConfirm({ tone: "danger", title: `Delete lot ${lotNo}?`, message: "This permanently removes it from inventory.", confirmLabel: "Delete lot" }))) return;
+    if (!(await uiConfirm({ tone: "danger", title: `Delete lot ${lotNo}?`, message: "The lot stays on record, struck through and read-only, out of stock and totals.", confirmLabel: "Delete lot" }))) return;   // v6.99.126 (AUD-44): soft, as every other record
 
-    setLots(prev => prev.filter(l => l.id !== selected.id));
+    setLots(prev => prev.map(l => l.id === selected.id ? { ...l, status: "Cancelled", cancelledAt: localTodayISO(), physicalKg: 0 } : l));
+    recordAudit({ module: "Inventory", docType: "Lot", docNumber: String(lotNo), action: "deleted", summary: `${lotNo} deleted (kept on record, struck through)` });
     setSelectedId(null);
     setView("list");
   }
@@ -1359,42 +1351,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
         }} />}
 
         {showReturn && selected && <ReturnModal lot={selected} contacts={extContacts} onCancel={() => setShowReturn(false)} onConfirm={returnToWarehouse} />}
-        {settlementLot && <SettlementModal lot={lots.find(l => l.id === settlementLot.id) || settlementLot} orders={liveSOs} contacts={extContacts} pos={extPOs}
-          onCancel={() => setSettlementLot(null)}
-          onSave={(settlement, close) => {
-            // Batch 5c (BP-38/31): a closed settlement is a NUMBERED DOCUMENT.
-            if (close && !settlement.number) {
-              settlement = { ...settlement, number: nextSettlementNumber(lots, new Date().getFullYear()) };
-            }
-            // Auto-draft the commission invoice into the Invoices registry (idempotent:
-            // skip if an invoice already links to this settlement number).
-            if (close && extSetInvoices) {
-              const setNo = settlement.number;
-              const lotForDraft = lots.find(l => l.id === settlementLot.id) || settlementLot;
-              const po = (extPOs || []).find((p: any) => p.number === lotForDraft.poRef) || null;
-              extSetInvoices((prev: any[]) => {
-                const exists = (prev || []).some((inv: any) => (inv.links || []).some((lk: any) => lk.type === "SET" && lk.number === setNo));
-                if (exists) return prev;
-                const draft = buildCommissionInvoiceDraft(lotForDraft, settlement, po, { nextId, todayISO: localTodayISO });
-                return [draft, ...(prev || [])];
-              });
-            }
-            setLots(prev => prev.map(l => {
-              if (l.id !== settlementLot.id) return l;
-              let next = { ...l, settlement };
-              if (close) {
-                const comps = settlementCostComponents(l, settlement.producerInvoiceAmountPLN, settlement.finalCommissionPLN ?? settlement.expectedCommissionPLN, settlement.producerInvoiceNo, settlement.commissionInvoiceNo);
-                // Replace-by-ref: drop any prior settlement components for THIS lot
-                // (so re-closing a corrected settlement rewrites cleanly and never
-                // double-counts), then add the fresh pair.
-                const compSources = new Set(comps.map((c: any) => c.source));
-                const withoutPrior = (l.costs || []).filter((c: any) => !compSources.has(c.source));
-                next = { ...next, costs: [...withoutPrior, ...comps] };
-              }
-              return next;
-            }));
-            if (close) setSettlementLot(null);
-          }} />}        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
+        {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
           season={{ lots, orders: liveSOs, shipments, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
           pos={extPOs}
@@ -1405,7 +1362,6 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
           onMove={() => { setEditingMovement(null); setMovementMode("movement"); setShowMovement(true); }}
           onQualityIssue={() => window.dispatchEvent(new CustomEvent("marianna:open-inspection"))}   // v6.99.17 (A-R13-10): "Report quality issue" = the Quality inspection (one form); a claim follows from it
           onEditMovement={(m: any) => { setEditingMovement(m); setMovementMode(["DAMAGE", "RECLASS"].includes(m.type) ? "quality" : "movement"); setShowMovement(true); }}
-          onDeleteMovement={deleteMovement}
           onVoidMovement={voidMovement}
           onInspect={() => window.dispatchEvent(new CustomEvent("marianna:open-inspection"))}
           onReturn={() => setShowReturn(true)}
@@ -1440,7 +1396,6 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
           shipments={extShipments}
           contacts={extContacts}
           onRecordSorting={(l) => setSortingLot(l)}
-          onOpenSettlement={(l) => setSettlementLot(l)}
           onOpenClaim={(l) => {
             // v6.63.0 (D-13): one claims UI — pre-filled with the lot, its PO,
             // the producer and the purchase invoice.

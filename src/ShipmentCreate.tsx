@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
 import { SmallButton, ActionButton } from "./ui";
 import { isCancelled } from "./cancellation.domain";
-import { formatDMY } from "./dates";
+import { formatDMY, localTodayISO } from "./dates";
 import { nextId } from "./ids";
 import { appendSourceGoods } from "./shipments.domain";   // v6.99.94
 import { placeForPrint } from "./locations";
@@ -202,7 +202,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     // v6.99.94 (A-GR-2): a groupage takes every ticked order's goods; no single governing order — each goods row keeps its own SO / PO / lot
     if (moreRefs.length) {
       let g: any = sh; const kind = sourceType === "PO" ? "PO" : "SO";
-      moreRefs.forEach(no => { const doc = (kind === "PO" ? (pos || []) : (orders || [])).find((x: any) => String(x.number) === String(no)); if (doc) g = appendSourceGoods(g, kind, doc, lots || [], { todayISO: () => new Date().toISOString().slice(0, 10), nextId }); });
+      moreRefs.forEach(no => { const doc = (kind === "PO" ? (pos || []) : (orders || [])).find((x: any) => String(x.number) === String(no)); if (doc) g = appendSourceGoods(g, kind, doc, lots || [], { todayISO: () => localTodayISO(), nextId }); });
       g = { ...g, groupage: true, ...(kind === "SO" ? { governingSoRef: null } : {}) };
       onCreate(g); return;
     }

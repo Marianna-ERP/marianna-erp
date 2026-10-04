@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 // ══ v6.99.82 (A-PS-3, owner 29 Sept) — THE PLANNING SHEET KEEPS THE CELL YOU CLICKED ══
 // The owner: "I can move between cells with the mouse, but typing does nothing." A cell component declared inside the
 // sheet was re-created on every re-render of the sheet — and moving the focus outline IS a re-render — so the input

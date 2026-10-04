@@ -340,7 +340,7 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
   // ×(1+VAT) → quantity×unitPrice×(1+VAT) → the invoice's own gross when it is
   // a single-position document — and never sends a blank.
   const positions = arr<InvoicePosition>(inv.positions).map((p, _i, all) => {
-    const qty = n(p.quantity) || 1;
+    const qty = n(p.quantity);   // v6.99.116 (AUD-14): a quantity of 0 is 0 — never turned into 1
     const vat = n(p.vatRate ?? inv.vatRate);
     let gross = p.grossTotal != null ? r2(n(p.grossTotal)) : 0;
     if (!gross && (p as any).netTotal != null) gross = r2(n((p as any).netTotal) * (1 + vat / 100));
@@ -352,7 +352,7 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
       quantity: qty,
       quantity_unit: p.unit || "kg",
       tax: vat,
-      total_price_gross: gross || r2(n(inv.grossAmount) / (all.length || 1)),
+      total_price_gross: gross || (all.length === 1 ? r2(n(inv.grossAmount)) : 0),   // v6.99.116 (AUD-14): the invoice total is never spread over lines — an unpriced line stays 0 and blocks the push (pushBlockers)
     };
   }).filter(p => n(p.total_price_gross) > 0);
   // If no per-line positions exist (migrated invoices), fall back to one summary line.
@@ -429,4 +429,16 @@ export function noteSignedPLN(note: FinanceNote): number {
   const issuedBy = String((note as any).issuedBy || "").toUpperCase();
   const legacyDefault = note.direction === "incoming" ? "COUNTERPARTY" : "US";
   return (issuedBy === "US" || issuedBy === "COUNTERPARTY") && issuedBy !== legacyDefault ? -base : base;
+}
+
+/** v6.99.116 (AUD-14): what stops an invoice from being pushed — every line must carry its own price; the lines must add up to the invoice. */
+export function pushBlockers(inv: Invoice): string[] {
+  const out: string[] = []; const ps = arr<InvoicePosition>(inv.positions);
+  if (ps.length > 1) {
+    ps.forEach((p, i) => { const priced = n((p as any).grossTotal) > 0 || n((p as any).netTotal) > 0 || (p as any).unitPrice != null || (p as any).netPrice != null; if (!priced) out.push(`line ${i + 1} (${String(p.name || "").trim() || "unnamed"}) has no price`); if (!(n(p.quantity) > 0)) out.push(`line ${i + 1} (${String(p.name || "").trim() || "unnamed"}) has no quantity`); });
+    const payload = buildFakturowniaPayload(inv, { apiToken: "x" } as any).invoice.positions;
+    const sum = r2(payload.reduce((a: number, x: any) => a + n(x.total_price_gross), 0)); const g = r2(n(inv.grossAmount));
+    if (g > 0 && Math.abs(sum - g) > 0.02) out.push(`the lines add up to ${sum.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} but the invoice says ${g.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}`);
+  }
+  return out;
 }

@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 // ══ v6.99.70 (A-BK-1/2) — BACKUP FOLDER ENGINE against a simulated folder (jsdom + ts-node) ══
 // The pure rules are pinned in audit-roundtrip (block 76). This suite drives the BROWSER part — src/autoBackup.ts — end to
 // end: the folder the user picks is simulated with the same calls Chrome offers (getFileHandle, createWritable, entries,

@@ -48,7 +48,8 @@ export function deadlineTiles(lots: any[], inspections: any[], contacts: any[], 
 
 // ── DA-5 · OWNER CONTROLS ────────────────────────────────────────────────────
 export function ownerTiles(closedPeriods: any[], poSettlements: any[], financeNotes: any[], risk: Array<{ client: string; usagePct: number | null; maxOverdueDays: number }>, todayISO: string): Tile[] {
-  const prev = (() => { const d = new Date(todayISO.slice(0, 4) + "-" + todayISO.slice(5, 7) + "-01T00:00:00"); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); })();
+  // v6.99.115 (AUD-07): the previous month from the YYYY-MM text itself — the Date round trip wrote the UTC month, two months back in Poland
+  const prev = (() => { const y = +todayISO.slice(0, 4), m = +todayISO.slice(5, 7); const pm = m === 1 ? 12 : m - 1, py = m === 1 ? y - 1 : y; return `${py}-${String(pm).padStart(2, "0")}`; })();
   const monthOpen = (closedPeriods || []).some(c => c.period === prev) ? [] : [`${prev} not closed`];
   const runPending = (poSettlements || []).filter(s => s.status === "Closed" && !s.commissionInvoiceId).map(s => s.poNumber);
   const expectedNotes = (financeNotes || []).filter(n => n && n.status === "Expected").map(n => `${n.partyName} ${num(n.amount).toLocaleString("pl-PL")} ${n.currency}`);

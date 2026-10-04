@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 // ══ RENDER SMOKE TEST — every module's list AND detail rendered against the OWNER'S OWN DATA (react-dom/server + jsdom) ══
 // Purpose (owner, 14 Sept): no batch may break another. A crash like "cannot read properties of null" must be caught here, not in production.
 const path = require("path"); const fs = require("fs");

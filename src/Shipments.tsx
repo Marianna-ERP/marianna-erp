@@ -14,7 +14,6 @@ import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain
 import { shipmentPostBlockReason, newestFirst } from "./moduleGuards.domain";
 import { overShipReport, derivedBillingStatus } from "./shipments.domain";
 import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, documentRegister, costLinesByCarrierLeg, carrierOfUnit, shipmentDates } from "./shipmentModel.domain";
-import LoadPlans from "./LoadPlans";
 
 import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, useConfirm } from "./ui";
@@ -1242,8 +1241,6 @@ export function ChecklistLine({ ok, label, warnText = "" }: any) {
 
 export default function Shipments({ archive = null,
   shipments: extShipments,
-  loadPlans = [],
-  setLoadPlans = null,
   packagingTypes = [],
   setClaims = null,
   setShipments: extSetShipments,
@@ -1299,10 +1296,7 @@ export default function Shipments({ archive = null,
   const [tab, setTab] = useState("shipments");
   // Which load plan a shipment belongs to, so the list can badge it — a truck
   // that is part of a bigger export should say so where you scan for it.
-  const planNumberFor = React.useCallback((shipmentNumber: string) => {
-    const p = (loadPlans || []).find((x: any) => (x.shipmentRefs || []).includes(shipmentNumber));
-    return p ? p.number : "";
-  }, [loadPlans]);
+  // v6.99.124 (A-LP-1): load plans retired — no plan number on the list any more
   // v6.99.42: a shipment can be opened from another module ("Open" on the PO's supplier-truck box)
   const [showCustomsImport, setShowCustomsImport] = useState(false);   // v6.99.72 (A-CU-3)
   const [editShipment, setEditShipment] = useState<any>(() => (initialSelectedNumber ? (extShipments || []).find((x: any) => String(x.number) === String(initialSelectedNumber)) || null : null));
@@ -1383,7 +1377,6 @@ export default function Shipments({ archive = null,
     if (__isNew) {
       setShipments(prev => [clean, ...prev]);
       setSelectedId(clean.id);
-      linkShipmentToDocs(clean);
       recordAudit({ module: "Shipments", docType: "Shipment", docNumber: clean.number, action: "created", summary: `Shipment created (${clean.mode || "?"} · ${clean.status || "Draft"})` });
       setToast(`${clean.number} created.`);
     } else {
@@ -1420,7 +1413,6 @@ export default function Shipments({ archive = null,
     delete (created as any).__isNew;
     setShipments(prev => [created, ...prev]);
     setSelectedId(created.id);
-    linkShipmentToDocs(created);
     recordAudit({ module: "Shipments", docType: "Shipment", docNumber: created.number, action: "created", summary: `Shipment created as Draft (${created.mode || "?"}) — opened for arranging` });
     setEditShipment(created);
   }
@@ -1441,12 +1433,7 @@ export default function Shipments({ archive = null,
     return updated;
   }
 
-  function linkShipmentToDocs(_sh) {
-    // v6.63.0 (D-15): retired. BP-49 made linked documents COMPUTED — the PO/SO
-    // screens now derive them from live data (documents.domain), so writing the
-    // legacy stored arrays only created half-alive state that went stale on
-    // cancel. The legacy arrays are read-only compat until stripped at migration.
-  }
+
 
   function markConfirmationSent(sh) {
     const next = updateShipment(sh.id, s => ({ ...s, confirmationStatus: "Sent", confirmationSentAt: new Date().toISOString(), documents: (s.documents || []).map(d => d.type === "Transport order" ? { ...d, status: "Sent", ref: s.transportOrderNo || s.number, date: todayISO() } : d) }));
@@ -1634,7 +1621,6 @@ export default function Shipments({ archive = null,
       return patch;
     });
     if (next) {
-      linkShipmentToDocs(next);
       recordAudit({ module: "Shipments", docType: "Shipment", docNumber: next.number, action: status === "Cancelled" ? "cancelled" : "status", summary: status === "Cancelled" ? "Cancelled — inventory postings & allocated costs reversed" : `Status → ${status}` });
       // v6.35.5: cancellation reverses whatever this shipment posted to inventory.
       if (status === "Cancelled") {
@@ -1694,8 +1680,7 @@ export default function Shipments({ archive = null,
   }
 
   function sendToBilling(sh) {
-    const next = updateShipment(sh.id, s => ({ ...s, billingStatus: "Ready for supplier invoice" }));
-    if (next) linkShipmentToDocs(next);
+    updateShipment(sh.id, s => ({ ...s, billingStatus: "Ready for supplier invoice" }));
     setToast(`${sh.number} sent to billing queue. Expected logistics invoice(s): ${fmtMoney(shipmentCostPLN(sh), "PLN")}.`);
   }
 
@@ -1767,7 +1752,6 @@ export default function Shipments({ archive = null,
       // v6.79.0 (W-1): derived — only a Draft is promoted to Confirmed; Shipped/Delivered come from the shipments.
       setOrders(prev => prev.map(o => (sh.soRefs || []).includes(o.number) ? { ...o, status: o.status === "Draft" ? "Confirmed" : o.status } : o));
     }
-    linkShipmentToDocs(sh);
     setToast(`${sh.number} inventory movement applied where matching lot refs exist.`);
   }
 
@@ -1793,7 +1777,7 @@ export default function Shipments({ archive = null,
             movement several shipments add up to — five trucks and four
             containers are one export, nine shipments. */}
         <div style={{ display: "flex", gap: 6, marginTop: 14 }}>
-          {[["shipments", `Shipments (${filtered.length})`], ["plans", `Load plans (${(loadPlans || []).length})`]].map(([k, label]) => (
+          {[["shipments", `Shipments (${filtered.length})`]].map(([k, label]) => (
             <button key={k} onClick={() => setTab(k)} style={{
               border: "none", background: "transparent", cursor: "pointer", padding: "6px 2px", marginRight: 14,
               fontSize: 12.5, fontWeight: tab === k ? 800 : 600, color: tab === k ? "#111" : "#94A3B8",
@@ -1808,11 +1792,7 @@ export default function Shipments({ archive = null,
 
     {toast && <div style={{ margin: "12px 28px 0", background: "#F0FDF4", border: "1px solid #BBF7D0", color: "#166534", borderRadius: 9, padding: "9px 12px", fontSize: 12, display: "flex", justifyContent: "space-between" }}><span>{toast}</span><ActionButton action="close" onClick={() => setToast("")} /></div>}
 
-    {tab === "plans" && setLoadPlans && (
-      <LoadPlans loadPlans={loadPlans} setLoadPlans={setLoadPlans} shipments={shipments} contacts={contacts}
-        costPLN={shipmentCostPLN}
-        onOpenShipment={(numRef: string) => { const hit = shipments.find((x: any) => x.number === numRef); if (hit) { setSelectedId(hit.id); setTab("shipments"); } }} />
-    )}
+    {/* v6.99.124 (A-LP-1, owner): the Load plans tab retired — the shipment editor's trucks, containers and forwarder reports do what it did */}
 
     <div style={{ flex: 1, overflow: "hidden", padding: "16px 28px 24px", display: tab === "shipments" ? "block" : "none" }}>
       <div style={{ height: "100%", display: "grid", gridTemplateColumns: "390px 1fr", gap: 16 }}>
@@ -1822,7 +1802,7 @@ export default function Shipments({ archive = null,
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}</Sel></div>
           </div>
           <div style={{ overflow: "auto", flex: 1 }}>
-            {filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} planNumber={planNumberFor(sh.number)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
+            {filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>

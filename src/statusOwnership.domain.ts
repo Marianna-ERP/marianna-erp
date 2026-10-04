@@ -72,10 +72,12 @@ export function soShipmentProgress(order: any, shipments: any[]): SoShipmentProg
   // that PO's goods with no SO of their own — the supplier's truck created from the PO (SHP-2026-0036 for SO-2026-0026 never
   // counted, so the order could never be invoiced). Only rows with no soRef are counted, capped at what the SO sources.
   const srcPOs = new Set((order?.items || []).filter((it: any) => S(it.sourceType) === "PO" && S(it.sourceRef)).map((it: any) => S(it.sourceRef)));
+  const srcLots = new Set((order?.items || []).filter((it: any) => S(it.sourceType) === "STOCK" && S(it.sourceRef)).map((it: any) => S(it.sourceRef)));   // v6.99.127 (A-ONE-1): a sale names its lots
   (shipments || []).filter(LIVE).forEach(sh => {
     const own = (sh.goods || []).filter((g: any) => S(g.soRef) === soNo);
     const viaPO = !own.length && srcPOs.size && !(sh.soRefs || []).length ? (sh.goods || []).filter((g: any) => !S(g.soRef) && srcPOs.has(S(g.poRef))) : [];
-    const rows = own.length ? own : viaPO;
+    const viaLot = !own.length && !viaPO.length && srcLots.size && !(sh.soRefs || []).length ? (sh.goods || []).filter((g: any) => !S(g.soRef) && srcLots.has(S(g.lotRef))) : [];
+    const rows = own.length ? own : (viaPO.length ? viaPO : viaLot);
     // A shipment with no per-row soRef but naming this order in its header still
     // carries it — older shipments were built that way.
     const kg = rows.length

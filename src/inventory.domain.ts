@@ -72,6 +72,9 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
   } else if (ordered.length === 0 && lot.expectedKg) {
     status = "Expected";
   }
+  // v6.99.111 (AUD-38): a voided movement is history, not nothing — it stays on the lot with its reason; only the arithmetic above skipped it
+  const voided = [...movements].filter(m => m && m.voided);
+  const all = [...ordered, ...voided].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || (a.id || 0) - (b.id || 0));
   return { ...lot,
-    overIssuedKg, movements: ordered, receivedKg, physicalKg, damagedKg, wasteKg, claimedKg, locationId, status };
+    overIssuedKg, movements: all, receivedKg, physicalKg, damagedKg, wasteKg, claimedKg, locationId, status };
 }

@@ -394,7 +394,7 @@ export function beforeReceiptWarning(lot: any, dateISO: any): string {
 const isClientCheck = (x: any) => /client|customer|destination|arrival/i.test(String(x?.context || x?.stage || ""));
 /** The delivered kilos of a direct lot per the client's latest QC report (in kg; boxes converted when the box weight is known). */
 export function clientReportKg(lotNumber: string, inspections: any[], lot?: any): number | null {
-  const mine = (inspections || []).filter((x: any) => String(x?.lotNumber) === String(lotNumber) && isClientCheck(x) && num(x.orderedQty) > 0)
+  const mine = (inspections || []).filter((x: any) => x && x.status !== "Cancelled" && String(x?.lotNumber) === String(lotNumber) && isClientCheck(x) && num(x.orderedQty) > 0)
     .sort((a: any, b: any) => String(b.date || b.createdAt || "").localeCompare(String(a.date || a.createdAt || "")));
   const x = mine[0]; if (!x) return null;
   if (String(x.unit || "kg") === "boxes") { const kpb = num(lot?.kgPerBox) || num(x.kgPerBox); return kpb > 0 ? Math.round(num(x.orderedQty) * kpb) : null; }

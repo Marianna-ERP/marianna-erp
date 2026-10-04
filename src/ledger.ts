@@ -9,7 +9,7 @@ import { paidFromEvents, notesTotalsAdjustment } from "./payments.domain";
 
 export type LedgerDirection = "receivable" | "payable";
 
-export interface LedgerItem {
+export interface LedgerItem { grossPLN?: number; paidPLN?: number;
   ref: string;                 // stable id, e.g. "SINV:FV2026/05/1" or "WHINV:123"
   direction: LedgerDirection;
   kind: string;                // "Sales invoice" | "Producer payout" | "Warehouse invoice" | "Cost invoice" | "PO purchase"
@@ -60,7 +60,7 @@ export interface LedgerInputs {
 export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: LedgerTotals } {
   const today = inp.todayISO;
   const settled = new Set((inp.settledRefs || []).map(String));
-  const fktPaid = inp.fakturowniaPaid || {};
+  // v6.99.121 (rule 11): inp.fakturowniaPaid is no longer read — the bank is the source of payment
   const items: LedgerItem[] = [];
 
   // ── INVOICES (single source of truth) ───────────────────────────────────────
@@ -71,7 +71,7 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
   // so the totals match what they were — but edits/payments/new invoices made in the
   // Invoices module now flow straight through to the ledger and P/L.
   (inp.invoices || []).forEach((inv: any) => {
-    if (!inv || inv.paymentStatus === "Cancelled") return;
+    if (!inv || inv.paymentStatus === "Cancelled" || inv.paymentStatus === "Draft") return;   // v6.99.121 (AUD-19): a Draft is not yet a document — nothing is owed on it
     // v6.68.1 (owner ruling): a PRO-FORMA is the document an advance answers —
     // a request for money, not yet a receivable/payable. It never enters the
     // open totals; the FINAL invoice does, and the advance settles that one.
@@ -87,17 +87,20 @@ export function buildLedger(inp: LedgerInputs): { items: LedgerItem[]; totals: L
     const legacyPaid = isSales && settled.has(`SINV:${inv.number}`);
     // Batch 5b (BP-36): payments are EVENTS — paidFromEvents sums them, and
     // synthesises one event from a legacy paidAmount, so old data reads the same.
+    // v6.99.121 (AUD-19/20, owner rule 11): paid = payments recorded in Marianna (bank matches or hand-recorded) — Fakturownia's paid flag is not read;
+    // an open item carries what is still OUTSTANDING, not the full gross (the same figure the cash projection and statements use)
+    const paidPLN = r2(paidFromEvents(inv) * (n(inv.fxRate) || 1));
     const isPaid = inv.paymentStatus === "Paid"
-      || (gross > 0 && paidFromEvents(inv) * (n(inv.fxRate) || 1) >= gross - 0.01)
-      || settled.has(ref) || legacyPaid
-      || fktPaid[String(inv.number)] === true;
+      || (gross > 0 && paidPLN >= gross - 0.01)
+      || settled.has(ref) || legacyPaid;
+    const openPLN = isPaid ? 0 : Math.max(0, r2(gross - paidPLN));
     items.push({
       ref, direction: isSales ? "receivable" : "payable",
       kind: isSales ? "Sales invoice" : (inv.category === "WAREHOUSE" ? "Warehouse invoice" : inv.category === "PURCHASE" ? "PO purchase" : "Cost invoice"),
       counterparty: inv.counterparty?.name || "—",
       documentNo: inv.number || inv.fakturownia?.legalNumber || String(inv.id),
       date: inv.issueDate || inv.saleDate || "", dueDate: inv.dueDate || "",
-      amountPLN: gross, currency: inv.currency || "PLN",
+      amountPLN: openPLN || gross, currency: inv.currency || "PLN", grossPLN: gross, paidPLN,
       amountOrig: r2(n(inv.grossAmount) || n(inv.netAmount) || gross),
       status: classify(inv.dueDate, isPaid, today),
       sourceModule: "Invoices", note: (inv.links || []).map((l: any) => l.number).filter(Boolean).join(", ") || inv.source || "",

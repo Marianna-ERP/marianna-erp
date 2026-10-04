@@ -1,3 +1,4 @@
+import { addDaysISO, localISO } from "./dates";
 // ─────────────────────────────────────────────────────────────────────────────
 // v6.37.0 — SCHEMA MIGRATION 2: retirement of the legacy "flow" model.
 //
@@ -90,7 +91,7 @@ function bakeJourney(lot: any): any[] {
     if (load && arrive && n > 1) {
       const t0 = new Date(load).getTime();
       const t1 = new Date(arrive).getTime();
-      plannedDate = new Date(t0 + ((t1 - t0) * i) / (n - 1)).toISOString().split("T")[0];
+      plannedDate = addDaysISO(localISO(new Date(t0)), Math.round(((t1 - t0) * i) / (n - 1) / 86400000));   // v6.99.122: whole days on the parts
     } else if (i === 0) plannedDate = load;
     else if (i === n - 1) plannedDate = arrive;
     return { seq: i + 1, kind: st.kind, label: st.label, ownership: frozenOwnership(tpl, i), plannedDate, actualDate: null, status: "pending" };

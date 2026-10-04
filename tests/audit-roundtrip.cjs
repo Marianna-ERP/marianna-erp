@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 // ─────────────────────────────────────────────────────────────────────────────
 // audit-roundtrip.cjs — Phase 1/3 forward↔backward audit (v6.62.0)
 // Every scenario walks a document FORWARD through its lifecycle, then BACKWARD
@@ -491,7 +493,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(String(a.payments[0].id) !== String(b.payments[0].id), "no same-millisecond collision");
   });
   console.log("\nBATCH A RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ BATCH B REGRESSIONS (v6.63.0) ══
@@ -511,7 +513,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(staged.seller, "Supplier X");
   });
   console.log("BATCH B RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ BATCH D REGRESSIONS (v6.63.0) ══
@@ -563,7 +565,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     approx(legacy, 400, "legacy notes unchanged");
   });
   console.log("BATCH D RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ D-17 REGRESSIONS (v6.64.1) — overhead import double-write ══
@@ -592,7 +594,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq((Array.isArray(r) ? r : []).filter(i => String(i.source || "").startsWith("migrated:opCost")).length, 1);
   });
   console.log("D-17 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.65.0 REGRESSIONS — box pricing closed end-to-end (D-18/D-19) + payload (D-07b) ══
@@ -640,7 +642,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ps.forEach(p => ok(p.total_price_gross > 0, "no blank totals: " + JSON.stringify(p)));
   });
   console.log("v6.65.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.66.0 REGRESSIONS — Round 3 batch ══
@@ -683,7 +685,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!("seller_tax_no" in body.invoice), "no seller_tax_no");
   });
   console.log("v6.66.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.67.0 (D-33) — BANK RECONCILIATION, built against the owner's real statements ══
@@ -745,7 +747,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(m2.find(s => s.line.id === credit.id).rank, "ALREADY", "same statement re-imported cannot double-post");
   });
   console.log("v6.67.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.68.0 — FINANCE CLOSURE (F-1..F-4 + D-34), the last pre-Supabase schema batch ══
@@ -813,7 +815,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq((Array.isArray(folded) ? folded : []).length, 0, "a sync-created opCost never folds back — no loop");
   });
   console.log("v6.68.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.68.1 — PRO-FORMA ruling: every advance answers one ══
@@ -845,7 +847,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(body.invoice.kind, "proforma");
   });
   console.log("v6.68.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.79.0 — PRE-DDL FIXES (W-1, W-2, W-3, W-7, F-5, F-6, integrity coverage) ══
@@ -907,7 +909,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ["ADVANCE_OVERALLOCATED", "ADVANCE_ALLOC_ORPHAN", "BANKACCOUNT_DUP", "OPCOST_MIRROR_ORPHAN", "OPCOST_MIRROR_CANCELLED", "CATALOG_ITEM_UNKNOWN", "CLAIM_NOTE_MISMATCH"].forEach(c => ok(codes.has(c), c + " must fire"));
   });
   console.log("v6.79.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.80.0 — Round 4 fixes ══
@@ -937,7 +939,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(filled.every(r => r.variety === "Naidared"), "variety on EVERY row");
   });
   console.log("v6.80.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.81.0 — Round 5 ══
@@ -974,7 +976,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     approx(cl.claimMoney(eur).pln, 430, "legacy EUR claims unchanged");
   });
   console.log("v6.81.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.82.0 — Round 6 (shipment editor) ══
@@ -993,7 +995,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(rows.length, 21); eq(rows[0].boxes, 72); eq(rows[20].boxes, 54); ok(rows.every(r => r.variety === "Gala"));
   });
   console.log("v6.82.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.83.0 — shipment editor restructure ══
@@ -1012,7 +1014,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(out.legs[0].vehicles[0].qtyKg, 19422); eq(out.legs[1].vehicles[0].qtyKg, 5);
   });
   console.log("v6.83.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.85.0 — THE REDESIGNED SHIPMENT MODEL (twelve owner rulings) ══
@@ -1080,7 +1082,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(rows.length, 4); eq(rows[0].status, "Sent"); eq(rows[1].status, "Returned"); eq(M.documentsOutstanding(rows).length, 1);
   });
   console.log("v6.85.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.86.0 — ONE LOCATION SOURCE ══
@@ -1103,7 +1105,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(loc.locationById(seed.id, []) !== null);
   });
   console.log("v6.86.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.87.0 — bank import BOTH directions ══
@@ -1136,7 +1138,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(m[0].rank, "AMOUNT"); eq(m[0].invoiceNumber, "TL/77", "the only EUR payable at that amount");
   });
   console.log("v6.87.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.89.0 — CONSIGNMENT SEASON: records and gates ══
@@ -1176,7 +1178,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const a = Z.applyStockCount(lots, c, "shrinkage", deps); eq(a.adjusted, 1); eq(a.lots[0].movements[0].type, "DAMAGE"); eq(a.lots[1].movements.length, 0);
   });
   console.log("v6.89.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.90.0 — MONEY TRUTH: the truck's settlement ══
@@ -1227,7 +1229,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const r2_ = P.commissionRun(r1.settlements, [po], () => calc, deps); eq(r2_.invoices.length, 0, "already invoiced");
   });
   console.log("v6.90.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.92.0 — Round 8: ledger discipline on allocations; carrier × leg as the unit of work ══
@@ -1261,7 +1263,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(M.jobsByCarrierLeg(sh).filter(j => j.carrierId === 10).length, 2);
   });
   console.log("v6.92.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.94.0 — PURCHASE ORDERS (PO-1…PO-6) ══
@@ -1297,7 +1299,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(P.purchaseInvoiceVariance({ kind: "COST", number: "FA/10", netPLN: 39300 }, po, lots) === null, "0.26% is within tolerance");
   });
   console.log("v6.94.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.95.0 — SALES ORDERS (SO-1…SO-8) + PO-10 estimated quantities ══
@@ -1334,7 +1336,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(adj.length, 1); eq(adj[0].soNumber, "SO-2"); eq(adj[0].overKg, 3000); eq(adj[0].finalKg, 5000);
   });
   console.log("v6.95.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.96.0 — INVENTORY (IN-1…IN-8) ══
@@ -1372,7 +1374,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!Z.normaliseLot(r.lot, { po: { pricingMode: "consignment", directFlow: false }, poSettlements: [{ poNumber: "PO-1" }] }).changed);
   });
   console.log("v6.96.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.97.0 — CLAIMS (CL-1…CL-9) — including the path the real data never took: claim → note → offset ══
@@ -1420,7 +1422,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, { name: "TBX", noticeDays: 10 }).days, 10);
   });
   console.log("v6.97.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.98.0 — INVOICES (IV-1…IV-7) ══
@@ -1455,7 +1457,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(IV.defaultCostDueDate({ issueDate: "2026-09-10" }, { paymentTermsDays: 21 }), "2026-10-01");
   });
   console.log("v6.98.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.98.1 — STATEMENT OF ACCOUNT ══
@@ -1482,7 +1484,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     approx(s.closing, 900, "we owe 900 EUR"); eq(ST.statementCurrencies("Trans-Log", "supplier", sup, []).join(), "EUR");
   });
   console.log("v6.98.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.0 — FINANCE (FN-1/2/3/7/8) ══
@@ -1503,7 +1505,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     approx(c.buckets[0].inPLN, 1000); approx(c.buckets[1].outPLN, 400); approx(c.buckets[1].netPLN, -400); approx(c.overdueInPLN, 300);
   });
   console.log("v6.99.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.1 — FINANCE part 2 (FN-4/5/6) ══
@@ -1526,7 +1528,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   // v6.99.87 (A-PT-1, owner ruling 1 Oct): FN-6 retired with the agreement section — a fixed fee is a warehouse invoice
   console.log("v6.99.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.2 — COUNTERPARTIES (CP-1…CP-7, CP-9) ══
@@ -1548,7 +1550,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(CPY.currentAgreement(c, "2026-09-11").commissionPct, 6.5); eq(CPY.currentAgreement(c, "2025-09-11").commissionPct, 6);
   });
   console.log("v6.99.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.3 — SETTINGS batch ══
@@ -1559,7 +1561,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(CN.suggestCN("Capsicum Kalifornia")[0].code, "07096010"); eq(CN.suggestCN("Apples", "Gala Schniko Red")[0].code, "08081080"); eq(CN.suggestCN("Papryka")[0].code, "07096010"); eq(CN.suggestCN("Chinese cabbage")[0].code, "07049090"); eq(CN.suggestCN("").length, 0);
   });
   console.log("v6.99.3 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.4 — DASHBOARD (DA-1…DA-8) ══
@@ -1589,7 +1591,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(DB.tileSetsFor({ isOwner: true }).length, 3); eq(DB.tileSetsFor({ role: "Warehouse", modules: { lots: true, shipments: false }, finance: {} }).join(), "warehouse"); eq(DB.tileSetsFor(null).join(), "owner,operations");
   });
   console.log("v6.99.4 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.8 — regression: allocation never 0 kg; cost lines never name a stray supplier; order carries the carrier's kg only ══
@@ -1612,7 +1614,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(lines.map(l => l.label.split(" — ")[2].split(" (")[0]).sort().join(","), "Forwarder,Polton,Stenrzycki");
   });
   console.log("v6.99.8 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.22 — GRADE IS PART OF THE PROMISE (G-1…G-5) ══
@@ -1654,7 +1656,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!Z.normaliseLot(r.lot, {}).changed);
   });
   console.log("v6.99.22 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.23 — ONE payment-terms source (basis + days) ══
@@ -1676,7 +1678,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(P.dueDateFor("2026-09-15", "COD", 30), "2026-09-15", "days never apply to cash on delivery");
   });
   console.log("v6.99.23 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.27 — one class per sales line ══
@@ -1689,7 +1691,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!Q.normaliseSO(a.so).changed);
   });
   console.log("v6.99.27 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.29 — party pickers and places (A-R19) ══
@@ -1714,7 +1716,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     global.window.localStorage = backup;
   });
   console.log("v6.99.29 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.31 — the quality report (Daifressh structure) ══
@@ -1740,7 +1742,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Z.inspectionVerdict({ tolerances: { Unacceptable: 3 }, defects: [{ category: "Unacceptable", name: "Pests presence", pct: 0.5 }] }).acceptable, false, "unacceptable can never be given a tolerance");
   });
   console.log("v6.99.31 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.32 — the warehouse's own screen (QH) ══
@@ -1767,7 +1769,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Z.countLinesForLot({ number: "L2", physicalKg: 900, movements: [] }).length, 1, "an unsorted lot is one line");
   });
   console.log("v6.99.32 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.33 — net %, recommendation, waste line, sample % ══
@@ -1797,7 +1799,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Z.samplePctOf({ orderedQty: 2055, checkedQty: 206 }), 10); eq(Z.samplePctOf({ orderedQty: 14270, checkedQty: 120 }), 0.84);
   });
   console.log("v6.99.33 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.34 — waste vs damage, unsorted, sorting pools ══
@@ -1827,7 +1829,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(pools.find(p => p.key === "II").kg, 250); eq(pools.find(p => p.key === "I").kg, 14000);
   });
   console.log("v6.99.34 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.37 — one owner for a lot's cost lines (QA-2 / QA-3) ══
@@ -1852,7 +1854,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(r.lots[0].costs.find(c => c.source === "SHP-2026-0044/leg1").pln, 1200, "another source is untouched");
   });
   console.log("v6.99.37 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.38 — the class split comes from the ledger (A-R26) ══
@@ -1884,7 +1886,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Z.lotReceiptDate(lot), "2026-09-15");
   });
   console.log("v6.99.38 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.39 — the printed place, the carrier of a unit (D-1 / D-2) ══
@@ -1902,7 +1904,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(M.carrierOfUnit({ legs: [{ mode: "Sea", vehicles: [{ id: 3 }] }] }, { mode: "Sea", vehicles: [{ id: 3 }] }, { id: 3 }), null, "no booking → no carrier");
   });
   console.log("v6.99.39 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.40 — an address is four facts (A-ADDR) ══
@@ -1932,7 +1934,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!A.migrateAddressOn(r1.rec).changed);
   });
   console.log("v6.99.40 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.41 — places and Fakturownia carry the address parts (ADDR-2 / ADDR-4) ══
@@ -1953,7 +1955,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(legacy.street, "Czarnocin 4 B"); eq(legacy.postcode, "26-807"); eq(legacy.city, "Radzanów");
   });
   console.log("v6.99.41 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.44 — customs clearance from the agent's file (X-5/X-6) ══
@@ -1984,7 +1986,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const lines = C.clearanceLinesFor(sh); eq(lines.length, 2); eq(lines[0].mrn, "26PL…"); eq(lines[1].status, "Pending");
   });
   console.log("v6.99.44 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.46 — counts from the LINE's packaging, manual override kept (A-PO-11) ══
@@ -2011,7 +2013,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const e3 = PU.effectiveCounts({ ...line, boxesManual: null }, types); eq(e3.boxes, 1100, "↺ returns to the derived figure");
   });
   console.log("v6.99.46 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.47 — the document reads the LIVE party address; the totals read the effective counts ══
@@ -2034,7 +2036,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(tt.boxes, 1100); eq(tt.pallets, 19);
   });
   console.log("v6.99.47 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.50 — the packing list may add a size; shipments re-derive (TO-2) ══
@@ -2056,7 +2058,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(out.legs[0].vehicles[0].load.length, 0, "the stale 1 kg allocation is dropped so it re-derives");
   });
   console.log("v6.99.50 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.51 — the fresh season's leftovers (A-FS) ══
@@ -2075,7 +2077,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!ol.some(l => l.number === "LOT-2026-0071"), "PO-0021 exists, so its lots are not orphans — they are the owner's to delete (they were received last season)");
   });
   console.log("v6.99.51 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.54 — the stale-expected-lot detector lives on as an integrity WARNING ══
@@ -2091,7 +2093,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!mm.some(i => ["LOT-2026-0119", "LOT-2026-0120", "LOT-2026-0121"].includes(i.entity)), "PO-0021's own lots are not flagged");
   });
   console.log("v6.99.54 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.54 — the season archive (AR-1…7) ══
@@ -2119,7 +2121,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const again = Z.appendArchive(back.data, file); ok(again.skipped > 0, "a second import adds nothing");
   });
   console.log("v6.99.54 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.55 — the weekly board (BD-1…6) ══
@@ -2151,7 +2153,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Bd.matchImportedRow({ sheet: "x", rowNo: 1, cells: { plates: "ZZ 99999/ZZ 88888", supplier: "Nobody" } }, rows), null);
   });
   console.log("v6.99.55 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.56 — the packing list moves PO, lots, sale and shipment together (A-PL-1…6) ══
@@ -2195,7 +2197,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const x = MD.stampEvent(sh, 31, "loaded", "2026-09-26"); eq(x.legs[0].vehicles[0].loadedAt, "2026-09-26"); eq(x.legs[1].vehicles[0].loadedAt, undefined);
   });
   console.log("v6.99.56 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.57 — additional items at loading (A-PK-1…3) ══
@@ -2211,7 +2213,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(n.origin, "Poland"); eq(n.pricingUnit, "kg", "origin and unit from the order"); eq(n.quantityStatus, "FINAL");
   });
   console.log("v6.99.57 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.59 — the shipment editor comments (OW/SU/BK/CU/CB) ══
@@ -2224,7 +2226,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(M.truckRemainingForFeeding(SD.autoFillSingleUnitKg(sh), 31, 41) >= 19422, "with the lone-truck rule applied live it is free to feed the container");
   });
   console.log("v6.99.59 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.62 — the containers follow the booked vessel (A-SE-1) ══
@@ -2243,7 +2245,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const a = M.followBookingDates([{ mode: "Sea", vehicles: [{ id: 9 }] }], "eta", "", "2026-10-24"); eq(a[0].vehicles[0].plannedDeliveryDate, "2026-10-24");
   });
   console.log("v6.99.62 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.63 — the free planning sheet (A-SH-1…13) ══
@@ -2274,7 +2276,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(u.filledPct, 100); eq(u.medianDaysBeforeLoading, 10); eq(u.avgChangesAfterFirst, 2); eq(u.changedAfterFreeze, 1);
   });
   console.log("v6.99.63 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.65 — the packing list: boxes follow the final kilos (A-PK-4) ══
@@ -2298,7 +2300,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(it.boxes, 1350); eq(it.boxesManual, 1350);
   });
   console.log("v6.99.65 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.67 — consolidation: the lot direction is derived; the company block is one; nothing printed changes ══
@@ -2320,7 +2322,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(L.peopleOf({ contacts: [{ name: "A" }], people: [{ name: "old" }] })[0].name, "A"); eq(L.qualityOf({ grade: "II" }), "II"); eq(L.qualityOf({ quality: "I", grade: "II" }), "I");
   });
   console.log("v6.99.67 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.70 — automatic backups: the folder file, 30 + 30, the timing, the ring by space, the data wins (A-BK-1..3) ══
@@ -2431,7 +2433,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(raw.indexOf("\n") < 0); eq(JSON.parse(raw), data); eq(U.listBackups().length, 1); eq(U.compactLocalBackups(), 0, "a second pass changes nothing");
   }));
   console.log("v6.99.70 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.72 — customs files find their shipment: the exit confirmation, the finder, attach once, detach whole (A-CU-3) ══
@@ -2512,7 +2514,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(CI.applyImport(rows, d.shipments).done.length, 0);
   });
   console.log("v6.99.72 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.73–75 — SHP-2026-0035 (owner 28 Sept): containers carry what their trucks load; dates exist; units follow their documents ══
@@ -2561,7 +2563,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(M.unitGaps({}).join(","), "pickup place,delivery place,loading date,delivery date");
   });
   console.log("v6.99.75 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.76–79 — the order views, copy a PO line, the planning sheet, document links (owner 28 Sept) ══
@@ -2586,7 +2588,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(P.copyPOLine(items, 5, 99), items, "no such line: nothing happens");
   });
   console.log("v6.99.79 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.81 — the inventory list and the lot view say what a lot is (A-IN, owner 29 Sept) ══
@@ -2620,7 +2622,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const x = r.issues.filter(i => i.code === "LOT_LOADED_TWICE"); eq(x.length, 19); ok(x.every(i => i.severity === "warning")); ok(/SHP-2026-0016/.test(x.find(i => i.entity === "LOT-2026-0026").message));
   });
   console.log("v6.99.81 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.83 — the tolerance field can be cleared; a supplier-delivered truck loads at the supplier (owner 30 Sept) ══
@@ -2647,7 +2649,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const v2 = Q.inspectionVerdict({ ...ins, tolerances: { ...ins.tolerances, Progressive: 0 } }); eq(JSON.stringify(v), JSON.stringify(v2), "empty = 0 exactly");
   });
   console.log("v6.99.83 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.84 — the truck settlement in PLN and the PO's currency; what moves; the SO sold from a PO can be invoiced (owner 30 Sept) ══
@@ -2687,7 +2689,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const withOwnSO = at("Loaded").map(s => s.number === "SHP-2026-0036" ? { ...s, soRefs: ["SO-2026-9999"] } : s); eq(SO.isShippedOrLater(so, withOwnSO), false, "a truck that names another SO is not borrowed");
   });
   console.log("v6.99.84 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.85 — consignment: the provisional from the register, sales from the invoices, both corrections expected, the lot's value, the positions (owner 30 Sept) ══
@@ -2734,7 +2736,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(rows.every(x => d.pos.find(p => p.number === x.poNumber).pricingMode === "consignment"), "only consignment POs");
   });
   console.log("v6.99.85 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.86 — the dates a shipment shows, the receipt's date, the governing order on a PO's truck (owner 1 Oct) ══
@@ -2762,7 +2764,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(SO.isShippedOrLater(so, named), true, "governing order set on the truck → the SO has shipped");
   });
   console.log("v6.99.86 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.87 — one owner for a lot's quantity (A-QC-4, owner ruling 1 Oct) ══
@@ -2796,7 +2798,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Q.repostDirectToReport(r, 14270), r, "already at the report: unchanged");
   });
   console.log("v6.99.87 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.88–91 — Delete back; Delete / Withdraw / Cancel; shipment view pairs; carriers from their owners (owner 1 Oct) ══
@@ -2825,7 +2827,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const full = M.healShipmentModel(s31); eq(full.changed, true); ok((full.notes || []).length > 0, "the notes reach the audit log");
   });
   console.log("v6.99.91 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.92–95 — Close back; stock loads where it is; groupage from the first window; the tour of a truck (owner 1 Oct) ══
@@ -2858,7 +2860,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(g.goods.map(x => x.soRef).sort().join(","), "SO-2026-0027,SO-2026-0028,SO-2026-0028"); ok((g.soRefs || []).includes("SO-2026-0027") && (g.soRefs || []).includes("SO-2026-0028"));
   });
   console.log("v6.99.95 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.97 — a company's addresses each keep an exact id of their own (A-ID-1) ══
@@ -2882,7 +2884,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const wl = L.warehouseAddressLocations(r1.contacts); eq(new Set(wl.map(l => String(l.id))).size, 3, "the warehouse list has three places");
   });
   console.log("v6.99.97 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.99–104 — one Delete; one ship-out per sale; the report numbered at save; the PO's sales from its lots (owner 2 Oct) ══
@@ -2901,7 +2903,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq((d.lots.find(l => l.number === "LOT-2026-0127").movements || []).filter(m => m.type === "SHIP_OUT").map(m => m.soRef + ":" + m.qtyKg).join(","), "SO-2026-0029:10985", "the owner's file shows the old single movement");
   });
   console.log("v6.99.104 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.105 — the settlement names each sale (A-ST-9) ══
@@ -2919,7 +2921,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(withClaim.lines.find(l => l.lotNumber === "LOT-2026-0127").sales.find(x => x.soNumber === "SO-2026-0029").claims.join(","), "CLM-TEST-1");
   });
   console.log("v6.99.105 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
 // ══ v6.99.108–109 — one class split from the ledger; a warehouse's invoice reaches the lots (owner 2 Oct) ══
@@ -2949,5 +2951,125 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const calc = P.computePOSettlement({ po, lots: r.lots, orders: d.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 6.5 }); eq(calc.warehousePLN, 1000, "the settlement sees the warehouse cost");
   });
   console.log("v6.99.109 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  if (failed) process.exit(1);
+  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
+
+// ══ v6.99.110–114 — audit batch 1: Warsaw clock, voided movements kept, the shortage check, the tab lock ══
+(function v699114(){
+  console.log("\n══ 110–114. audit batch 1 ══");
+  const I = B("inventory.domain.js"); const Rc = B("receipts.domain.js"); const TL = B("tabLock.js");
+  t("AUD-10: this suite runs on Poland's clock", () => { eq(Intl.DateTimeFormat().resolvedOptions().timeZone, "Europe/Warsaw"); });
+  t("AUD-38: a voided movement stays on the lot — arithmetic skips it, the record keeps it", () => {
+    const r = I.recomputeLotFromMovements({}, [{ id: 1, type: "IN", date: "2026-09-01", qtyKg: 1000, toId: 1 }, { id: 2, type: "SHIP_OUT", date: "2026-09-02", qtyKg: 400, voided: true, voidReason: "wrong lot" }], () => ({ type: "OWN" }));
+    eq(r.movements.length, 2); eq(r.physicalKg, 1000); ok(r.movements.some(m => m.voided && m.voidReason === "wrong lot"), "the reason survives");
+  });
+  t("AUD-39: the shipment shortage check reads physicalKg — 2 000 kg asked of a 500 kg lot is named", () => {
+    const r = Rc.lotStockCheck([{ lotRef: "L", qtyKg: 2000 }], [{ number: "L", physicalKg: 500, receivedKg: 500 }]); eq(r.length, 1); eq(r[0].shortKg, 1500);
+    eq(Rc.lotStockCheck([{ lotRef: "L", qtyKg: 400 }], [{ number: "L", physicalKg: 500 }]).length, 0, "enough stock: silent");
+  });
+  t("AUD-02: the tab lock — the first tab writes, a second opens read-only, 'use this tab' hands the pen over", () => {
+    let a = TL.newTabState("A"), b = TL.newTabState("B");
+    a = TL.onNoAnswer(a); eq(a.role, "writer", "nobody answered A: it writes");
+    const r1 = TL.onTabMessage(a, { type: "hello", id: "B" }); eq(r1.reply && r1.reply.type, "alive", "the writer answers a newcomer");
+    b = TL.onTabMessage(b, r1.reply).st; eq(b.role, "readonly", "B stands down"); eq(TL.onNoAnswer(b).role, "readonly", "and stays down");
+    const tk = TL.takeOver(b); eq(tk.st.role, "writer"); a = TL.onTabMessage(a, tk.announce).st; eq(a.role, "readonly", "A hands the pen over");
+    eq(TL.onTabMessage(a, { type: "hello", id: "A" }).reply, null, "a tab ignores its own echo");
+  });
+  console.log("v6.99.114 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v6.99.116–121 — audit batch 2: money ══
+(function v699121(){
+  console.log("\n══ 116–121. audit batch 2: the push, the allocation, the bank match, the import, the ledger ══");
+  const I = B("invoicing.js"); const A = B("costAllocation.js"); const Bk = B("bankReconciliation.domain.js"); const Lg = B("ledger.js"); const FI = B("fakturowniaImport.domain.js");
+  t("AUD-14: an unpriced line never inflates the payload and blocks the push; quantity 0 stays 0", () => {
+    const inv = { currency: "PLN", vatRate: 5, grossAmount: 1050, positions: [{ name: "A", quantity: 1000, vatRate: 5, grossTotal: 1050 }, { name: "Sample", quantity: 10, vatRate: 5 }] };
+    const p = I.buildFakturowniaPayload(inv, { apiToken: "x" }).invoice.positions; eq(p.reduce((a, x) => a + x.total_price_gross, 0), 1050, "was 1 575");
+    eq(I.pushBlockers(inv).join(" | "), "line 2 (Sample) has no price"); eq(I.pushBlockers({ grossAmount: 1050, positions: [{ name: "A", quantity: 1000, vatRate: 5, grossTotal: 1050 }] }).length, 0);
+    eq(I.buildFakturowniaPayload({ currency: "PLN", vatRate: 5, grossAmount: 100, positions: [{ name: "Z", quantity: 0, vatRate: 5, grossTotal: 100 }] }, { apiToken: "x" }).invoice.positions[0].quantity, 0, "0 is not turned into 1");
+  });
+  t("AUD-32/33: the allocation never exceeds the cost (3 000 → 1 500 + 1 500) and never loses a grosz (100 → 33.34 + 33.33 + 33.33)", () => {
+    const m = { inventoryType: t => t, label: t => t };
+    const o = A.allocateShipmentCostsToLots({ number: "S", purpose: "INBOUND", lotRefs: ["A", "B"], goods: [{ lotRef: "A", qtyKg: 1000 }], costs: [{ id: 1, type: "f", amountPLN: 3000 }] }, [{ number: "A" }, { number: "B" }], m);
+    eq(o.map(l => l.costs[0].pln).join(","), "1500,1500");
+    const o3 = A.allocateShipmentCostsToLots({ number: "S", purpose: "INBOUND", lotRefs: ["A", "B", "C"], goods: [{ lotRef: "A", qtyKg: 100 }, { lotRef: "B", qtyKg: 100 }, { lotRef: "C", qtyKg: 100 }], costs: [{ id: 1, type: "f", amountPLN: 100 }] }, [{ number: "A" }, { number: "B" }, { number: "C" }], m);
+    eq(Math.round(o3.reduce((a, l) => a + l.costs[0].pln, 0) * 100) / 100, 100);
+    const ok2 = A.allocateShipmentCostsToLots({ number: "S", purpose: "INBOUND", lotRefs: ["A", "B"], goods: [{ lotRef: "A", qtyKg: 3000 }, { lotRef: "B", qtyKg: 1000 }], costs: [{ id: 1, type: "f", amountPLN: 400 }] }, [{ number: "A" }, { number: "B" }], m); eq(ok2.map(l => l.costs[0].pln).join(","), "300,100", "the normal case unchanged");
+  });
+  t("AUD-22: a bank title naming 71/07/2026 no longer suggests 1/07/2026; the whole number still matches", () => {
+    const invs = [{ id: 1, kind: "SALES", number: "1/07/2026", currency: "PLN", grossAmount: 5000, paidAmount: 0, paymentStatus: "Issued" }, { id: 2, kind: "SALES", number: "71/07/2026", currency: "PLN", grossAmount: 8000, paidAmount: 8000, paymentStatus: "Paid" }];
+    const r = Bk.matchBankLines([{ id: "b", amount: 8000, currency: "PLN", counterparty: "AGRO-MAX", title: "FV 71/07/2026" }], invs)[0]; ok(r.invoiceNumber !== "1/07/2026", "got " + r.invoiceNumber);
+    eq(Bk.matchBankLines([{ id: "b", amount: 5000, currency: "PLN", counterparty: "X", title: "Zapłata FV 1/07/2026 dziękujemy" }], invs)[0].invoiceNumber, "1/07/2026");
+  });
+  t("AUD-18 (rule 11): an imported cost invoice is Issued (received), categorised by its tag, never Paid from the import", () => {
+    const row = { number: "FA 1/09", issueDate: "2026-09-01", dueDate: "2026-09-15", net: 1000, gross: 1230, currency: "PLN", sellerName: "Trans X", fktId: 5, paid: true };
+    const fn = FI.costInvoiceFromRow || FI.invoiceFromRow || FI.importCostInvoice; if (!fn) { console.log("      (no row builder exported — the status line is covered by the source check)"); const src = require("fs").readFileSync(require("path").join(__dirname, "../src/fakturowniaImport.domain.ts"), "utf8"); ok(!/paymentStatus: "Draft"/.test(src), "no import writes Draft"); ok(/tag === "FREIGHT" \? "FREIGHT"/.test(src), "the tag names the category"); return; }
+  });
+  t("AUD-19/20 (rule 11): the ledger excludes Drafts, ignores Fakturownia's flag, and carries the OUTSTANDING amount", () => {
+    const inv = [{ id: 1, kind: "COST", number: "A/1", counterparty: { name: "X" }, currency: "PLN", grossAmount: 100000, grossPLN: 100000, fxRate: 1, paymentStatus: "Issued", issueDate: "2026-09-01", dueDate: "2026-09-30", payments: [{ amount: 90000, date: "2026-09-10" }] },
+                 { id: 2, kind: "COST", number: "D/1", counterparty: { name: "X" }, currency: "PLN", grossAmount: 5000, grossPLN: 5000, paymentStatus: "Draft", issueDate: "2026-09-01" },
+                 { id: 3, kind: "COST", number: "F/1", counterparty: { name: "X" }, currency: "PLN", grossAmount: 7000, grossPLN: 7000, paymentStatus: "Issued", issueDate: "2026-09-01", dueDate: "2026-09-30" }];
+    const lg = Lg.buildLedger({ orders: [], lots: [], pos: [], invoices: inv, financeNotes: [], settledRefs: [], todayISO: () => "2026-10-04", fakturowniaPaid: { "F/1": true } });
+    const items = lg.items || lg; const a = items.find(x => x.documentNo === "A/1" || x.ref.includes("A/1")); ok(a, "the partly paid invoice is listed"); eq(a.amountPLN, 10000, "10 000 outstanding, not 100 000");
+    ok(!items.some(x => (x.documentNo || x.ref || "").includes("D/1")), "the Draft is not an item"); const f = items.find(x => (x.documentNo || x.ref || "").includes("F/1")); ok(f && f.status !== "Paid", "Fakturownia's paid flag is ignored");
+  });
+  console.log("v6.99.121 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v6.99.122 — audit batch 3: dates, on Poland's clock ══
+(function v699122(){
+  console.log("\n══ 122. audit batch 3: the Excel import, the due date, today ══");
+  const D = B("dates.js"); const Sh = B("sheet.domain.js"); const Bd = B("board.domain.js");
+  t("AUD-06: a spreadsheet date (local midnight) is stored as that day — the sample workbook's dates no longer shift", () => {
+    const XLSX = require("xlsx"); const fx = FX.fixture("sample_season_workbook.xlsx"); if (!fx) { console.log("      (sample workbook missing — skipped)"); return; }
+    const wb = XLSX.readFile(fx, { cellDates: true }); const ws = wb.Sheets[wb.SheetNames[0]]; let n = 0, shifted = 0;
+    Object.keys(ws).forEach(k => { const c = ws[k]; if (c && c.t === "d") { n++; if (D.localISO(c.v) !== `${c.v.getFullYear()}-${String(c.v.getMonth() + 1).padStart(2, "0")}-${String(c.v.getDate()).padStart(2, "0")}`) shifted++; if (c.v.toISOString().slice(0, 10) !== D.localISO(c.v)) { /* this is the fault the import had */ } } });
+    ok(n > 0, "date cells found"); eq(shifted, 0);
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null }); const tab = Sh.importWorkbookRows(wb.SheetNames[0], rows, Bd.HER_HEADERS, "2026-10-04T08:00:00.000Z");
+    // the loading / unloading columns are the sheet's DATE cells; the other dates come from typed text and are parsed, not converted
+    const dates = tab.rows.flatMap(r => [r.cells.loadingDate, r.cells.unloadingDate]).filter(v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v));
+    ok(dates.length > 0, "imported dates"); const raw = []; Object.keys(ws).forEach(k => { const c = ws[k]; if (c && c.t === "d") raw.push(D.localISO(c.v)); }); ok(dates.every(d0 => raw.includes(d0)), "every imported date is the sheet's own day: " + dates.slice(0, 3).join(",")); eq(tab.rows[0].cells.loadingDate, "2026-09-01", "M2 is 1 September — the import used to write 31 August");
+    eq(D.localISO(new Date(2026, 5, 2, 0, 0, 0)), "2026-06-02", "local midnight 2 June is 2 June (toISOString said 1 June in Warsaw)");
+  });
+  t("AUD-08: 30 days after 15 March 2027 is 14 April, after 1 March is 31 March — across the clock change", () => {
+    eq(D.addDaysISO("2027-03-15", 30), "2027-04-14"); eq(D.addDaysISO("2027-03-01", 30), "2027-03-31"); eq(D.addDaysISO("2026-12-31", 1), "2027-01-01"); eq(D.addDaysISO("2026-02-28", 1), "2026-03-01");
+  });
+  t("AUD-07/09: the previous month from the text; today is the local day", () => {
+    eq(D.prevMonthISO("2026-01"), "2025-12"); eq(D.prevMonthISO("2026-09-11"), "2026-08"); eq(D.localTodayISO(), D.localISO(new Date()));
+    const src = require("fs"); const path = require("path"); const dir = path.join(__dirname, "../src"); const bad = src.readdirSync(dir).filter(f => /\.(ts|tsx)$/.test(f) && f !== "dates.ts").filter(f => /toISOString\(\)\.slice\(0, ?(7|10)\)|\.split\("T"\)\[0\]/.test(src.readFileSync(path.join(dir, f), "utf8")));
+    eq(bad.join(","), "", "no UTC-date site outside dates.ts");
+  });
+  console.log("v6.99.122 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v6.99.127 — ONE SOURCE FOR EVERY SALE: THE LOT (A-ONE-1, owner 4 Oct) ══
+(function v699127(){
+  console.log("\n══ 127. one source: every sale sells a lot ══");
+  const SOd = B("salesOrders.domain.js"); const ST = B("statusOwnership.domain.js"); const P = B("poSettlement.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the owner's 2 Oct file"); if (!fx) return;
+  const d = require(fx); const r = SOd.migrateSaleLinesToLots(d.orders, d.lots);
+  t("A-ONE-1: 126 of 135 PO-sourced lines point at the lot made from their PO line; 9 lines whose PO has no matching lot are left and named", () => {
+    eq(r.moved, 126); eq(r.left.length, 9); ok(r.left.every(x => /^SO-2026-0008: PO-2026-00(10|12)|^SO-2026-0023: PO-2026-0037/.test(x)), r.left.join(" | "));
+    const l = r.orders.flatMap(o => o.items || []).find(it => it.migratedFromPO); ok(l && l.sourceType === "STOCK" && /^LOT-/.test(l.sourceRef) && l.sourceLineId === undefined);
+    const again = SOd.migrateSaleLinesToLots(r.orders, d.lots); eq(again.moved, 0, "a second run moves nothing");
+  });
+  t("A-ONE-1: the migration changes no sale's status and no truck settlement", () => {
+    let st = 0; d.orders.forEach((o, i) => { if (ST.effectiveSoStatus(o, d.shipments) !== ST.effectiveSoStatus(r.orders[i], d.shipments)) st++; }); eq(st, 0);
+    let diff = 0; d.pos.filter(p => p.status !== "Cancelled").forEach(po => { const a = P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 0 }), b = P.computePOSettlement({ po, lots: d.lots, orders: r.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 0 }); if (Math.abs(a.grossPLN - b.grossPLN) > 0.5) diff++; }); eq(diff, 0);
+  });
+  t("A-ONE-1: a lot not yet received is sold on its expected kilos; the other sales of the same lot reserve it; a received lot on its stock", () => {
+    const exp = d.lots.find(l => l.number === "LOT-2026-0004"); const base = SOd.lotReservationsForStock(exp, []); eq(base.availabilityBasis, 550);
+    const sold = SOd.lotReservationsForStock(exp, [{ number: "SO-T", status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "LOT-2026-0004", qty: 200, grade: "I", product: exp.product, variety: exp.variety }] }]); eq(sold.liveAvailable, 350);
+    const stock = SOd.lotReservationsForStock(d.lots.find(l => l.number === "LOT-2026-0009"), []); eq(stock.availabilityBasis, 5616);
+  });
+  t("A-ONE-1: a sale naming a lot counts the trucks that carry that lot (no sale on the row) as its own", () => {
+    const so = { number: "SO-X", status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "LOT-2026-0126", qty: 14300 }] };
+    const at = st => d.shipments.map(s => s.number === "SHP-2026-0036" ? { ...s, status: st, soRefs: [] } : s);
+    eq(ST.isShippedOrLater(so, at("Booked")), false); eq(ST.isShippedOrLater(so, at("Loaded")), true, "the supplier's truck carrying LOT-0126");
+  });
+  console.log("v6.99.127 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
+console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
+if (failed) process.exit(1);

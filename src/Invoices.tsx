@@ -18,8 +18,7 @@ import { resolveFxRate, defaultFxRate } from "./fx";
 import {
   Invoice, FinanceNote, InvoiceCategory, PaymentStatus,
   recomputeInvoiceMoney, isLocked, invoiceDirection,
-  buildFakturowniaPayload, noteSignedPLN,
-} from "./invoicing";
+  buildFakturowniaPayload, noteSignedPLN, pushBlockers } from "./invoicing";
 import * as XLSX from "xlsx";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice } from "./fakturownia";
 import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES } from "./fakturowniaImport.domain";
@@ -552,6 +551,7 @@ export default function Invoices(props: any) {
     setInvoices((prev: Invoice[]) => prev.map(p => p.id === inv.id ? removePaymentEvent(p, evtId) : p));
   }
   async function sendToFakturownia(inv: Invoice) {
+    { const b = pushBlockers(inv); if (b.length) { await invAlert({ tone: "warn", title: `${inv.number} can't be pushed`, message: `Fakturownia would issue a legal invoice from these lines, so each must carry its own price and they must add up:\n\n${b.join("\n")}` }); return; } }   // v6.99.116 (AUD-14)
     if (inv.kind !== "SALES") { await invAlert({ tone: "warn", title: "Sales invoices only", message: "Only sales invoices are pushed to Fakturownia." }); return; }
     const cfg = readFakturowniaConfig();
     if (!cfg) { await invAlert({ tone: "warn", title: "Not configured", message: "Fakturownia is not configured. Add the account name and API token in Settings first." }); return; }

@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 // Engine scenario tests (Consolidation Batch 1 — audit P2-5).
 // Run: npm run test:engines   (compiles the pure engines, then executes this file)
 const assert = require("assert");
@@ -34,7 +36,7 @@ T("voided TRANSFER excluded from replay (v6.18.17 Void)", () => {
   const r = recomputeLotFromMovements(baseLot, [
     {id:1,type:"IN",date:"2026-01-01",qtyKg:1000,toId:1},
     {id:2,type:"TRANSFER",date:"2026-01-02",qtyKg:1000,toId:3,voided:true}], locById);
-  assert.equal(r.locationId, 1); assert.equal(r.movements.length, 1);
+  assert.equal(r.locationId, 1); assert.equal(r.movements.length, 2); assert.equal(r.movements.filter(m => !m.voided).length, 1);   // v6.99.111 (AUD-38): the voided move stays on record, out of the arithmetic
 });
 T("DAMAGE reduces physical into damagedKg", () => {
   const r = recomputeLotFromMovements(baseLot, [
@@ -193,9 +195,9 @@ T("past dueDate unpaid → Overdue and in overdue totals", () => {
   assert.equal(items.find(i=>i.documentNo==="FV/1/2026").status, "Overdue");
   assert.ok(totals.receivableOverduePLN >= 4250 - 0.01);
 });
-T("fakturowniaPaid sync marks Paid", () => {
+T("rule 11 (v6.99.121): Fakturownia's paid flag is NOT read — the bank is the source of payment", () => {
   const { items } = buildLedger({ invoices:[mkInv()], fakturowniaPaid:{"FV/1/2026":true}, todayISO:today });
-  assert.equal(items.find(i=>i.documentNo==="FV/1/2026").status, "Paid");
+  assert.notEqual(items.find(i=>i.documentNo==="FV/1/2026").status, "Paid");
 });
 T("BP-37 FLIPPED (Batch 5b): an outgoing credit note now REDUCES open receivables", () => {
   const base = buildLedger({ invoices:[mkInv()], todayISO:today }).totals;

@@ -196,6 +196,63 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### One source for every sale: the lot (v6.99.127)
+
+A sales line always sells a **lot**. The picker shows lots with their state — *expected ·
+not yet received* (sold ahead, as a PO line used to be), *in our stock*, or *direct ·
+producer → client* — and the PO each comes from; the separate "PO lines" tab is gone. A
+lot not yet received is available for its expected kilos, and other sales of the same lot
+reserve it. Existing PO-sourced lines were pointed once at the lot made from their PO line
+(126 of 135 in the 2 Oct data; the 9 left belong to deleted orders of deleted POs). Nothing
+else changed: every sale's status and every truck settlement read the same as before.
+
+### Clean-up I (v6.99.123–126)
+
+- The old per-lot settlement window and the stock-history delete are gone (the truck
+  settlement is the one settlement; a movement is voided, never erased); the empty
+  document linker too.
+- The **Load plans** tab is retired — the shipment's trucks, containers and forwarder
+  reports do what it did. Existing plan records are kept as data.
+- The sales report PDF is named with the supplier's reference and the producer.
+- Deleting a lot, an operational cost or a quality report keeps it on record, marked
+  Deleted, like every other document.
+
+### Audit batch 3 — dates (v6.99.122)
+
+- Every date the app writes is the LOCAL day: the Excel import keeps the sheet's own
+  dates (they used to come in one day early), a due date adds days on the calendar (the
+  March clock change no longer shifts it), and "today" is Poland's today everywhere.
+- The code no longer contains a single UTC-date conversion outside the dates helper, and
+  the source gate keeps it so.
+- **Data check:** planning rows imported before this version may carry dates one day
+  early — compare a few against the original workbook before trusting them.
+
+### Audit batch 2 — money (v6.99.116–121)
+
+- **Pushing to Fakturownia:** every line must carry its own price and the lines must add
+  up to the invoice; otherwise the push is refused with the reasons. A quantity of 0 is
+  never turned into 1 and the invoice total is never spread over lines.
+- **Re-opening a truck settlement** withdraws the expected notes it created; closing it
+  again keeps the same SET number.
+- **Shipment costs** never allocate more than the cost and never lose a grosz.
+- **Bank matching** finds an invoice number only as a whole token in the transfer title.
+- **The bank is the source of payment (rule 11).** Invoices imported from Fakturownia come
+  in as *Issued* (received) with their category from the tag — never Draft, never Paid;
+  Fakturownia's paid flag is not read anywhere. The ledger lists what is still
+  outstanding on each open invoice; a Draft is not yet a document. Existing imported
+  Drafts were moved to Issued once at start-up (audit-logged).
+
+### Audit batch 1 — the gates (v6.99.110–115)
+
+- The test suites run on Poland's clock and report every failure before stopping; two
+  source gates refuse any new UTC-date conversion or ad-hoc number parsing in the code.
+- A voided stock movement stays on the lot, struck through with its reason; it is simply
+  left out of the arithmetic.
+- The shipment's stock-shortage check reads the kilos real lots carry, so it fires.
+- **One writing tab per browser:** a second MARIANNA tab opens read-only with a notice;
+  *Use this tab instead* hands the pen over and the other tab becomes read-only.
+- The dashboard's "Month to close" names the right month.
+
 ### Class split and warehouse costs (v6.99.108–109)
 
 - **One class split**, from the stock ledger: everything received that was not reclassified

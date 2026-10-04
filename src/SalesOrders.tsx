@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";
 import { statusWord } from "./format";
 import { newestFirst } from "./moduleGuards.domain";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
@@ -5,7 +6,7 @@ import { SmallButton, notifySaved } from "./ui";
 import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { buildCollectionShipment } from "./shipments.domain";
-import { localTodayISO as domainToday } from "./dates";
+import { localTodayISO as domainToday, addDaysISO } from "./dates";
 import { Card, Lbl, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { PACKAGING_SEED } from "./packaging.domain";
 import { effectiveSoStatus } from "./statusOwnership.domain";
@@ -107,7 +108,7 @@ function reserveCtx() { return RAW_LOTS.length ? { lots: RAW_LOTS, shipments: SH
 // We map physicalKg → availableKg so the source picker can still display a baseline figure.
 // (The TRUE live availability is computed downstream by lotReservations with the SO list.)
 function _adaptLotsFromInventory(invLots) {
-  return (invLots || []).map(l => ({
+  return (invLots || []).filter((l: any) => l && !/Cancelled/.test(String(l.status || ""))).map(l => ({
     number: l.number,
     product: l.product,
     variety: l.variety || "",
@@ -119,7 +120,9 @@ function _adaptLotsFromInventory(invLots) {
     size: l.size,
     origin: l.origin,
     warehouse: l.warehouse || "—",
-    availableKg: l.physicalKg ?? l.receivedKg ?? 0,
+    // v6.99.127 (A-ONE-1, owner): a lot not yet received is sold on its EXPECTED kilos — selling from the PO is selling the lot made from it
+    availableKg: (parseNum(l.physicalKg) || parseNum(l.receivedKg)) > 0 ? (l.physicalKg ?? l.receivedKg ?? 0) : parseNum(l.expectedKg),
+    lotState: /Cancelled/.test(String(l.status || "")) ? "deleted" : parseNum(l.physicalKg) > 0 ? "in stock" : parseNum(l.receivedKg) > 0 ? "received" : (l.directFlow || /direct/i.test(String(l.status || ""))) ? "direct" : "expected",
     physicalKg: l.physicalKg ?? 0,
     receivedKg: l.receivedKg ?? 0,
     packaging: l.packaging,
@@ -258,9 +261,7 @@ export function buildInvoiceFromSO(order, invoiceNumber, today) {
   const days = parsePaymentTermsDays(order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms);
   let dueDate = "";
   if (days !== null) {
-    const d = new Date(issueDate);
-    d.setDate(d.getDate() + days);
-    dueDate = d.toISOString().split("T")[0];
+    dueDate = addDaysISO(issueDate, days);   // v6.99.122 (AUD-08): on the y-m-d parts — the clock change in March shifted it a day
   }
   // VAT — Polish food default is 5%, but it depends on product/destination.
   // We pre-fill 5% and flag for user review in the modal.
@@ -318,10 +319,14 @@ export function validateSourcing(items) {
 export function validatePOReadinessForSO(items: any[]) {
   const blocked: any[] = [];
   (items || []).forEach((it: any, idx: number) => {
-    if (it.sourceType !== "PO" || !it.sourceRef) return;
-    const po = PO_REFS.find((p: any) => p.number === it.sourceRef);
+    // v6.99.127 (A-ONE-1): a line sells a LOT — its readiness is its PO's; the PO path stays for the old lines left on it
+    const poNumber = it.sourceType === "PO" ? it.sourceRef : it.sourceType === "STOCK" && it.sourceRef ? ((RAW_LOTS || []).find((l: any) => String(l.number) === String(it.sourceRef)) || {}).poRef : null;
+    if (!poNumber) return;
+    const lot = it.sourceType === "STOCK" ? (RAW_LOTS || []).find((l: any) => String(l.number) === String(it.sourceRef)) : null;
+    if (lot && (parseNum(lot.physicalKg) > 0 || parseNum(lot.receivedKg) > 0)) return;   // received goods are ours whatever the PO says
+    const po = PO_REFS.find((p: any) => p.number === poNumber);
     if (!po || !isPOUsableForConfirmedSO(po)) {
-      blocked.push({ idx, poRef: it.sourceRef, status: po?.status || "Missing", product: it.product || "" });
+      blocked.push({ idx, poRef: poNumber, status: po?.status || "Missing", product: it.product || "" });
     }
   });
   return blocked;

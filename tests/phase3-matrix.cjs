@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 // ─────────────────────────────────────────────────────────────────────────────
 // phase3-matrix.cjs — Phase 3: PAIRWISE CROSS-MODULE SCENARIO MATRIX (v6.64.x)
 //

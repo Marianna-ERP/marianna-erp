@@ -1,3 +1,4 @@
+import { localISO } from "./dates";
 // ─────────────────────────────────────────────────────────────────────────────
 import { S } from "./format";
 // sheet.domain.ts — v6.99.63 (A-SH-1…13, owner 25 Sept)
@@ -93,7 +94,7 @@ export function importWorkbookRows(sheetName: string, matrix: any[][], headerMap
     const line = matrix[r] || []; const cells: Record<string, any> = {}; let filled = 0;
     Object.entries(map).forEach(([c, k]) => {
       const v0 = line[Number(c)]; if (v0 === undefined || v0 === null || S(v0) === "") return; filled++;
-      const v = v0 instanceof Date ? v0.toISOString().slice(0, 10) : S(v0);
+      const v = v0 instanceof Date ? localISO(v0) : S(v0);   // v6.99.122 (AUD-06): local day — toISOString wrote the day before in Poland
       if (k === "etdEta") { const [a, b] = S(v).replace(/\bET[AD]\b[:.]?\s*/gi, "").split(/\s*[-–]\s*/).filter(x => S(x)); /* "ETD 07/09 - ETA 18/09" as well as "07/09 - 18/09" */ const strip = (x: any) => S(x).replace(/^[A-Z]{2,5}\s+(?=\d)/, ""); const e1 = toISODate(strip(a), year), e2 = toISODate(strip(b), year);   /* "DAM 15/09" → 15/09 (the port is in POD) */ cells.etd = e1 === null ? S(a) : e1; if (b) cells.eta = e2 === null ? S(b) : e2; return; }
       if (k === "controller") {   // "31.08.2026 / JDR & HZM", "JDR 08.09.2026" — one date and the person(s); several dates stay as typed
         const t = S(v); const dates = t.match(/\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?/g) || [];

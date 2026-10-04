@@ -479,7 +479,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
               {!frozenBy && <button onClick={() => openInspection(x)} style={qhEdit}>Edit</button>}
               <button style={qhPrint} onClick={() => { const no = x.number || lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</button>
-              {!frozenBy && setInspections && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).filter((p: any) => String(p.id) !== String(x.id))); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} deleted` }); }}>🗑 Delete</button>}
+              {!frozenBy && setInspections && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).map((p: any) => String(p.id) === String(x.id) ? { ...p, status: "Cancelled", cancelledAt: localTodayISO() } : p))   /* v6.99.126 (AUD-44): kept, struck through */; recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} deleted` }); }}>🗑 Delete</button>}
             </span>
             <QualityReportDoc x={x} lot={lot} no={x.number || qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} supplierRef={supplierRefOf(lot, shipmentsRef)} />
           </div>

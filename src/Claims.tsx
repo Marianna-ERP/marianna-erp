@@ -271,7 +271,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
     const notes = (financeNotes || []).filter((n: any) => n && n.status !== "Cancelled" && (String(n.claimId) === String(c.id) || String(n.claimNumber) === String(c.number) || String(n.relatedRef) === String(c.number)));
     if (notes.length) { await uiAlert({ tone: "warn", title: `${c.number} can't be deleted`, message: `These documents depend on it — delete them first:\n\n${notes.map((n: any) => n.number || `${n.noteType || "note"} ${n.id}`).join("\n")}` }); return; }
     if (!(await uiConfirm({ tone: "danger", title: `Delete ${c.number}?`, message: "The claim stays on record, struck through and read-only. Any inventory movement it produced stays where it is.", confirmLabel: "Delete" }))) return;
-    setClaims((prev: any[]) => (prev || []).map((x: any) => String(x.id) === String(c.id) ? { ...x, status: "Cancelled", cancelledAt: new Date().toISOString().slice(0, 10) } : x));
+    setClaims((prev: any[]) => (prev || []).map((x: any) => String(x.id) === String(c.id) ? { ...x, status: "Cancelled", cancelledAt: localTodayISO() } : x));
     setSelectedId(null);
   };
 

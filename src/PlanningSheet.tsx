@@ -1,3 +1,4 @@
+import { localTodayISO } from "./dates";
 // ─────────────────────────────────────────────────────────────────────────────
 // PlanningSheet.tsx — v6.99.63 (A-SH-1…13, owner 25 Sept)
 // The weekly planning sheet: tabs · rows · cells, like her Excel, INSIDE the system and writing to NO module. Cells save as
@@ -80,9 +81,9 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   function exportXlsx(all: boolean) {
     const wb = XLSX.utils.book_new(); const list = all ? sorted : (tab ? [tab] : []);
     list.forEach(t => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([SHEET_COLUMNS.map(c => c.label), ...tabToGrid(t)]), t.name.slice(0, 31) || "sheet"));
-    if (list.length) XLSX.writeFile(wb, `Planning_sheet_${all ? "all" : (tab?.name || "tab").replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    if (list.length) XLSX.writeFile(wb, `Planning_sheet_${all ? "all" : (tab?.name || "tab").replace(/\s+/g, "_")}_${localTodayISO()}.xlsx`);
   }
-  function exportLog() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["when", "who", "action", "tab", "row", "column", "old", "new"], ...(log || []).map((e: SheetLogEntry) => [e.at, e.who, e.action, (sorted.find(t => t.id === e.tab)?.name) || e.tab, e.row || "", e.col || "", typeof e.old === "object" ? productText(e.old) : S(e.old), typeof e.now === "object" ? productText(e.now) : S(e.now)])]), "change log"); XLSX.writeFile(wb, `Planning_sheet_changes_${new Date().toISOString().slice(0, 10)}.xlsx`); }
+  function exportLog() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["when", "who", "action", "tab", "row", "column", "old", "new"], ...(log || []).map((e: SheetLogEntry) => [e.at, e.who, e.action, (sorted.find(t => t.id === e.tab)?.name) || e.tab, e.row || "", e.col || "", typeof e.old === "object" ? productText(e.old) : S(e.old), typeof e.now === "object" ? productText(e.now) : S(e.now)])]), "change log"); XLSX.writeFile(wb, `Planning_sheet_changes_${localTodayISO()}.xlsx`); }
 
   const inp: any = { width: "100%", border: "1px solid transparent", background: "transparent", padding: "4px 5px", fontSize: 12, borderRadius: 4, boxSizing: "border-box" };
   const amber = { ...inp, border: "1px solid #F59E0B", background: "#FFFBEB" };

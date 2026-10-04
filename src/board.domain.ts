@@ -1,3 +1,4 @@
+import { localISO } from "./dates";
 // ─────────────────────────────────────────────────────────────────────────────
 import { S } from "./format";
 // board.domain.ts — v6.99.55 (BD-1…6, owner ruling 23 Sept)
@@ -54,7 +55,7 @@ export function weekOf(dateISO: any): { key: string; label: string; monday: stri
   const y0 = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
   const week = Math.ceil((((dt.getTime() - y0.getTime()) / 86400000) + 1) / 7);
   const mon = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); mon.setUTCDate(mon.getUTCDate() - ((mon.getUTCDay() || 7) - 1));
-  return { key: `${dt.getUTCFullYear()}-W${String(week).padStart(2, "0")}`, label: `week ${week}`, monday: mon.toISOString().slice(0, 10) };
+  return { key: `${dt.getUTCFullYear()}-W${String(week).padStart(2, "0")}`, label: `week ${week}`, monday: `${mon.getUTCFullYear()}-${String(mon.getUTCMonth() + 1).padStart(2, "0")}-${String(mon.getUTCDate()).padStart(2, "0")}` };   // v6.99.122: a UTC-built date read with UTC getters
 }
 
 export interface BoardRow { id: string; shipment: any; unit: any; legIdx: number; unitIdx: number; po: any; poLines: any[]; so: any; week: { key: string; label: string; monday: string }; cells: Record<string, string>; ready: { steps: Record<number, boolean>; loadable: boolean; closed: boolean }; }
@@ -143,7 +144,7 @@ export function parseHerSheet(sheetName: string, matrix: any[][]): ImportedRow[]
   const out: ImportedRow[] = [];
   for (let r = 1; r < matrix.length; r++) {
     const row = matrix[r] || []; const cells: Record<string, string> = {};
-    Object.entries(map).forEach(([c, k]) => { const v = row[Number(c)]; if (v !== undefined && v !== null && S(v) !== "") cells[k] = v instanceof Date ? v.toISOString().slice(0, 10) : S(v); });
+    Object.entries(map).forEach(([c, k]) => { const v = row[Number(c)]; if (v !== undefined && v !== null && S(v) !== "") cells[k] = v instanceof Date ? v && localISO(v) : S(v); });
     if (Object.keys(cells).length < 2) continue;
     out.push({ sheet: sheetName, rowNo: r + 1, cells });
   }

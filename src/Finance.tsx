@@ -22,7 +22,7 @@ import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { computeSOMargin } from "./marginCalculations";
 import { nextId } from "./ids";
 import { MarginMode } from "./marginCalculations";
-import { localTodayISO, localMonthISO } from "./dates";
+import { localTodayISO, localMonthISO, prevMonthISO } from "./dates";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
 import { buildLedger } from "./ledger";
 import {
@@ -154,7 +154,7 @@ function newCostTemplate(): OperationalCost {
 // ── v6.99.0 (FN-1/FN-2/FN-3): CLOSE THE MONTH · MANAGEMENT PACKAGE · CASH VIEW ──
 function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSettlements = [], invoices = [], bankAccounts = [], closedPeriods = [], setClosedPeriods = null, userName = "", canClose = true }: any) {
   const today = localTodayISO(); const thisMonth = today.slice(0, 7);
-  const prevMonth = (() => { const d = new Date(today.slice(0, 4) + "-" + today.slice(5, 7) + "-01T00:00:00"); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); })();
+  const prevMonth = prevMonthISO(today);   // v6.99.122 (AUD-07/09): from the text
   const [period, setPeriod] = React.useState(prevMonth);
   const closed = (closedPeriods || []).find((c: any) => c.period === period) || null;
   const stockLots = (lots || []).filter((l: any) => (Number(l.physicalKg) || 0) > 0);
@@ -869,7 +869,7 @@ export default function Finance({
   async function deleteCost(id: number) {
     if (!setOperationalCosts) return;
     if (!(await finConfirm({ tone: "danger", title: "Delete operational cost?", confirmLabel: "Delete" }))) return;
-    setOperationalCosts((prev: OperationalCost[]) => (prev || []).filter(c => c.id !== id));
+    setOperationalCosts((prev: OperationalCost[]) => (prev || []).map(c => c.id === id ? { ...c, status: "Cancelled" as any, cancelledAt: localTodayISO() } : c));   // v6.99.126 (AUD-44): kept, out of every allocation
   }
 
 

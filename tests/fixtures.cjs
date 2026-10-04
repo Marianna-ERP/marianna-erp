@@ -1,3 +1,5 @@
+// v6.99.110 (AUD-10): the suites run on Poland's clock — the one the business runs on; UTC hid every one-day date shift
+process.env.TZ = "Europe/Warsaw";
 // ══ v6.99.71 (A-TF-1, owner 28 Sept): THE FIXTURES TRAVEL WITH THE CODE ══
 // Every real file a suite reads lives in tests/fixtures (see its README). Before this, the suites read a chat's upload
 // folder, so 19 round-trip scenarios and 6 screen checks could only run inside that one session; a missing file

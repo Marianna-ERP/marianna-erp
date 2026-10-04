@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";
 import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 // ─────────────────────────────────────────────────────────────────────────────
 // salesOrders.domain.ts — pure availability & reservation engine (Batch 1)
@@ -136,7 +137,9 @@ export function lotReservationsForStock(lot: any, sourceSOs: any[], ctx?: Reserv
   });
   const directBasis = lot.directFlow ? (parseFloat(lot.expectedKg) || 0) : 0;
   const physical = lot.physicalKg ?? lot.receivedKg ?? 0;
-  const availabilityBasis = lot.directFlow ? Math.max(directBasis, physical) : physical;
+  const notYetReceived = !parseNum(lot.physicalKg) && !parseNum(lot.receivedKg) && parseNum(lot.expectedKg) > 0;
+  // v6.99.127 (A-ONE-1): a lot not yet received (sold ahead, as a PO line used to be) is available for its expected kilos
+  const availabilityBasis = lot.directFlow ? Math.max(directBasis, physical) : notYetReceived ? parseNum(lot.expectedKg) : physical;
   return {
     physicalKg: physical,
     availabilityBasis,
@@ -477,4 +480,26 @@ export function shippedKgByLine(order: any, lots: any[], shipments: any[]): { pe
     return got;
   });
   return { perLine, totalKg: perLine.reduce((a: number, b: number) => a + b, 0), hasEvidence };
+}
+
+// ─── v6.99.127 (A-ONE-1, owner 4 Oct): ONE SOURCE FOR EVERY SALE — THE LOT ─────────────────────────────────────────
+// A sale line used to point either at a PO line or at a lot; the PO's incoterm already governs how the lot arrives, the
+// sale governs the lot. Every PO-sourced line is pointed at the lot made from its PO line (the lot carries poRef + poLineId);
+// a line whose lot cannot be found (an old PO with no lots) is left as it was and reported.
+export function migrateSaleLinesToLots(orders: any[], lots: any[]): { orders: any[]; moved: number; left: string[] } {
+  let moved = 0; const left: string[] = [];
+  const live = (lots || []).filter((l: any) => l && !/Cancelled/.test(String(l.status || "")));
+  const next = (orders || []).map((o: any) => {
+    let touched = false;
+    const items = (o?.items || []).map((it: any) => {
+      if (!it || String(it.sourceType || "") !== "PO" || !it.sourceRef) return it;
+      const exact = live.filter((l: any) => String(l.poRef) === String(it.sourceRef) && it.sourceLineId != null && String(l.poLineId) === String(it.sourceLineId));
+      const lot = exact.length === 1 ? exact[0] : null;
+      if (!lot) { left.push(`${o.number}: ${it.sourceRef} line ${it.sourceLineId ?? "?"}`); return it; }
+      touched = true; moved++;
+      return { ...it, sourceType: "STOCK", sourceRef: String(lot.number), sourceLineId: undefined, migratedFromPO: String(it.sourceRef) };
+    });
+    return touched ? { ...o, items } : o;
+  });
+  return { orders: next, moved, left };
 }
