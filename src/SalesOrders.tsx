@@ -107,7 +107,12 @@ function reserveCtx() { return RAW_LOTS.length ? { lots: RAW_LOTS, shipments: SH
 // SalesOrders expects: { number, product, quality, size, origin, warehouse, availableKg, packaging }
 // We map physicalKg → availableKg so the source picker can still display a baseline figure.
 // (The TRUE live availability is computed downstream by lotReservations with the SO list.)
-function _adaptLotsFromInventory(invLots) {
+// v6.99.147 (A-QC-7): a lot whose latest quality report says REJECTED is not for sale until sorting or a return decides
+function rejectedByReport(lot: any, inspections: any[]): boolean {
+  const mine = (inspections || []).filter((x: any) => x && x.status !== "Cancelled" && String(x.lotNumber) === String(lot?.number)).sort((a: any, b: any) => String(b.date || b.createdAt || "").localeCompare(String(a.date || a.createdAt || "")));
+  return !!mine[0] && String(mine[0].verdict || "") === "Rejected";
+}
+function _adaptLotsFromInventory(invLots: any[], inspections: any[] = []) {
   return (invLots || []).filter((l: any) => l && !/Cancelled/.test(String(l.status || ""))).map(l => ({
     number: l.number,
     product: l.product,
@@ -121,8 +126,9 @@ function _adaptLotsFromInventory(invLots) {
     origin: l.origin,
     warehouse: l.warehouse || "—",
     // v6.99.127 (A-ONE-1, owner): a lot not yet received is sold on its EXPECTED kilos — selling from the PO is selling the lot made from it
-    availableKg: (parseNum(l.physicalKg) || parseNum(l.receivedKg)) > 0 ? (l.physicalKg ?? l.receivedKg ?? 0) : parseNum(l.expectedKg),
-    lotState: /Cancelled/.test(String(l.status || "")) ? "deleted" : parseNum(l.physicalKg) > 0 ? "in stock" : parseNum(l.receivedKg) > 0 ? "received" : (l.directFlow || /direct/i.test(String(l.status || ""))) ? "direct" : "expected",
+    availableKg: rejectedByReport(l, inspections) ? 0 : (parseNum(l.physicalKg) || parseNum(l.receivedKg)) > 0 ? (l.physicalKg ?? l.receivedKg ?? 0) : parseNum(l.expectedKg),
+    rejected: rejectedByReport(l, inspections),
+    lotState: /Cancelled/.test(String(l.status || "")) ? "deleted" : rejectedByReport(l, inspections) ? "rejected by quality report" : parseNum(l.physicalKg) > 0 ? "in stock" : parseNum(l.receivedKg) > 0 ? "received" : (l.directFlow || /direct/i.test(String(l.status || ""))) ? "direct" : "expected",
     physicalKg: l.physicalKg ?? 0,
     receivedKg: l.receivedKg ?? 0,
     packaging: l.packaging,
@@ -712,7 +718,7 @@ export default function SalesOrders({ archive = null,
   packagingTypes = [],
   operationalCosts: extOperationalCosts = [],
   invoices: extInvoices = null, setInvoices: extSetInvoices = null,
-  financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null,
+  financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, inspections: extInspections = [],
   userRole = "General Manager",
   userName = "",
   productCatalog = [],
@@ -774,7 +780,7 @@ export default function SalesOrders({ archive = null,
   // This works because (a) React renders synchronously, (b) every reader of LOTS/PO_REFS is invoked
   // downstream of this assignment within the same render pass.
   // In standalone mode (no extInvLots / extPOs), LOTS and PO_REFS retain their seed values.
-  if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots);
+  if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots, extInspections);
   RAW_LOTS = extInvLots || [];
   SHIPMENTS_REF = extShipments || [];
   CONTACTS_REF = extContacts || [];

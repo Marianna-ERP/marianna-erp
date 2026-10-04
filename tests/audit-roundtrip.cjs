@@ -3124,6 +3124,17 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.136 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v6.99.143–147 — Clean-up II part 2: whole-number notes, id compare, heal markers in the data, hardened helpers, rejected lots ══
+(function v699147(){
+  console.log("\n══ 143–147. clean-up II, part 2 ══");
+  const F = B("format.js"); const Bk = B("bankReconciliation.domain.js"); const ST = B("useLocalStoredState.js");
+  t("AUD-47: a note names a document only as a whole number", () => { ok(F.noteNames("SHIP_OUT via SHP-2026-0033 for SO-2026-0012", "SHP-2026-0033")); ok(!F.noteNames("SHIP_OUT via SHP-2026-0033", "SHP-2026-003")); ok(!F.noteNames("via SHP-2026-0033", "HP-2026-0033")); ok(!F.noteNames("", "SO-1")); });
+  t("AUD-48: r2 / r0 / daysInMonth never return NaN; a bank line without a date books today", () => { eq(F.r2(NaN), 0); eq(F.r0(undefined), 0); eq(F.daysInMonth("x", 2), 0); eq(F.daysInMonth(2026, 2), 28); const ev = Bk.bankPaymentEvent({ id: "b", amount: -100, currency: "PLN" }); ok(/^\d{4}-\d{2}-\d{2}$/.test(ev.date)); eq(ev.amount, 100); });
+  t("AUD-46: the heals store is part of the dataset (exports and imports with it)", () => { ok(ST.DATA_KEYS.includes("heals"), "heals is a DATA_KEY"); });
+  t("AUD-40: a PO-line id compares as text", () => { const src = require("fs").readFileSync(require("path").join(__dirname, "../src/salesOrders.domain.ts"), "utf8"); ok(/String\(it\.sourceLineId \?\? 1\) !== String\(poLine\.id\)/.test(src)); });
+  console.log("v6.99.147 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

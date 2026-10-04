@@ -1,3 +1,4 @@
+import { localTodayISO } from "./dates";
 // ─────────────────────────────────────────────────────────────────────────────
 // bankReconciliation.domain.ts — v6.67.0 (D-33)
 //
@@ -227,10 +228,10 @@ export function matchBankLines(lines: BankLine[], invoices: any[], opts?: { tole
 /** The payment event a confirmed line produces (partial payments accumulate naturally). */
 export function bankPaymentEvent(line: BankLine): { date: string; amount: number; method: string; note: string; source: string } {
   return {
-    date: line.date,
-    amount: Math.round(Math.abs(line.amount) * 100) / 100,   // v6.87.0: debit lines settle payables
+    date: /^\d{4}-\d{2}-\d{2}/.test(String(line?.date || "")) ? String(line.date).slice(0, 10) : localTodayISO(),   // v6.99.146 (AUD-48): a CSV line without a date books today, not "undefined"
+    amount: Math.round(Math.abs(Number(line?.amount) || 0) * 100) / 100,   // v6.87.0: debit lines settle payables
     method: "Bank transfer",
-    note: `Bank ${line.account.slice(-4)}: ${String(line.counterparty).slice(0, 60)}${line.title ? " — " + String(line.title).slice(0, 80) : ""}`,
+    note: `Bank ${String(line?.account || "").slice(-4)}: ${String(line?.counterparty || "").slice(0, 60)}${line.title ? " — " + String(line.title).slice(0, 80) : ""}`,
     source: `bank:${line.id}`,
   };
 }

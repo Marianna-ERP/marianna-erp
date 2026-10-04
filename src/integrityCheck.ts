@@ -1,5 +1,5 @@
 import { lotReceiptDate } from "./seasonOps.domain";
-import { isRealISODate } from "./format";
+import { isRealISODate, noteNames } from "./format";
 import { lotLoadedTwice } from "./lotView.domain";
 import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 import { missingPeopleInfo } from "./counterparty.domain";
@@ -209,7 +209,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     let shippedKg = 0;
     lots.forEach((lot: any) => {
       arr(lot.movements).forEach((m: any) => {
-        const matches = m.soRef ? String(m.soRef) === soNo : String(m.note || "").includes(soNo);
+        const matches = m.soRef ? String(m.soRef) === soNo : noteNames(m.note, soNo);
         if (m.type === "SHIP_OUT" && matches) shippedKg += num(m.qtyKg);
         if (m.type === "REVERSAL" && matches) shippedKg -= num(m.qtyKg);
       });
@@ -585,7 +585,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
       let shipped = 0;
       lots.forEach((lot: any) => arr(lot.movements).forEach((m: any) => {
         if (m.voided) return;
-        const matches = m.soRef ? String(m.soRef) === String(o.number) : String(m.note || "").includes(String(o.number));
+        const matches = m.soRef ? String(m.soRef) === String(o.number) : noteNames(m.note, String(o.number));
         if (m.type === "SHIP_OUT" && matches) shipped += num(m.qtyKg);
       }));
       const demand = arr(o.items).reduce((s: number, it: any) => s + num(it.qty), 0);

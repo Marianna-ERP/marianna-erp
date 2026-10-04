@@ -196,6 +196,18 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Clean-up II, part 2 (v6.99.143–147)
+
+- A stock movement's note names a document only as a whole number (old data without
+  references); PO-line ids compare as text.
+- The one-time heals are recorded inside the dataset, so an older file imported here is
+  healed again; the rounding helpers never produce NaN; a bank line without a date books
+  on today's date.
+- A lot whose latest quality report says **Rejected** is shown in the sales picker but has
+  nothing available until sorting or a return decides.
+- The 17 integrity errors in the 2 Oct data are listed in *MARIANNA_Data_Errors_2_Oct.md*
+  with how to correct each kind.
+
 ### Clean-up II, part 1 (v6.99.137–142)
 
 - **Create shipment:** Source type, Reference and Mode on one line; the Groupage box tinted;

@@ -1,3 +1,4 @@
+import { noteNames } from "./format";
 // ─── v6.45.0 one-time DATA HEAL (test-round root causes B + C) ───────────────
 // Two classes of historical damage are repaired here, once, at load:
 //
@@ -140,7 +141,7 @@ function retagGoodsRows(sh: any, orders: any[], lots: any[], notes: string[]): {
 /** Does this shipment have any live (non-voided) posted movement? */
 function hasLivePosting(sh: any, lots: any[]): boolean {
   return (lots || []).some((l: any) => (l.movements || []).some((m: any) =>
-    !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(String(sh.number)))));
+    !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : noteNames(m.note, String(sh.number)))));
 }
 
 /** Are ALL of the shipment's goods lots fully posted (each has a live movement)? */
@@ -151,7 +152,7 @@ function fullyPosted(sh: any, lots: any[]): boolean {
     const lot = (lots || []).find((l: any) => String(l.number) === String(ref));
     if (!lot) return true; // nothing to post into
     return (lot.movements || []).some((m: any) =>
-      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(String(sh.number))));
+      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : noteNames(m.note, String(sh.number))));
   });
 }
 
@@ -177,7 +178,7 @@ export function healRound645(input: { shipments: any[]; lots: any[]; orders: any
       lots = lots.map((l: any) => ({
         ...l,
         movements: (l.movements || []).map((m: any) => {
-          const mine = !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(String(sh.number)));
+          const mine = !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : noteNames(m.note, String(sh.number)));
           if (!mine) return m;
           voided++;
           return { ...m, voided: true, voidNote: "v6.45.0 heal: re-posted after goods-row lot correction" };

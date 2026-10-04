@@ -173,6 +173,7 @@ export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T
 // colleague's name/role. v6.17: creditNotes + logisticsPoints were missing, so
 // shared files silently dropped them — now included.
 export const DATA_KEYS = [
+  "heals",   // v6.99.145 (AUD-46): which one-time heals this DATASET has had — travels with the data, so an older file imported here is healed again
   "contacts", "pos", "lots", "orders", "shipments", "operationalCosts",
   "customLocations", "warehouseInvoices", "settledRefs", "creditNotes", "logisticsPoints",
   // v6.18.1: the Invoicing module's stores were missing — without these, invoices

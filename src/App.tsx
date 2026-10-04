@@ -260,13 +260,13 @@ export default function App() {
   React.useEffect(() => {
     try {
       const MARK = "marianna:heal:v6.45.0";
-      if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      if (typeof window === "undefined" || healDone(MARK)) return;
       const res = healRound645({ shipments, lots, orders }, {
         todayISO: localTodayISO,
         nextId: globalNextId,
         costMapper: { inventoryType: costInventoryType, label: costTypeLabel },
       });
-      window.localStorage.setItem(MARK, new Date().toISOString());
+      markHeal(MARK);
       if (res.changed) {
         setShipments(res.shipments);
         setLots(res.lots);
@@ -290,7 +290,7 @@ export default function App() {
   React.useEffect(() => {
     try {
       const MARK = "marianna:heal:v6.51.0";
-      if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      if (typeof window === "undefined" || healDone(MARK)) return;
       // v6.51.1: DO NOT claim to have healed before there is anything to heal.
       // The previous version ran once on mount and wrote the marker unconditionally
       // — so if the stores had not finished loading in that instant, the heal found
@@ -298,7 +298,7 @@ export default function App() {
       // and only writes the marker once it has actually processed some.
       if (!(lots || []).length || !(shipments || []).length) return;
       const res = healRound651({ shipments, lots });
-      window.localStorage.setItem(MARK, new Date().toISOString());
+      markHeal(MARK);
       if (res.changed) {
         setLots(res.lots);
         try { recordAudit({ module: "System", docType: "Heal", docNumber: "HEAL-6.51.0", action: "healed", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
@@ -316,10 +316,10 @@ export default function App() {
   React.useEffect(() => {
     try {
       const MARK = "marianna:claims:migrated:v6.48.0";
-      if (typeof window === "undefined" || window.localStorage.getItem(MARK)) return;
+      if (typeof window === "undefined" || healDone(MARK)) return;
       const res = migrateClaims({ lots, pos, orders, existing: claims },
         { todayISO: localTodayISO, nextId: globalNextId });
-      window.localStorage.setItem(MARK, new Date().toISOString());
+      markHeal(MARK);
       if (res.changed) {
         setClaims(res.claims);
         try { recordAudit({ module: "Claims", docType: "Migration", docNumber: "CLAIMS-6.48.0", action: "migrated", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
@@ -335,6 +335,10 @@ export default function App() {
   const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
   const [userName, setUserName] = useLocalStoredState("userName", "");
   // v6.40.0: the audit logbook — passive, capped, exported with everything else.
+  const [heals, setHeals] = useLocalStoredState("heals", {} as Record<string, string>);   // v6.99.145 (AUD-46): per DATASET, not per browser
+  const healsRef = useRef<Record<string, string>>(heals as any); healsRef.current = heals as any;
+  const healDone = (k: string) => !!(healsRef.current || {})[k] || (typeof window !== "undefined" && !!window.localStorage.getItem(k) && (markHeal(k), true));   // a browser-level marker from before is carried into the dataset once
+  function markHeal(k: string) { const stamp = new Date().toISOString(); healsRef.current = { ...(healsRef.current || {}), [k]: stamp }; setHeals((prev: any) => ({ ...(prev || {}), [k]: stamp })); }
   const [auditLog, setAuditLog] = useLocalStoredState("auditLog", []);
   setAuditSink((e: any) => setAuditLog((prev: any[]) => appendAudit(prev || [], {
     id: nextId(), // v6.79.0 (W-7): central counter — burst writes collided under Date.now()
@@ -590,7 +594,7 @@ export default function App() {
       case "lots":
         return <Inventory key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
       case "orders":
-        return <SalesOrders key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
+        return <SalesOrders inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
         return <Shipments key={"shp-" + (openShipmentNumber || "list")} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={productCatalog} userName={userName} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":

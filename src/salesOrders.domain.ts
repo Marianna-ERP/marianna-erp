@@ -1,3 +1,4 @@
+import { noteNames } from "./format";
 import { parseNum } from "./numbers";
 import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 // ─────────────────────────────────────────────────────────────────────────────
@@ -170,7 +171,7 @@ export function poLineReservations(po: any, poLine: any, allOrders: any[], exclu
     (o.items || []).forEach((it: any, li: number) => {
       if (it.sourceType !== "PO") return;
       if (it.sourceRef !== po.number) return;
-      if ((it.sourceLineId ?? 1) !== poLine.id) return;
+      if (String(it.sourceLineId ?? 1) !== String(poLine.id)) return;   // v6.99.144 (AUD-40): ids mix numbers and "pk-…" strings
       if (!productsMatch(it.product, poLine.product, it.variety, poLine.variety)) return;
       const full = parseFloat(it.qty) || 0;
       if (full <= 0) return;
@@ -420,7 +421,7 @@ export function shippedKgByLine(order: any, lots: any[], shipments: any[]): { pe
     let kg = 0;
     (l.movements || []).forEach((m: any) => {
       if (m?.voided) return;
-      const matches = m.soRef ? String(m.soRef) === so : String(m.note || "").includes(so);
+      const matches = m.soRef ? String(m.soRef) === so : noteNames(m.note, so);
       if (!matches) return;
       if (m.type === "SHIP_OUT") kg += Number(m.qtyKg) || 0;
       if (m.type === "REVERSAL") kg -= Number(m.qtyKg) || 0;
@@ -434,7 +435,7 @@ export function shippedKgByLine(order: any, lots: any[], shipments: any[]): { pe
   (shipments || []).forEach((s: any) => {
     if (!s || s.status === "Cancelled" || !DISPATCHED.has(nrm(s.status))) return;
     const posted = (lots || []).some((l: any) => (l.movements || []).some((m: any) =>
-      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(s.number) : String(m.note || "").includes(String(s.number)))));
+      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(s.number) : noteNames(m.note, String(s.number)))));
     if (posted) return; // its kg already live in the movement pool
     const headerSOs = (s.soRefs || []).filter(Boolean).map(String);
     (s.goods || []).forEach((g: any) => {

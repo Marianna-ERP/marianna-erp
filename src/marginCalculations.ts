@@ -1,3 +1,4 @@
+import { noteNames } from "./format";
 import { resolveFxRate } from "./fx";
 // ─── MARGIN / P&L CALCULATIONS ──────────────────────────────────────────────
 //
@@ -88,14 +89,14 @@ function lotCostPerKg(lot: any): number {
 // movements created before soRef existed.
 function lotShippedKgForSO(lot: any, soNumber: string): number {
   return (lot.movements || [])
-    .filter((m: any) => m.type === "SHIP_OUT" && (m.soRef ? String(m.soRef) === String(soNumber) : String(m.note || "").includes(soNumber)))
+    .filter((m: any) => m.type === "SHIP_OUT" && (m.soRef ? String(m.soRef) === String(soNumber) : noteNames(m.note, soNumber)))
     .reduce((s: number, m: any) => s + safe(m.qtyKg), 0);
 }
 
 // Same but for REVERSAL (when an SO was cancelled and its ship-out was reversed).
 function lotReversedKgForSO(lot: any, soNumber: string): number {
   return (lot.movements || [])
-    .filter((m: any) => m.type === "REVERSAL" && (m.soRef ? String(m.soRef) === String(soNumber) : String(m.note || "").includes(soNumber)))
+    .filter((m: any) => m.type === "REVERSAL" && (m.soRef ? String(m.soRef) === String(soNumber) : noteNames(m.note, soNumber)))
     .reduce((s: number, m: any) => s + safe(m.qtyKg), 0);
 }
 

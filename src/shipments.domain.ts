@@ -1,3 +1,4 @@
+import { noteNames } from "./format";
 // ─────────────────────────────────────────────────────────────────────────────
 // shipments.domain.ts — pure shipment→inventory posting engine (Batch 3a)
 //
@@ -60,7 +61,7 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
     // v6.45.0 (heal): VOIDED movements don't count — a voided posting was undone
     // (cancellation or heal), so a fresh post must be allowed.
     const hasMovement = (lot.movements || []).some((m: any) =>
-      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : String(m.note || "").includes(sh.number)));
+      !m.voided && (m.shipmentRef ? String(m.shipmentRef) === String(sh.number) : noteNames(m.note, sh.number)));
     if (hasMovement) return lot;
 
     let qty = relatedGoods.reduce((s: number, g: any) => s + num(g.qtyKg), 0);
