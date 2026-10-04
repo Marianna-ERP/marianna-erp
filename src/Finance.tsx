@@ -1053,7 +1053,7 @@ export default function Finance({
               {(() => {
                 const rows = (orders || [])
                   .filter(committedFilter)
-                  .map((o: any) => ({ o, m: computeSOMargin(o, lots, pos, shipments, mode) }))
+                  .map((o: any) => ({ o, m: computeSOMargin(o, lots, pos, shipments, mode, invoices, financeNotes) }))
                   .sort((a: any, b: any) => (b.m.marginPLN || 0) - (a.m.marginPLN || 0));
                 if (!rows.length) return <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No committed sales orders yet.</div>;
                 return (

@@ -449,7 +449,7 @@ export function LifecycleTimeline({ status }: any) {
 export function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null, financeNotes = [] }: any) {
   const rec: any = (settlements || []).find((s: any) => String(s.poNumber) === String(order.number)) || null;
   const producer = (contacts || []).find((c: any) => String(c.id) === String(order.supplier?.id)) || null;
-  const rateRec = producer ? currentCommissionRate(producer, localTodayISO()) : null;
+  const rateRec = producer ? currentCommissionRate(producer, order.loadingDate || order.orderDate || localTodayISO()) : null;   // v6.99.129 (AUD-13): the rate valid when the truck was bought, not today's
   const defRate = defaultTruckRate(order, lots, orders, invoices);
   const rate = rec?.ratePLNperEUR ?? defRate;
   const pctDefault = rateRec ? (commissionPctForSales(rateRec, 0) ?? rateRec.pct) : 0;

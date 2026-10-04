@@ -1218,7 +1218,7 @@ export default function SalesOrders({ archive = null,
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
         <OrderDetail
           order={selected}
-          soInvoices={invoicesForSO(selected.number)}
+          soInvoices={invoicesForSO(selected.number)} financeNotes={extFinanceNotes}
           allOrders={orders}
           fktConfigured={fktConfigured}
           fktMatching={fktMatching}

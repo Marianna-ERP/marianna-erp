@@ -401,7 +401,9 @@ export function buildClaimPostings(claim: any, opts: { plnPerEur?: any; todayISO
 
   const totalKg = lotSubjects.reduce((a: number, s: any) => a + num(s.affectedKg), 0);
   const postings = lotSubjects.map((s: any, i: number) => {
-    const share = totalKg > 0 ? num(s.affectedKg) / totalKg : 1 / lotSubjects.length;
+    // v6.99.134 (AUD-43): a split by kilos only when EVERY subject has its kilos — one empty subject would otherwise get nothing while the others take all; then equal shares
+    const everyKg = lotSubjects.every((x: any) => num(x.affectedKg) > 0);
+    const share = everyKg && totalKg > 0 ? num(s.affectedKg) / totalKg : 1 / lotSubjects.length;
     return {
       kind: "LOT_COST" as const,
       ref: str(s.ref),

@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";
 // SalesOrderForm.tsx — v6.99.68 (A-AUD-2, owner): moved out of SalesOrders.tsx unchanged; the module's shared helpers are imported from it.
 import LocationPicker from "./LocationPicker";
 import React, { useState, useMemo } from "react";
@@ -962,7 +963,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                       <div><Lbl>Qty (boxes)</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => {
                         const b = Math.round(parseFloat(e.target.value) || 0);
                         const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
-                        setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? { ...x, boxes: b, qty: kgPerBox > 0 ? Math.round(b * kgPerBox * 1000) / 1000 : x.qty } : x) }));
+                        setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? { ...x, boxes: Math.max(0, Math.round(parseNum(b))), qty: kgPerBox > 0 ? Math.round(Math.max(0, Math.round(parseNum(b))) * kgPerBox * 1000) / 1000 : x.qty } : x) }));
                       }} placeholder="e.g. 400" disabled={fullyLocked} /></div>
                     ) : (
                       <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>

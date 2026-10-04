@@ -30,6 +30,8 @@ export default function SOMarginCard({
   shipments = [],
   operationalCosts = [],
   allOrders = [],
+  invoices = [],
+  financeNotes = [],
 }: {
   order: any;
   lots?: any[];
@@ -37,6 +39,8 @@ export default function SOMarginCard({
   shipments?: any[];
   operationalCosts?: any[];
   allOrders?: any[];
+  invoices?: any[];
+  financeNotes?: any[];
 }) {
   const [mode, setMode] = useState<MarginMode>(() => {
     // Default heuristic: if SO is Confirmed/Reserved/Loading, show Forecast.
@@ -47,8 +51,8 @@ export default function SOMarginCard({
   });
 
   const margin = useMemo(
-    () => computeSOMarginWithOverhead(order, lots, pos, shipments, mode, operationalCosts, allOrders),
-    [order, lots, pos, shipments, operationalCosts, allOrders, mode]
+    () => computeSOMarginWithOverhead(order, lots, pos, shipments, mode, operationalCosts, allOrders, invoices, financeNotes),
+    [order, lots, pos, shipments, operationalCosts, allOrders, mode, invoices, financeNotes]
   );
 
   // v6.6: consignment awareness — sources from consignment lots mean P/L will

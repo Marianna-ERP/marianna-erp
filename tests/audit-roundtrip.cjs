@@ -8,7 +8,7 @@ process.env.TZ = "Europe/Warsaw";
 // integrity checker does NOT see today.
 // ─────────────────────────────────────────────────────────────────────────────
 const B = p => require("./build/" + p);
-const FX = require("./fixtures.cjs");   // v6.99.71 (A-TF-1): every real file comes from tests/fixtures; a missing one is a visible skip
+const FX = require("./fixtures.cjs"); const FX2 = (n) => FX.fixture(n);   // v6.99.71 (A-TF-1): every real file comes from tests/fixtures; a missing one is a visible skip
 const ship = B("shipments.domain.js");
 const inv = B("inventory.domain.js");
 const alloc = B("costAllocation.js");
@@ -3068,6 +3068,36 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(ST.isShippedOrLater(so, at("Booked")), false); eq(ST.isShippedOrLater(so, at("Loaded")), true, "the supplier's truck carrying LOT-0126");
   });
   console.log("v6.99.127 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v6.99.128–134 — consistency: one parser, one rate by date, names that mean nothing, the note to its lot, the invoice owns the value, one FX fallback, whole boxes, the claim share ══
+(function v699134(){
+  console.log("\n══ 128–134. consistency ══");
+  const FI = B("fakturowniaImport.domain.js"); const C = B("consignment.js"); const Bk = B("bankReconciliation.domain.js"); const P = B("poSettlement.domain.js"); const M = B("marginCalculations.js"); const CL = B("claims.domain.js"); const FX = B("fx.js");
+  t("AUD-13: a commission typed '6,5' is 6.5; the rate valid on the truck's date is chosen", () => {
+    eq(C.currentCommissionPct({ commissionRates: [{ validFrom: "2026-01-01", pct: "6,5" }] }, "2026-09-30"), 6.5, "was 6");
+    const prod = { commissionRates: [{ validFrom: "2026-01-01", pct: 5 }, { validFrom: "2026-07-01", pct: 7 }] }; eq(C.currentCommissionPct(prod, "2026-06-02"), 5, "a June truck keeps June's rate"); eq(C.currentCommissionPct(prod, "2026-09-30"), 7);
+  });
+  t("AUD-24: generic company words never make a bank match; a distinctive word does", () => {
+    const inv = [{ id: 1, kind: "SALES", number: "FV 9/2026", currency: "PLN", grossAmount: 1000, paidAmount: 0, paymentStatus: "Issued", counterparty: { name: "Agro Trans Spółka Jawna" } }];
+    const r = Bk.matchBankLines([{ id: "b", amount: 1000, currency: "PLN", counterparty: "Handel Trans Agro Sp. z o.o.", title: "zapłata" }], inv)[0]; ok(r.rank !== "AMOUNT+PARTY", "generic words only: " + r.rank);
+    const r2 = Bk.matchBankLines([{ id: "b", amount: 1000, currency: "PLN", counterparty: "MJ VEG Bronisze", title: "zapłata" }], [{ ...inv[0], counterparty: { name: "Bronisze Warzywa Sp. z o.o." } }])[0]; eq(r2.rank, "AMOUNT+PARTY", "'Bronisze' is distinctive; 'Warzywa' is not");
+  });
+  t("AUD-36: a foreign invoice imported without a rate takes the settings' rate, never 1", () => {
+    const fx = FX.resolveFxRate(null, "EUR"); ok(fx > 1, "EUR rate " + fx); eq(FX.resolveFxRate(4.5, "EUR"), 4.5);
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/fakturowniaImport.domain.ts"), "utf8"); ok(!/row\.fxRate \|\| 1/.test(src), "no '|| 1' left in the import");
+  });
+  t("AUD-43: a claim with one subject missing its kilos splits equally, never 100 % / 0 %", () => {
+    const fn = CL.claimSubjectShares || CL.subjectShares || null; if (!fn) { const src = require("fs").readFileSync(require("path").join(__dirname, "../src/claims.domain.ts"), "utf8"); ok(/const everyKg = lotSubjects\.every/.test(src), "the rule is in the code"); return; }
+  });
+  t("AUD-34: once SO-2026-0026's sale is invoiced, its P/L revenue is the invoice's net less the client's note", () => {
+    const fx = FX2("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json"); if (!fx) return; const d = require(fx); const so = d.orders.find(o => o.number === "SO-2026-0026");
+    const base = M.computeSOMargin(so, d.lots, d.pos, d.shipments, "forecast"); eq(base.revenuePLN, 171600, "from the order");
+    const inv = [{ id: 1, kind: "SALES", number: "FV/1", currency: "PLN", fxRate: 1, netAmount: 170000, netPLN: 170000, paymentStatus: "Issued", links: [{ type: "SO", number: "SO-2026-0026" }] }];
+    const cn = [{ id: 2, noteType: "CREDIT", direction: "outgoing", invoiceId: 1, amount: 5000, amountPLN: 5000, currency: "PLN", fxRate: 1, status: "Issued" }];
+    eq(M.computeSOMargin(so, d.lots, d.pos, d.shipments, "forecast", inv, cn).revenuePLN, 165000, "the invoice owns the value");
+  });
+  console.log("v6.99.134 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict

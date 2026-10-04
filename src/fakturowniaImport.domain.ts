@@ -1,3 +1,5 @@
+import { parseNum } from "./numbers";
+import { resolveFxRate } from "./fx";   // v6.99.133 (AUD-36): one FX fallback — a foreign invoice without a rate takes the settings' rate, never 1
 // ─────────────────────────────────────────────────────────────────────────────
 // v6.39.0 — Fakturownia IMPORT domain (pure, tested).
 //
@@ -30,7 +32,7 @@ export type ImportTag = typeof IMPORT_TAGS[number];
 
 export const FREIGHT_COST_TYPES = new Set(["road_freight", "sea_freight", "air_freight", "rail_freight"]);
 
-const num = (v: any) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+const num = (v: any) => parseNum(v);   // v6.99.128 (AUD-12): the one parser — "1 230,50" is 1 230,50, not 1
 const norm = (s: any) => String(s || "").trim().toLowerCase();
 
 /** A staged row — one Fakturownia cost invoice awaiting a tag. */
@@ -136,7 +138,7 @@ export interface Suggestion {
  */
 export function suggestForRow(row: StagedRow, contacts: any[], shipments: any[], pos: any[]): Suggestion {
   const c = contactForSeller(row, contacts);
-  const rowPLN = Math.round((row.net || row.gross) * (row.fxRate || 1) * 100) / 100;
+  const rowPLN = Math.round((row.net || row.gross) * (resolveFxRate(row.fxRate, row.currency)) * 100) / 100;
   const types = contactTypes(c).map(norm);
   const has = (...keys: string[]) => types.some(t => keys.some(k => t.includes(k)));
 
@@ -212,7 +214,7 @@ export function buildCostInvoice(row: StagedRow, tag: ImportTag, link: { shipmen
     counterparty: contact ? { id: contact.id, name: contact.name } : { name: row.seller },
     issueDate: row.date, saleDate: row.date, dueDate: row.dueDate || "",
     paymentMethod: "Transfer",
-    currency: row.currency, fxRate: row.fxRate || 1,
+    currency: row.currency, fxRate: resolveFxRate(row.fxRate, row.currency),
     netAmount: net, vatRate,
     positions: [], links,
     paymentStatus: "Issued", paidAmount: 0,   // v6.99.120 (AUD-18, owner rule 11): a received invoice, open until the BANK clears it — Fakturownia's paid flag is never read
@@ -238,7 +240,7 @@ export function applyReceivedCostLine(sh: any, costLineId: any, invoiceNumber: s
 /** Operational-cost row for an OVERHEAD-tagged invoice (parity with the old import). */
 export function operationalCostFromRow(row: StagedRow, category: string): any {
   const amount = row.net || row.gross;
-  const fx = row.fxRate || 1;
+  const fx = resolveFxRate(row.fxRate, row.currency);
   return {
     id: nextId(),
     period: String(row.date || localTodayISO()).slice(0, 7),
@@ -255,7 +257,7 @@ export function operationalCostFromRow(row: StagedRow, category: string): any {
 /** Warehouse-invoice record for a WAREHOUSE-tagged invoice (parity with the old import). */
 export function warehouseInvoiceFromRow(row: StagedRow, wh: any): any {
   const amount = row.net || row.gross;
-  const fx = row.fxRate || 1;
+  const fx = resolveFxRate(row.fxRate, row.currency);
   return {
     id: nextId(),
     warehouseId: wh?.id ?? "",

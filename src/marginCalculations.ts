@@ -1,3 +1,4 @@
+import { resolveFxRate } from "./fx";
 // ─── MARGIN / P&L CALCULATIONS ──────────────────────────────────────────────
 //
 // Pure functions for computing P/L on a Sales Order. No React, no UI — this
@@ -163,7 +164,7 @@ function computeRevenue(order: any, mode: MarginMode, lots: any[] = [], shipment
     }
 
     totalSO += amountSO;
-    lines.push({ label, amountSO, amountPLN: round2(amountSO * safe(order.fxRate || 1)), note });
+    lines.push({ label, amountSO, amountPLN: round2(amountSO * (safe(order.fxRate) || resolveFxRate(null, order.currency))), note });   // v6.99.133 (AUD-36)
   });
   // v6.49.0 (claims Phase 2): an ACCEPTED client concession reduces this order's
   // revenue. It arrives as a dated, source-tagged adjustment (claim:CLM-…) that is
@@ -388,7 +389,9 @@ export function computeSOMargin(
   lots: any[],
   pos: any[],
   shipments: any[],
-  mode: MarginMode
+  mode: MarginMode,
+  invoices: any[] = [],
+  financeNotes: any[] = []
 ): MarginBreakdown {
   const currency = order.currency || "PLN";
   const fxRate = safe(order.fxRate || 1) || 1;
@@ -397,7 +400,13 @@ export function computeSOMargin(
   const cogs = computeCOGS(order, lots, pos, mode);
   const direct = computeDirectCosts(order, shipments, mode, lots);
 
-  const revenuePLN = round2(rev.totalSO * fxRate);
+  // v6.99.132 (AUD-34): the invoice owns the value once issued — revenue = the sale's invoices' net (excl. VAT) at their rates,
+  // less the client's credit / debit notes on them; the order's lines only until invoiced (the rule the settlement follows)
+  const sales = (invoices || []).filter((i: any) => i && i.kind === "SALES" && i.paymentStatus !== "Cancelled" && !i.isProforma && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(order.number)));
+  const invNet = sales.reduce((a: number, i: any) => a + (safe(i.netPLN) || safe(i.netAmount) * (safe(i.fxRate) || 1)), 0);
+  const ids = new Set(sales.map((i: any) => String(i.id)));
+  const notesNet = (financeNotes || []).filter((n: any) => n && n.direction === "outgoing" && ids.has(String(n.invoiceId)) && !/Cancelled|Void/i.test(String(n.status || ""))).reduce((a: number, n: any) => a + (n.noteType === "DEBIT" ? 1 : -1) * Math.abs(safe(n.amountPLN) || safe(n.amount) * (safe(n.fxRate) || 1)), 0);
+  const revenuePLN = sales.length ? round2(invNet + notesNet) : round2(rev.totalSO * fxRate);
   const totalCostsPLN = round2(cogs.totalPLN + direct.totalPLN);
   const marginPLN = round2(revenuePLN - totalCostsPLN);
   const marginSO = round2(marginPLN / fxRate);

@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";
 import { productsMatch } from "./salesOrders.domain";
 // ─── v6.6: CONSIGNMENT (COMMISSION) SETTLEMENT ENGINE ───────────────────────
 // Producer ships goods on consignment; we sell at our prices, deduct all
@@ -47,12 +48,12 @@ export interface LotSettlementCalc {
   warnings: string[];
 }
 
-function n(v: any): number { const x = parseFloat(v); return isFinite(x) ? x : 0; }
+function n(v: any): number { return parseNum(v); }   // v6.99.129 (AUD-13): "6,5" is 6.5 — not 6
 function r2(x: number): number { return Math.round(x * 100) / 100; }
 
 // Season commission for a producer: the rate with the latest validFrom <= date.
 export function currentCommissionPct(producer: any, dateISO: string): number | null {
-  const rates: CommissionRate[] = (producer?.commissionRates || []).filter((r: any) => r && isFinite(parseFloat(r.pct as any)));
+  const rates: CommissionRate[] = (producer?.commissionRates || []).filter((r: any) => r && isFinite(parseNum(r.pct as any)) && String(r.pct ?? "").trim() !== "");
   if (!rates.length) return null;
   const applicable = rates
     .filter(r => !r.validFrom || String(r.validFrom) <= String(dateISO))
@@ -62,7 +63,7 @@ export function currentCommissionPct(producer: any, dateISO: string): number | n
 }
 /** The season rate RECORD (with bands) valid on a date — for per-truck banding. */
 export function currentCommissionRate(producer: any, dateISO: string): CommissionRate | null {
-  const rates: CommissionRate[] = (producer?.commissionRates || []).filter((r: any) => r && isFinite(parseFloat(r.pct as any)));
+  const rates: CommissionRate[] = (producer?.commissionRates || []).filter((r: any) => r && isFinite(parseNum(r.pct as any)) && String(r.pct ?? "").trim() !== "");
   if (!rates.length) return null;
   const applicable = rates.filter(r => !r.validFrom || String(r.validFrom) <= String(dateISO)).sort((a, b) => String(a.validFrom || "").localeCompare(String(b.validFrom || "")));
   return applicable[applicable.length - 1] || rates[0];

@@ -332,9 +332,11 @@ export function computeSOMarginWithOverhead(
   shipments: any[],
   mode: MarginMode,
   operationalCosts: OperationalCost[] = [],
-  allOrders: any[] = []
+  allOrders: any[] = [],
+  invoices: any[] = [],
+  financeNotes: any[] = []
 ): MarginWithOverhead {
-  const base = computeSOMargin(order, lots, pos, shipments, mode);
+  const base = computeSOMargin(order, lots, pos, shipments, mode, invoices, financeNotes)   /* v6.99.132 (AUD-34) */;
   const overhead = computeAllocatedOverhead(order, allOrders && allOrders.length ? allOrders : [order], lots, pos, shipments, operationalCosts, mode);
   const contributionMarginPLN = base.marginPLN;
   const contributionMarginSO = base.marginSO;

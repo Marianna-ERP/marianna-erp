@@ -85,14 +85,19 @@ export function computePOSettlement(input: {
   const salesInvoicesOf = (o: any) => (input.invoices || []).filter((i: any) => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && !i.isProforma && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(o.number)));
   const invNetPLN = (i: any) => num(i.netPLN) || num(i.netAmount) * (num(i.fxRate) || 1);
   const noteSignedPLN = (n: any) => (n.noteType === "DEBIT" ? 1 : -1) * Math.abs(num(n.amountPLN) || num(n.amount) * (num(n.fxRate) || 1));
-  const invoiceFacts = new Map<string, { factor: number; notesPLN: number; invoiced: boolean }>();
+  const invoiceFacts = new Map<string, { factor: number; notesPLN: number; notesOnMyLotsPLN: number; invoiced: boolean }>();
   const factsOf = (o: any) => {
     const k = String(o.number); if (invoiceFacts.has(k)) return invoiceFacts.get(k)!;
     const invs = salesInvoicesOf(o); const ids = new Set(invs.map((i: any) => String(i.id)));
     const orderedPLN = (o.items || []).reduce((a: number, it: any) => { const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice); return a + num(it.qty) * price * soRate(o); }, 0);
     const invoicedPLN = invs.reduce((a: number, i: any) => a + invNetPLN(i), 0);
-    const notesPLN = (input.financeNotes || []).filter((n: any) => n && n.direction === "outgoing" && ids.has(String(n.invoiceId)) && !/Cancelled|Void/i.test(String(n.status || ""))).reduce((a: number, n: any) => a + noteSignedPLN(n), 0);
-    const facts = { factor: invs.length && orderedPLN > 0 ? invoicedPLN / orderedPLN : 1, notesPLN, invoiced: invs.length > 0 }; bases.add(invs.length ? "invoice" : "order"); invoiceFacts.set(k, facts); return facts;
+    const notes = (input.financeNotes || []).filter((n: any) => n && n.direction === "outgoing" && ids.has(String(n.invoiceId)) && !/Cancelled|Void/i.test(String(n.status || "")));
+    // v6.99.131 (AUD-28): a note that names a lot (itself, or through its claim) belongs to that lot's truck in full; an unnamed note is shared by kilos
+    const lotOfNote = (n: any) => { if (n.lotNumber) return String(n.lotNumber); const c = (input.claims || []).find((x: any) => String(x.id) === String(n.claimId) || (n.claimNumber && String(x.number) === String(n.claimNumber))); return c && c.lotNumber ? String(c.lotNumber) : ""; };
+    const myLotNos = new Set(myLots.map(l => String(l.number)));
+    const notesPLN = notes.filter((n: any) => !lotOfNote(n)).reduce((a: number, n: any) => a + noteSignedPLN(n), 0);
+    const notesOnMyLotsPLN = notes.filter((n: any) => lotOfNote(n) && myLotNos.has(lotOfNote(n))).reduce((a: number, n: any) => a + noteSignedPLN(n), 0);
+    const facts = { factor: invs.length && orderedPLN > 0 ? invoicedPLN / orderedPLN : 1, notesPLN, notesOnMyLotsPLN, invoiced: invs.length > 0 }; bases.add(invs.length ? "invoice" : "order"); invoiceFacts.set(k, facts); return facts;
   };
   const lines: VarietyLine[] = myLots.map(lot => {
     let soldKg = 0, soldKgII = 0, salesPLN = 0, salesPLNII = 0;
@@ -127,7 +132,7 @@ export function computePOSettlement(input: {
     if (!(truckKg > 0) || !(soKg > 0)) return;
     const facts = factsOf(o);
     // v6.99.85 (A-CS-2): invoiced → the credit / debit notes on the invoices are the truth; not yet → the claim postings on the order
-    if (facts.invoiced) { creditNotesPLN += -facts.notesPLN * Math.min(1, truckKg / soKg); return; }
+    if (facts.invoiced) { creditNotesPLN += -facts.notesPLN * Math.min(1, truckKg / soKg) - facts.notesOnMyLotsPLN; return; }   // v6.99.131 (AUD-28)
     const adj = (o.claimAdjustments || o.adjustments || []).filter((a: any) => String(a?.source || "").startsWith("claim:"));
     adj.forEach((a: any) => { creditNotesPLN += Math.abs(num(a.pln ?? a.amountPLN)) * Math.min(1, truckKg / soKg); });
   });

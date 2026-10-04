@@ -152,7 +152,9 @@ export interface MatchSuggestion {
  *  removed, case-insensitively. */
 const squash = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
 
-const nameTokens = (v: any) => String(v || "").toLowerCase().replace(/[^a-ząćęłńóśźż0-9 ]/gi, " ").split(/\s+/).filter(t => t.length >= 4);
+// v6.99.130 (AUD-24): the words every company name carries never make a match — "Spółka", "Handel", "Trans", "Agro"… count for nothing
+const GENERIC_NAME_WORDS = new Set(["spółka", "spolka", "jawna", "akcyjna", "cywilna", "komandytowa", "firma", "handel", "handlowa", "handlowe", "handlowo", "usługowa", "uslugowa", "usługi", "uslugi", "trans", "transport", "logistics", "logistyka", "agro", "fruit", "fruits", "owoce", "warzywa", "group", "grupa", "gmbh", "limited", "company", "export", "import", "hurt", "sprzedaż", "sprzedaz", "przedsiębiorstwo", "przedsiebiorstwo", "produkcyjno"]);
+const nameTokens = (v: any) => String(v || "").toLowerCase().replace(/[^a-ząćęłńóśźż0-9 ]/gi, " ").split(/\s+/).filter(t => t.length >= 4 && !GENERIC_NAME_WORDS.has(t));
 function partyOverlap(a: any, b: any): boolean {
   const ta = nameTokens(a), tb = new Set(nameTokens(b));
   return ta.some(t => tb.has(t));

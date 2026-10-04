@@ -144,7 +144,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
 }
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+export function OrderDetail({ order, soInvoices = [], financeNotes = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
   const computedLinks = computedSOLinks(order, { shipments, invoices: (soInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), lots });
@@ -268,7 +268,7 @@ export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, o
           </Card>
 
           {canSeePL ? (
-            <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={allOrders} />
+            <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={allOrders} invoices={soInvoices} financeNotes={financeNotes} />
           ) : (
             <Card style={{ marginBottom: 16 }}>
               <SectionTitle>PROFITABILITY (P/L)</SectionTitle>

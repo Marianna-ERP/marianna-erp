@@ -196,6 +196,19 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Consistency (v6.99.128–134)
+
+- The Fakturownia import and the commission rate read numbers the one way ("1 230,50",
+  "6,5"); the truck's commission defaults to the rate valid on its date.
+- Bank matching ignores the words every company name carries (Spółka, Handel, Trans…).
+- A client's credit note that names a lot — itself or through its claim — counts for that
+  lot's truck in full; an unnamed note is shared by kilos.
+- Once a sale is invoiced, its P/L revenue is the invoice's net less the client's notes —
+  the rule the truck settlement already followed.
+- A foreign invoice without a rate takes the settings' rate for its currency, never 1.
+- Boxes are whole numbers; kilos derive from boxes × kg/box once.
+- A claim with several lots splits by kilos only when every lot has its kilos.
+
 ### One source for every sale: the lot (v6.99.127)
 
 A sales line always sells a **lot**. The picker shows lots with their state — *expected ·
