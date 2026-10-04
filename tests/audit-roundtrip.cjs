@@ -3100,6 +3100,30 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.134 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v6.99.135–136 — the import learns; linking offers the likely documents (owner 4 Oct) ══
+(function v699136(){
+  console.log("\n══ 135–136. the import learns · likely links ══");
+  const FI = B("fakturowniaImport.domain.js"); const IP = B("invoicePlus.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the owner's 2 Oct file"); if (!fx) return;
+  const d = require(fx);
+  t("A-FI-1: AGRO-HURT's next invoice is proposed from its last one — category, warehouse — and flagged recurring when the amount repeats; an unknown seller gets nothing", () => {
+    const hurt = d.invoices.filter(i => i.kind !== "SALES" && /AGRO-HURT/i.test(i.counterparty?.name || "")).sort((a, b) => String(b.issueDate).localeCompare(String(a.issueDate)));
+    // v6.99.141 (A-FI-3): AGRO-HURT is client + supplier + warehouse — a multi-role seller is learned BY CONTENT; a bare row gets no proposal
+    const sameText = [hurt[0].description, hurt[0].source, ...((hurt[0].positions || []).map(p => p && p.name))].filter(Boolean).join(" ");
+    eq(FI.learnFromRegister({ seller: "AGRO-HURT Tomasz Wieśniak", net: hurt[0].netAmount * 1.03 }, d.invoices, d.contacts), null, "nothing resembling: no guess");
+    const l = sameText ? FI.learnFromRegister({ seller: "AGRO-HURT Tomasz Wieśniak", net: hurt[0].netAmount * 1.03, description: sameText }, d.invoices, d.contacts) : null;
+    if (sameText) { ok(l, "a proposal by content"); ok(/by content/.test(l.from), l.from); eq(l.recurring, true); } else console.log("      (the last AGRO-HURT invoice carries no line text — content rule not exercisable on this file)");
+    const single = d.contacts.find(c => c.roles && c.roles.length === 1 && d.invoices.some(i => i.kind !== "SALES" && i.counterparty && String(i.counterparty.id) === String(c.id)));
+    if (single) { const li = d.invoices.filter(i => i.kind !== "SALES" && i.counterparty && String(i.counterparty.id) === String(single.id)).sort((a, b) => String(b.issueDate).localeCompare(String(a.issueDate)))[0]; const p = FI.learnFromRegister({ seller: single.name, net: li.netAmount }, d.invoices, d.contacts); ok(p && p.category, `a single-role seller (${single.name}) is learned from the seller alone`); }
+    eq(FI.learnFromRegister({ seller: "Nowa Firma", net: 100 }, d.invoices, d.contacts), null);
+  });
+  t("A-FI-2: the link proposals name a reason and are few; the full list is never offered without a typed number", () => {
+    const inv = d.invoices.find(i => i.kind !== "SALES" && (i.links || []).length === 0 && i.counterparty?.id != null) || d.invoices[0];
+    const p = IP.proposeLinks(inv, { shipments: d.shipments, pos: d.pos, lots: d.lots }); ok(Array.isArray(p)); ok(p.every(x => x.reason), "each proposal says why"); ok(p.length < 20, "a short list, not every document: " + p.length);
+  });
+  console.log("v6.99.136 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

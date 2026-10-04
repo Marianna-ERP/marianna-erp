@@ -362,3 +362,29 @@ export function duplicateCostInvoiceInfo(number: string, invoices: any[]): { num
   const hit = (invoices || []).find((i: any) => i.kind === "COST" && i.paymentStatus !== "Cancelled" && nrm(i.number) === n);
   return hit ? { number: hit.number, status: hit.paymentStatus, grossAmount: Number(hit.grossAmount) || 0, source: String(hit.source || "") } : null;
 }
+
+// ─── v6.99.135 (A-FI-1, owner 4 Oct): THE IMPORT LEARNS from the register ────────────────────────────────────────────
+// Most of the monthly invoices repeat: same seller, same kind, often the same amount. Before proposing anything from rules,
+// the import looks at the most recent earlier invoice of the same seller and proposes its tag, category and allocation
+// period; a same-seller invoice within ±10 % of the last amount is flagged recurring. Proposals are shown as proposals.
+export interface LearnedProposal { tag?: ImportTag; category?: string; operationalCategory?: string; warehouseId?: any; allocationPeriod?: "month"; recurring: boolean; from: string; }
+const TAG_FROM_CATEGORY: Record<string, ImportTag> = { FREIGHT: "FREIGHT", CUSTOMS: "CUSTOMS", WAREHOUSE: "WAREHOUSE", PURCHASE: "GOODS" };
+const wordsOf = (v: any) => new Set(String(v || "").toLowerCase().replace(/[^a-ząćęłńóśźż0-9 ]/gi, " ").split(/\s+/).filter(w => w.length >= 4));
+const resembles = (a: any, b: any) => { const A = wordsOf(a), B = wordsOf(b); if (!A.size || !B.size) return false; let hit = 0; A.forEach(w => { if (B.has(w)) hit++; }); return hit / Math.min(A.size, B.size) >= 0.5; };
+export function learnFromRegister(row: { seller: string; sellerTaxNo?: string; net?: number; gross?: number; description?: string; positions?: any[] }, invoices: any[], contacts: any[]): LearnedProposal | null {
+  const c = contactForSeller(row as any, contacts);
+  // v6.99.141 (A-FI-3, owner 4 Oct): a seller with several roles (client + supplier + warehouse, like AGRO-HURT) cannot be learned from the
+  // seller alone — its proposal comes from the last earlier invoice whose line names resemble this one's; nothing resembling → no proposal
+  const roles = c ? [c.type, ...(c.roles || []), ...(c.types || [])].filter(Boolean).map((t: any) => String(t).toLowerCase()) : [];
+  const multiRole = new Set(roles).size > 1;
+  const rowText = [row.description, ...((row.positions || []).map((p: any) => p?.name))].filter(Boolean).join(" ");
+  const sameSeller = (invoices || []).filter((i: any) => i && i.kind !== "SALES" && i.paymentStatus !== "Cancelled" && (
+    (c && i.counterparty?.id != null && String(i.counterparty.id) === String(c.id)) || (row.sellerTaxNo && i.counterparty?.taxNo && String(i.counterparty.taxNo).replace(/\D/g, "") === String(row.sellerTaxNo).replace(/\D/g, "")) || (row.seller && String(i.counterparty?.name || "").toLowerCase() === String(row.seller).toLowerCase())))
+    .sort((a: any, b: any) => String(b.issueDate || "").localeCompare(String(a.issueDate || "")));
+  const pool = multiRole ? sameSeller.filter((i: any) => resembles(rowText, [i.description, i.source, ...((i.positions || []).map((p: any) => p?.name))].filter(Boolean).join(" "))) : sameSeller;
+  const last = pool[0]; if (!last) return null;
+  const amt = Number(row.net || row.gross || 0), lastAmt = Number(last.netAmount || last.grossAmount || 0);
+  const recurring = sameSeller.length >= 2 && amt > 0 && lastAmt > 0 && Math.abs(amt - lastAmt) / lastAmt <= 0.10;
+  const cat = String(last.category || ""); const tag = TAG_FROM_CATEGORY[cat];
+  return { tag, category: cat || undefined, operationalCategory: last.operationalCategory || last.costCategory || undefined, warehouseId: cat === "WAREHOUSE" ? (last.warehouseId ?? last.counterparty?.id) : undefined, allocationPeriod: cat === "WAREHOUSE" && last.allocation ? "month" : undefined, recurring, from: `${last.number} (${String(last.issueDate || "").slice(0, 10)})${multiRole ? " · by content" : ""}` };
+}

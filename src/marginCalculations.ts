@@ -107,10 +107,15 @@ function lotNetShippedForSO(lot: any, soNumber: string): number {
 // Find a PO line referenced by a stock-out SO item.
 // PO shape varies between standalone-stub and integrated — handle both:
 //   { number, items: [{ id, product, unitPrice, qty, ... }], currency, fxRate, ... }
-function findPOLine(pos: any[], poNumber: string, poLineId: any): { po: any; line: any } | null {
+function findPOLine(pos: any[], poNumber: string, poLineId: any, product?: string, variety?: string): { po: any; line: any } | null {
   const po = (pos || []).find((p: any) => p.number === poNumber);
   if (!po) return null;
-  const line = (po.items || []).find((l: any) => String(l.id) === String(poLineId ?? 1)) || (po.items || [])[0];
+  // v6.99.142 (AUD-35): the PO line is found by id, then by product + variety — never "the first line", which priced apples at pepper prices
+  const items = po.items || [];
+  const line = items.find((l: any) => poLineId != null && String(l.id) === String(poLineId))
+    || items.find((l: any) => product && String(l.product || "").toLowerCase() === String(product).toLowerCase() && String(l.variety || "").toLowerCase() === String(variety || "").toLowerCase())
+    || items.find((l: any) => product && String(l.product || "").toLowerCase() === String(product).toLowerCase())
+    || (items.length === 1 ? items[0] : null);
   if (!line) return null;
   return { po, line };
 }
@@ -231,7 +236,7 @@ function computeCOGS(order: any, lots: any[], pos: any[], mode: MarginMode): { l
       }
     } else if (it.sourceType === "PO" && it.sourceRef) {
       // PO-sourced line — use the PO's purchase price as proxy
-      const found = findPOLine(pos, it.sourceRef, it.sourceLineId);
+      const found = findPOLine(pos, it.sourceRef, it.sourceLineId, it.product, it.variety);
       if (!found) {
         warnings.push(`Line "${product}": referenced PO ${it.sourceRef} not found — COGS unknown.`);
         hasMissingData = true;

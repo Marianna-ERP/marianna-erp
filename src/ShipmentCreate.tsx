@@ -5,6 +5,7 @@ import { SmallButton, ActionButton } from "./ui";
 import { isCancelled } from "./cancellation.domain";
 import { formatDMY, localTodayISO } from "./dates";
 import { nextId } from "./ids";
+import { truckLoadPlaces } from "./shipmentModel.domain";
 import { appendSourceGoods } from "./shipments.domain";   // v6.99.94
 import { placeForPrint } from "./locations";
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
@@ -145,6 +146,15 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
   }, [ref, sourceType]);
   // v6.99.12: the create window no longer asks for providers — carriers live on the units (D9)
   // v6.99.43 (M-5): the preview describes THIS shipment — the ticked lines with the kilos entered, not the whole order
+
+  // v6.99.138 (A-SC-2): the loading places of a sale's goods — the same rule the editor's tour uses
+  function soLoadingText(so: any): string {
+    const goods = (so?.items || []).filter((it: any) => it.sourceType === "STOCK" && it.sourceRef).map((it: any, i: number) => { const lot = (lots || []).find((l: any) => String(l.number) === String(it.sourceRef)); return { id: i + 1, lotRef: it.sourceRef, poRef: lot?.poRef, qtyKg: Number(it.qty) || 0 }; });
+    if (!goods.length) return "our warehouse";
+    const places = truckLoadPlaces({ goods }, { load: goods.map((g: any) => ({ goodsLineId: g.id, qtyKg: g.qtyKg })) }, pos || [], lots || []);
+    const names = Array.from(new Set(places.map((p: any) => placeForPrint(p.id, p.text, contacts).line || p.text || "").filter(Boolean)));
+    return names.length ? names.join(" + ") : "our warehouse";
+  }
   function previewGoods(): string {
     const rows = (srcItems || []).map((it: any, idx: number) => { const id = String(it.id ?? idx + 1); const rem = lineRemaining(it, idx); if (rem <= 0) return null; const on = selectedItemIds.length === 0 || selectedItemIds.includes(id); if (!on) return null; const v = lineQtys[id] === undefined ? rem : parseNum(lineQtys[id]); return `${it.product}${it.variety ? " " + it.variety : ""} ${fmtNum(v)} kg`; }).filter(Boolean);
     return rows.length ? rows.join(", ") : "nothing left to load";
@@ -221,9 +231,10 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
             <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(""); }}><option value="PO">From PO</option><option value="SO">From SO</option>{/* v6.99.43 (M-2, owner): Manual retired — a transfer between our warehouses is a movement, a return to the producer is the lot's Return action */}</Sel></div>
             {draftUnsourced > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 11.5, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px" }}>{(selectedSO as any)?.number} is a draft with {draftUnsourced} unsourced line{draftUnsourced > 1 ? "s" : ""} — source them from the PO first (the truck needs to know where it loads).</div>}
             <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{[...(pos || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{[...(orders || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((o: any) => o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}{o.status === "Draft" ? " — draft (the client may still change)" : ""}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
+            <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => setForm(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             {(sourceType === "PO" || sourceType === "SO") && ref && (() => {   // v6.99.94 (A-GR-2): groupage from the first window
               const pool = (sourceType === "PO" ? (pos || []).filter((p: any) => !isCancelled(p) && p.status !== "Draft") : (orders || []).filter((o: any) => !isCancelled(o) && o.status !== "Draft")).filter((x: any) => String(x.number) !== String(ref));
-              return <div style={{ gridColumn: "1 / -1" }}><Lbl>Groupage <span style={{ color: "#BBB", fontWeight: 400 }}>· {sourceType === "SO" ? "more sales orders on the same truck — one drop each" : "more purchase orders on the same truck — one pickup each"}</span></Lbl>
+              return <div style={{ gridColumn: "1 / -1", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 10px" }}>{/* v6.99.137 (A-SC-1): tinted so the user sees it */}<Lbl>Groupage <span style={{ color: "#BBB", fontWeight: 400 }}>· {sourceType === "SO" ? "more sales orders on the same truck — one drop each" : "more purchase orders on the same truck — one pickup each"}</span></Lbl>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
                   {moreRefs.map(no => <span key={no} style={{ padding: "3px 8px", borderRadius: 12, background: "#EEF2FF", color: "#3730A3", fontSize: 12, fontWeight: 700 }}>{no} <SmallButton kind="remove" title="Take it off the groupage" onClick={() => setMoreRefs(m => m.filter(x => x !== no))}>Remove</SmallButton></span>)}
                   <Sel value="" onChange={e => { const v = e.target.value; if (v) setMoreRefs(m => m.includes(v) ? m : [...m, v]); }} style={{ maxWidth: 360 }}>
@@ -232,7 +243,6 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
                   </Sel>
                   {moreRefs.length > 0 && <span style={{ fontSize: 11.5, color: "#3730A3", fontWeight: 700 }}>Groupage · {moreRefs.length + 1} {sourceType === "SO" ? "drops" : "pickups"}</span>}
                 </div></div>; })()}
-            <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => setForm(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
             {/* v6.92.0 (A-R8-7): the freight currency belongs to the unit price, not to the shipment. */}
           </div>
         </Card>
@@ -350,7 +360,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
           <SectionTitle>Preview</SectionTitle>
           <div style={{ fontSize: 12, color: "#444", lineHeight: 1.6 }}>
             {sourceType === "PO" && selectedPO && <div><strong>{selectedPO.number}</strong> from {selectedPO.supplier?.name}. Loading now: {previewGoods()}. Route: {placeForPrint(null, selectedPO.supplier?.name ? `${selectedPO.supplier.name}` : "", contacts).line || "supplier"} → {placeForPrint(selectedPO.destinationLocationId, selectedPO.destinationText, contacts).line || "—"}.</div>}   {/* v6.99.43 (M-5): what this shipment carries and where it really goes, with the address */}
-            {sourceType === "SO" && selectedSO && <div><strong>{selectedSO.number}</strong> for {selectedSO.client?.name}. Loading now: {previewGoods()}. Route: our warehouse → {placeForPrint(selectedSO.destinationLocationId, selectedSO.destinationText || selectedSO.client?.address, contacts).line || "—"}.</div>}
+            {sourceType === "SO" && selectedSO && <div><strong>{selectedSO.number}</strong> for {selectedSO.client?.name}. Loading now: {previewGoods()}. Route: {soLoadingText(selectedSO)} → {placeForPrint(selectedSO.destinationLocationId, selectedSO.destinationText || selectedSO.client?.address, contacts).line || "—"}.</div>}{/* v6.99.138 (A-SC-2): loading = where the goods are (the lot's place; the PO's for goods not yet received), never "our warehouse" by default */}
             {sourceType === "Manual" && <div>Manual shipment: {form.product}, {fmtNum(form.qtyKg)} kg, {locText(form.originLocationId)} {"->"} {locText(form.destinationLocationId)}.</div>}
           </div>
         </Card>

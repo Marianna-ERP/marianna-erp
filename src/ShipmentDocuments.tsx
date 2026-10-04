@@ -255,11 +255,11 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
         </tr>)}</tbody>
       </table>
 
-      <div style={{ marginTop: 8, fontWeight: 850, fontSize: 11 }}>Terms / Warunki</div>
+      <div style={{ marginTop: 6, fontWeight: 850, fontSize: 9.5 }}>Terms / Warunki</div>{/* v6.99.140 (A-TO-8, owner): the terms in a smaller type — room below for the carrier's signature and stamp */}
       {allRoad ? (
-        <ol style={{ marginTop: 3, paddingLeft: 16, marginBottom: 0 }}>{ROAD_TERMS.map((t, i) => <li key={i} style={{ marginBottom: 1.5 }}><span>{t[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>/ {t[1]}</span></li>)}</ol>
+        <ol style={{ marginTop: 2, paddingLeft: 14, marginBottom: 0, fontSize: 8, lineHeight: 1.25 }}>{ROAD_TERMS.map((t, i) => <li key={i} style={{ marginBottom: 1 }}><span>{t[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>/ {t[1]}</span></li>)}</ol>
       ) : manualTermsLines.length > 0 ? (
-        <ol style={{ marginTop: 3, paddingLeft: 16, marginBottom: 0 }}>{manualTermsLines.map((t, i) => <li key={i} style={{ marginBottom: 1.5 }}>{t}</li>)}</ol>
+        <ol style={{ marginTop: 2, paddingLeft: 14, marginBottom: 0, fontSize: 8, lineHeight: 1.25 }}>{manualTermsLines.map((t, i) => <li key={i} style={{ marginBottom: 1 }}>{t}</li>)}</ol>
       ) : (
         <div style={{ marginTop: 3, fontStyle: "italic", color: "#555" }}>Terms as per separate agreement / booking confirmation. · Warunki zgodnie z odrebna umowa / potwierdzeniem bookingu.</div>
       )}

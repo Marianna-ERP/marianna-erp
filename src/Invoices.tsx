@@ -21,7 +21,7 @@ import {
   buildFakturowniaPayload, noteSignedPLN, pushBlockers } from "./invoicing";
 import * as XLSX from "xlsx";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice } from "./fakturownia";
-import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES } from "./fakturowniaImport.domain";
+import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
@@ -125,10 +125,11 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
   function stage(raws: any[]) {
     const staged = raws.map((r: any, i: number) => {
       const sug = suggestForRow(r, contacts, shipments, pos);
+      const learned = learnFromRegister(r, invoices, contacts);   // v6.99.135 (A-FI-1): what this seller's last invoice was
       const dup = isDuplicateCostInvoice(r.number, invoices);
-      return { ...r, ...sug, dup, include: !dup && (r.net || r.gross) > 0,
-        category: guessCostCategory(`${r.seller} ${r.description || ""}`),
-        warehouseId: warehouses[0]?.id ?? "" };
+      return { ...r, ...sug, ...(learned?.tag ? { tag: learned.tag } : {}), dup, include: !dup && (r.net || r.gross) > 0,
+        category: learned?.category || guessCostCategory(`${r.seller} ${r.description || ""}`),
+        warehouseId: learned?.warehouseId ?? (warehouses[0]?.id ?? ""), learned: learned ? { from: learned.from, recurring: learned.recurring } : null };
     });
     setRows(staged);
     if (!staged.length) setError("No cost invoices found.");
@@ -292,6 +293,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     )}
                     {r.tag === "SKIP" && <span style={{ color: "#CBD5E1" }}>not posted</span>}
                     {r.reason && <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{r.reason}</div>}
+                    {r.learned && <div style={{ fontSize: 10, color: "#6D28D9", marginTop: 2, fontWeight: 700 }}>proposed from {r.learned.from}{r.learned.recurring ? " · recurring monthly" : ""}</div>}{/* v6.99.135 (A-FI-1) */}
                   </div>
                 </div>
               );
@@ -871,22 +873,18 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
   // SINV/COMMISSION → SOs first).
   const [linkQuery, setLinkQuery] = React.useState("");
   const docOptions = React.useMemo(() => {
-    const soOpts = (orders || []).map((o: any) => ({ type: "SO", number: o.number }));
-    const poOpts = (pos || []).map((p: any) => ({ type: "PO", number: p.number }));
-    const shOpts = (shipments || []).map((s: any) => ({ type: "Shipment", number: s.number }));
-    const cat = String(form.category || "");
-    const ordered = cat === "PURCHASE" ? [...poOpts, ...shOpts, ...soOpts]
-      : (cat === "TRANSPORT" || cat === "FORWARDER" || cat === "BROKER") ? [...shOpts, ...poOpts, ...soOpts]
-      : (cat === "SINV" || cat === "COMMISSION") ? [...soOpts, ...shOpts, ...poOpts]
-      : [...soOpts, ...poOpts, ...shOpts];
-    const q = linkQuery.trim().toLowerCase();
+    // v6.99.136 (A-FI-2, owner 4 Oct): a long list of every document invites a wrong click — offer the LIKELY ones (same counterparty, number quoted,
+    // matching amount or period — the suggestion engine's, each with its reason) and whatever is already linked; anything else only when its number is typed in full
     const linkedSet = new Set((form.links || []).map((l: any) => String(l.number)));
-    const filtered = q ? ordered.filter((d: any) => String(d.number).toLowerCase().includes(q) || String(d.type).toLowerCase().includes(q)) : ordered;
-    // linked ones always visible and pinned first, even if the filter would hide them
-    const linkedOpts = ordered.filter((d: any) => linkedSet.has(String(d.number)));
-    const rest = filtered.filter((d: any) => !linkedSet.has(String(d.number)));
-    return [...linkedOpts, ...rest];
-  }, [orders, pos, shipments, form.category, form.links, linkQuery]);
+    const likely = (() => { try { return (proposeLinks(form, { shipments, pos, lots: [] }) || []).map((x: any) => ({ type: x.type === "SHIPMENT" ? "Shipment" : x.type === "LOT" ? "Lot" : x.type, number: x.number, reason: x.reason })); } catch { return []; } })();
+    const all = [...(orders || []).map((o: any) => ({ type: "SO", number: o.number })), ...(pos || []).map((p: any) => ({ type: "PO", number: p.number })), ...(shipments || []).map((s2: any) => ({ type: "Shipment", number: s2.number }))];
+    const q = String(linkQuery || "").trim().toLowerCase();
+    const typed = q.length >= 6 ? all.filter((d: any) => String(d.number).toLowerCase() === q || String(d.number).toLowerCase().endsWith(q)) : [];
+    const linkedOpts = all.filter((d: any) => linkedSet.has(String(d.number)));
+    const seen = new Set<string>(); const out: any[] = [];
+    [...linkedOpts, ...likely, ...typed].forEach((d: any) => { const k = String(d.number); if (seen.has(k)) return; seen.add(k); out.push(d); });
+    return out;
+  }, [orders, pos, shipments, form, linkQuery]);
 
   function setParty(id: string) { const c = partyOptions.find((x: any) => String(x.id) === String(id)); sf("counterparty", c ? { id: c.id, name: c.name, nip: c.nip || c.vatEuId } : null); }
   function toggleLink(d: any) {
@@ -951,7 +949,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
                 <div style={{ fontSize: 12, color: "#334155" }}>Linked to <b>{(form.links || []).filter((l: any) => l.type === "SO").map((l: any) => l.number).join(", ")}</b> — fixed for an invoice issued from a Sales Order. To invoice something else, cancel this one and issue from the right order.</div>
               ) : (<>
               <div style={{ width: "100%", marginBottom: 8 }}>
-                <Inp value={linkQuery} onChange={(e: any) => setLinkQuery(e.target.value)} placeholder="Search documents to link (e.g. PO-2026, SHP, client SO number)…" />
+                <Inp value={linkQuery} onChange={(e: any) => setLinkQuery(e.target.value)} placeholder="Likely documents are listed — type a full number (e.g. SO-2026-0027) to link anything else" />
               </div>
               {docOptions.map((d: any) => { const on = (form.links || []).find((l: any) => l.number === d.number); return <button key={d.type + d.number} onClick={() => toggleLink(d)} style={{ padding: "6px 12px", border: `1px solid ${on ? "#2563EB" : "#E5E7EB"}`, background: on ? "#EFF6FF" : "#fff", borderRadius: 8, fontSize: 12, color: on ? "#1D4ED8" : "#555", cursor: "pointer", fontWeight: on ? 600 : 400 }}>{on && "✓ "}{d.type} {d.number}</button>; })}
               {docOptions.length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No SOs / POs / shipments to link yet.</div>}

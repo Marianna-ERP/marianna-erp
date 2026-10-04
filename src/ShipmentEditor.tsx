@@ -330,20 +330,6 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             {[...(draft.poRefs || []), ...(draft.soRefs || [])].map((r: any) => <span key={r} style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: "#F1F5F9", color: "#334155" }}>{r}</span>)}
             <span style={{ fontSize: 10.5, color: "#94A3B8" }}> · carrying {(draft.goods || []).length} row(s) · {(draft.goods || []).reduce((t: number, g: any) => t + (parseFloat(g.qtyKg) || 0), 0).toLocaleString("pl-PL")} kg{(() => { const docs = Array.from(new Set([...(draft.poRefs || []), ...(draft.soRefs || [])])); return docs.length ? ` (from ${docs.join(" and ")})` : ""; })()}</span>{/* v6.99.49 (H-1): the shipment's own goods, from every document it carries */}
           </div>
-          {/* Groupage add-source bar (BP-53) — one prominent line so linking more cargo is easy. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "nowrap", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 9, padding: "8px 10px" }}>
-            <span style={{ fontSize: 11, fontWeight: 800, color: "#1D4ED8" }}>GROUPAGE · add another document's cargo:</span>{/* v6.99.49 (H-2) */}
-            <select value="" onChange={e => { const po = pos.find((p: any) => p.number === e.target.value); if (po) setDraft(prev => appendSourceGoods(prev, "PO", po, lots, { todayISO: localTodayISO, nextId })); e.target.value = ""; }}
-              style={{ fontSize: 12, fontWeight: 700, padding: "7px 10px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#1D4ED8", cursor: "pointer", width: 230, maxWidth: 230, textOverflow: "ellipsis" }}>   {/* v6.99.59 (A-OW-4 · H-2): both pickers on one line */}
-              <option value="">＋ Link another PO…</option>
-              {pos.filter((p: any) => !["Draft", "Cancelled"].includes(p.status) && !(draft.poRefs || []).includes(p.number)).map((p: any) => <option key={p.number} value={p.number}>{p.number} — {p.supplier?.name || ""}</option>)}
-            </select>
-            <select value="" onChange={e => { const so = orders.find((o: any) => o.number === e.target.value); if (so) setDraft(prev => appendSourceGoods(prev, "SO", so, lots, { todayISO: localTodayISO, nextId })); e.target.value = ""; }}
-              style={{ fontSize: 12, fontWeight: 700, padding: "7px 10px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#1D4ED8", cursor: "pointer", width: 230, maxWidth: 230, textOverflow: "ellipsis" }}>   {/* v6.99.59 (A-OW-4 · H-2): both pickers on one line */}
-              <option value="">＋ Link another SO…</option>
-              {orders.filter((o: any) => !["Draft", "Cancelled"].includes(o.status) && !(draft.soRefs || []).includes(o.number)).map((o: any) => <option key={o.number} value={o.number}>{o.number} — {o.client?.name || ""}</option>)}
-            </select>
-          </div>
         </div>
         <button onClick={() => requestClose()} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#475569", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }} title="v6.99.59 (A-OW-5): close the editor — it asks first if something is not saved">Close</button>
       </div>
@@ -835,6 +821,12 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
         {/* v6.83.0 (owner ruling): GOODS first — what will be loaded — then the legs that carry it. */}
         <Card>
           <SectionTitle>Goods on this shipment</SectionTitle>
+          {/* v6.99.139 (A-SE-1, owner): the standalone groupage bar is gone (the create window has Groupage); an order can still join later from here */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, fontSize: 11.5, color: "#475569" }}>
+            <span style={{ fontWeight: 700 }}>+ add an order's goods:</span>
+            <select value="" onChange={e => { const po = pos.find((p: any) => p.number === e.target.value); if (po) setDraft(prev => appendSourceGoods(prev, "PO", po, lots, { todayISO: localTodayISO, nextId })); }} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12 }}><option value="">purchase order…</option>{pos.filter((p: any) => p.status !== "Cancelled" && !(draft.poRefs || []).includes(p.number)).map((p: any) => <option key={p.number} value={p.number}>{p.number} · {p.supplier?.name || ""}</option>)}</select>
+            <select value="" onChange={e => { const so = orders.find((o: any) => o.number === e.target.value); if (so) setDraft(prev => appendSourceGoods(prev, "SO", so, lots, { todayISO: localTodayISO, nextId })); }} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12 }}><option value="">sales order…</option>{orders.filter((o: any) => o.status !== "Cancelled" && !(draft.soRefs || []).includes(o.number)).map((o: any) => <option key={o.number} value={o.number}>{o.number} · {o.client?.name || ""}</option>)}</select>
+          </div>
           <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>Adjust quantities and pallets here — e.g. if you entered pallets on the SO after creating this shipment, update them here so the transport order shows the right figure.</div>
           {(draft.goods || []).length === 0 && <div style={{ fontSize: 12, color: "#AAA" }}>No goods lines on this shipment.</div>}
           {(draft.legs || []).length > 1 && (

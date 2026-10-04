@@ -196,6 +196,31 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Clean-up II, part 1 (v6.99.137–142)
+
+- **Create shipment:** Source type, Reference and Mode on one line; the Groupage box tinted;
+  the route preview reads where the goods are (the lot's place, or the PO's for goods not yet
+  received) — never "our warehouse" by default.
+- **Edit shipment:** the standalone groupage bar is gone; "+ add an order's goods" sits in the
+  Goods box for an order joining after creation.
+- **Transport order:** the terms in a smaller type, leaving room for the carrier's signature
+  and stamp.
+- **The import learns by seller — and by content for a multi-role seller:** Dantex (rent) and
+  Orlen (fuel) are learned from the seller; AGRO-HURT (client, supplier and warehouse) from
+  the last invoice whose line names resemble the new one's; nothing resembling → no guess.
+- A sale line's PO cost line is found by id, then by product and variety — never "the first
+  line".
+
+### The import learns; likely links (v6.99.135–136)
+
+- **Importing from Fakturownia:** each row is proposed from the seller's most recent earlier
+  invoice — its kind, category and warehouse — marked *proposed from <that invoice>*; a
+  same-seller invoice within ±10 % of the last amount is marked *recurring monthly*. Correct
+  a seller's category once and the next import follows it.
+- **Linking an invoice:** the Linked documents section lists only the likely documents
+  (same counterparty, number quoted, matching amount or period), each with its reason, plus
+  what is already linked; anything else by typing the full number.
+
 ### Consistency (v6.99.128–134)
 
 - The Fakturownia import and the commission rate read numbers the one way ("1 230,50",
