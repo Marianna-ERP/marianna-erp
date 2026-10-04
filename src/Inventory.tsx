@@ -7,7 +7,7 @@ import { SmallButton, ActionButton, DocLink } from "./ui";
 import DateInput from "./DateInput";
 import { nextSettlementNumber, buildCommissionInvoiceDraft } from "./settlement.domain";
 import { claimsForLot } from "./claims.domain";
-import { fmtNum } from "./format";
+import { fmtNum, statusWord } from "./format";
 import { Card, Lbl, useConfirm, DocRef, cancelledDocSet} from "./ui";
 import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.domain";
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
@@ -1158,6 +1158,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
       const loc = locById(l.locationId);
       if (filterStatus === "inPossession" && !inPossessionStatuses.has(l.status)) return false;
       if (filterStatus !== "all" && filterStatus !== "inPossession" && l.status !== filterStatus) return false;
+      if ((filterStatus === "all" || filterStatus === "inPossession") && /Cancelled/.test(String(l.status))) return false;   // v6.99.106 (A-DEL-4): deleted lots show only under their Deleted entries
       if (filterLocationType !== "All" && loc?.type !== filterLocationType) return false;
       if (filterProduct !== "All" && l.product !== filterProduct) return false;
       if (filterQuality !== "All" && l.quality !== filterQuality) return false;
@@ -1514,7 +1515,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             <option value="inPossession">In our possession</option>
             <option value="all">All statuses</option>
-            {Object.keys(LOT_STATUSES).map(s => <option key={s} value={s}>{s}</option>)}
+            {Object.keys(LOT_STATUSES).map(s => <option key={s} value={s}>{statusWord(s)}</option>)}
           </select>
           <select value={filterLocationType} onChange={e => setFilterLocationType(e.target.value)} title="Filter by location" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             {["All", ...Object.keys(LOCATION_TYPES)].map(t => <option key={t} value={t}>{t === "All" ? "All locations" : `${locType(t).icon} ${locType(t).label}`}</option>)}

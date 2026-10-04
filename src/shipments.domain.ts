@@ -116,9 +116,14 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
       // excess silently — an over-issue arriving via a shipment was invisible.
       const overIssue = qty > currentPhysical ? Math.round((qty - currentPhysical) * 1000) / 1000 : 0;
       const soRef = goodsSoRef || (sh.soRefs || [])[0] || (String(sh.governingSoRef || "").trim() || null);
-      const note = `SHIP_OUT via ${sh.number}${(sh.soRefs || []).length ? ` for ${(sh.soRefs || []).join(", ")}` : ""}`;
-      const movement = { id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: gradeOfGoodsForLot(sh, lot), fromId, toId: destId, soRef, shipmentRef: sh.number, note };
-      return { ...lot, physicalKg: nextPhysical, overIssuedKg: Math.round(((num(lot.overIssuedKg)) + overIssue) * 1000) / 1000, status: nextPhysical <= 0 ? "Shipped Out" : lot.status, movements: [...(lot.movements || []), movement] };
+      // v6.99.100 (A-SH-M1, owner 2 Oct): a groupage truck takes one lot for SEVERAL sales — one SHIP_OUT per goods row (per sale),
+      // so the lot's history, the P/L by sale and the claims name the right order; a single-sale lot posts exactly as before
+      const perSale = relatedGoods.filter((g: any) => num(g.qtyKg) > 0 && g.soRef);
+      const distinctSales = new Set(perSale.map((g: any) => String(g.soRef)));
+      const movements = distinctSales.size > 1
+        ? perSale.map((g: any) => ({ id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: num(g.qtyKg), grade: g.quality || gradeOfGoodsForLot(sh, lot), fromId, toId: destId, soRef: String(g.soRef), shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number} for ${g.soRef}` }))
+        : [{ id: deps.nextId(), date, type: "SHIP_OUT", qtyKg: qty, grade: gradeOfGoodsForLot(sh, lot), fromId, toId: destId, soRef, shipmentRef: sh.number, note: `SHIP_OUT via ${sh.number}${(sh.soRefs || []).length ? ` for ${(sh.soRefs || []).join(", ")}` : ""}` }];
+      return { ...lot, physicalKg: nextPhysical, overIssuedKg: Math.round(((num(lot.overIssuedKg)) + overIssue) * 1000) / 1000, status: nextPhysical <= 0 ? "Shipped Out" : lot.status, movements: [...(lot.movements || []), ...movements] };
     }
 
     if (purpose === "TRANSFER") {

@@ -15,7 +15,7 @@ export function lotStatusLabel(status: any): { label: string; color: string; bg:
   if (/^In Stock$/i.test(s)) return { label: "In stock", color: "#16A34A", bg: "#DCFCE7" };
   if (/^Shipped Out$/i.test(s)) return { label: "Shipped", color: "#2563EB", bg: "#DBEAFE" };
   if (/^Delivered/i.test(s)) return { label: "Delivered", color: "#0F766E", bg: "#CCFBF1" };
-  if (/Cancelled/i.test(s)) return { label: "Withdrawn", color: "#DC2626", bg: "#FEE2E2" };   // v6.99.89 (A-NM-1)
+  if (/Cancelled/i.test(s)) return { label: "Deleted", color: "#DC2626", bg: "#FEE2E2" };   // v6.99.99 (A-DEL-4)
   if (/^Damaged$/i.test(s)) return { label: "Damaged", color: "#DC2626", bg: "#FEE2E2" };
   return { label: s || "—", color: "#6B7280", bg: "#F3F4F6" };
 }

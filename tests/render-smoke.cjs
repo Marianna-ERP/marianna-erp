@@ -381,10 +381,9 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const po = d9.pos.find(p => p.number === "PO-2026-0043");
     const box = renderToStaticMarkup(React.createElement(POm.TruckSettlementCard, { order: po, lots: d9.lots, orders: d9.orders, invoices: d9.invoices || [], shipments: d9.shipments, claims: d9.claims || [], inspections: d9.inspections || [], contacts: d9.contacts, settlements: d9.poSettlements, setSettlements: () => {} }));
     const bt = T(box);
-    ["IN PLN", "Sales (excl. VAT) 171 600,00 PLN", "IN EUR · rate 4.35", "Sales after costs 39 448,28 EUR", "Our commission 6.5% 2564,14 EUR", "1 · Vega-Pro Kft. issues an EXTRA INVOICE 2448,28 EUR", "2 · we issue our COMMISSION INVOICE 2564,14 EUR", "3 · after compensation Vega-Pro Kft. owes us 115,86 EUR", "14 300 expected", "Transport and other costs"].forEach(w => { if (!bt.includes(w)) bad.push("box lacks " + JSON.stringify(w)); });
+    ["IN PLN", "Sales (excl. VAT) 171 600,00 PLN", "IN EUR · rate 4.35", "Sales after costs 39 448,28 EUR", "Our commission 6.5% 2564,14 EUR", "1 · Vega-Pro Kft. issues an EXTRA INVOICE 2448,28 EUR", "2 · we issue our COMMISSION INVOICE 2564,14 EUR", "3 · after compensation Vega-Pro Kft. owes us 115,86 EUR", "14 300 expected"].forEach(w => { if (!bt.includes(w)) bad.push("box lacks " + JSON.stringify(w)); });
     if (/Transfer after compensation|Gross sales|Net sales /.test(bt)) bad.push("an old label survived");
-    const labels = (box.match(/<div><\/div><div style="color:#0F766E">ARRIVED<\/div>/) || []).length; if (!labels) bad.push("the label row has no spacer over Variety · lot");
-    if (!/SOLD<\/div><div style="color:#B45309">LEFT/.test(box) || !/span 3;color:#16A34A/.test(box.replace(/grid-column:span 3;color:#16A34A;text-align:center/, "span 3;color:#16A34A"))) bad.push("SOLD does not span its three columns");
+    if (/ARRIVED<\/div>|SORTED INTO/.test(box)) bad.push("the label line is still there (A-PV-3)"); if (/−0,00|\+0,00/.test(bt)) bad.push("signed zero lines still shown (A-ST-8)");
     if (!/<option[^>]*>USD<\/option>/.test(box)) bad.push("provisional currency choice missing");
     const srep = (box.match(/id="sales-report-doc-[^"]+"[\s\S]*?(?=<div id="qc-report-)/) || [""])[0]; const st = T(srep);
     ["Sales report", "Raport sprzedaży", "Producer", "Vega-Pro Kft.", "PO-2026-0043", "3 · After compensation — Vega-Pro Kft. owes us 115,86 EUR"].forEach(w => { if (!st.includes(w)) bad.push("sales report lacks " + JSON.stringify(w)); });
@@ -494,10 +493,10 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [] };
     const POm = require(path.resolve("./src/PurchaseOrders")); const SOm = require(path.resolve("./src/SalesOrders"));
     _where = "PO view PO-2026-0044"; const pv = renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0044" }));
-    if (!/<button[^>]*background:#DC2626[^>]*>Delete<\/button>/.test(pv)) bad.push("PO view: no solid red Delete"); if (!/>Withdraw<\/button>/.test(pv)) bad.push("PO view: no Withdraw");
+    if (!/<button[^>]*background:#DC2626[^>]*>Delete<\/button>/.test(pv)) bad.push("PO view: no solid red Delete"); if (/>Withdraw<\/button>/.test(pv)) bad.push("PO view: Withdraw still there (A-DEL-4)");
     _where = "SO view SO-2026-0027"; const sv = renderToStaticMarkup(React.createElement(SOm.default, { ...c9, initialSelectedNumber: "SO-2026-0027" }));
-    if (!/>Delete<\/button>/.test(sv) || !/>Withdraw<\/button>/.test(sv)) bad.push("SO view: Delete / Withdraw missing");
-    const cancelledPO = d9.pos.find(p => p.status === "Cancelled"); if (cancelledPO) { const cv = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: cancelledPO.number }))); if (!/Withdrawn — read-only/.test(cv)) bad.push("a withdrawn PO does not say so"); if (/\bCancelled\b/.test(cv.replace(/Cancelled at/g, ""))) bad.push("the word Cancelled still shows on a withdrawn PO"); }
+    if (!/>Delete<\/button>/.test(sv) || />Withdraw<\/button>/.test(sv)) bad.push("SO view: Delete missing or Withdraw still there");
+    const cancelledPO = d9.pos.find(p => p.status === "Cancelled"); if (cancelledPO) { const cv = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: cancelledPO.number }))); if (!/Deleted — read-only/.test(cv)) bad.push("a deleted PO does not say so"); if (/\bCancelled\b/.test(cv.replace(/Cancelled at/g, ""))) bad.push("the word Cancelled still shows on a deleted PO"); }
     _where = "shipment view SHP-2026-0035"; const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const M = require(path.resolve("./src/shipmentModel.domain"));
     const sh35 = d9.shipments.find(s => s.number === "SHP-2026-0035"); const dh = renderToStaticMarkup(React.createElement(Det, { shipment: sh35, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onEdit: () => {} })); const dt = T(dh);
     if (!/AGRO-HURT[^|]{0,40}\+ Mikolaj Majewski|Mikolaj Majewski[^|]{0,40}\+ AGRO-HURT/.test(dt)) bad.push("road leg: the trucks' carriers not named: " + (dt.match(/Route \/ legs.{0,160}/) || [""])[0]); if (!/DCS TRAMACO/.test(dt)) bad.push("sea leg: the booking's forwarder not named");
@@ -528,6 +527,22 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     if (!bad.length) { passed++; console.log("  \u2713 window header Close drawn; SHP-2026-0039: the tour in the editor (load at AGRO-HURT 14 265 kg, 3 drops) and on its transport order with the cargo per drop"); }
     else { failed++; console.log("  \u2717 close / groupage — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 close / groupage —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
+
+// v6.99.102–104 (A-PV-4, A-ST-8, A-PV-3): PO-2026-0044's view — its sales linked, the settlement full width with less / plus lines
+{ try {
+    const pf = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!pf) throw new Error("fixture missing");
+    const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [], poSettlements: d9.poSettlements || [], claims: d9.claims || [] };
+    const POm = require(path.resolve("./src/PurchaseOrders"));
+    _where = "PO view PO-2026-0044"; const pv = renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0044" })); const pt = T(pv);
+    ["SO-2026-0027", "SO-2026-0028", "SO-2026-0029"].forEach(n => { if (!pt.includes(n)) bad.push("linked documents lack " + n); });
+    const iS = pt.indexOf("Truck settlement"), iL = pt.indexOf("LINKED DOCUMENTS"), iO = pt.indexOf("ORDER DETAILS"); if (!(iS > 0 && iO > iS && iL > iO)) bad.push(`order: settlement ${iS}, order details ${iO}, linked ${iL}`);
+    if (/less: .* 0,00 PLN|−0,00/.test(pt)) bad.push("a zero or signed line shows"); if (!/Sales \(excl\. VAT\)/.test(pt)) bad.push("sales line missing");
+    if (!/↳ SO-2026-0028/.test(pt) || !/↳ SO-2026-0029/.test(pt)) bad.push("the settlement lines do not name their sales (A-ST-9)");
+    const lh2 = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9 }))); if (/PO-2026-0010/.test(lh2)) bad.push("a deleted PO shows in the list by default (A-DEL-4)");
+    if (!bad.length) { passed++; console.log("  \u2713 PO-2026-0044: the three sales linked through its lots; settlement first and full width, Order details, then Linked documents; less / plus lines without signs"); }
+    else { failed++; console.log("  \u2717 PO-2026-0044 view — " + bad.join(" · ")); }
+  } catch (e) { failed++; console.log("  \u2717 PO-2026-0044 view —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
 { const bf = Array.from(new Set(buttonFaults));
   if (!bf.length) { passed++; console.log("  \u2713 button vocabulary: close is 'Close', Delete is red, Import/Export/Print/Edit use the one wording"); }

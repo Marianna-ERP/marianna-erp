@@ -196,17 +196,23 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
-### Delete, Withdraw, Cancel — and the shipment view (v6.99.88–91)
+### Delete and Cancel — one standard (v6.99.99)
 
-- **Delete** removes a record. A PO or SO can be deleted only while it is a Draft and
-  nothing depends on it (no sale, shipment, received stock or invoice); the window
-  names what blocks it, and the audit log keeps the deletion.
-- **Withdraw** keeps the record, marked **Withdrawn** — for anything already sent to
-  the producer or the client, or with history (PO, SO, shipment, invoice).
+- **Delete** on a PO, SO, shipment, lot, invoice, claim or company never erases it: the
+  record stays on record, marked **Deleted**, struck through in red wherever it appears,
+  and opens read-only; it is out of stock, totals and status. The audit log keeps who
+  deleted it.
+- A record that other documents depend on cannot be deleted: the window lists those
+  documents by number — delete them first.
 - **Cancel** only closes a form or a window and goes back.
-- **Shipment view:** Operational checklist | Documents on one row, Costs / billing |
-  Notes on the next; the Route / legs row names the trucks' carriers and the booking's
-  forwarder (older shipments had theirs written once onto their trucks and booking).
+- Status filters have a *Deleted* entry; the former "Withdraw" is gone.
+- Shipment view: Operational checklist | Documents on one row, Costs / billing | Notes on
+  the next; the Route / legs row names the trucks' carriers and the booking's forwarder.
+- PO-2026-0044 and alike (v6.99.100–104): a groupage truck posts one ship-out per sale;
+  a quality report gets its number when saved; the PO's Linked documents show the sales
+  made from its lots; the settlement box sits full width above Order details and Linked
+  documents, with its deductions under *less* / *plus* and zero lines hidden.
+
 
 ### One owner for a lot's quantity, and the layouts (v6.99.87)
 

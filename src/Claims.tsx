@@ -265,9 +265,13 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
     setSelectedId(c.id);
   };
 
+  // v6.99.99 (A-DEL-4, owner ruling 2 Oct): a claim is never removed — it stays on record, struck through, read-only; a credit /
+  // debit note it produced blocks the deletion and is named by number
   const removeClaim = async (c: any) => {
-    if (!(await uiConfirm({ tone: "danger", title: `Delete ${c.number}?`, message: "The claim document is removed. Any credit note or inventory movement it produced stays where it is.", confirmLabel: "Delete" }))) return;
-    setClaims((prev: any[]) => (prev || []).filter((x: any) => String(x.id) !== String(c.id)));
+    const notes = (financeNotes || []).filter((n: any) => n && n.status !== "Cancelled" && (String(n.claimId) === String(c.id) || String(n.claimNumber) === String(c.number) || String(n.relatedRef) === String(c.number)));
+    if (notes.length) { await uiAlert({ tone: "warn", title: `${c.number} can't be deleted`, message: `These documents depend on it — delete them first:\n\n${notes.map((n: any) => n.number || `${n.noteType || "note"} ${n.id}`).join("\n")}` }); return; }
+    if (!(await uiConfirm({ tone: "danger", title: `Delete ${c.number}?`, message: "The claim stays on record, struck through and read-only. Any inventory movement it produced stays where it is.", confirmLabel: "Delete" }))) return;
+    setClaims((prev: any[]) => (prev || []).map((x: any) => String(x.id) === String(c.id) ? { ...x, status: "Cancelled", cancelledAt: new Date().toISOString().slice(0, 10) } : x));
     setSelectedId(null);
   };
 
@@ -398,7 +402,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   {selected.direction === "CONCESSION" && (
                     <SmallButton kind="green" onClick={() => recoverFrom(selected)} title="Create a linked claim against the party responsible">+ Recover from supplier / carrier</SmallButton>
                   )}
-                  <SmallButton kind="red" onClick={() => removeClaim(selected)}>Delete</SmallButton>
+                  <SmallButton kind="delete" onClick={() => removeClaim(selected)}>Delete</SmallButton>
                   <SmallButton kind="close" onClick={() => setSelectedId(null)}>Close</SmallButton>
                 </div>
                 <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12, lineHeight: 1.5 }}>{ds.hint}</div>

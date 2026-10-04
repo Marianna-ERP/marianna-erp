@@ -144,7 +144,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
 }
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onWithdraw = null, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
   const computedLinks = computedSOLinks(order, { shipments, invoices: (soInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), lots });
@@ -219,9 +219,8 @@ export function OrderDetail({ order, soInvoices = [], onBack, onEdit, onPrint, o
               style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #B45309", background: "#FFFBEB", color: "#B45309", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⚠ Record client claim</button>
           )}
           {order.status === "Cancelled"
-            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Withdrawn — read-only</span>
+            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Deleted — read-only</span>
             : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
-          {order.status !== "Cancelled" && onWithdraw && <ActionButton action="withdrawDoc" onClick={onWithdraw} />}{/* v6.99.89 (A-NM-1) */}
           <ActionButton action="delete" onClick={onDelete} />
         </div>
       </div>

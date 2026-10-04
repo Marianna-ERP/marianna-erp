@@ -31,6 +31,6 @@ export function isRealISODate(v: any): boolean {
   return mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth(y, mo);
 }
 
-// v6.99.89 (A-NM-1, owner ruling 1 Oct): the stored status "Cancelled" is shown as "Withdrawn" on every screen, print and
-// export — Cancel only ever means "go back". The stored value stays (many checks read it; the data is not migrated).
-export function statusWord(s: any): string { const v = String(s ?? ""); return v === "Cancelled" ? "Withdrawn" : v.replace(/\bCancelled\b/g, "Withdrawn"); }
+// v6.99.99 (A-DEL-4, owner ruling 2 Oct): the stored status "Cancelled" is shown as "Deleted" on every screen, print and
+// export — a deleted record stays on record, struck through, read-only. Cancel only ever means "go back". The stored value stays.
+export function statusWord(s: any): string { const v = String(s ?? ""); return v === "Cancelled" ? "Deleted" : v.replace(/\bCancelled\b/g, "Deleted"); }   // v6.99.99 (A-DEL-4, owner ruling 2 Oct): the state word is DELETED

@@ -841,7 +841,7 @@ export default function SalesOrders({ archive = null,
   // Filter
   const filtered = orders.filter(o => archiveShow(o) &&   /* v6.99.54 (AR-4) */
     (!search || o.number.toLowerCase().includes(search.toLowerCase()) || (o.client?.name || "").toLowerCase().includes(search.toLowerCase()) || o.items.some(it => (it.product || "").toLowerCase().includes(search.toLowerCase()) || (it.sourceRef || "").toLowerCase().includes(search.toLowerCase()))) &&
-    (filterStatus === "All" || o.status === filterStatus) &&
+    (filterStatus === "All" ? o.status !== "Cancelled" : o.status === filterStatus) &&   // v6.99.106 (A-DEL-4): deleted records show only under the Deleted entry
     (filterClient === "All" || o.client?.name === filterClient)
   );
 
@@ -1126,22 +1126,19 @@ export default function SalesOrders({ archive = null,
     setCollectionFor(null);
   }
 
-  // v6.99.89 (A-NM-1, owner ruling 1 Oct): DELETE removes an SO that never left us (Draft) with no shipment and no invoice;
-  // anything confirmed to the client or with history is WITHDRAWN (kept, marked Withdrawn — the former "Cancel").
-  async function deleteOrder() {
-    const no = selected.number;
-    const shipped = (extShipments || []).some((sh: any) => sh && sh.status !== "Cancelled" && ((sh.soRefs || []).includes(no) || String(sh.governingSoRef) === String(no) || (sh.goods || []).some((g: any) => String(g.soRef) === String(no))));
-    const invoiced = (extInvoices || []).some((i: any) => i && i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(no)));
-    const blockers = [shipped && "a shipment", invoiced && "an invoice"].filter(Boolean);
-    if (blockers.length) { await uiAlert({ tone: "warn", title: `${no} can't be deleted`, message: `It has ${blockers.join(" and ")}. Withdraw it instead: it stays on record, marked Withdrawn.` }); return; }
-    if (selected.status !== "Draft") { await uiAlert({ tone: "warn", title: `${no} can't be deleted`, message: `It is ${selected.status} — it has gone out to the client. Withdraw it instead: it stays on record, marked Withdrawn.` }); return; }
-    if (!(await uiConfirm({ tone: "danger", title: `Delete ${no}?`, message: "The order is removed. The audit log keeps the record of the deletion.", confirmLabel: "Delete" }))) return;
-    setOrders(prev => prev.filter(p => p.id !== selected.id));
-    recordAudit({ module: "Sales orders", docType: "SO", docNumber: no, action: "deleted", summary: `${no} deleted (Draft, no shipment, no invoice)` });
-    setSelected(null); setView("list");
+  // v6.99.99 (A-DEL-4, owner ruling 2 Oct): ONE Delete — the SO stays on record (shown "Deleted"), struck through, read-only;
+  // blocked while anything depends on it, the dependants named by number.
+  function soDependants(so: any): string[] {
+    const no = so.number; const out: string[] = [];
+    (extShipments || []).filter((sh: any) => sh && sh.status !== "Cancelled" && ((sh.soRefs || []).includes(no) || String(sh.governingSoRef) === String(no) || (sh.goods || []).some((g: any) => String(g.soRef) === String(no)))).forEach((sh: any) => out.push(sh.number));
+    (extInvoices || []).filter((i: any) => i && i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "SO" && String(l.number) === String(no))).forEach((i: any) => out.push(i.number));
+    ((extClaims as any[]) || []).filter((c: any) => c && c.status !== "Cancelled" && (String(c.soRef) === String(no) || String(c.orderRef) === String(no))).forEach((c: any) => out.push(c.number));
+    return out;
   }
-  async function withdrawOrder() {
-    if (!(await uiConfirm({ tone: "danger", title: `Withdraw ${selected.number}?`, message: "Reservations will be released and any linked SHIP_OUT will be reversed in Inventory. The order stays on record, marked Withdrawn.", confirmLabel: "Withdraw", cancelLabel: "Keep" }))) return;
+  async function deleteOrder() {
+    const deps = soDependants(selected);
+    if (deps.length) { await uiAlert({ tone: "warn", title: `${selected.number} can't be deleted`, message: `These documents depend on it — delete them first:\n\n${deps.join("\n")}` }); return; }
+    if (!(await uiConfirm({ tone: "danger", title: `Delete ${selected.number}?`, message: "Reservations will be released. The order stays on record, struck through and read-only.", confirmLabel: "Delete", cancelLabel: "Keep" }))) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     reverseCancelledSOInInventory(cancelled);
     setOrders(prev => prev.map(p => p.id === selected.id ? cancelled : p));
@@ -1248,7 +1245,6 @@ export default function SalesOrders({ archive = null,
           }}
           onIssueInvoice={() => setInvoiceOrder(selected)}
           onDelete={deleteOrder}
-          onWithdraw={withdrawOrder}
           onRecordCollection={() => setCollectionFor(selected)}
           onRecordClientClaim={() => {
             // v6.63.0 (D-13): one claims UI — this button now opens the Claims module
@@ -1310,7 +1306,7 @@ export default function SalesOrders({ archive = null,
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SO, client, product, LOT/PO…" style={{ flex: "1 1 240px", minWidth: 200, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
-            {["All", ...Object.keys(SO_STATUSES)].map(s => <option key={s} value={s}>{s === "All" ? "All statuses" : s}</option>)}
+            {["All", ...Object.keys(SO_STATUSES)].map(s => <option key={s} value={s}>{s === "All" ? "All statuses" : statusWord(s)}</option>)}
           </select>
           <Sel value={filterClient} onChange={e => setFilterClient(e.target.value)} style={{ maxWidth: 220 }}>
             <option value="All">All clients</option>

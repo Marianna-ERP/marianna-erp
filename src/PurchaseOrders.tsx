@@ -432,7 +432,7 @@ export function LifecycleTimeline({ status }: any) {
           </React.Fragment>
         );
       })}
-      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Withdrawn</span>}
+      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Deleted</span>}
     </div>
   );
 }
@@ -496,10 +496,7 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
       </div>
       <div id={`sales-report-${order.id}`} style={{ fontSize: 11.5 }}>
         {/* v6.99.36 (A-R25-1, owner): grouped headers, figures right-aligned with separators, a totals row, the currency named once. */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontWeight: 700, color: "#64748B", fontSize: 9.5, textAlign: "right" }}>
-          <div style={{ textAlign: "left" }} />
-          <div />{/* v6.99.84 (A-ST-4): the spacer over VARIETY · LOT — without it every label sat one column to the left */}<div style={{ color: "#0F766E" }}>ARRIVED</div><div style={{ gridColumn: "span 3", color: "#7C3AED", textAlign: "center" }}>SORTED INTO</div><div style={{ gridColumn: "span 3", color: "#16A34A", textAlign: "center" }}>SOLD</div><div style={{ color: "#B45309" }}>LEFT</div>
-        </div>
+        {/* v6.99.104 (A-PV-3, owner 2 Oct): the ARRIVED · SORTED INTO · SOLD · LEFT label line removed — the column heads say it */}
         <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontWeight: 700, color: "#94A3B8", fontSize: 10, textAlign: "right" }}><div style={{ textAlign: "left" }}>VARIETY · LOT</div><div>RECEIVED kg</div><div>CLASS I kg</div><div>CLASS II kg</div><div>WASTE kg</div><div>SOLD I kg</div><div>SOLD II kg</div><div>VALUE ({"PLN"})</div><div>ON STOCK kg</div></div>
         {calc.lines.map(l => <div key={l.lotNumber} style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, padding: "4px 0", borderTop: "1px solid #F1F5F9", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
           <div style={{ textAlign: "left" }}><b>{l.variety || l.product}</b> <span style={{ color: "#94A3B8" }}>{l.lotNumber}</span></div>
@@ -511,6 +508,13 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
           <div>{Math.round(l.soldKgII || 0).toLocaleString("pl-PL")}</div>
           <div style={{ fontWeight: 700 }}>{fmt((l.salesPLN || 0) + (l.salesPLNII || 0)).replace(" PLN", "")}</div>
           <div style={{ color: (l.onStockKg || 0) > 0 ? "#B45309" : "#94A3B8" }}>{Math.round(l.onStockKg || 0).toLocaleString("pl-PL")}</div>
+          {/* v6.99.105 (A-ST-9, owner 2 Oct): the sales behind the line — SO, client, class, kilos, value, and the claims that touch them */}
+          {(l.sales || []).map((sr: any, si: number) => <div key={si} style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontSize: 11, color: "#475569", textAlign: "right" }}>
+            <div style={{ textAlign: "left", paddingLeft: 14 }}>↳ <DocLink num={sr.soNumber} from={order.number}><span style={{ color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700 }}>{sr.soNumber}</span></DocLink>{sr.client ? ` · ${sr.client}` : ""}{sr.claims.length ? <span style={{ color: "#B45309", fontWeight: 700 }}> · claim {sr.claims.map((cn: string, ci: number) => <DocLink key={cn} num={cn} from={order.number}><span>{ci ? ", " : ""}{cn}</span></DocLink>)}</span> : null}</div>
+            <div /><div /><div /><div />
+            <div>{sr.grade === "I" ? Math.round(sr.kg).toLocaleString("pl-PL") : ""}</div><div>{sr.grade === "II" ? Math.round(sr.kg).toLocaleString("pl-PL") : ""}</div>
+            <div>{fmt(sr.pln).replace(" PLN", "")}</div><div />
+          </div>)}
         </div>)}
         {(() => { const T = calc.lines.reduce((a: any, l: any) => ({ r: a.r + l.receivedKg, i: a.i + l.classIKg, ii: a.ii + l.classIIKg, w: a.w + l.wasteKg, si: a.si + (l.soldKg || 0), sii: a.sii + (l.soldKgII || 0), v: a.v + (l.salesPLN || 0) + (l.salesPLNII || 0), s: a.s + (l.onStockKg || 0) }), { r: 0, i: 0, ii: 0, w: 0, si: 0, sii: 0, v: 0, s: 0 });
           return <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, padding: "5px 0", borderTop: "2px solid #E5E7EB", textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
@@ -522,12 +526,10 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
         <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
           <div>
             <div style={{ fontSize: 10, fontWeight: 800, color: "#64748B", letterSpacing: "0.06em", marginBottom: 3 }}>IN PLN</div>
+            {/* v6.99.103 (A-ST-8, owner 2 Oct): deductions and additions as positive amounts under less / plus; zero lines hidden; no signs */}
             <div title={calc.salesBasis === "invoice" ? "the sales invoices, at their locked rates" : "the sales orders, at their rates — replaced by the invoices once issued"}>Sales (excl. VAT) <b>{fmt(calc.grossPLN)}</b></div>
-            <div title="credit notes given to the client on these sales (claims)">Client credit notes <b>−{fmt(calc.creditNotesPLN)}</b></div>
-            <div title="our sorting / storage / handling costs on the lots">Warehouse service <b>−{fmt(calc.warehousePLN)}</b></div>
-            <div title="transport and other costs on the shipments carrying the truck and on the sales' own shipments">Transport and other costs <b>−{fmt(calc.additionalPLN)}</b></div>
-            <div title="claims settled by anyone but the producer — e.g. a carrier (Claims module)">Recovered from third parties <b>+{fmt(calc.thirdPartyRecoveriesPLN)}</b></div>
-            <div title="claims raised against the producer (Claims module) — deducted from his payout">Claims against the producer <b>−{fmt(calc.producerRecoveriesPLN)}</b></div>
+            {[["less: client credit notes", calc.creditNotesPLN], ["less: warehouse service", calc.warehousePLN], ["less: transport and other costs", calc.additionalPLN], ["less: claims against the producer", calc.producerRecoveriesPLN], ["plus: recovered from third parties", calc.thirdPartyRecoveriesPLN]]
+              .filter(([, v]) => Math.abs(Number(v) || 0) >= 0.005).map(([l, v]) => <div key={String(l)} style={{ color: "#475569" }}>{l} <b>{fmt(Math.abs(Number(v)))}</b></div>)}
             <div style={{ marginTop: 2 }}>Sales after costs <b>{fmt(calc.netPLN)}</b></div>
           </div>
           <div>
@@ -582,7 +584,7 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
           const lot = (lots || []).find((l: any) => String(l.number) === String(x.lotNumber)) || { number: x.lotNumber, product: x.product || "", variety: x.variety || "" };
           const sh = (shipments || []).find((s: any) => s && String(s.status) !== "Cancelled" && ((s.poRefs || []).includes(order.number) || (s.goods || []).some((g: any) => String(g.lotRef) === String(lot.number))) && s.supplierRef);
           return <div key={String(x.id)} style={{ pageBreakAfter: "always" }}>
-            <QualityReportDoc x={x} lot={lot} no={lastReportNumber("QR", String(x.id))} supplierRef={sh?.supplierRef || ""} inline />
+            <QualityReportDoc x={x} lot={lot} no={x.number || lastReportNumber("QR", String(x.id))} supplierRef={sh?.supplierRef || ""} inline />
           </div>;
         })}
       </div>
@@ -866,6 +868,7 @@ export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: ex
       if (consOnly && String(o.pricingMode || "") !== "consignment") return false;   // v6.99.84 (A-PO-C1)
       if (filterStatus === "Active" && !activeStatuses.has(o.status)) return false;
       if (filterStatus !== "All" && filterStatus !== "Active" && o.status !== filterStatus) return false;
+      if ((filterStatus === "All" || filterStatus === "Active") && o.status === "Cancelled") return false;   // v6.99.106 (A-DEL-4): deleted records show only under the Deleted entry
       if (filterSupplier !== "All" && o.supplier?.name !== filterSupplier) return false;
       if (q) {
         const hay = `${o.number} ${o.supplier?.name || ""} ${o.items.map(i => i.product).join(" ")}`.toLowerCase(); // v6.79.0 (W-8): legacy arrays no longer searched
@@ -1070,29 +1073,20 @@ ${blockNote}`.trim(),
     recordAudit({ module: "Purchase orders", docType: "PO", docNumber: String(l.poRef || ""), action: "updated", summary: `${l.number} received ${Math.round(kg).toLocaleString("pl-PL")} kg on ${date} (direct receipt)` });
     notifySaved(`receipt of ${l.number}`);
   }
-  // v6.99.89 (A-NM-1, owner ruling 1 Oct): DELETE removes a PO that never left us (Draft) and that nothing depends on,
-  // with its untouched expected lots; anything sent to the producer or with history is WITHDRAWN (kept, marked Withdrawn).
+  // v6.99.99 (A-DEL-4, owner ruling 2 Oct): ONE Delete — the PO is never removed: it stays on record (stored status "Cancelled",
+  // shown "Deleted"), struck through, read-only, out of stock and totals. Blocked while anything depends on it; the window
+  // names the dependent documents by number so they can be deleted first.
+  function poDependants(po: any): string[] {
+    const poNum = po.number; const out: string[] = [];
+    (extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "PO" && it.sourceRef === poNum) || (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(poNum))))).forEach((so: any) => out.push(so.number));
+    (extShipments || []).filter((sh: any) => sh.status !== "Cancelled" && ((sh.poRefs || []).includes(poNum) || (sh.goods || []).some((g: any) => String(g.poRef) === String(poNum)))).forEach((sh: any) => out.push(sh.number));
+    (extLots || []).filter((l: any) => String(l.poRef) === String(poNum) && !/Cancelled/.test(String(l.status)) && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || (l.movements || []).some((m: any) => m && !m.voided))).forEach((l: any) => out.push(l.number));
+    (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "PO" && String(l.number) === String(poNum))).forEach((i: any) => out.push(i.number));
+    return out;
+  }
   async function deleteOrder() {
-    const poNum = selected.number;
-    const deps = poDependents(selected);
-    if (deps.length) { await uiAlert({ tone: "warn", title: `${poNum} can't be deleted`, message: `It has ${deps.join(", ")}. Unlink them first — or Withdraw the PO: it stays on record, marked Withdrawn.` }); return; }
-    if (selected.status !== "Draft") { await uiAlert({ tone: "warn", title: `${poNum} can't be deleted`, message: `It is ${selected.status} — it has gone out to the producer. Withdraw it instead: it stays on record, marked Withdrawn.` }); return; }
-    const myLots = (extLots || []).filter((l: any) => String(l.poRef) === String(poNum));
-    if (!(await uiConfirm({ tone: "danger", title: `Delete ${poNum}?`, message: `The PO is removed${myLots.length ? ` with its ${myLots.length} expected lot${myLots.length === 1 ? "" : "s"}` : ""}. The audit log keeps the record of the deletion.`, confirmLabel: "Delete" }))) return;
-    setOrders(prev => prev.filter(o => o.id !== selected.id));
-    if (myLots.length && typeof extSetLots === "function") extSetLots((prev: any[]) => (prev || []).filter((l: any) => String(l.poRef) !== String(poNum)));
-    recordAudit({ module: "Purchase orders", docType: "PO", docNumber: poNum, action: "deleted", summary: `${poNum} deleted (Draft, nothing depended on it)${myLots.length ? ` with ${myLots.map((l: any) => l.number).join(", ")}` : ""}` });
-    setSelected(null); setView("list");
-  }
-  function poDependents(po: any): string[] {
-    const poNum = po.number;
-    const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
-    const hasShipment = (extShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
-    const moved = (extLots || []).some((l: any) => String(l.poRef) === String(poNum) && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || (l.movements || []).some((m: any) => m && !m.voided)));
-    const invoiced = (extInvoices || []).some((i: any) => i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "PO" && String(l.number) === String(poNum)));
-    return [hasLinkedSO && "a sales order", hasShipment && "a shipment", moved && "received / moved inventory", invoiced && "an invoice"].filter(Boolean) as string[];
-  }
-  async function withdrawOrder() {
+    const deps = poDependants(selected);
+    if (deps.length) { await uiAlert({ tone: "warn", title: `${selected.number} can't be deleted`, message: `These documents depend on it — delete them first:\n\n${deps.join("\n")}` }); return; }
     // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
     const poNum = selected.number;
     const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
@@ -1123,10 +1117,10 @@ ${blockNote}`.trim(),
   });
     if (hasLinkedSO || hasShipment || lotReceivedOrMoved) {
       const what = [hasLinkedSO && "a Sales Order", hasShipment && "a shipment", lotReceivedOrMoved && "received / moved inventory"].filter(Boolean).join(", ");
-      await uiAlert({ tone: "warn", title: "PO has dependents", message: `PO ${poNum} can't be withdrawn: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.` });
+      await uiAlert({ tone: "warn", title: "PO has dependants", message: `PO ${poNum} can't be deleted: it has downstream dependents (${what}).\n\nUnlink every downstream document first — remove the SO lines sourced from it, cancel/disconnect its shipments, and clear its inventory — then the PO can be removed.` });
       return;
     }
-    if (!(await uiConfirm({ tone: "danger", confirmLabel: "Withdraw", title: `Withdraw ${selected.number}?`, message: "Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.", cancelLabel: "Keep" }))) return;
+    if (!(await uiConfirm({ tone: "danger", confirmLabel: "Delete", title: `Delete ${selected.number}?`, message: "Related expected lots will be blocked and non-shipped SOs sourced from this PO will return to Draft for review.", cancelLabel: "Keep" }))) return;
     const cancelled = { ...selected, status: "Cancelled", cancelledAt: localTodayISO() };
     setOrders(prev => prev.map(o => o.id === selected.id ? cancelled : o));
     reflectCancelledPOInInventory(cancelled);
@@ -1226,13 +1220,12 @@ ${blockNote}`.trim(),
           }}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
           supplierTrucks={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled" && String(s.arrangedBy || "").toUpperCase() === "SUPPLIER")}   // v6.99.42 (hotfix): the box needs the shipment OBJECTS, not their numbers
-          computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === selected.number)).map((so: any) => so.number)}
+          computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "PO" && it.sourceRef === selected.number) || (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(selected.number))))).map((so: any) => so.number)}   /* v6.99.102 (A-PV-4): also the sales from the PO's lots */
           computedLots={(extLots || []).filter((l: any) => String(l.poRef) === String(selected.number)).map((l: any) => l.number)}
           computedInvoices={computedPOLinks(selected, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }).linkedInvoices}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => { setForm({ ...selected }); setView("form"); }}
           onDelete={deleteOrder}
-          onWithdraw={withdrawOrder}
           onPrint={async () => {
             if (selected.status === "Draft") {
               await uiAlert({ tone: "warn", title: "Draft PO", message: "Cannot print or share a draft PO. Confirm the order first." });
@@ -1369,7 +1362,7 @@ ${blockNote}`.trim(),
                     ))}
                   </div>
                 </div>
-                <div style={{ fontSize: 11.5, color: isLoadingOverdue ? "#DC2626" : "#444", fontWeight: isLoadingOverdue ? 600 : 400 }}>{formatDMY(o.orderDate) || formatDMY(o.loadingDate) || "—"}</div>
+                <div style={{ fontSize: 11.5, color: isLoadingOverdue ? "#B45309" : "#444", fontWeight: isLoadingOverdue ? 600 : 400 }} title={isLoadingOverdue ? "the loading date has passed on an active PO" : undefined}>{formatDMY(o.orderDate) || formatDMY(o.loadingDate) || "—"}</div>{/* v6.99.107 (A-CLR-1, owner): amber — a timing hint, not an error */}
                 <div style={{ fontSize: 11.5, color: "#444" }}>{formatDMY(o.expectedDeliveryDate) || "—"}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>

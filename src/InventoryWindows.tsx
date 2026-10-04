@@ -470,7 +470,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
         {myIns.map((x: any) => { const v = inspectionVerdict(x); return (
           <div key={String(x.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
             <span style={{ width: 20 }}>🔬</span>
-            <b style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{qrNos[String(x.id)] || lastReportNumber("QR", String(x.id)) || "—"}</b>
+            <b style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{x.number || qrNos[String(x.id)] || lastReportNumber("QR", String(x.id)) || "—"}</b>
             <span>{x.date} · {x.stage} · {x.inspector || "—"}</span>
             <span>checked {num(x.checkedQty).toLocaleString("pl-PL")} {x.unit || "kg"} ({samplePctOf(x)} %)</span>
             <span>defects <b>{v.totalPct} %</b></span>
@@ -478,10 +478,10 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
             <span style={{ color: "#64748B" }}>· {x.verdict}</span>
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
               {!frozenBy && <button onClick={() => openInspection(x)} style={qhEdit}>Edit</button>}
-              <button style={qhPrint} onClick={() => { const no = lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</button>
+              <button style={qhPrint} onClick={() => { const no = x.number || lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</button>
               {!frozenBy && setInspections && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).filter((p: any) => String(p.id) !== String(x.id))); recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} deleted` }); }}>🗑 Delete</button>}
             </span>
-            <QualityReportDoc x={x} lot={lot} no={qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} supplierRef={supplierRefOf(lot, shipmentsRef)} />
+            <QualityReportDoc x={x} lot={lot} no={x.number || qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} supplierRef={supplierRefOf(lot, shipmentsRef)} />
           </div>
         ); })}
         {myJobs.map((j: any) => (
@@ -505,8 +505,10 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
       </div>
 
       {win === "inspect" && ins && (
-        <InspectionWindow ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={(final: any) => {
-          const w = beforeReceiptWarning(lot, final.date); if (w) { window.alert("⚠ " + w); return; }
+        <InspectionWindow ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={(final0: any) => {
+          const w = beforeReceiptWarning(lot, final0.date); if (w) { window.alert("⚠ " + w); return; }
+          // v6.99.101 (A-QC-5, owner 2 Oct — one source): the report's number is issued when it is SAVED and stored on it; prints read it from there
+          const final = { ...final0, number: final0.number || lastReportNumber("QR", String(final0.id)) || issueReportNumber("QR", `${lot.number} · inspection ${final0.date}`, userName, "Inventory") };
           setInspections && setInspections((prev: any[]) => (prev || []).some((p: any) => String(p.id) === String(final.id)) ? (prev || []).map((p: any) => String(p.id) === String(final.id) ? final : p) : [...(prev || []), final]);
           recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Quality inspection ${final.date} · defects ${inspectionVerdict(final).totalPct}% · ${final.verdict}` });
           // v6.99.87 (A-QC-4): a direct lot already delivered takes the client's report's kilos — its pass-through pair is re-posted

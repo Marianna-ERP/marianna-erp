@@ -131,7 +131,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: an
   );
 }
 
-export function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onWithdraw = null, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+export function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -159,9 +159,8 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
             </>;
           })()}
           {order.status === "Cancelled"
-            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Withdrawn — read-only</span>
+            ? <span style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#FEF2F2", color: "#B91C1C", fontSize: 12, fontWeight: 600 }}>Deleted — read-only</span>
             : <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
-          {order.status !== "Cancelled" && onWithdraw && <ActionButton action="withdrawDoc" onClick={onWithdraw} />}{/* v6.99.89 (A-NM-1) */}
           <ActionButton action="delete" onClick={onDelete} />
         </div>
       </div>
@@ -194,6 +193,8 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
           </Card>
 
           {/* Two-column body */}
+          {/* v6.99.104 (A-PV-3, owner): the truck settlement takes the whole width */}
+          {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
           <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 20 }}>
             <div>
               {/* Line items */}
@@ -267,40 +268,6 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
                   </Card>
                 );
               })()}
-              {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
-              {/* v6.99.26 (owner ruling): the purchase RESULT left this screen — the PO is operational. It lives in Finance → Purchase results. */}
-              <Card style={{ marginBottom: 16 }}>
-                <SectionTitle>LINKED DOCUMENTS</SectionTitle>
-                <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" from={order.number} />
-                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" from={order.number} />
-                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && ["EXW", "DAP", "DPU", "DDP", "CIF", "CFR", "FOB", "FCA"].includes(String(o.sellIncoterm || "").toUpperCase())); void sos;
-                  return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
-                <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" from={order.number} />
-                {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
-                    note — so receiving lives HERE too, not only on the lot in Inventory. */}
-                {typeof onPackingResult === "function" && order.status === "Confirmed" && (order.items || []).some((it: any) => isEstimatedLine(it)) && (
-                  <div style={{ marginTop: 8, padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8 }}>
-                    <div style={{ fontSize: 11.5, color: "#92400E", fontWeight: 700 }}>Quantities are ESTIMATED — prices agreed, kilos to be confirmed by the producer's packing result. Transport can be booked on these figures (v6.95.0, PO-10).</div>
-                    <button onClick={onPackingResult} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: "#B45309", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📦 Enter packing result → quantities final</button>
-                  </div>
-                )}
-                {/* v6.99.36 (A-R25-6, owner): the supplier truck moved OUT of Linked documents — it has its own box under the line items */}
-                {typeof onReceiveLot === "function" && (expectedLots || []).length > 0 && (
-                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <span style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
-                    {expectedLots.map((l: any) => (
-                      <button key={String(l.id)} onClick={() => onReceiveLot(l)} title="DDP / supplier-delivered arrival with no shipment of ours — posts the receipt movement" style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 Receive {l.number} ({Math.round(parseFloat(l.expectedKg) || 0).toLocaleString("pl-PL")} kg)</button>
-                    ))}
-                  </div>
-                )}
-                {/* v6.63.0 (BUG #2 fix): invoices are DERIVED from the register via its links[]
-                    — the stored legacy array was never updated by the Invoices module, so a
-                    cost invoice linked to this PO was invisible here. */}
-                <LinkRow label="Invoices" items={computedInvoices ?? order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
-                <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
-                  Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
-                </div>
-              </Card>
 
               {order.notes && (
                 <Card style={{ marginBottom: 16 }}>
@@ -338,6 +305,39 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
                   </div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order, liveParty(order.supplier, CONTACTS_REF || []) || order.supplier)}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
+                </div>
+              </Card>
+              {/* v6.99.104 (A-PV-3, owner): Linked documents under Order details */}
+              <Card style={{ marginBottom: 16 }}>
+                <SectionTitle>LINKED DOCUMENTS</SectionTitle>
+                <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" from={order.number} />
+                <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" from={order.number} />
+                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && ["EXW", "DAP", "DPU", "DDP", "CIF", "CFR", "FOB", "FCA"].includes(String(o.sellIncoterm || "").toUpperCase())); void sos;
+                  return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
+                <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" from={order.number} />
+                {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
+                    note — so receiving lives HERE too, not only on the lot in Inventory. */}
+                {typeof onPackingResult === "function" && order.status === "Confirmed" && (order.items || []).some((it: any) => isEstimatedLine(it)) && (
+                  <div style={{ marginTop: 8, padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8 }}>
+                    <div style={{ fontSize: 11.5, color: "#92400E", fontWeight: 700 }}>Quantities are ESTIMATED — prices agreed, kilos to be confirmed by the producer's packing result. Transport can be booked on these figures (v6.95.0, PO-10).</div>
+                    <button onClick={onPackingResult} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: "#B45309", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📦 Enter packing result → quantities final</button>
+                  </div>
+                )}
+                {/* v6.99.36 (A-R25-6, owner): the supplier truck moved OUT of Linked documents — it has its own box under the line items */}
+                {typeof onReceiveLot === "function" && (expectedLots || []).length > 0 && (
+                  <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
+                    {expectedLots.map((l: any) => (
+                      <button key={String(l.id)} onClick={() => onReceiveLot(l)} title="DDP / supplier-delivered arrival with no shipment of ours — posts the receipt movement" style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 Receive {l.number} ({Math.round(parseFloat(l.expectedKg) || 0).toLocaleString("pl-PL")} kg)</button>
+                    ))}
+                  </div>
+                )}
+                {/* v6.63.0 (BUG #2 fix): invoices are DERIVED from the register via its links[]
+                    — the stored legacy array was never updated by the Invoices module, so a
+                    cost invoice linked to this PO was invisible here. */}
+                <LinkRow label="Invoices" items={computedInvoices ?? order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
+                <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
+                  Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
                 </div>
               </Card>
 

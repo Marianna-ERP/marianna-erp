@@ -31,7 +31,8 @@ function sourcesLot(it: any, lot: any): boolean {
   return false;
 }
 
-export interface VarietyLine { lotNumber: string; product: string; variety: string; receivedKg: number; expectedKg: number; classIKg: number; classIIKg: number; wasteKg: number; soldKg: number; soldKgII: number; salesPLN: number; salesPLNII: number; pricePerKgPLN: number; pricePerKgPLNII: number; onStockKg: number; }
+export interface SaleRow { soNumber: string; client: string; grade: "I" | "II"; kg: number; pln: number; claims: string[]; }
+export interface VarietyLine { sales: SaleRow[]; lotNumber: string; product: string; variety: string; receivedKg: number; expectedKg: number; classIKg: number; classIIKg: number; wasteKg: number; soldKg: number; soldKgII: number; salesPLN: number; salesPLNII: number; pricePerKgPLN: number; pricePerKgPLNII: number; onStockKg: number; }
 
 export interface POSettlementCalc {
   poNumber: string; lines: VarietyLine[];
@@ -94,12 +95,16 @@ export function computePOSettlement(input: {
   };
   const lines: VarietyLine[] = myLots.map(lot => {
     let soldKg = 0, soldKgII = 0, salesPLN = 0, salesPLNII = 0;
+    const sales: SaleRow[] = [];   // v6.99.105 (A-ST-9, owner 2 Oct): each sale of this lot — SO, client, class, kilos, value, the claims that touch it
     liveOrders.forEach(o => (o.items || []).forEach((it: any) => {
       if (!sourcesLot(it, lot)) return;
       const kg = num(it.qty); const fx = soRate(o) * factsOf(o).factor;
       const price = String(it.pricingUnit || "") === "box" && num(it.kgPerBox) > 0 ? num(it.unitPrice) / num(it.kgPerBox) : num(it.unitPrice);
       const isII = /\bII\b|class ?2|klasa ?2|second/i.test(String(it.quality || it.grade || ""));
       if (isII) { soldKgII += kg; salesPLNII += kg * price * fx; } else { soldKg += kg; salesPLN += kg * price * fx; }
+      const claimsOn = (input.claims || []).filter((c: any) => c && c.status !== "Cancelled" && (String(c.soRef) === String(o.number) || String(c.orderRef) === String(o.number) || String(c.lotNumber) === String(lot.number))).map((c: any) => String(c.number));
+      const hit = sales.find(x => x.soNumber === String(o.number) && x.grade === (isII ? "II" : "I"));
+      if (hit) { hit.kg = r0(hit.kg + kg); hit.pln = r2(hit.pln + kg * price * fx); } else sales.push({ soNumber: String(o.number), client: S(o.client?.name), grade: isII ? "II" : "I", kg: r0(kg), pln: r2(kg * price * fx), claims: Array.from(new Set(claimsOn)) });
     }));
     const g = lot.grades || {};
     const received = num(lot.receivedKg);
@@ -107,7 +112,7 @@ export function computePOSettlement(input: {
     const onStock = Math.max(0, r0(received - wasteKg - soldKg - soldKgII));
     // v6.99.84 (A-ST-4): a direct lot is received only when its truck is Delivered — until then the table shows what is expected
     const expectedKg = received > 0 ? 0 : r0(num(lot.expectedKg));
-    return { lotNumber: lot.number, product: lot.product || "", variety: lot.variety || "", receivedKg: r0(received), expectedKg, classIKg: r0(num(g.I)), classIIKg: r0(num(g.II)), wasteKg: r0(wasteKg),
+    return { sales, lotNumber: lot.number, product: lot.product || "", variety: lot.variety || "", receivedKg: r0(received), expectedKg, classIKg: r0(num(g.I)), classIIKg: r0(num(g.II)), wasteKg: r0(wasteKg),
       soldKg: r0(soldKg), soldKgII: r0(soldKgII), salesPLN: r2(salesPLN), salesPLNII: r2(salesPLNII),
       pricePerKgPLN: soldKg > 0 ? r2(salesPLN / soldKg) : 0, pricePerKgPLNII: soldKgII > 0 ? r2(salesPLNII / soldKgII) : 0, onStockKg: onStock };
   });

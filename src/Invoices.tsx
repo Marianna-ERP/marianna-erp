@@ -366,7 +366,7 @@ export default function Invoices(props: any) {
   const filtered = invoices.filter((i: Invoice) => archiveShow(i) &&   /* v6.99.54 (AR-4) */
     (!search || i.number.toLowerCase().includes(search.toLowerCase()) || (i.counterparty?.name || "").toLowerCase().includes(search.toLowerCase()) || i.links.some(l => l.number.toLowerCase().includes(search.toLowerCase()))) &&
     (fDir === "All" || invoiceDirection(i) === fDir) &&
-    (fStatus === "All" || i.paymentStatus === fStatus)
+    (fStatus === "All" ? i.paymentStatus !== "Cancelled" : i.paymentStatus === fStatus)   // v6.99.106 (A-DEL-4): deleted invoices show only under the Deleted entry
   ).sort((a: Invoice, b: Invoice) => String(b.issueDate || "").localeCompare(String(a.issueDate || "")));
 
   // #7: credit/debit notes also belong in the main view (not only hidden on their
@@ -702,7 +702,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark issued</button>}
           {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
-          {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Withdraw invoice</button>}
+          {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete invoice</button>}
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
           {(() => {

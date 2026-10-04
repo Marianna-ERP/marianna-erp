@@ -70,7 +70,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
             : <span title="v6.80.0 (D-41): an outbound delivery's freight is a DIRECT cost of the sale — it lands in the SO margin, never in lot landed cost." style={{ fontSize: 11, color: "#94A3B8", alignSelf: "center" }}>Direct cost of sale — not allocated to lots</span>}
           <SmallButton onClick={onApplyInventory} title="Normally automatic on Loaded/Arrived — use only to re-post after editing goods.">Re-post inventory</SmallButton>
           {!["Closed", "Cancelled"].includes(canonicalStatus(shipment.status)) &&
-            <SmallButton kind="red" onClick={() => onQuickStatus("Cancelled")} title="v6.99.89 (A-NM-1): Withdraw — the shipment stays on record, marked Withdrawn. Withdraw this shipment — it stays on record (read-only) but no longer counts toward the PO/SO.">Withdraw shipment</SmallButton>}
+            <SmallButton kind="red" onClick={() => onQuickStatus("Cancelled")} title="v6.99.99 (A-DEL-4): Delete — the shipment stays on record, struck through and read-only. Delete this shipment — it stays on record (read-only) but no longer counts toward the PO/SO.">Delete shipment</SmallButton>}
         </div>
       </div>
     </Card>

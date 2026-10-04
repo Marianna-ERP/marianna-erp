@@ -2597,7 +2597,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const d = require(fx); const lot = n => d.lots.find(l => l.number === n);
   t("A-IN-4: one plain word per status, the stored value untouched", () => {
     eq(L.lotStatusLabel("Direct Expected").label, "Expected"); eq(L.lotStatusLabel("Expected").label, "Expected"); eq(L.lotStatusLabel("In Stock").label, "In stock");
-    eq(L.lotStatusLabel("Shipped Out").label, "Shipped"); eq(L.lotStatusLabel("Delivered (direct)").label, "Delivered"); eq(L.lotStatusLabel("Blocked · PO Cancelled").label, "Withdrawn"); eq(L.lotStatusLabel("Cancelled").label, "Withdrawn");   // v6.99.89 (A-NM-1): the owner's word
+    eq(L.lotStatusLabel("Shipped Out").label, "Shipped"); eq(L.lotStatusLabel("Delivered (direct)").label, "Delivered"); eq(L.lotStatusLabel("Blocked · PO Cancelled").label, "Deleted"); eq(L.lotStatusLabel("Cancelled").label, "Deleted");   // v6.99.99 (A-DEL-4): the owner's word
     eq(new Set(d.lots.map(l => L.lotStatusLabel(l.status).label)).size <= 6, true, "her file uses at most six words");
   });
   t("A-IN-7: the value in the lot's own state — in stock · delivered · expected — never 0 for goods that went direct", () => {
@@ -2806,15 +2806,15 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const fx = FX.needFixture("marianna-erp_v6.99.87_schema-v2_2026-10-01T16-29-32.json", "the owner's 1 Oct 16:29 file"); if (!fx) return;
   const d = require(fx); const src = require("fs").readFileSync(require("path").join(__dirname, "../src/ui.tsx"), "utf8");
   t("A-DEL-1: every action a screen names exists — the missing 'delete' made every Delete button vanish", () => {
-    const known = new Set(Array.from(src.matchAll(/^\s+([a-zA-Z]+):\s+\{ icon:/gm)).map(m => m[1])); ok(known.has("delete"), "delete is in the list"); ok(known.has("withdrawDoc"));
+    const known = new Set(Array.from(src.matchAll(/^\s+([a-zA-Z]+):\s+\{ icon:/gm)).map(m => m[1])); ok(known.has("delete"), "delete is in the list"); ok(!known.has("withdrawDoc"), "v6.99.99 (A-DEL-4): Withdraw is gone");
     const fs = require("fs"), path = require("path"); const dir = path.join(__dirname, "../src"); const used = new Set();
     fs.readdirSync(dir).filter(f => f.endsWith(".tsx")).forEach(f => { for (const m of fs.readFileSync(path.join(dir, f), "utf8").matchAll(/<ActionButton action="([a-zA-Z]+)"/g)) used.add(m[1] + "@" + f); });
     // the same fault hides 17 Close buttons ('close' is missing too) — registered as A-DEL-2 for the next batch (rule 2); until then it is the ONLY one allowed
     const missing = Array.from(new Set(Array.from(used).filter(x => !known.has(x.split("@")[0])).map(x => x.split("@")[0]))); eq(missing.join(", "), "", "an ActionButton naming an unknown action draws nothing — v6.99.92 (A-DEL-2): 'close' added, none left");
   });
-  t("A-NM-1: the stored 'Cancelled' reads 'Withdrawn' everywhere; other statuses untouched", () => {
-    eq(F.statusWord("Cancelled"), "Withdrawn"); eq(F.statusWord("Blocked · PO Cancelled"), "Blocked · PO Withdrawn"); eq(F.statusWord("Confirmed"), "Confirmed"); eq(F.statusWord(""), "");
-    eq(L.lotStatusLabel("Cancelled").label, "Withdrawn");
+  t("A-DEL-4: the stored 'Cancelled' reads 'Deleted' everywhere; other statuses untouched", () => {
+    eq(F.statusWord("Cancelled"), "Deleted"); eq(F.statusWord("Blocked · PO Cancelled"), "Blocked · PO Deleted"); eq(F.statusWord("Confirmed"), "Confirmed"); eq(F.statusWord(""), "");
+    eq(L.lotStatusLabel("Cancelled").label, "Deleted");
   });
   t("A-SD-5: SHP-0030 / -0031 get their leg carrier on their trucks and their forwarder on their booking — once; SHP-0034 / -0035 already have their owners", () => {
     const s30 = d.shipments.find(s => s.number === "SHP-2026-0030"), s31 = d.shipments.find(s => s.number === "SHP-2026-0031"), s35 = d.shipments.find(s => s.number === "SHP-2026-0035");
@@ -2882,5 +2882,42 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const wl = L.warehouseAddressLocations(r1.contacts); eq(new Set(wl.map(l => String(l.id))).size, 3, "the warehouse list has three places");
   });
   console.log("v6.99.97 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.99–104 — one Delete; one ship-out per sale; the report numbered at save; the PO's sales from its lots (owner 2 Oct) ══
+(function v699104(){
+  console.log("\n══ 98–104. v6.99.99–104: Delete everywhere, Deleted word · one SHIP_OUT per sale · the PO's linked sales ══");
+  const SD = B("shipments.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the owner's 2 Oct file"); if (!fx) return;
+  const d = require(fx);
+  t("A-SH-M1: LOT-2026-0127 on the groupage SHP-2026-0039 leaves as two ship-outs — 10 000 kg for SO-0028 and 985 kg for SO-0029 — not one for 10 985", () => {
+    const sh = { ...d.shipments.find(s => s.number === "SHP-2026-0039"), status: "Loaded" };
+    const lots = d.lots.map(l => (l.number === "LOT-2026-0127" || l.number === "LOT-2026-0128") ? { ...l, physicalKg: l.receivedKg, status: "In Stock", movements: (l.movements || []).filter(m => m.type === "IN") } : l);
+    let id = 980000; const r = SD.postShipmentToLots(sh, lots, { todayISO: () => "2026-10-02", nextId: () => ++id });
+    const l127 = r.lots.find(l => l.number === "LOT-2026-0127"); const outs = l127.movements.filter(m => m.type === "SHIP_OUT");
+    eq(outs.map(m => m.soRef + ":" + m.qtyKg).sort().join(","), "SO-2026-0028:10000,SO-2026-0029:985"); eq(l127.physicalKg, 0, "all gone"); eq(l127.status, "Shipped Out");
+    const l128 = r.lots.find(l => l.number === "LOT-2026-0128"); eq(l128.movements.filter(m => m.type === "SHIP_OUT").map(m => m.soRef + ":" + m.qtyKg).sort().join(","), "SO-2026-0027:1650,SO-2026-0028:1630");
+    eq((d.lots.find(l => l.number === "LOT-2026-0127").movements || []).filter(m => m.type === "SHIP_OUT").map(m => m.soRef + ":" + m.qtyKg).join(","), "SO-2026-0029:10985", "the owner's file shows the old single movement");
+  });
+  console.log("v6.99.104 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  if (failed) process.exit(1);
+})();
+
+// ══ v6.99.105 — the settlement names each sale (A-ST-9) ══
+(function v699105(){
+  console.log("\n══ 105. v6.99.105: the settlement's lines expand into their sales ══");
+  const P = B("poSettlement.domain.js");
+  const fx = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the owner's 2 Oct file"); if (!fx) return;
+  const d = require(fx); const po = d.pos.find(p => p.number === "PO-2026-0044");
+  t("A-ST-9: PO-2026-0044 — LOT-0127 sold to SO-0028 (10 000 kg) and SO-0029 (985 kg), LOT-0128 to SO-0027 and SO-0028; a claim on a sale is named", () => {
+    const calc = P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: d.invoices || [], shipments: d.shipments, claims: d.claims || [], ratePLNperEUR: 4.35, commissionPct: 6.5 });
+    const l127 = calc.lines.find(l => l.lotNumber === "LOT-2026-0127"), l128 = calc.lines.find(l => l.lotNumber === "LOT-2026-0128");
+    eq(l127.sales.map(x => x.soNumber + ":" + x.grade + ":" + x.kg).join(","), "SO-2026-0028:I:10000,SO-2026-0029:I:985"); eq(l128.sales.map(x => x.soNumber + ":" + x.kg).join(","), "SO-2026-0027:1650,SO-2026-0028:1630");
+    eq(l127.sales.reduce((a, x) => a + x.kg, 0), l127.soldKg, "the sales add up to the line"); ok(l127.sales.every(x => x.client));
+    const withClaim = P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: [], shipments: d.shipments, claims: [{ number: "CLM-TEST-1", status: "Open", soRef: "SO-2026-0029" }], ratePLNperEUR: 4.35, commissionPct: 0 });
+    eq(withClaim.lines.find(l => l.lotNumber === "LOT-2026-0127").sales.find(x => x.soNumber === "SO-2026-0029").claims.join(","), "CLM-TEST-1");
+  });
+  console.log("v6.99.105 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   if (failed) process.exit(1);
 })();
