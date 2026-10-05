@@ -46,6 +46,13 @@ Then **Authentication → Sign In / Providers → Email**: turn **off** "Allow n
 4. Only then do the others sign in. Their browsers take the shared data.
 **Until step 3 is done, nobody signs in to the production address with a test browser.**
 
+### Step 4b — when the colleague cannot sign in yet: upload her JSON export
+1. On her computer: **Settings → Export all data** — the newest copy of her real data. From this moment she enters nothing until step 4 below is done (anything entered after the export is not in the file).
+2. On any browser, sign in to the production address. The top bar shows *shared store is empty* and two buttons; choose **Upload a JSON export as the shared data** and pick her file.
+3. The confirmation shows the file's export time and what it holds ("45 POs, 29 sales orders, 124 lots…") — check they are hers, confirm.
+4. The file's data is now the shared data; your browser shows it (your own test data is kept as a local snapshot first). When she signs in, her browser takes the shared data too.
+The upload refuses if the shared copy already holds data, and nothing is sent from any browser while the copy is still empty — so a test browser cannot put stray data there by accident.
+
 ## Step 5 — the TEST copy (a separate address, separate data)
 1. **Supabase:** create a second project, e.g. *Marianna TEST* (the free plan allows two). In it, run the same SQL as in Step 2 and add yourself as a user (Step 3). Copy its Project URL and anon / publishable key.
 2. **Vercel → marianna-erp → Settings → Environments → Preview → Environment Variables:** add three, all as **Config**:

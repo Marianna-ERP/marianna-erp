@@ -3190,6 +3190,23 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.151 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v6.99.152 — the first shared data from an exported file; guarded ══
+(function v699152(){
+  console.log("\n══ 152. upload a JSON export as the first shared data ══");
+  const R = B("remoteStore.js");
+  t("a Marianna export is read as stores and counted; anything else is refused", () => {
+    const fx = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!fx) return;
+    const p = R.storesFromExport(require("fs").readFileSync(fx, "utf8")); ok(/^\d+ POs, \d+ sales orders, \d+ lots, /.test(p.summary), p.summary); ok(Array.isArray(p.stores.pos) && p.stores.pos.length > 0); eq(p.meta.appVersion, "6.99.98");
+    let threw = false; try { R.storesFromExport(JSON.stringify({ hello: 1 })); } catch (e) { threw = /not a Marianna export/.test(e.message); } ok(threw, "a foreign file is refused");
+  });
+  t("the upload refuses when the shared copy already holds data; nothing is pushed while it is empty", () => {
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/remoteStore.ts"), "utf8");
+    ok(/if \(existing\.length\) throw new Error/.test(src), "a non-empty shared copy is never overwritten by an upload"); ok(/if \(state\.status === "empty"\) return;/.test(src), "no stray pushes before the first upload");
+    ok(!/resolution=merge-duplicates,return=minimal/.test(src), "the first upload no longer merges over existing rows");
+  });
+  console.log("v6.99.152 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

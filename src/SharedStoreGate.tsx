@@ -1,6 +1,6 @@
 // v6.99.148: the login and the sync status for the shared store — shown only when the two settings are present
 import React, { useEffect, useState } from "react";
-import { remoteConfigured, readSession, login, logout, pullAll, uploadAllLocal, startSync, onSync, SyncState, clearConflict, localSummary, ENV_LABEL } from "./remoteStore";
+import { remoteConfigured, readSession, login, logout, pullAll, uploadAllLocal, uploadStores, storesFromExport, startSync, onSync, SyncState, clearConflict, localSummary, ENV_LABEL } from "./remoteStore";
 
 export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncState; node: React.ReactNode } {
   const configured = remoteConfigured();
@@ -47,7 +47,23 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 700, color }} title={sync.lastPull ? `last pulled ${sync.lastPull.slice(11, 19)} UTC` : ""}>
       <span style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }} />{label}
-      {sync.status === "empty" && <button disabled={busy} onClick={async () => { if (!window.confirm(`Make THIS browser's data the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}?\n\nIt holds: ${localSummary()}.\n\nEveryone who signs in after this will see exactly this data, and their own browser's data will be replaced by it (each browser keeps a snapshot first). Do this once, from the browser whose data you trust.`)) return; setBusy(true); try { const n = await uploadAllLocal(userLabel); window.alert(`${n} stores uploaded — this browser's data is now the shared data.`); } catch (e: any) { window.alert(String(e?.message || e)); } setBusy(false); }} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #6366F1", background: "#EEF2FF", color: "#3730A3", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{busy ? "Uploading…" : "Upload this browser's data as the shared data"}</button>}
+      {sync.status === "empty" && <>
+        <button disabled={busy} onClick={async () => { if (!window.confirm(`Make THIS browser's data the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}?\n\nIt holds: ${localSummary()}.\n\nEveryone who signs in after this will see exactly this data, and their own browser's data will be replaced by it (each browser keeps a snapshot first). Do this once, from the browser whose data you trust.`)) return; setBusy(true); try { const n = await uploadAllLocal(userLabel); window.alert(`${n} stores uploaded — this browser's data is now the shared data.`); } catch (e: any) { window.alert(String(e?.message || e)); } setBusy(false); }} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #6366F1", background: "#EEF2FF", color: "#3730A3", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{busy ? "Uploading…" : "Upload this browser's data"}</button>
+        {/* v6.99.152 (owner 6 Oct): the first shared data from an EXPORTED FILE — e.g. a colleague's browser copy — without importing it into this browser first */}
+        <label style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#F5F3FF", color: "#6D28D9", fontSize: 11, fontWeight: 700, cursor: busy ? "default" : "pointer" }}>
+          {busy ? "Uploading…" : "Upload a JSON export as the shared data"}
+          <input type="file" accept=".json,application/json" disabled={busy} style={{ display: "none" }} onChange={async e => {
+            const file = e.target.files && e.target.files[0]; e.target.value = ""; if (!file) return;
+            try {
+              const parsed = storesFromExport(await file.text());
+              const when = parsed.meta?.exportedAt ? String(parsed.meta.exportedAt).replace("T", " ").slice(0, 16) + " UTC" : "unknown time";
+              if (!window.confirm(`Make the file "${file.name}" the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}?\n\nExported ${when}, app ${parsed.meta?.appVersion || "?"}.\nIt holds: ${parsed.summary}.\n\nEveryone who signs in after this — you included — will see exactly this data; each browser keeps a snapshot of its own data first. Anything entered after the file was exported is NOT in it.`)) return;
+              setBusy(true); const n = await uploadStores(parsed.stores, userLabel); window.alert(`${n} stores uploaded from ${file.name} — the file's data is now the shared data, and this browser shows it.`);
+            } catch (x: any) { window.alert(String(x?.message || x)); }
+            setBusy(false);
+          }} />
+        </label>
+      </>}
       {sync.conflicts.map(k => <span key={k} style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>{k}: a colleague{sync.by?.[k] ? ` (${sync.by[k]})` : ""} saved first — their copy was taken; your last change is kept as a conflict copy <button onClick={() => clearConflict(k)} style={{ marginLeft: 6, border: "none", background: "none", color: "#92400E", cursor: "pointer", fontWeight: 800 }}>✓</button></span>)}
     </span>
   );

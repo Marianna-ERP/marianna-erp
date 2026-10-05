@@ -83,12 +83,27 @@ export async function pullAll(): Promise<{ empty: boolean }> {
   emit({ status: rows.length ? "synced" : "empty", lastPull: new Date().toISOString(), by });
   return { empty: rows.length === 0 };
 }
-/** The first person with an empty shared store uploads this browser's data once — every store, version 1. */
-export async function uploadAllLocal(by: string): Promise<number> {
-  const body = DATA_KEYS.map(key => ({ key, data: readStoreValue(key), version: 1, updated_by: by, updated_at: new Date().toISOString() }));
-  const res = await rest("stores", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(body) });
+/** v6.99.152 (owner 6 Oct): the FIRST upload — from this browser, or from an exported JSON file — only into an EMPTY shared copy.
+ *  It refuses when the shared copy already holds data (nobody overwrites colleagues' work by pressing a button), then pulls,
+ *  so this browser takes exactly what went up (its own data is kept as a snapshot first). */
+export async function uploadStores(source: Record<string, any>, by: string): Promise<number> {
+  const existing = await fetchRows("key");
+  if (existing.length) throw new Error(`the shared data already holds ${existing.length} store(s) — nothing was uploaded. A first upload only goes into an empty shared copy.`);
+  const now = new Date().toISOString();
+  const body = DATA_KEYS.map(key => ({ key, data: source[key] ?? (key === "heals" ? {} : []), version: 1, updated_by: by, updated_at: now }));
+  const res = await rest("stores", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(`upload failed (${res.status})`);
-  body.forEach(b => known.set(b.key, { version: 1, json: JSON.stringify(b.data) })); emit({ status: "synced" }); return body.length;
+  await pullAll(); return body.length;
+}
+export async function uploadAllLocal(by: string): Promise<number> { const src: Record<string, any> = {}; DATA_KEYS.forEach(k => { src[k] = readStoreValue(k); }); return uploadStores(src, by); }
+/** An exported Marianna JSON file (Settings → Export all data) read as stores — what it holds, counted, for the confirmation. */
+export function storesFromExport(text: string): { stores: Record<string, any>; summary: string; meta: any } {
+  const j = JSON.parse(text); const src = j && typeof j === "object" ? (j.data && typeof j.data === "object" && !Array.isArray(j.data) ? j.data : j) : {};
+  if (!j || j._meta?.app !== "marianna-erp") throw new Error("this is not a Marianna export file");
+  const stores: Record<string, any> = {}; DATA_KEYS.forEach(k => { if (src[k] !== undefined) stores[k] = src[k]; });
+  const n = (k: string) => (Array.isArray(stores[k]) ? stores[k].length : 0);
+  const summary = [["pos", "POs"], ["orders", "sales orders"], ["lots", "lots"], ["shipments", "shipments"], ["invoices", "invoices"], ["contacts", "companies"]].map(([k, l]) => `${n(k)} ${l}`).join(", ");
+  return { stores, summary, meta: j._meta || {} };
 }
 async function pushNow(key: string, json: string, by: string): Promise<void> {
   const k = known.get(key);
@@ -114,6 +129,7 @@ async function pushNow(key: string, json: string, by: string): Promise<void> {
 export function startSync(by: string): () => void {
   setStoreWrittenHook((key, json) => {
     if (!DATA_KEYS.includes(key)) return;
+    if (state.status === "empty") return;   // v6.99.152: before the first upload nothing goes up — no stray store from a test browser
     const p = pending.get(key); if (p) clearTimeout(p.timer);
     pending.set(key, { json, timer: setTimeout(() => { pending.delete(key); pushNow(key, json, by).catch(() => emit({ status: "offline" })); }, 1500) });
   });
