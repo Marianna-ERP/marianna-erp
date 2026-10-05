@@ -10,10 +10,13 @@ import { DATA_KEYS, applyStoreFromRemote, readStoreValue, setStoreWrittenHook, c
 
 // v6.99.149 (owner 5 Oct): which copy this is — "TEST" on the preview address (a separate Supabase project), nothing on production
 declare const process: any;
-export const ENV_LABEL = String((typeof process !== "undefined" && process.env && process.env.REACT_APP_ENV_LABEL) || "").trim();
+export const ENV_LABEL = String(process.env.REACT_APP_ENV_LABEL || "").trim();
 
-export const REMOTE_URL = String((typeof process !== "undefined" && process.env && process.env.REACT_APP_SUPABASE_URL) || "").replace(/\/+$/, "");
-export const REMOTE_KEY = String((typeof process !== "undefined" && process.env && process.env.REACT_APP_SUPABASE_ANON_KEY) || "");
+// v6.99.150 (owner 6 Oct: "I reach the page without any credentials") — MY FAULT in v6.99.148: the settings were read behind a
+// `typeof process !== "undefined"` guard; the build replaces process.env.X with its value, but `process` itself does not exist
+// in the browser, so the guard was false and the app never saw the settings. The plain form below is what the build expects.
+export const REMOTE_URL = String(process.env.REACT_APP_SUPABASE_URL || "").replace(/\/+$/, "");
+export const REMOTE_KEY = String(process.env.REACT_APP_SUPABASE_ANON_KEY || "");
 export const remoteConfigured = () => !!(REMOTE_URL && REMOTE_KEY);
 
 const SESSION_KEY = "marianna:shared:session";

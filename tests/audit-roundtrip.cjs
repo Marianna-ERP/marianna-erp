@@ -3168,6 +3168,17 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.149 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v6.99.150 — the settings reach the browser bundle ══
+(function v699150(){
+  console.log("\n══ 150. the shared-store settings are read the way the build replaces them ══");
+  t("remoteStore reads process.env.REACT_APP_* plainly — no typeof-process guard (the browser has no `process`)", () => {
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/remoteStore.ts"), "utf8");
+    const code = src.split("\n").filter(l => !/^\s*\/\//.test(l)).join("\n"); ok(!/typeof process !== "undefined"/.test(code), "the guard that hid the settings is gone (comments aside)");
+    ok(/String\(process\.env\.REACT_APP_SUPABASE_URL \|\| ""\)/.test(src) && /String\(process\.env\.REACT_APP_SUPABASE_ANON_KEY \|\| ""\)/.test(src) && /String\(process\.env\.REACT_APP_ENV_LABEL \|\| ""\)/.test(src));
+  });
+  console.log("v6.99.150 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
