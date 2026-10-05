@@ -15,8 +15,12 @@ export const ENV_LABEL = String(process.env.REACT_APP_ENV_LABEL || "").trim();
 // v6.99.150 (owner 6 Oct: "I reach the page without any credentials") — MY FAULT in v6.99.148: the settings were read behind a
 // `typeof process !== "undefined"` guard; the build replaces process.env.X with its value, but `process` itself does not exist
 // in the browser, so the guard was false and the app never saw the settings. The plain form below is what the build expects.
-export const REMOTE_URL = String(process.env.REACT_APP_SUPABASE_URL || "").replace(/\/+$/, "");
-export const REMOTE_KEY = String(process.env.REACT_APP_SUPABASE_ANON_KEY || "");
+// v6.99.151 (owner 6 Oct: "Invalid path specified in request URL"): the Project URL is often copied with a path on it
+// (…supabase.co/rest/v1/); every call then went to …/rest/v1/auth/v1/… and Supabase refused the path. Only the address's
+// origin (https://<project>.supabase.co) is kept, whatever was pasted, with spaces trimmed.
+export function originOf(v: any): string { const t = String(v || "").trim(); if (!t) return ""; try { return new URL(/^https?:\/\//i.test(t) ? t : `https://${t}`).origin; } catch { return t.replace(/\/+$/, ""); } }
+export const REMOTE_URL = originOf(process.env.REACT_APP_SUPABASE_URL);
+export const REMOTE_KEY = String(process.env.REACT_APP_SUPABASE_ANON_KEY || "").trim();
 export const remoteConfigured = () => !!(REMOTE_URL && REMOTE_KEY);
 
 const SESSION_KEY = "marianna:shared:session";

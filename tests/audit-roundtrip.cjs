@@ -3174,9 +3174,20 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("remoteStore reads process.env.REACT_APP_* plainly — no typeof-process guard (the browser has no `process`)", () => {
     const src = require("fs").readFileSync(require("path").join(__dirname, "../src/remoteStore.ts"), "utf8");
     const code = src.split("\n").filter(l => !/^\s*\/\//.test(l)).join("\n"); ok(!/typeof process !== "undefined"/.test(code), "the guard that hid the settings is gone (comments aside)");
-    ok(/String\(process\.env\.REACT_APP_SUPABASE_URL \|\| ""\)/.test(src) && /String\(process\.env\.REACT_APP_SUPABASE_ANON_KEY \|\| ""\)/.test(src) && /String\(process\.env\.REACT_APP_ENV_LABEL \|\| ""\)/.test(src));
+    ok(/originOf\(process\.env\.REACT_APP_SUPABASE_URL\)/.test(src) && /String\(process\.env\.REACT_APP_SUPABASE_ANON_KEY \|\| ""\)/.test(src) && /String\(process\.env\.REACT_APP_ENV_LABEL \|\| ""\)/.test(src), "plain process.env reads (the URL through originOf, v6.99.151)");
   });
   console.log("v6.99.150 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v6.99.151 — the Project URL however it was pasted ══
+(function v699151(){
+  console.log("\n══ 151. the Project URL's origin ══");
+  const R = B("remoteStore.js");
+  t("a URL pasted with /rest/v1/, a trailing slash, spaces or no scheme still reaches the project's origin", () => {
+    ["https://abc.supabase.co", "https://abc.supabase.co/", "https://abc.supabase.co/rest/v1/", "  https://abc.supabase.co/rest/v1  ", "abc.supabase.co"].forEach(v => eq(R.originOf(v), "https://abc.supabase.co", JSON.stringify(v)));
+    eq(R.originOf(""), "");
+  });
+  console.log("v6.99.151 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
