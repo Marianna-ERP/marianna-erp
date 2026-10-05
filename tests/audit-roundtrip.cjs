@@ -3135,6 +3135,39 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.147 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v6.99.148 — the shared record store (AUD-01/03/04/05) ══
+(function v699148(){
+  console.log("\n══ 148. the shared store ══");
+  const ST = B("useLocalStoredState.js"); const R = B("remoteStore.js");
+  t("without the two settings the app is exactly as before: the store is off and the hook's doors are unused", () => {
+    eq(R.remoteConfigured(), false); eq(R.syncState().status, "off"); eq(typeof ST.applyStoreFromRemote, "function"); eq(ST.onStoreWritten, null, "no write hook installed");
+  });
+  t("the hook's doors: a remote value replaces a store; a local write reaches the hook; the shared store echoes nothing back", () => {
+    let got = null; ST.setStoreWrittenHook((k, j) => { got = [k, j]; });
+    ST.onStoreWritten("lots", JSON.stringify([{ a: 1 }])); eq(got[0], "lots"); ST.setStoreWrittenHook(null); eq(ST.onStoreWritten, null);
+    eq(ST.applyStoreFromRemote("heals", { x: 1 }), false, "no mounted hook here → written to storage directly"); eq(JSON.stringify(ST.readStoreValue("heals")), JSON.stringify({ x: 1 }));
+  });
+  t("the set-up guide and the SQL ship with the code", () => {
+    const fs = require("fs"), path = require("path"); const g = fs.readFileSync(path.join(__dirname, "../docs/SHARED_STORE_SETUP.md"), "utf8");
+    ok(/create table if not exists public\.stores/.test(g)); ok(/enable row level security/.test(g)); ok(/to authenticated/.test(g)); ok(/REACT_APP_SUPABASE_URL/.test(g) && /REACT_APP_SUPABASE_ANON_KEY/.test(g));
+  });
+  console.log("v6.99.148 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v6.99.149 — the test copy and the safe real start ══
+(function v699149(){
+  console.log("\n══ 149. test copy · safe first start ══");
+  const R = B("remoteStore.js"); const ST = B("useLocalStoredState.js");
+  t("no label on production; the local summary counts what this browser holds", () => {
+    eq(R.ENV_LABEL, ""); ST.writeStoreValue("pos", [{}, {}]); ST.writeStoreValue("orders", [{}]); ok(/^2 POs, 1 sales orders, /.test(R.localSummary()), R.localSummary());
+  });
+  t("the guide puts the real upload on the colleague's browser and the test copy on its own project and address", () => {
+    const g = require("fs").readFileSync(require("path").join(__dirname, "../docs/SHARED_STORE_SETUP.md"), "utf8");
+    ok(/upload must come from the browser that holds the real data/i.test(g)); ok(/REACT_APP_ENV_LABEL/.test(g)); ok(/second project/i.test(g)); ok(/branch called `test`/.test(g));
+  });
+  console.log("v6.99.149 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

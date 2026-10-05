@@ -49,6 +49,7 @@
     "../src/warehouseCharges.ts",
     "../src/warehouseAllocation.domain.ts",
     "../src/tabLock.ts",
+    "../src/remoteStore.ts",
     "../src/claimCostChain.domain.ts",
     "../src/claimReadiness.domain.ts",
     "../src/statusOwnership.domain.ts",

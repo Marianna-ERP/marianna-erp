@@ -196,6 +196,15 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### The shared data (v6.99.148)
+
+With the two Supabase settings in place (see *docs/SHARED_STORE_SETUP.md*), the app keeps
+ONE copy of the data for everyone: you sign in, the app loads the shared data, every save
+goes to it, and colleagues' saves appear within 20 seconds. The pill in the top bar says
+*shared · synced / saving / offline*. If two people change the same store within seconds,
+the first save wins, the other person is told which store and keeps a conflict copy. Without
+the settings nothing changes.
+
 ### Clean-up II, part 2 (v6.99.143–147)
 
 - A stock movement's note names a document only as a whole number (old data without

@@ -22,6 +22,7 @@ import { migrateAddressOn } from "./address.domain";
 import { healShipmentModel } from "./shipmentModel.domain";
 import { migrateSaleLinesToLots } from "./salesOrders.domain";   // v6.99.127
 import { useSingleTab } from "./useSingleTab";   // v6.99.114 (AUD-02)
+import { useSharedStore, SharedStoreStatus, EnvironmentStrip } from "./SharedStoreGate";   // v6.99.148–149
 import { setFxSettings as applyFxSettings, fetchNbpRates } from "./fx";
 import { poDirectFromSOs } from "./tradeFlow.domain";
 import { healRound645, healRound651 } from "./heal.v645";
@@ -511,6 +512,7 @@ export default function App() {
 
   const [activeModule, setActiveModule] = useState("dashboard");
   const tab = useSingleTab();   // v6.99.114 (AUD-02)
+  const shared = useSharedStore(userName || "");   // v6.99.148: the shared store — login + pull when configured, otherwise nothing
   // v6.99.58 (A-US-2, owner): every way of leaving a module passes here. An open editor with unsaved changes is named, and
   // the choice is Save and continue (the editor's own Save — gates apply; refused = stay) · Leave without saving · Stay.
   const [leaveAsk, setLeaveAsk] = useState<{ target: string; labels: string[]; canSave: boolean; saving?: boolean; refused?: boolean } | null>(null);
@@ -611,8 +613,10 @@ export default function App() {
   const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog } as any).issues, // eslint-disable-next-line react-hooks/exhaustive-deps
     [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog]);
 
+  if (!shared.ready) return <>{shared.node}</>;   // v6.99.148: sign in / loading the shared data
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
+      <EnvironmentStrip />{/* v6.99.149 */}
       {tab.readOnly && (   /* v6.99.114 (AUD-02): a second tab of the app in this browser is read-only — two writing tabs overwrite each other */
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px 26px", width: 460, maxWidth: "92vw", boxShadow: "0 24px 60px rgba(0,0,0,0.3)" }}>
@@ -642,7 +646,7 @@ export default function App() {
         </div>
       )}
       <TopNav active={activeModule} onNav={navigate} canOpen={(k: string) => canOpenModule(users, userName, k === "loadPlans" ? "loadplans" : k)} rightSlot={
-        <><label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
+        <><span style={{ marginRight: 12 }}><SharedStoreStatus sync={shared.sync} userLabel={userName || ""} /></span>{/* v6.99.148 */}<label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
           <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}
         </label>
         <IntegrityBadge

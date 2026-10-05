@@ -152,16 +152,20 @@ export function runMigrationsIfNeeded(): { migrated: boolean; from?: number } {
   return { migrated: false };
 }
 
+// v6.99.148 (AUD-01/03, the shared store): the hook keeps working on this browser's storage exactly as before; two small doors
+// let the shared store in — applyStoreFromRemote(name, value) sets a store from the shared copy, and onStoreWritten is told of
+// every local write so the shared copy can follow. Without the shared store configured, neither is ever used.
+const storeSetters = new Map<string, (v: any) => void>();
+export let onStoreWritten: ((name: string, json: string) => void) | null = null;
+export function setStoreWrittenHook(fn: ((name: string, json: string) => void) | null) { onStoreWritten = fn; }
+export function applyStoreFromRemote(name: string, value: any): boolean { const set = storeSetters.get(name); if (!set) { writeToStorage(name, value); return false; } set(value); return true; }
 export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T | ((prev: T) => T)) => void] {
-  // Read once on mount; thereafter state is the source of truth and we write through.
   const [state, setState] = useState<T>(() => readFromStorage(name, initialValue));
-
-  // Persist both the first seed load and all later edits. This makes Settings -> Export
-  // useful even before the user has changed anything in the current browser.
+  useEffect(() => { storeSetters.set(name, setState as any); return () => { storeSetters.delete(name); }; }, [name]);
   useEffect(() => {
     writeToStorage(name, state);
+    if (onStoreWritten) { try { onStoreWritten(name, JSON.stringify(state)); } catch { /* the shared copy is best effort */ } }
   }, [name, state]);
-
   return [state, setState];
 }
 
