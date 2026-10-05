@@ -3207,6 +3207,21 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v6.99.152 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v7.0.0 — Settings on the shared copy (A-SH-1/2) ══
+(function v700(){
+  console.log("\n══ v7.0.0. Settings on the shared copy ══");
+  const R = B("remoteStore.js");
+  t("without a sign-in nothing is shared mode; the TEST copy is recognised only by its label", () => { eq(R.isSharedMode(), false); eq(R.isTestCopy(), false); });
+  t("Settings: no erase on the real shared copy; restore, archive and (TEST only) reset go to the shared copy after the old copy is downloaded; the texts follow the mode", () => {
+    const s = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8");
+    ok(/isSharedMode\(\) && !isTestCopy\(\) \? \(/.test(s), "the real shared copy shows no erase buttons");
+    ok(/if \(isSharedMode\(\) && !isTestCopy\(\)\) return;/.test(s), "the handlers refuse too");
+    ok(/Type RESTORE to go ahead/.test(s) && /sharedCopyAsExport\(APP_VERSION, STORAGE_VERSION\)/.test(s), "restore = typed word + the old copy downloaded");
+    ok(/archived in the shared data/.test(s), "season archive in the shared copy"); ok(/About the shared data:/.test(s) && !/Phase 2 will add/.test(s), "texts");
+  });
+  console.log("v7.0.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

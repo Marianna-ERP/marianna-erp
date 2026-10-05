@@ -196,6 +196,16 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7 — Settings on the shared data (v7.0.0)
+
+From v7 every release belongs to the shared-data era.
+- **On the real shared data** there is no erase button: nobody can wipe the business's data.
+  **Import** a backup restores it INTO the shared data for everyone — after showing the file's
+  counts and asking you to type RESTORE, with the shared copy as it was downloaded first.
+- **Archiving a season** removes it from the shared data (after its export file is saved).
+- **On the TEST copy** the two reset buttons stay and act on the shared test data.
+- The page explains where the data lives; the pill in the top bar has **sign out**.
+
 ### The shared data (v6.99.148)
 
 With the two Supabase settings in place (see *docs/SHARED_STORE_SETUP.md*), the app keeps

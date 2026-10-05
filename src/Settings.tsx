@@ -2,8 +2,9 @@ import { ModulePage } from "./ui";
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
 import React, { useRef, useState } from "react";
-import { importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue } from "./useLocalStoredState";
+import { importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue, DATA_KEYS } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
+import { isSharedMode, isTestCopy, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, ENV_LABEL } from "./remoteStore";   // v7.0.0 (A-SH-1)
 import { AutoBackupCard } from "./BackupPanel";   // v6.99.70 (A-BK-1)
 import { downloadAllData, flushFolderBackup } from "./autoBackup";
 import { fetchDepartments } from "./fakturownia";
@@ -100,6 +101,7 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
     const all: any = {}; Object.keys(STORE_KIND).forEach(k => { all[k] = readStoreValue(k); }); all.pos = readStoreValue("pos");
     const r = removeSeason(all, season, st);
     Object.entries(r.data).forEach(([k, v]) => { if (Object.keys(STORE_KIND).includes(k)) writeStoreValue(k, v); });
+    if (isSharedMode()) { try { const note = await pushStoresToShared(Object.keys(r.data).filter(k => Object.keys(STORE_KIND).includes(k)), `archiving ${season}`); setMessage({ kind: "info", text: `Season ${season} archived in the shared data — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: `Archiving in the shared data failed: ${String(x?.message || x)}` }); return; } }   // v7.0.0 (A-SH-1)
     recordAudit({ module: "System", docType: "Season", docNumber: season, action: "deleted", summary: `Season ${season} removed from this browser after export: ${Object.entries(r.removed).map(([k, n]) => `${k} ${n}`).join(", ")}` });
     setMessage({ kind: "info", text: `Season ${season} removed from this browser. Reloading…` }); setTimeout(() => window.location.reload(), 900);
   }
@@ -578,6 +580,17 @@ function NumberingPanel({ numbering = {}, setNumbering = null }: any) {
   );
 }
 
+
+// ─── v7.0.0 (A-SH-1): in SHARED mode a whole-copy change is deliberate — the current shared copy is downloaded first, then the
+// stores are replaced in Supabase (new versions) so every colleague's tab takes them; in single-browser mode nothing changes.
+async function pushStoresToShared(keys: string[], what: string): Promise<string> {
+  const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION);
+  const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `marianna-shared-copy-before-${what.replace(/\s+/g, "-")}-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
+  const stores: Record<string, any> = {}; keys.forEach(k => { stores[k] = readStoreValue(k); });
+  const n = await replaceSharedStores(stores, readSession()?.email || "");
+  return `${n} store(s) replaced in the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}; the shared copy as it was is in your downloads`;
+}
 export default function Settings({
   reloadFromStorage,
   refStores = {},
@@ -733,6 +746,18 @@ export default function Settings({
       });
       if (!proceed) { setMessage({ kind: "info", text: "Import cancelled — nothing was changed." }); return; }
       await flushFolderBackup();   // v6.99.70 (A-BK): the folder gets the state before the overwrite
+      // v7.0.0 (A-SH-1): in shared mode a backup is restored INTO the shared copy, for everyone — counted, typed, the old copy downloaded first
+      if (isSharedMode()) {
+        let parsed: any; try { parsed = storesFromExport(result); } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; }
+        const word = window.prompt(`RESTORE this file into the SHARED data${ENV_LABEL ? ` (${ENV_LABEL})` : ""} — for everyone?\n\nFile: ${file.name}\nExported: ${String(parsed.meta?.exportedAt || "?").replace("T", " ").slice(0, 16)}, app ${parsed.meta?.appVersion || "?"}\nIt holds: ${parsed.summary}\n\nEvery colleague's screen will show this data. The shared copy as it is now will be downloaded first.\n\nType RESTORE to go ahead:`);
+        if (String(word || "").trim().toUpperCase() !== "RESTORE") { setMessage({ kind: "info", text: "Restore not done (the confirmation word was not typed)." }); return; }
+        try {
+          const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION); const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `marianna-shared-copy-before-restore-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
+          const n = await replaceSharedStores(parsed.stores, readSession()?.email || ""); recordAudit({ module: "System", docType: "Restore", docNumber: file.name, action: "updated", summary: `Shared data restored from ${file.name} (${parsed.summary}); ${n} stores replaced` });
+          setMessage({ kind: "success", text: `Restored into the shared data: ${n} stores from ${file.name}. Reloading…` }); setTimeout(() => window.location.reload(), 1400);
+        } catch (x: any) { setMessage({ kind: "error", text: `Restore failed: ${String(x?.message || x)}` }); }
+        return;
+      }
       const outcome = importAllData(result);
       if (!outcome.ok) {
         setMessage({ kind: "error", text: outcome.error || "Import failed." });
@@ -782,7 +807,9 @@ export default function Settings({
     if (!confirmed) return;
     const resetNo = await stConfirm({ tone: "info", title: "Reset the numbering?", message: "Start PO / SO / SHP / LOT numbers again from 0001 for the new season? (Choose No to continue the sequence.)", confirmLabel: "Yes, restart at 0001", cancelLabel: "No, continue" });
     await flushFolderBackup();   // v6.99.70 (A-BK)
+    if (isSharedMode() && !isTestCopy()) return;   // v7.0.0: never on the real shared copy (the button is not shown there)
     const backup = startFreshSeason({ resetNumbering: !!resetNo });
+    if (isSharedMode() && isTestCopy()) { try { const note = await pushStoresToShared(DATA_KEYS.slice(), "fresh-season"); setMessage({ kind: "info", text: `TEST data wiped (master data kept) — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; } }
     refreshBackups();
     setMessage({ kind: "info", text: `Fresh season started${backup ? " (a backup was saved first)" : ""} — master data kept. Reloading…` });
     setTimeout(() => window.location.reload(), 1000);
@@ -796,7 +823,9 @@ export default function Settings({
     });
     if (!confirmed) return;
     await flushFolderBackup();   // v6.99.70 (A-BK)
+    if (isSharedMode() && !isTestCopy()) return;   // v7.0.0: never on the real shared copy (the button is not shown there)
     const backup = clearAllData();
+    if (isSharedMode() && isTestCopy()) { try { const note = await pushStoresToShared(DATA_KEYS.slice(), "start-fresh"); setMessage({ kind: "info", text: `TEST data erased — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; } }
     refreshBackups();
     setMessage({ kind: "info", text: `All data cleared${backup ? " (a backup was saved first)" : ""}. Reloading to an empty system…` });
     setTimeout(() => window.location.reload(), 1000);
@@ -1055,22 +1084,28 @@ export default function Settings({
             covered by tests. The routine (healRound651) stays in the migration toolkit for the Supabase import. */}
 
         <SeasonsPanel refStores={refStores} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} stConfirm={stConfirm} setMessage={setMessage} />
+        {/* v7.0.0 (A-SH-1, owner 6 Oct): on the REAL shared copy nobody can erase the business's data from a button; on the TEST copy the
+            two buttons act on the shared test data for everyone testing; in single-browser mode they work as before */}
+        {isSharedMode() && !isTestCopy() ? (
+          <Card style={{ marginBottom: 16, borderLeft: "3px solid #94A3B8" }}>
+            <SectionTitle>RESET</SectionTitle>
+            <div style={{ fontSize: 13, color: "#475569", lineHeight: 1.5 }}>Erasing is not available on the shared data — everyone works on it. To go back to an earlier state, <b>Import</b> a backup above: it is restored into the shared data after a typed confirmation, and the shared copy as it was is downloaded first. To try things out, use the TEST copy.</div>
+          </Card>
+        ) : (
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>
-          <SectionTitle>RESET</SectionTitle>
+          <SectionTitle>RESET{isSharedMode() && isTestCopy() ? " — acts on the shared TEST data, for everyone testing" : ""}</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
             Erase everything you've entered and return the system to a completely empty state. Use this if you've made test data unusable and want to start fresh. A backup is saved automatically first (see Local backups).
           </div>
           <Button onClick={handleFreshSeason} variant="danger" title="v6.99.51: keeps the master data, clears every document of the season together">⚠ Emergency: wipe all documents (keep master data)</Button>
           <Button onClick={handleReset} variant="danger">⚠ Start fresh — erase ALL data</Button>
         </Card>
+        )}
 
         <div style={{ marginTop: 24, padding: "14px 16px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
-          <strong>About local storage:</strong> Data lives in your browser only. Different browsers, devices, or private windows have separate copies. Clearing your browser data will wipe MARIANNA ERP data. There is no server: a copy leaves this computer only through the backup folder or an export.
-        </div>
+          {isSharedMode() ? <><strong>About the shared data:</strong> The data lives in the shared copy{ENV_LABEL ? ` (${ENV_LABEL})` : ""} on Supabase (Frankfurt) — everyone signed in reads and writes the same records; colleagues' saves appear within 20 seconds. This browser keeps a working copy and its local snapshots; Export all data saves what this browser holds, which is the shared copy once synced. Signing out (the pill in the top bar) leaves the shared copy untouched.</> : <><strong>About local storage:</strong> Data lives in your browser only. Different browsers, devices, or private windows have separate copies. Clearing your browser data will wipe MARIANNA ERP data. There is no server: a copy leaves this computer only through the backup folder or an export.</>}{/* v7.0.0 (A-SH-2) */}</div>
 
-        <div style={{ marginTop: 16, fontSize: 11, color: "#AAA", textAlign: "center" }}>
-          Phase 2 will add: a real backend with shared data, login, audit trail.
-        </div>
+        {/* v7.0.0 (A-SH-2): the "Phase 2" footer is gone — the shared data, login and audit trail are here */}
       </div>
     </ModulePage>
   );

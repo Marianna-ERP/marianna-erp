@@ -147,3 +147,28 @@ export function startSync(by: string): () => void {
   return () => { clearInterval(poll); setStoreWrittenHook(null); };
 }
 export function clearConflict(key: string) { emit({ conflicts: state.conflicts.filter(c => c !== key) }); }
+
+// ─── v7.0.0 (A-SH-1, owner 6 Oct): DELIBERATE CHANGES TO THE WHOLE SHARED COPY ────────────────────────────────────────
+// Restore a backup into the shared copy, archive a season in it, or (TEST copy only) wipe it. Each replaces the named stores
+// with NEW versions, so every signed-in tab takes them on its next poll; colleagues' unsaved edits to those stores lose the race
+// and are told so (the usual conflict notice).
+export const isSharedMode = () => remoteConfigured() && !!readSession();
+export const isTestCopy = () => /^test$/i.test(ENV_LABEL);
+export async function replaceSharedStores(stores: Record<string, any>, by: string): Promise<number> {
+  const current = await fetchRows("key,version"); const ver = new Map(current.map(r => [r.key, r.version]));
+  const now = new Date().toISOString(); let n = 0;
+  for (const key of Object.keys(stores).filter(k => DATA_KEYS.includes(k))) {
+    const data = stores[key]; const v = ver.get(key);
+    const res = v == null
+      ? await rest("stores", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify([{ key, data, version: 1, updated_by: by, updated_at: now }]) })
+      : await rest(`stores?key=eq.${encodeURIComponent(key)}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ data, version: Number(v) + 1, updated_by: by, updated_at: now }) });
+    if (!res.ok) throw new Error(`writing ${key} failed (${res.status}) — ${n} store(s) were replaced before the failure`);
+    known.set(key, { version: v == null ? 1 : Number(v) + 1, json: JSON.stringify(data) }); n++;
+  }
+  return n;
+}
+/** The whole shared copy as a Marianna export file (for the download taken before any replacement). */
+export async function sharedCopyAsExport(appVersion: string, storageVersion: number): Promise<string> {
+  const rows = await fetchRows(); const out: any = { _meta: { app: "marianna-erp", version: storageVersion, appVersion, exportedAt: new Date().toISOString(), source: "shared copy" + (ENV_LABEL ? ` (${ENV_LABEL})` : "") } };
+  rows.forEach(r => { out[r.key] = r.data; }); return JSON.stringify(out);
+}
