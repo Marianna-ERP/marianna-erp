@@ -572,4 +572,3 @@ warehouse-charge predictions vs invoices.
   canonical notes and finally counted in the receivable/payable totals.
 - Clean system: no demo data anywhere after a reset.
 - Decimal commas accepted everywhere in the engines.
-

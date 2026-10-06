@@ -55,6 +55,9 @@ export function currentUser(users: AppUser[], userName: any): AppUser | null | u
 export function canOpenModule(users: AppUser[], userName: any, moduleKey: string): boolean {
   const u = currentUser(users, userName);
   if (u === null) return true;
+  // v7.0.2 (owner 6 Oct, Settings unreachable): while the Users list has NO owner, Settings stays open to everyone, so an owner can be set —
+  // without it a list made only of limited users locks the whole office out of Settings for good
+  if (moduleKey === "settings" && !(users || []).some(x => x && x.isOwner)) return true;
   if (!u) return moduleKey === "dashboard";
   if (u.isOwner) return true;
   return u.modules?.[moduleKey] !== false;
