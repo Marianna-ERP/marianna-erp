@@ -46,7 +46,7 @@ import Invoices from "./Invoices";
 import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
 import { syncOverheadOpCosts } from "./operationalCosts";
 import { normaliseStoredSoStatus } from "./statusOwnership.domain";
-import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn, signInNotLinkedYet } from "./permissions.domain";
+import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn } from "./permissions.domain";
 import { readSession, isSharedMode, logout } from "./remoteStore";   // v7.1.0 (A-USR-1)
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
@@ -660,9 +660,11 @@ export default function App() {
       <TopNav active={activeModule} onNav={navigate} canOpen={mayOpen} userSlot={(() => {
         // v7.1.0 (A-USR-1): shared mode — the signed-in person; not in the Users list → their e-mail and a notice (Dashboard only until the owner adds it).
         // Single-browser mode keeps the typed name; an unmatched browser picks its person from the list (v7.0.1). The v7.0.2 'change' link is gone (owner).
-        if (signInEmail && !signInNotLinkedYet(users)) {
+        if (signInEmail) {   // v7.1.13: ONE rule on the shared copy — the sign-in; the v7.1.10 typed-name bootstrap is gone
           const me = userBySignIn(users, signInEmail);
-          if ((users || []).length && !me) {
+          const signOut = <button onClick={() => { if (window.confirm(`Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.`)) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button>;
+          if (!(users || []).length) return <><span title={signInEmail}>{signInEmail}</span>{signOut}</>;
+          if (!me) {
             // v7.1.12 (owner 6 Oct, trapped again): a sign-in that matches no entry CLAIMS its entry here — only an entry that carries no
             // e-mail yet can be claimed, the claim writes the e-mail (so it can never be claimed twice) and is audit-logged. Nobody is
             // ever locked out of Settings by the state of the list again.
@@ -678,14 +680,14 @@ export default function App() {
                   <option value="">choose…</option>
                   {free.map((u: any) => <option key={u.id ?? u.name} value={String(u.id)}>{u.name}{u.isOwner ? " (owner)" : ""}</option>)}
                 </select>}
+                {signOut}
               </span>);
           }
           const label = String((me && me.name) || signInEmail).trim(); const initials = label.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0].toUpperCase()).join("");
           return <><span title={signInEmail}>{label}</span><div title={signInEmail} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials || "·"}</div>
-            <button onClick={() => { if (window.confirm(`Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.`)) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button></>;   // v7.1.1 (A-USR-2)
+            {signOut}</>;   // v7.1.1 (A-USR-2)
         }
         const me = currentUser(users, userName);
-        const bootstrap = signInEmail && signInNotLinkedYet(users);   // v7.1.10: e-mails not filled in yet — the typed name applies, and the owner is told
         if ((users || []).length && !me) return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
             Who are you?
@@ -696,7 +698,7 @@ export default function App() {
           </span>);
         const label = String((me && me.name) || userName || "").trim();
         const initials = label ? label.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0].toUpperCase()).join("") : "·";
-        return <>{bootstrap && <span title="Settings → Users: add each person's sign-in e-mail; from the first one on, the sign-in decides who you are" style={{ padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>sign-in e-mails not set yet — Settings → Users</span>}{label && <span>{label}</span>}<div title={label || "set your name in Settings"} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials}</div></>;
+        return <>{label && <span>{label}</span>}<div title={label || "set your name in Settings"} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials}</div></>;
       })()} rightSlot={
         <><span style={{ marginRight: 12 }}><SharedStoreStatus sync={shared.sync} userLabel={who || ""} /></span>{/* v6.99.148 */}<label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
           <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}

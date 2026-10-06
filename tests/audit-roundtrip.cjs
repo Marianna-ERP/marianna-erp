@@ -3271,20 +3271,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.1.9 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
-// ══ v7.1.10 — no lock-out on the first deploy: the typed name applies until the first sign-in e-mail is filled in ══
-(function v7110(){
-  console.log("\n══ v7.1.10. bootstrap of the sign-in identity ══");
-  const Pm = B("permissions.domain.js");
-  t("no entry carries an e-mail → the typed name still decides (the owner can reach Settings); the first e-mail switches the rule on", () => {
-    const noEmails = [{ id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} }, { id: 2, name: "Anna", isOwner: false, modules: {}, finance: {} }];
-    eq(Pm.signInNotLinkedYet(noEmails), true); eq(Pm.effectiveUserName(noEmails, "Hazem Osman", "hazem@marianna-biz.com"), "Hazem Osman"); eq(Pm.canOpenModule(noEmails, Pm.effectiveUserName(noEmails, "Hazem Osman", "hazem@marianna-biz.com"), "settings"), true, "Settings reachable");
-    const withEmails = [{ ...noEmails[0], email: "hazem@marianna-biz.com" }, noEmails[1]];
-    eq(Pm.signInNotLinkedYet(withEmails), false); eq(Pm.effectiveUserName(withEmails, "Hazem Osman", "anna@marianna-biz.com").startsWith("\u2205"), true, "Anna has no e-mail yet → not matched, whatever she typed");
-    eq(Pm.effectiveUserName(withEmails, "", "hazem@marianna-biz.com"), "Hazem Osman");
-  });
-  console.log("v7.1.10 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-})();
-
+// ══ v7.1.10 — RETIRED in v7.1.13: the typed-name bootstrap is gone; an unlinked sign-in claims its entry ══
 // ══ v7.1.11 — one gate for every road into a module ══
 (function v7111(){
   console.log("\n══ v7.1.11. permissions enforced on every road, not only the tabs ══");
@@ -3309,6 +3296,20 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(/\{ \.\.\.x, email: signInEmail \}/.test(src), "the claim writes the e-mail"); ok(/linked itself to the entry/.test(src), "audit-logged");
   });
   console.log("v7.1.12 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.1.13 — one rule on the shared copy: the sign-in ══
+(function v7113(){
+  console.log("\n══ v7.1.13. one rule: the sign-in ══");
+  const Pm = B("permissions.domain.js");
+  t("on the shared copy the typed name never decides; an unlinked sign-in gets the Dashboard and the claim; Sign out is always there", () => {
+    const noEmails = [{ id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} }, { id: 2, name: "marina@marianna-biz.com", isOwner: false, modules: { settings: false }, finance: {} }];
+    const w = Pm.effectiveUserName(noEmails, "marina@marianna-biz.com", "marina@marianna-biz.com"); ok(w.startsWith("\u2205"), "an e-mail typed as a NAME links nothing: " + w); eq(Pm.canOpenModule(noEmails, w, "orders"), false);
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+    ok(!/signInNotLinkedYet/.test(src), "no bootstrap left"); ok((src.match(/\{signOut\}/g) || []).length >= 3, "Sign out on every shared-mode branch");
+    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/sign-in e-mail<\/span><input value=\{u\.email/.test(st), "the e-mail field is labelled");
+  });
+  console.log("v7.1.13 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
