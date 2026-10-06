@@ -9,8 +9,13 @@
 //   4. the local ring — snapshots are kept while the whole browser store stays under 70 % of its budget (the level at which
 //      Settings turns amber); the newest snapshot is always kept.
 
-export const AUTO_PREFIX = "marianna-erp_auto_";
-const AUTO_RE = /^marianna-erp_auto_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})_v[0-9A-Za-z.-]+\.json$/;
+// v7.1.9 (A-BK-6, owner 6 Oct): the TEST copy's files are named apart (marianna-erp-TEST_auto_…) and its retention lists only its own,
+// so test and real files never mix even in one folder; the real copy's pattern is unchanged and ignores TEST files
+let COPY_LABEL = "";
+export function setBackupCopyLabel(label: string) { COPY_LABEL = String(label || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+export function autoPrefix(): string { return COPY_LABEL ? `marianna-erp-${COPY_LABEL}_auto_` : "marianna-erp_auto_"; }
+export const AUTO_PREFIX = "marianna-erp_auto_";   // the real copy's prefix (kept for readers)
+function autoRe(): RegExp { return new RegExp("^" + autoPrefix().replace(/[-_]/g, m => "\\" + m) + "(\\d{4}-\\d{2}-\\d{2})_(\\d{2})-(\\d{2})-(\\d{2})_v[0-9A-Za-z.-]+\\.json$"); }
 
 export const KEEP_NEWEST = 30;
 export const KEEP_DAILY_DAYS = 30;
@@ -24,11 +29,11 @@ export function localDay(d: Date): string { return `${d.getFullYear()}-${pad(d.g
 
 /** marianna-erp_auto_2026-09-27_16-30-05_v6.99.70.json */
 export function autoFileName(now: Date, appVersion: string): string {
-  return `${AUTO_PREFIX}${localDay(now)}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}_v${appVersion}.json`;
+  return `${autoPrefix()}${localDay(now)}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}_v${appVersion}.json`;
 }
 
 export function parseAutoFileName(name: string): { day: string; stamp: string } | null {
-  const m = AUTO_RE.exec(String(name || ""));
+  const m = autoRe().exec(String(name || ""));
   if (!m) return null;
   return { day: m[1], stamp: `${m[1]}T${m[2]}:${m[3]}:${m[4]}` };
 }

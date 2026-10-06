@@ -22,6 +22,7 @@ export interface AppUser {
   id: any;
   name: string;
   role: string;                       // display only (General Manager, Operations, …)
+  email?: string;                     // v7.1.0: the sign-in e-mail that identifies this person on the shared copy
   isOwner: boolean;
   modules: Record<string, boolean>;   // MODULE_KEYS → may open
   finance: Record<string, boolean>;   // FINANCE_KEYS → may open (within Finance)
@@ -49,15 +50,23 @@ export function currentUser(users: AppUser[], userName: any): AppUser | null | u
   const key = String(userName || "").trim().toLowerCase();
   return (users || []).find(u => String(u.name || "").trim().toLowerCase() === key);
 }
+/** v7.1.0 (A-USR-1, owner 6 Oct): in shared mode the SIGNED-IN E-MAIL picks the person — nobody types or chooses a name. */
+export function userBySignIn(users: AppUser[], email: any): AppUser | undefined {
+  const key = String(email || "").trim().toLowerCase(); if (!key) return undefined;
+  return (users || []).find(u => String((u as any).email || "").trim().toLowerCase() === key);
+}
+/** The name the app works under: in shared mode the signed-in person's entry (or a marker nobody matches), otherwise the typed name. */
+export function effectiveUserName(users: AppUser[], typedName: any, signInEmail: any): string {
+  if (!signInEmail) return String(typedName || "");
+  const u = userBySignIn(users, signInEmail);
+  return u ? String(u.name || "") : `\u2205 ${String(signInEmail)}`;   // a name nobody in the list carries → Dashboard only
+}
 
 /** May this user open the module? Owner: always. No users defined: always.
  *  Defined users but no match: only the dashboard — visible and explainable. */
 export function canOpenModule(users: AppUser[], userName: any, moduleKey: string): boolean {
   const u = currentUser(users, userName);
   if (u === null) return true;
-  // v7.0.2 (owner 6 Oct, Settings unreachable): while the Users list has NO owner, Settings stays open to everyone, so an owner can be set —
-  // without it a list made only of limited users locks the whole office out of Settings for good
-  if (moduleKey === "settings" && !(users || []).some(x => x && x.isOwner)) return true;
   if (!u) return moduleKey === "dashboard";
   if (u.isOwner) return true;
   return u.modules?.[moduleKey] !== false;

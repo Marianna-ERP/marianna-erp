@@ -117,6 +117,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [period, setPeriod] = useState("this_month");
+  const [fetchNote, setFetchNote] = useState("");   // v7.1.7 (A-FI-4)
   const [fileName, setFileName] = useState("");
   const cfg = readFakturowniaConfig();
   const liveShipments = (shipments || []).filter((sh: any) => sh.status !== "Cancelled");
@@ -141,6 +142,9 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     const r = await fetchInvoices(cfg, { income: 0, period });
     setBusy(false);
     if (!r.ok) { setError(r.corsLikely ? "The browser couldn't reach Fakturownia directly (CORS) — use the file export instead." : (r.error || "Fetch failed.")); return; }
+    const got = (r.data || []).length;   // v7.1.7 (A-FI-4, owner 6 Oct): an empty answer looked like a broken import — now it says so
+    const periodLabel = period === "this_month" ? "this month" : period === "last_month" ? "last month" : period === "this_year" ? "this year" : period;
+    setFetchNote(got ? `Fakturownia returned ${got} received invoice${got === 1 ? "" : "s"} for ${periodLabel}.` : `Fakturownia returned no received invoice for ${periodLabel}. ${period === "this_month" ? "Try Last month or This year above." : "Try another period above — or check in Fakturownia that the invoices are registered as received (expenses)."}`);
     stage((r.data || []).map(mapInvoice).map((m: any, i: number) => stagedRowFromMapped(m, i, COMPANY.nip, COMPANY.name)));
   }
 
@@ -238,6 +242,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
           </label>
           {fileName && <span style={{ fontSize: 11.5, color: "#64748B" }}>{fileName}</span>}
           {error && <span style={{ fontSize: 12, color: "#DC2626", fontWeight: 600 }}>{error}</span>}
+          {!error && fetchNote && <span style={{ fontSize: 12, color: fetchNote.includes("no received") ? "#B45309" : "#15803D", fontWeight: 600 }}>{fetchNote}</span>}{/* v7.1.7 (A-FI-4) */}
         </div>
         {rows.length > 0 && (
           <div style={{ padding: "10px 22px" }}>

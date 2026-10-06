@@ -1552,10 +1552,15 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                 </>; })()}</div>
                 <div>
                   {l.poRef && <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={l.poRef} cancelledSet={cancelledRefs} /></div>}
-                  {soList.slice(0, 2).map(s => (
-                    <div key={s.number} style={{ fontSize: 11, color: "#15803D", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}>{s.number}</div>
+                  {/* v7.1.6 (A-IN-13, owner 6 Oct): the lot's sales and the shipments carrying it, each a link (the PO above already is) */}
+                  {soList.slice(0, 3).map(s => (
+                    <div key={s.number} style={{ fontSize: 11, color: "#15803D", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={s.number} cancelledSet={cancelledRefs} /></div>
                   ))}
-                  {soList.length > 2 && <div style={{ fontSize: 10, color: "#AAA" }}>+{soList.length - 2} more</div>}
+                  {soList.length > 3 && <div style={{ fontSize: 10, color: "#AAA" }}>+{soList.length - 3} more sales</div>}
+                  {(() => { const shps = (shipments || []).filter((sh: any) => sh && sh.status !== "Cancelled" && (sh.goods || []).some((g: any) => String(g.lotRef) === String(l.number))).map((sh: any) => sh.number); return <>
+                    {shps.slice(0, 3).map((n: string) => <div key={n} style={{ fontSize: 11, color: "#0284C7", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={n} cancelledSet={cancelledRefs} /></div>)}
+                    {shps.length > 3 && <div style={{ fontSize: 10, color: "#AAA" }}>+{shps.length - 3} more shipments</div>}
+                  </>; })()}
                 </div>
               </div>
             );

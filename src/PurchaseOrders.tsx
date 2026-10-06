@@ -1378,6 +1378,7 @@ ${blockNote}`.trim(),
                       were missing entirely from this column. */}
                   {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)).map((so: any) => so.number))); return sos.length ? <div style={{ color: "#7C3AED" }} title="Sales orders">🧾 {sos.join(", ")}</div> : null; })()}
                   {(() => { const cl = computedPOLinks(o, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }); return (<>
+                  <LinkedDocNumbers nums={cl.linkedSalesOrders} cancelledSet={cancelledRefs} color="#16A34A" icon="🧾" title="Sales orders" />{/* v7.1.4 (A-PV-5) */}
                   <LinkedDocNumbers nums={cl.linkedShipments} cancelledSet={cancelledRefs} color="#0284C7" icon="📦" title="Shipments" />
                   {/* v6.62.0 (user ruling): lots and invoices rendered as raw
                       joined strings while shipments went through LinkedDocNumbers,

@@ -3235,18 +3235,40 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.0.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
-// ══ v7.0.2 — Settings reachable while the Users list has no owner ══
-(function v702(){
-  console.log("\n══ v7.0.2. no owner → Settings stays open ══");
-  const Pm = B("permissions.domain.js");
-  t("a list without an owner keeps Settings open to everyone (so an owner can be set); with an owner, the ticks decide again", () => {
-    const limited = { id: 2, name: "Anna", isOwner: false, modules: { settings: false, audit: false }, finance: {} };
-    eq(Pm.canOpenModule([limited], "Anna", "settings"), true, "no owner yet"); eq(Pm.canOpenModule([limited], "Anna", "audit"), false, "only Settings opens");
-    eq(Pm.canOpenModule([limited], "", "settings"), true, "even unmatched");
-    const owner = { id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} };
-    eq(Pm.canOpenModule([owner, limited], "Anna", "settings"), false, "with an owner the ticks decide"); eq(Pm.canOpenModule([owner, limited], "Hazem Osman", "settings"), true);
+// ══ v7.0.2 — CANCELLED by the owner on 6 Oct (v7.1.0): with an owner set and identity tied to the sign-in, the ticks decide ══
+// ══ v7.1.0–7.1.9 — the first V7 batch ══
+(function v71(){
+  console.log("\n══ v7.1.x. identity by sign-in · result of a sale in Finance · links · import note · backups ══");
+  const Pm = B("permissions.domain.js"); const Dm = B("documents.domain.js"); const Bd = B("autoBackup.domain.js"); const OC = B("operationalCosts.js");
+  const users = [{ id: 1, name: "Hazem Osman", isOwner: true, email: "hazem@marianna-biz.com", modules: {}, finance: {} }, { id: 2, name: "Anna", isOwner: false, email: "anna@marianna-biz.com", modules: { finance: false, settings: false }, finance: { pl: true } }];
+  t("A-USR-1: the signed-in e-mail picks the person; a typed name counts for nothing on the shared copy; an unknown e-mail opens the Dashboard only", () => {
+    eq(Pm.effectiveUserName(users, "Hazem Osman", "anna@marianna-biz.com"), "Anna", "Anna typed the owner's name — she is still Anna");
+    eq(Pm.effectiveUserName(users, "", "HAZEM@marianna-biz.com"), "Hazem Osman", "case does not matter");
+    const nobody = Pm.effectiveUserName(users, "Hazem Osman", "x@marianna-biz.com"); eq(Pm.canOpenModule(users, nobody, "orders"), false); eq(Pm.canOpenModule(users, nobody, "dashboard"), true); eq(Pm.canOpenModule(users, nobody, "settings"), false, "the v7.0.2 rule is cancelled");
+    eq(Pm.effectiveUserName(users, "Anna", ""), "Anna", "no sign-in (single-browser mode): the typed name");
+    eq(Pm.canOpenFinance(users, "Anna", "pl") && Pm.canOpenModule(users, "Anna", "finance"), false, "P/L ticked but Finance unticked → no result link");
   });
-  console.log("v7.0.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+  t("A-PL-1: the Finance list's figure is the result AFTER overhead (the card's), and the card is gone from the sale", () => {
+    const fx = FX.fixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json"); if (!fx) return; const d = require(fx); const so = d.orders.find(o => o.number === "SO-2026-0026");
+    const m = OC.computeSOMarginWithOverhead(so, d.lots, d.pos, d.shipments, "forecast", d.operationalCosts || [], d.orders, [], []); ok(typeof m.netMarginPLN === "number" && typeof m.overheadCostsPLN === "number");
+    const sod = require("fs").readFileSync(require("path").join(__dirname, "../src/SalesOrderDetail.tsx"), "utf8"); ok(!/<SOMarginCard/.test(sod), "no card on the sale"); ok(/Result of this sale/.test(sod));
+    const fin = require("fs").readFileSync(require("path").join(__dirname, "../src/Finance.tsx"), "utf8"); ok(/computeSOMarginWithOverhead\(o, lots, pos, shipments, mode, operationalCosts, orders, invoices, financeNotes\)/.test(fin), "the list uses the card's calculation"); ok(/<SOMarginCard order=\{o\}/.test(fin), "the breakdown opens in Finance");
+  });
+  t("A-PV-5: the PO's sales are the sales of its lots; its shipments include trucks carrying those lots", () => {
+    const fx = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!fx) return; const d = require(fx); const SOd = B("salesOrders.domain.js"); const orders = SOd.migrateSaleLinesToLots(d.orders, d.lots).orders;
+    const po = d.pos.find(p => p.number === "PO-2026-0044"); const cl = Dm.computedPOLinks(po, { shipments: d.shipments, lots: d.lots, invoices: d.invoices || [], orders });
+    eq(cl.linkedSalesOrders.slice().sort().join(","), "SO-2026-0027,SO-2026-0028,SO-2026-0029"); ok(cl.linkedShipments.includes("SHP-2026-0039"), "the groupage truck carrying LOT-0127/0128");
+  });
+  t("A-BK-6: the TEST copy's files are named apart and its retention ignores the real copy's files (and vice versa)", () => {
+    Bd.setBackupCopyLabel("TEST"); const n = Bd.autoFileName(new Date(2026, 9, 6, 14, 43, 23), "7.1.9"); ok(/^marianna-erp-TEST_auto_2026-10-06_14-43-23_v7\.1\.9\.json$/.test(n), n);
+    ok(Bd.parseAutoFileName(n)); eq(Bd.parseAutoFileName("marianna-erp_auto_2026-10-06_14-43-23_v7.0.0.json"), null, "a real file is not the TEST copy's");
+    Bd.setBackupCopyLabel(""); eq(Bd.autoFileName(new Date(2026, 9, 6, 14, 43, 23), "7.1.9"), "marianna-erp_auto_2026-10-06_14-43-23_v7.1.9.json"); eq(Bd.parseAutoFileName(n), null, "a TEST file is not the real copy's");
+  });
+  t("A-BK-5 / A-FI-4: only the writing tab backs up; a tidy-up error is 'retention postponed'; the import says what came back", () => {
+    const ab = require("fs").readFileSync(require("path").join(__dirname, "../src/autoBackup.ts"), "utf8"); ok(/if \(!backupAllowed\(\)\) return;/.test(ab)); ok(/retention postponed/.test(ab)); ok(/retrying in 30 s/.test(ab));
+    const inv = require("fs").readFileSync(require("path").join(__dirname, "../src/Invoices.tsx"), "utf8"); ok(/Fakturownia returned no received invoice for/.test(inv));
+  });
+  console.log("v7.1.9 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict

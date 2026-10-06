@@ -538,7 +538,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const POm = require(path.resolve("./src/PurchaseOrders"));
     _where = "PO view PO-2026-0044"; const pv = renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0044" })); const pt = T(pv);
     ["SO-2026-0027", "SO-2026-0028", "SO-2026-0029"].forEach(n => { if (!pt.includes(n)) bad.push("linked documents lack " + n); });
-    const iS = pt.indexOf("Truck settlement"), iL = pt.indexOf("LINKED DOCUMENTS"), iO = pt.indexOf("ORDER DETAILS"); if (!(iS > 0 && iO > iS && iL > iO)) bad.push(`order: settlement ${iS}, order details ${iO}, linked ${iL}`);
+    const iS = pt.indexOf("Truck settlement"), iL = pt.indexOf("LINKED DOCUMENTS"), iLI = pt.indexOf("LINE ITEMS"); if (!(iS > 0 && iLI > iS && iL > iLI)) bad.push(`order: settlement ${iS}, line items ${iLI}, linked ${iL}`);   // v7.1.5 (A-PV-6): Linked documents under Line items
     if (/less: .* 0,00 PLN|−0,00/.test(pt)) bad.push("a zero or signed line shows"); if (!/Sales \(excl\. VAT\)/.test(pt)) bad.push("sales line missing");
     if (!/↳ SO-2026-0028/.test(pt) || !/↳ SO-2026-0029/.test(pt)) bad.push("the settlement lines do not name their sales (A-ST-9)");
     const lh2 = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9 }))); if (/PO-2026-0010/.test(lh2)) bad.push("a deleted PO shows in the list by default (A-DEL-4)");

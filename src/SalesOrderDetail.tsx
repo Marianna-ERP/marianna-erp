@@ -1,6 +1,5 @@
 // SalesOrderDetail.tsx — v6.99.68 (A-AUD-2, owner): moved out of SalesOrders.tsx unchanged; the module's shared helpers are imported from it.
 import React, { useState } from "react";
-import SOMarginCard from "./SOMarginCard";
 import { Card, Lbl, SectionTitle, cancelledDocSet, ActionButton, DocLink } from "./ui";
 import { PAGE_MAX } from "./ui";
 import { SO_STATUSES } from "./types";
@@ -144,7 +143,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
 }
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-export function OrderDetail({ order, soInvoices = [], financeNotes = [], onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpenResult = false, onOpenResult = null, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
   const computedLinks = computedSOLinks(order, { shipments, invoices: (soInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), lots });
@@ -152,11 +151,6 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], onBack,
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
   //  - Financial Director & General Manager: see all P/L
-  const canSeePL = (() => {
-    if (userRole === "Financial Director" || userRole === "General Manager") return true;
-    if (userRole === "Sales") return !!order.createdBy && order.createdBy === userName;
-    return false; // Assistant, Operations, or unknown
-  })();
   const total = netTotal(order.items);
   const destination = locById(order.destinationLocationId);
   const destinationLabel = destinationDisplay(order);
@@ -267,15 +261,11 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], onBack,
             <div style={{ marginTop: 8, fontSize: 11, color: "#888", fontStyle: "italic" }}>{SO_STATUSES[order.status]?.desc}</div>
           </Card>
 
-          {canSeePL ? (
-            <SOMarginCard order={order} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={allOrders} invoices={soInvoices} financeNotes={financeNotes} />
-          ) : (
-            <Card style={{ marginBottom: 16 }}>
-              <SectionTitle>PROFITABILITY (P/L)</SectionTitle>
-              <div style={{ fontSize: 12.5, color: "#888", lineHeight: 1.5 }}>
-                Profitability is hidden for your role ({userRole || "—"}). {userRole === "Sales" ? "Sales users can see P/L only for orders they created." : "P/L is visible to Sales (own orders), Financial Director, and General Manager."} You can change the active role in Settings.
-              </div>
-            </Card>
+          {/* v7.1.3 (A-PL-1, owner ruling 6 Oct): the result of a sale lives in ONE place — Finance → P/L; here only a link, for those who may open it */}
+          {canOpenResult && (
+            <div style={{ marginBottom: 16, fontSize: 12.5 }}>
+              <button type="button" onClick={() => onOpenResult && onOpenResult(order)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, color: "#111", cursor: "pointer" }}>Result of this sale → Finance</button>
+            </div>
           )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
