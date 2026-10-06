@@ -3235,6 +3235,20 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.0.1 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v7.0.2 — Settings reachable while the Users list has no owner ══
+(function v702(){
+  console.log("\n══ v7.0.2. no owner → Settings stays open ══");
+  const Pm = B("permissions.domain.js");
+  t("a list without an owner keeps Settings open to everyone (so an owner can be set); with an owner, the ticks decide again", () => {
+    const limited = { id: 2, name: "Anna", isOwner: false, modules: { settings: false, audit: false }, finance: {} };
+    eq(Pm.canOpenModule([limited], "Anna", "settings"), true, "no owner yet"); eq(Pm.canOpenModule([limited], "Anna", "audit"), false, "only Settings opens");
+    eq(Pm.canOpenModule([limited], "", "settings"), true, "even unmatched");
+    const owner = { id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} };
+    eq(Pm.canOpenModule([owner, limited], "Anna", "settings"), false, "with an owner the ticks decide"); eq(Pm.canOpenModule([owner, limited], "Hazem Osman", "settings"), true);
+  });
+  console.log("v7.0.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
