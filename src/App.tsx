@@ -46,7 +46,7 @@ import Invoices from "./Invoices";
 import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
 import { syncOverheadOpCosts } from "./operationalCosts";
 import { normaliseStoredSoStatus } from "./statusOwnership.domain";
-import { canOpenModule } from "./permissions.domain";
+import { canOpenModule, currentUser } from "./permissions.domain";
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
@@ -151,7 +151,7 @@ const NAV_GROUPS: { items: { key: string; icon: string; label: string; short: st
   ] },
 ];
 
-function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: string) => true }: any) {
+function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: string) => true, userSlot = null }: any) {
   return (
     <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", minHeight: 56, display: "flex", alignItems: "center", gap: 0, flexShrink: 0, overflowX: "auto" }}>
       <div style={{ fontSize: 17, fontWeight: 700, color: "#111", letterSpacing: "-0.3px", marginRight: 24, whiteSpace: "nowrap" }}>
@@ -192,8 +192,7 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "#AAA", paddingLeft: 16, whiteSpace: "nowrap" }}>
         {rightSlot}
         <span title="App build version. Everyone sharing a JSON file must be on the same version." style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
-        <span>Hazem Osman</span>
-        <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>HO</div>
+        {userSlot}{/* v7.0.1 (owner 6 Oct): the person using this browser — no longer the name written into the page */}
       </div>
     </div>
   );
@@ -645,7 +644,23 @@ export default function App() {
           </div>
         </div>
       )}
-      <TopNav active={activeModule} onNav={navigate} canOpen={(k: string) => canOpenModule(users, userName, k === "loadPlans" ? "loadplans" : k)} rightSlot={
+      <TopNav active={activeModule} onNav={navigate} canOpen={(k: string) => canOpenModule(users, userName, k === "loadPlans" ? "loadplans" : k)} userSlot={(() => {
+        // v7.0.1 (owner 6 Oct, all tabs gone): once Settings → Users holds anyone, a browser whose name matches nobody saw the Dashboard only —
+        // with Settings hidden there was no way back. Now an unmatched browser picks its person from the list (what typing "Your name"
+        // in Settings did — no new right is created); a matched browser shows that person's name and initials.
+        const me = currentUser(users, userName);
+        if ((users || []).length && !me) return (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
+            Who are you?
+            <select value="" onChange={e => { if (e.target.value) setUserName(e.target.value); }} style={{ border: "1px solid #FCD34D", borderRadius: 6, padding: "2px 6px", fontSize: 11.5, background: "#fff" }}>
+              <option value="">choose your name…</option>
+              {(users || []).map((u: any) => <option key={u.id ?? u.name} value={u.name}>{u.name}{u.isOwner ? " (owner)" : ""}</option>)}
+            </select>
+          </span>);
+        const label = String((me && me.name) || userName || "").trim();
+        const initials = label ? label.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0].toUpperCase()).join("") : "·";
+        return <>{label && <span>{label}</span>}<div title={label ? `${label}${(users || []).length ? " · change in Settings → Your name" : ""}` : "set your name in Settings"} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials}</div></>;
+      })()} rightSlot={
         <><span style={{ marginRight: 12 }}><SharedStoreStatus sync={shared.sync} userLabel={userName || ""} /></span>{/* v6.99.148 */}<label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
           <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}
         </label>
