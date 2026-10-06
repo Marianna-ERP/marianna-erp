@@ -1,6 +1,6 @@
 {
   "name": "freshtrade-erp",
-  "version": "7.1.11",
+  "version": "7.1.12",
   "private": true,
   "dependencies": {
     "@types/react": "^18.2.0",

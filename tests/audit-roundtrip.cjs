@@ -3300,6 +3300,17 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.1.11 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v7.1.12 — a sign-in claims its entry; nobody is locked out by the list's state ══
+(function v7112(){
+  console.log("\n══ v7.1.12. claim your entry ══");
+  t("an unmatched sign-in may claim only an entry without e-mail; the claim writes the e-mail and is audit-logged", () => {
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+    ok(/const free = \(users \|\| \[\]\)\.filter\(\(u: any\) => !String\(u\.email \|\| ""\)\.trim\(\)\);/.test(src), "only entries without e-mail");
+    ok(/\{ \.\.\.x, email: signInEmail \}/.test(src), "the claim writes the e-mail"); ok(/linked itself to the entry/.test(src), "audit-logged");
+  });
+  console.log("v7.1.12 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
