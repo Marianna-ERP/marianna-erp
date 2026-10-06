@@ -1,3 +1,4 @@
+import { ENV_LABEL } from "./remoteStore";
 // ─── v6.99.70 (A-BK-1/2, owner 27 Sept): AUTOMATIC BACKUP TO A FOLDER — the browser part ────────────────────────────
 // The owner chooses a folder once (ideally one OneDrive or Google Drive already syncs, so a copy leaves the laptop). The app
 // writes an "Export all data" file there on opening, then two minutes after the changes stop, at most every 15 minutes,
@@ -13,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { exportAllData, DATA_KEYS, dataKey, STORAGE_VERSION } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
-import { tick, afterWrite, afterFailure, autoFileName, planRetention, fingerprint, localDay, EMPTY_CLOCK, BackupClock, TICK_MS } from "./autoBackup.domain";
+import { tick, afterWrite, afterFailure, autoFileName, planRetention, fingerprint, localDay, EMPTY_CLOCK, BackupClock, TICK_MS, setBackupCopyLabel } from "./autoBackup.domain";
 
 const PREF_KEY = "marianna-erp:autoBackup";
 const IDB_NAME = "marianna-erp-prefs";
@@ -111,6 +112,7 @@ function describe(err: any): string {
   return String(err?.message || err || "Unknown error");
 }
 
+let retriedOnce = false;   // v7.1.8 (A-BK-5): a transient failure gets one quiet retry
 async function writeFile(fp: string): Promise<boolean> {
   if (!handle) return false;
   setStatus({ busy: true });
@@ -122,19 +124,26 @@ async function writeFile(fp: string): Promise<boolean> {
     const w = await fh.createWritable();
     await w.write(json);
     await w.close();
-    // retention: only files matching our own pattern are ever listed for deletion
-    const names: string[] = [];
-    for await (const [n, h] of handle.entries()) { if (h && h.kind === "file") names.push(String(n)); }
-    const plan = planRetention(names, now);
-    for (const r of plan.remove) { try { await handle.removeEntry(r); } catch { /* a locked file stays; next time */ } }
+    // the file is safe from here — v7.1.8 (A-BK-5): whatever happens while tidying old copies is "retention postponed", never a failed backup
+    let kept = current().filesKept || 0;
+    try {
+      const names: string[] = [];
+      for await (const [n, h] of handle.entries()) { if (h && h.kind === "file") names.push(String(n)); }
+      const plan = planRetention(names, now);
+      for (const r of plan.remove) { try { await handle.removeEntry(r); } catch { /* a locked file stays; next time */ } }
+      kept = plan.keep.length;
+    } catch (tidyErr) { console.warn("[auto-backup] retention postponed:", tidyErr); }
     clock = afterWrite(clock, fp, now.getTime());
-    patchPrefs({ writtenFp: fp, wroteAt: now.getTime(), lastWrittenAt: now.toISOString(), lastFileName: name, filesKept: plan.keep.length });
-    setStatus({ mode: "active", busy: false, lastError: "", lastWrittenAt: now.toISOString(), lastFileName: name, filesKept: plan.keep.length });
+    patchPrefs({ writtenFp: fp, wroteAt: now.getTime(), lastWrittenAt: now.toISOString(), lastFileName: name, filesKept: kept });
+    setStatus({ mode: "active", busy: false, lastError: "", lastWrittenAt: now.toISOString(), lastFileName: name, filesKept: kept });
     return true;
   } catch (err: any) {
     clock = afterFailure(clock, now.getTime());
     patchPrefs({ wroteAt: now.getTime() });
     if (String(err?.name) === "NotAllowedError" || String(err?.name) === "SecurityError") setStatus({ mode: "paused", busy: false });
+    else if (!retriedOnce && (String(err?.name) === "InvalidStateError" || String(err?.name) === "NoModificationAllowedError")) {   // v7.1.8 (A-BK-5): "busy" is transient — one quiet retry; a missing folder or anything else shows at once
+      retriedOnce = true; setStatus({ busy: false }); const tm: any = setTimeout(() => { runTick("force").finally(() => { retriedOnce = false; }); }, 30_000); if (tm && typeof tm.unref === "function") tm.unref(); console.warn("[auto-backup] write failed once (busy) — retrying in 30 s:", err);
+    }
     else setStatus({ mode: "failed", busy: false, lastError: describe(err) });
     console.warn("[auto-backup] write failed:", err);
     return false;
@@ -143,7 +152,10 @@ async function writeFile(fp: string): Promise<boolean> {
 
 /** One look. `force` writes regardless of the timing and of equal data (Back up now, Retry, the first file after choosing);
  *  `ifDirty` writes whenever the data differs from the last file, ignoring the timing (Resume, before an overwrite). */
+export let backupAllowed = () => true;   // v7.1.8 (A-BK-5): App tells the backup whether this tab holds the pen (the tab lock)
+export function setBackupAllowed(fn: () => boolean) { backupAllowed = fn; }
 async function runTick(mode: "normal" | "ifDirty" | "force" = "normal"): Promise<void> {
+  if (!backupAllowed()) return;
   const st = current();
   if (!handle || st.busy || (st.mode !== "active" && st.mode !== "failed")) return;
   const p = readPrefs();   // another tab may have written meanwhile — the last file is shared knowledge
@@ -156,6 +168,7 @@ async function runTick(mode: "normal" | "ifDirty" | "force" = "normal"): Promise
 
 /** Called once from App on opening. */
 export async function startAutoBackup(): Promise<void> {
+  setBackupCopyLabel(ENV_LABEL);   // v7.1.9 (A-BK-6): TEST files named apart
   if (started || typeof window === "undefined") return;
   started = true;
   if (!folderBackupSupported()) { setStatus({ mode: "unsupported" }); return; }

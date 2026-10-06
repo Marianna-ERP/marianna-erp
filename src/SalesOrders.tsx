@@ -720,6 +720,7 @@ export default function SalesOrders({ archive = null,
   invoices: extInvoices = null, setInvoices: extSetInvoices = null,
   financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, inspections: extInspections = [],
   userRole = "General Manager",
+  canOpenResult = false, onOpenResult = null,   // v7.1.3 (A-PL-1)
   userName = "",
   productCatalog = [],
   setProductCatalog,
@@ -1235,6 +1236,7 @@ export default function SalesOrders({ archive = null,
           shipments={extShipments || []}
           operationalCosts={extOperationalCosts || []}
           userRole={userRole}
+          canOpenResult={canOpenResult} onOpenResult={onOpenResult}
           userName={userName}
           onBack={() => { setView("list"); setSelected(null); }}
           onEdit={() => editOrder(selected)}

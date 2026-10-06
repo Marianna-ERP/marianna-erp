@@ -1,3 +1,4 @@
+import { ENV_LABEL } from "./remoteStore";
 // ─── v6.99.70 (A-BK-1, owner 27 Sept): the backup folder card (Settings) and the backup banner (App) ────────────────
 // Each is a pure VIEW over the status (so the render smoke can open every case) plus a thin connected wrapper.
 // Button vocabulary (A-BT-1): the action that saves = green · leave it for now / stop = white.
@@ -30,6 +31,7 @@ export function AutoBackupCardView({ status, onChoose, onBackupNow, onStop, onDo
   return (
     <Card style={{ marginBottom: 16, padding: "20px 22px" }}>
       <SectionTitle>AUTOMATIC BACKUP FOLDER</SectionTitle>
+      {ENV_LABEL && <div style={{ fontSize: 12, color: "#6D28D9", fontWeight: 700, marginBottom: 8 }}>{ENV_LABEL} copy — its files are named marianna-erp-{ENV_LABEL}_auto_… ; choose a separate folder from the real copy's.</div>}{/* v7.1.9 (A-BK-6) */}
       {st.mode === "unsupported" ? (
         <>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>

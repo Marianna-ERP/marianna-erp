@@ -54,11 +54,14 @@ function invoicesForCounterpartyDoc(docNumber: string, kind: "PO" | "SO", invoic
 /** Computed linked records for a PO (BP-49). */
 export function computedPOLinks(po: any, { shipments = [], lots = [], invoices = [], orders = [] }: any) {
   // SOs that source from this PO (any line sourceType PO + sourceRef == po.number)
+  // v7.1.4 (A-PV-5, owner 6 Oct): a sale names its LOT (A-ONE-1) — the PO's sales are the sales of its lots; the old PO-sourced path is kept for history
+  const lotNos = new Set((lots || []).filter((l: any) => l && l.poRef === po.number).map((l: any) => String(l.number)));
   const linkedSalesOrders = (orders || [])
-    .filter((o: any) => (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === po.number))
+    .filter((o: any) => o && o.status !== "Cancelled" && (o.items || []).some((it: any) => (it.sourceType === "PO" && it.sourceRef === po.number) || (it.sourceType === "STOCK" && lotNos.has(String(it.sourceRef)))))
     .map((o: any) => o.number);
+  const viaLots = (shipments || []).filter((s: any) => s && s.status !== "Cancelled" && (s.goods || []).some((g: any) => lotNos.has(String(g.lotRef)))).map((s: any) => s.number);
   return {
-    linkedShipments: shipmentsForPO(po.number, shipments),
+    linkedShipments: Array.from(new Set([...shipmentsForPO(po.number, shipments), ...viaLots])),
     linkedLots: lotsForPO(po.number, lots),
     linkedInvoices: invoicesForCounterpartyDoc(po.number, "PO", invoices),
     linkedSalesOrders,

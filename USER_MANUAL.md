@@ -196,6 +196,27 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.1 — who you are, the result of a sale, links (v7.1.0–7.1.9)
+
+- **Who you are comes from your sign-in.** Each person in Settings → Users carries their
+  sign-in e-mail; the account you signed in with decides your name at the top right, your
+  permissions, the tag on sales orders you create and the audit trail. Someone signed in
+  but not in the list sees their e-mail and only the Dashboard until the owner adds it.
+  **Sign out** is a button beside your initials.
+- **Finance options grey out** while the Finance module is unticked for a user.
+- **The result of a sale lives in Finance only.** The card has left the sales order; people
+  with Finance and P/L get "Result of this sale → Finance", which opens the sale's full
+  breakdown there. The P/L list shows revenue, COGS, direct costs, allocated overhead and
+  the net result per sale; click a row for the breakdown.
+- **Links:** the PO list shows the sales orders of its lots and the shipments carrying them;
+  the PO view keeps Linked documents under Line items; the Inventory list shows each lot's
+  PO, sales orders and shipments, all clickable.
+- **Importing from Fakturownia** now says what came back ("… returned 0 received invoices
+  for this month — try Last month or This year").
+- **Automatic backup:** only the tab that holds the pen writes the folder; a problem while
+  tidying old copies no longer counts as a failed backup; a "busy" failure is retried once
+  quietly. The TEST copy names its files `marianna-erp-TEST_auto_…` and keeps its own.
+
 ### Version 7 — Settings on the shared data (v7.0.0)
 
 From v7 every release belongs to the shared-data era.

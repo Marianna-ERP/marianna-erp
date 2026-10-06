@@ -1,3 +1,4 @@
+import SOMarginCard from "./SOMarginCard";
 import { ModulePage, ActionButton, DocLink } from "./ui";
 import { useUnsavedGuard } from "./unsaved";
 import { useConfirm, SmallButton } from "./ui";
@@ -17,9 +18,8 @@ import { isShippedOrLater } from "./statusOwnership.domain";
 import { upsertBudget, budgetVariance, BUDGET_MEASURES } from "./budgets.domain";
 import { applyPaymentEvent as bankApplyPaymentEvent } from "./payments.domain";
 import { consignmentPositions } from "./poSettlement.domain";
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
-import { computeSOMargin } from "./marginCalculations";
 import { nextId } from "./ids";
 import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO, prevMonthISO } from "./dates";
@@ -30,8 +30,7 @@ import {
   groupAndAggregateNetMargins,
   OperationalCost,
   OPERATIONAL_COST_CATEGORIES,
-  ALLOCATION_METHODS,
-} from "./operationalCosts";
+  ALLOCATION_METHODS, computeSOMarginWithOverhead } from "./operationalCosts";
 
 // ─── FINANCE MODULE ─────────────────────────────────────────────────────────
 // V5.7 adds Operational Costs and overhead allocation. Direct costs stay on
@@ -733,7 +732,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
 // folded into the canonical FinanceNote model (Invoices module owns notes) and
 // now enter the receivable/payable totals (BP-37).
 
-export default function Finance({
+export default function Finance({ focusResultOf = null,
   claims = [],
   orders = [],
   lots = [],
@@ -762,6 +761,7 @@ export default function Finance({
   setClosedPeriods = null,
   poSettlements = [],
 }: {
+  focusResultOf?: any;   // v7.1.3 (A-PL-1)
   orders?: any[];
   lots?: any[];
   setLots?: any;
@@ -790,6 +790,9 @@ export default function Finance({
   setClosedPeriods?: any;
   poSettlements?: any[];
 }) {
+  const [plOpenSO, setPlOpenSO] = useState<any>(null);   // v7.1.3 (A-PL-1): which sale's breakdown is open in the P/L list
+  useEffect(() => { if (focusResultOf?.number) { const o = (orders || []).find((x: any) => String(x.number) === String(focusResultOf.number)); if (o) { setTab("pl"); setPlOpenSO(o.id); } } }, [focusResultOf?.n]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   const { confirm: finConfirm, alert: finAlert, dialogNode: finNode } = useConfirm(); // P2-6
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
@@ -1053,25 +1056,29 @@ export default function Finance({
               {(() => {
                 const rows = (orders || [])
                   .filter(committedFilter)
-                  .map((o: any) => ({ o, m: computeSOMargin(o, lots, pos, shipments, mode, invoices, financeNotes) }))
-                  .sort((a: any, b: any) => (b.m.marginPLN || 0) - (a.m.marginPLN || 0));
+                  .map((o: any) => ({ o, m: computeSOMarginWithOverhead(o, lots, pos, shipments, mode, operationalCosts, orders, invoices, financeNotes) }))   /* v7.1.3 (A-PL-1): the sale's REAL result — after allocated overhead, as the card on the sale showed */
+                  .sort((a: any, b: any) => (b.m.netMarginPLN || 0) - (a.m.netMarginPLN || 0));
                 if (!rows.length) return <div style={{ fontSize: 12, color: "#AAA", padding: "12px 0" }}>No committed sales orders yet.</div>;
                 return (
                   <div style={{ marginTop: 10 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 110px 110px 120px 70px", gap: 8, padding: "6px 8px", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase" }}>
-                      <div>SO</div><div>Client</div><div>Status</div><div style={{ textAlign: "right" }}>Revenue</div><div style={{ textAlign: "right" }}>COGS</div><div style={{ textAlign: "right" }}>Direct</div><div style={{ textAlign: "right" }}>Net margin</div><div style={{ textAlign: "right" }}>%</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 100px 100px 100px 110px 70px", gap: 8, padding: "6px 8px", fontSize: 10, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase" }}>
+                      <div>SO</div><div>Client</div><div>Status</div><div style={{ textAlign: "right" }}>Revenue</div><div style={{ textAlign: "right" }}>COGS</div><div style={{ textAlign: "right" }}>Direct</div><div style={{ textAlign: "right" }}>Overhead</div><div style={{ textAlign: "right" }}>Net result</div><div style={{ textAlign: "right" }}>%</div>
                     </div>
                     {rows.map(({ o, m }: any) => (
-                      <div key={o.id} style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 110px 110px 120px 70px", gap: 8, padding: "8px 8px", fontSize: 12, borderTop: "1px solid #F1F5F9", alignItems: "center" }}>
+                      <React.Fragment key={o.id}><div onClick={() => setPlOpenSO(plOpenSO === o.id ? null : o.id)} title="click: the full breakdown of this sale's result" style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 100px 100px 100px 110px 70px", gap: 8, padding: "8px 8px", fontSize: 12, borderTop: "1px solid #F1F5F9", alignItems: "center", cursor: "pointer", background: plOpenSO === o.id ? "#F8FAFC" : "transparent" }}>
                         <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#0369A1" }}>{o.number}</div>
                         <div style={{ color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.client?.name || "—"}</div>
                         <div style={{ fontSize: 11, color: "#64748B" }}>{o.status}</div>
                         <div style={{ textAlign: "right" }}>{fmtPLNcompact(m.revenuePLN)}</div>
                         <div style={{ textAlign: "right", color: "#64748B" }}>{fmtPLNcompact(m.cogsPLN)}</div>
                         <div style={{ textAlign: "right", color: "#64748B" }}>{fmtPLNcompact(m.directCostsPLN)}</div>
-                        <div style={{ textAlign: "right", fontWeight: 700, color: (m.marginPLN || 0) >= 0 ? "#16A34A" : "#DC2626" }}>{fmtPLNcompact(m.marginPLN)}</div>
-                        <div style={{ textAlign: "right", color: "#94A3B8" }}>{m.marginPct}%</div>
+                        <div style={{ textAlign: "right", color: "#64748B" }}>{fmtPLNcompact(m.overheadCostsPLN)}</div>
+                        <div style={{ textAlign: "right", fontWeight: 700, color: (m.netMarginPLN || 0) >= 0 ? "#16A34A" : "#DC2626" }}>{fmtPLNcompact(m.netMarginPLN)}</div>
+                        <div style={{ textAlign: "right", color: "#94A3B8" }}>{m.netMarginPct}%</div>
                       </div>
+                      {plOpenSO === o.id && <div style={{ padding: "4px 8px 14px" }}>{/* v7.1.3 (A-PL-1): the breakdown that used to sit on the sale */}
+                        <SOMarginCard order={o} lots={lots} pos={pos} shipments={shipments} operationalCosts={operationalCosts} allOrders={orders} invoices={invoices} financeNotes={financeNotes} />
+                      </div>}</React.Fragment>
                     ))}
                   </div>
                 );

@@ -5,6 +5,7 @@ import React, { useRef, useState } from "react";
 import { importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue, DATA_KEYS } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { isSharedMode, isTestCopy, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, ENV_LABEL } from "./remoteStore";   // v7.0.0 (A-SH-1)
+import { userBySignIn } from "./permissions.domain";   // v7.1.0 (A-USR-1)
 import { AutoBackupCard } from "./BackupPanel";   // v6.99.70 (A-BK-1)
 import { downloadAllData, flushFolderBackup } from "./autoBackup";
 import { fetchDepartments } from "./fakturownia";
@@ -508,6 +509,7 @@ function UsersPanel({ users = [], setUsers = null }: any) {
             <div style={{ fontSize: 13, fontWeight: 800 }}>{u.name}</div>
             <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!u.isOwner} onChange={() => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, isOwner: !x.isOwner } : x))} /> owner (sees everything)</label>
             <input value={u.role || ""} onChange={e => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, role: e.target.value } : x))} placeholder="role label" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "3px 8px", fontSize: 11.5, width: 150 }} />
+            <input value={u.email || ""} onChange={e => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, email: e.target.value.trim() } : x))} placeholder="sign-in e-mail" title="v7.1.0 (A-USR-1): on the shared data the person who signs in with this e-mail IS this user" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12, width: 220 }} />
             <button onClick={() => setUsers((prev: any[]) => (prev || []).filter((x: any) => x.id !== u.id))} style={{ marginLeft: "auto", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Remove</button>
           </div>
           {!u.isOwner && (<>
@@ -516,7 +518,7 @@ function UsersPanel({ users = [], setUsers = null }: any) {
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 11.5, marginTop: 6, color: "#334155" }}>
               <span style={{ fontWeight: 700, color: "#94A3B8" }}>Finance:</span>
-              {FINANCE_KEYS.map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={u.finance?.[k] === true} onChange={() => toggle(u, "finance", k)} />{FIN_LABEL[k]}</label>)}
+              {FINANCE_KEYS.map(k => <label key={k} title={u.modules?.finance === false ? "applies only when Finance is ticked" : ""} style={{ display: "flex", gap: 4, alignItems: "center", opacity: u.modules?.finance === false ? 0.4 : 1 }}><input type="checkbox" disabled={u.modules?.finance === false} checked={u.finance?.[k] === true} onChange={() => toggle(u, "finance", k)} />{FIN_LABEL[k]}</label>)}
             </div>
           </>)}
         </div>
@@ -885,6 +887,12 @@ export default function Settings({
                 {["Assistant", "Operations", "Sales", "Financial Director", "General Manager"].map(r => <option key={r}>{r}</option>)}
               </select>
             </div>
+            {isSharedMode() ? (
+              <div>{/* v7.1.0 (A-USR-1): on the shared data the sign-in decides — nothing to type */}
+                <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>You are signed in as</label>
+                <div style={{ fontSize: 13 }}>{readSession()?.email || "—"}{(() => { const u = userBySignIn(users || [], readSession()?.email); return u ? ` → ${u.name}${u.isOwner ? " (owner)" : ""}` : " — not in the Users list yet: add this e-mail to your entry below"; })()}</div>
+              </div>
+            ) : (
             <div>
               <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Your name (used to tag SOs you create)</label>
               <input
@@ -894,6 +902,7 @@ export default function Settings({
                 style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}
               />
             </div>
+            )}
           </div>
         </Card>
 

@@ -33,7 +33,7 @@ import { localTodayISO } from "./dates";
 import { nextId as globalNextId, nextId } from "./ids";
 import { SHELL_SEED } from "./shell_seed";
 import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded, compactLocalBackups } from "./useLocalStoredState";
-import { startAutoBackup } from "./autoBackup";   // v6.99.70 (A-BK-1)
+import { startAutoBackup, setBackupAllowed } from "./autoBackup";   // v6.99.70 (A-BK-1) · v7.1.8
 import { BackupBanner } from "./BackupPanel";
 import { setAuditSink, recordAudit } from "./audit";
 import { appendAudit } from "./auditTrail.domain";
@@ -46,7 +46,8 @@ import Invoices from "./Invoices";
 import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
 import { syncOverheadOpCosts } from "./operationalCosts";
 import { normaliseStoredSoStatus } from "./statusOwnership.domain";
-import { canOpenModule, currentUser } from "./permissions.domain";
+import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn } from "./permissions.domain";
+import { readSession, isSharedMode, logout } from "./remoteStore";   // v7.1.0 (A-USR-1)
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
@@ -343,7 +344,7 @@ export default function App() {
   setAuditSink((e: any) => setAuditLog((prev: any[]) => appendAudit(prev || [], {
     id: nextId(), // v6.79.0 (W-7): central counter — burst writes collided under Date.now()
     ts: new Date().toISOString(),
-    user: userName || "user",
+    user: who || userName || "user",
     ...e,
   })));
 
@@ -511,7 +512,13 @@ export default function App() {
 
   const [activeModule, setActiveModule] = useState("dashboard");
   const tab = useSingleTab();   // v6.99.114 (AUD-02)
+  const tabRef = useRef(tab); tabRef.current = tab;
+  useEffect(() => { setBackupAllowed(() => !tabRef.current.readOnly && !tabRef.current.deciding); }, []);   // v7.1.8 (A-BK-5): a read-only tab never writes the backup folder
   const shared = useSharedStore(userName || "");   // v6.99.148: the shared store — login + pull when configured, otherwise nothing
+  // v7.1.0 (A-USR-1, owner 6 Oct): on the shared copy the SIGNED-IN e-mail decides who you are — the typed "Your name" is ignored there
+  const signInEmail = isSharedMode() ? (readSession()?.email || "") : "";
+  const who = effectiveUserName(users, userName, signInEmail);
+  const [resultFocus, setResultFocus] = useState<any>(null);   // v7.1.3 (A-PL-1): "Result of this sale → Finance"
   // v6.99.58 (A-US-2, owner): every way of leaving a module passes here. An open editor with unsaved changes is named, and
   // the choice is Save and continue (the editor's own Save — gates apply; refused = stay) · Leave without saving · Stay.
   const [leaveAsk, setLeaveAsk] = useState<{ target: string; labels: string[]; canSave: boolean; saving?: boolean; refused?: boolean } | null>(null);
@@ -581,27 +588,27 @@ export default function App() {
   function renderActive() {
     switch (activeModule) {
       case "dashboard":
-        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={userName} integrityIssues={integrityIssuesForDashboard} />;
+        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={who} integrityIssues={integrityIssuesForDashboard} />;
       case "claims":
         return <Claims archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={userName}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
+        return <Finance focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
-        return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={userName}  lots={lots} />;
+        return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={who}  lots={lots} />;
       case "pos":
-        return <PurchaseOrders key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} financeNotes={financeNotes} setInvoices={setInvoices}  users={users} userName={userName}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
+        return <PurchaseOrders key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} financeNotes={financeNotes} setInvoices={setInvoices}  users={users} userName={who}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
       case "lots":
         return <Inventory key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
       case "orders":
-        return <SalesOrders inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={userName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
+        return <SalesOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={(o: any) => { setResultFocus({ number: o?.number, n: Date.now() }); navigate("finance"); }} inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={who} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
-        return <Shipments key={"shp-" + (openShipmentNumber || "list")} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={productCatalog} userName={userName} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
+        return <Shipments key={"shp-" + (openShipmentNumber || "list")} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={productCatalog} userName={who} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
         return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} setLots={setLots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
       case "settings":
-        return <Settings seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={userName} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
+        return <Settings seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
       default:
         return null;
     }
@@ -644,10 +651,16 @@ export default function App() {
           </div>
         </div>
       )}
-      <TopNav active={activeModule} onNav={navigate} canOpen={(k: string) => canOpenModule(users, userName, k === "loadPlans" ? "loadplans" : k)} userSlot={(() => {
-        // v7.0.1 (owner 6 Oct, all tabs gone): once Settings → Users holds anyone, a browser whose name matches nobody saw the Dashboard only —
-        // with Settings hidden there was no way back. Now an unmatched browser picks its person from the list (what typing "Your name"
-        // in Settings did — no new right is created); a matched browser shows that person's name and initials.
+      <TopNav active={activeModule} onNav={navigate} canOpen={(k: string) => canOpenModule(users, who, k === "loadPlans" ? "loadplans" : k)} userSlot={(() => {
+        // v7.1.0 (A-USR-1): shared mode — the signed-in person; not in the Users list → their e-mail and a notice (Dashboard only until the owner adds it).
+        // Single-browser mode keeps the typed name; an unmatched browser picks its person from the list (v7.0.1). The v7.0.2 'change' link is gone (owner).
+        if (signInEmail) {
+          const me = userBySignIn(users, signInEmail);
+          if ((users || []).length && !me) return <span title="ask the owner to add your sign-in e-mail to your entry in Settings → Users" style={{ padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>{signInEmail} · not in the Users list</span>;
+          const label = String((me && me.name) || signInEmail).trim(); const initials = label.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0].toUpperCase()).join("");
+          return <><span title={signInEmail}>{label}</span><div title={signInEmail} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials || "·"}</div>
+            <button onClick={() => { if (window.confirm(`Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.`)) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button></>;   // v7.1.1 (A-USR-2)
+        }
         const me = currentUser(users, userName);
         if ((users || []).length && !me) return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
@@ -659,9 +672,9 @@ export default function App() {
           </span>);
         const label = String((me && me.name) || userName || "").trim();
         const initials = label ? label.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0].toUpperCase()).join("") : "·";
-        return <>{label && <span>{label}</span>}{(users || []).length > 0 && <button onClick={() => setUserName("")} title="choose another person from the Users list (until each person is recognised by their sign-in, A-USR-1)" style={{ border: "none", background: "none", color: "#64748B", fontSize: 10.5, cursor: "pointer", textDecoration: "underline", padding: 0 }}>change</button>}<div title={label ? `${label}${(users || []).length ? " · change in Settings → Your name" : ""}` : "set your name in Settings"} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials}</div></>;
+        return <>{label && <span>{label}</span>}<div title={label || "set your name in Settings"} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials}</div></>;
       })()} rightSlot={
-        <><span style={{ marginRight: 12 }}><SharedStoreStatus sync={shared.sync} userLabel={userName || ""} /></span>{/* v6.99.148 */}<label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
+        <><span style={{ marginRight: 12 }}><SharedStoreStatus sync={shared.sync} userLabel={who || ""} /></span>{/* v6.99.148 */}<label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
           <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}
         </label>
         <IntegrityBadge

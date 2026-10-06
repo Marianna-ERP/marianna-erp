@@ -64,8 +64,7 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
           }} />
         </label>
       </>}
-      {/* v7.0.0: sign out — the shared copy is untouched; the next person signs in on this browser */}
-      {sync.status !== "login" && <button onClick={() => { if (window.confirm("Sign out of the shared data on this browser?")) { logout(); window.location.reload(); } }} title={`signed in as ${readSession()?.email || ""}`} style={{ border: "none", background: "none", color: "#64748B", fontSize: 11, fontWeight: 600, cursor: "pointer", textDecoration: "underline", padding: 0 }}>sign out</button>}
+      {/* v7.1.1 (A-USR-2): the Sign out button now sits beside the person's initials in the top bar */}
       {sync.conflicts.map(k => <span key={k} style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>{k}: a colleague{sync.by?.[k] ? ` (${sync.by[k]})` : ""} saved first — their copy was taken; your last change is kept as a conflict copy <button onClick={() => clearConflict(k)} style={{ marginLeft: 6, border: "none", background: "none", color: "#92400E", cursor: "pointer", fontWeight: 800 }}>✓</button></span>)}
     </span>
   );
