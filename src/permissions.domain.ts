@@ -67,9 +67,14 @@ export function signInNotLinkedYet(users: AppUser[]): boolean { return (users ||
 
 /** May this user open the module? Owner: always. No users defined: always.
  *  Defined users but no match: only the dashboard — visible and explainable. */
+export function hasOwner(users: AppUser[]): boolean { return (users || []).some(x => x && x.isOwner); }
 export function canOpenModule(users: AppUser[], userName: any, moduleKey: string): boolean {
   const u = currentUser(users, userName);
   if (u === null) return true;
+  // v7.1.14 (owner 6 Oct, trapped with no owner entry and two limited users): while NO entry is marked owner, Settings — and only
+  // Settings — stays open to every signed-in person, so an owner can be set; the moment an owner exists the ticks decide again.
+  // (The same rule as v7.0.2, cancelled when an owner existed; reinstated with a visible banner — see App.)
+  if (moduleKey === "settings" && !hasOwner(users)) return true;
   if (!u) return moduleKey === "dashboard";
   if (u.isOwner) return true;
   return u.modules?.[moduleKey] !== false;

@@ -3312,6 +3312,22 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.1.13 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v7.1.14 — no owner → Settings open (reinstated, with a banner) ══
+(function v7114(){
+  console.log("\n══ v7.1.14. no owner → Settings open ══");
+  const Pm = B("permissions.domain.js");
+  t("two limited entries and no owner: Settings opens for any signed-in person (and nothing else); with an owner, the ticks decide", () => {
+    const list = [{ id: 1, name: "marina@marianna-biz.com", isOwner: false, email: "hazem@marianna-biz.com", modules: { settings: false, orders: true, finance: false }, finance: {} }, { id: 2, name: "info@marianna-biz.com", isOwner: false, modules: { settings: false }, finance: {} }];
+    const who = Pm.effectiveUserName(list, "", "hazem@marianna-biz.com"); eq(who, "marina@marianna-biz.com");
+    eq(Pm.canOpenModule(list, who, "settings"), true, "no owner → Settings open"); eq(Pm.canOpenModule(list, who, "finance"), false, "nothing else opens");
+    eq(Pm.canOpenModule(list, Pm.effectiveUserName(list, "", "x@x"), "settings"), true, "even an unlinked sign-in");
+    const fixed = [...list, { id: 3, name: "Hazem Osman", isOwner: true, email: "hazem2@marianna-biz.com", modules: {}, finance: {} }];
+    eq(Pm.canOpenModule(fixed, who, "settings"), false, "an owner exists → the ticks decide"); eq(Pm.canOpenModule(fixed, "Hazem Osman", "settings"), true);
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8"); ok(/No owner is defined in Settings/.test(src), "the banner");
+  });
+  console.log("v7.1.14 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
