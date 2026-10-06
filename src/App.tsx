@@ -46,7 +46,7 @@ import Invoices from "./Invoices";
 import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
 import { syncOverheadOpCosts } from "./operationalCosts";
 import { normaliseStoredSoStatus } from "./statusOwnership.domain";
-import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn } from "./permissions.domain";
+import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn, signInNotLinkedYet } from "./permissions.domain";
 import { readSession, isSharedMode, logout } from "./remoteStore";   // v7.1.0 (A-USR-1)
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
@@ -522,7 +522,11 @@ export default function App() {
   // v6.99.58 (A-US-2, owner): every way of leaving a module passes here. An open editor with unsaved changes is named, and
   // the choice is Save and continue (the editor's own Save — gates apply; refused = stay) · Leave without saving · Stay.
   const [leaveAsk, setLeaveAsk] = useState<{ target: string; labels: string[]; canSave: boolean; saving?: boolean; refused?: boolean } | null>(null);
+  // v7.1.11 (owner 6 Oct, security): permissions used to hide the tabs only — a Dashboard or document link still opened the module.
+  // ONE gate now: every road into a module passes mayOpen(), and the module is not even rendered when the person may not open it.
+  const mayOpen = (k: string) => canOpenModule(users, who, k === "loadPlans" ? "loadplans" : k);
   const navigate = (target: string) => {
+    if (!mayOpen(target)) { window.alert("You don't have access to this module. Ask the owner (Settings → Users)."); return; }
     if (target === activeModule) return;
     const d = dirtyEntries();
     if (!d.length) { setActiveModule(target); return; }
@@ -537,6 +541,7 @@ export default function App() {
   };
   const openDoc = (num: string, from = "") => {
     const target = docModule(num); if (!target) return;
+    if (!mayOpen(target)) { window.alert("You don't have access to this module. Ask the owner (Settings → Users)."); return; }   // v7.1.11
     if (dirtyEntries().length) { navigate(target); return; }   // an unsaved form: the leave-guard asks first, as for any move
     setNavBack(from ? { module: activeModule, number: from } : { module: activeModule, number: "" });
     if (target === "pos") setOpenPO({ number: num, action: "" });
@@ -544,7 +549,7 @@ export default function App() {
     else setOpenDocNum(p => ({ module: target, number: num, n: p.n + 1 }));
     setActiveModule(target);
   };
-  const docNav = { open: openDoc, canOpen: (num: string) => !!docModule(num) };
+  const docNav = { open: openDoc, canOpen: (num: string) => { const m = docModule(num); return !!m && mayOpen(m); } };   // v7.1.11: a link to a module the person may not open is not a link
   // US-3: closing or reloading the tab while something is unsaved → the browser's own "leave site?" prompt
   useEffect(() => { const h = (e: any) => { if (dirtyEntries().length) { e.preventDefault(); e.returnValue = ""; return ""; } }; window.addEventListener("beforeunload", h); return () => window.removeEventListener("beforeunload", h); }, []);
   const [openShipmentNumber, setOpenShipmentNumber] = useState("");   // v6.99.42: cross-module hand-off (PO → its supplier truck)
@@ -586,6 +591,7 @@ export default function App() {
   }
 
   function renderActive() {
+    if (!mayOpen(activeModule)) return <div style={{ padding: 40, textAlign: "center", color: "#64748B", fontSize: 14 }}>You don't have access to this module. <button onClick={() => setActiveModule("dashboard")} style={{ marginLeft: 8, padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>Dashboard</button></div>;   // v7.1.11
     switch (activeModule) {
       case "dashboard":
         return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={who} integrityIssues={integrityIssuesForDashboard} />;
@@ -651,10 +657,10 @@ export default function App() {
           </div>
         </div>
       )}
-      <TopNav active={activeModule} onNav={navigate} canOpen={(k: string) => canOpenModule(users, who, k === "loadPlans" ? "loadplans" : k)} userSlot={(() => {
+      <TopNav active={activeModule} onNav={navigate} canOpen={mayOpen} userSlot={(() => {
         // v7.1.0 (A-USR-1): shared mode — the signed-in person; not in the Users list → their e-mail and a notice (Dashboard only until the owner adds it).
         // Single-browser mode keeps the typed name; an unmatched browser picks its person from the list (v7.0.1). The v7.0.2 'change' link is gone (owner).
-        if (signInEmail) {
+        if (signInEmail && !signInNotLinkedYet(users)) {
           const me = userBySignIn(users, signInEmail);
           if ((users || []).length && !me) return <span title="ask the owner to add your sign-in e-mail to your entry in Settings → Users" style={{ padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>{signInEmail} · not in the Users list</span>;
           const label = String((me && me.name) || signInEmail).trim(); const initials = label.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0].toUpperCase()).join("");
@@ -662,6 +668,7 @@ export default function App() {
             <button onClick={() => { if (window.confirm(`Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.`)) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button></>;   // v7.1.1 (A-USR-2)
         }
         const me = currentUser(users, userName);
+        const bootstrap = signInEmail && signInNotLinkedYet(users);   // v7.1.10: e-mails not filled in yet — the typed name applies, and the owner is told
         if ((users || []).length && !me) return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
             Who are you?
@@ -672,7 +679,7 @@ export default function App() {
           </span>);
         const label = String((me && me.name) || userName || "").trim();
         const initials = label ? label.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0].toUpperCase()).join("") : "·";
-        return <>{label && <span>{label}</span>}<div title={label || "set your name in Settings"} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials}</div></>;
+        return <>{bootstrap && <span title="Settings → Users: add each person's sign-in e-mail; from the first one on, the sign-in decides who you are" style={{ padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>sign-in e-mails not set yet — Settings → Users</span>}{label && <span>{label}</span>}<div title={label || "set your name in Settings"} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials}</div></>;
       })()} rightSlot={
         <><span style={{ marginRight: 12 }}><SharedStoreStatus sync={shared.sync} userLabel={who || ""} /></span>{/* v6.99.148 */}<label title="v6.99.54 (AR-4): archived seasons stay in the file; this shows them" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#64748B", marginRight: 10, cursor: "pointer" }}>
           <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}

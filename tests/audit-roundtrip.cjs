@@ -3271,6 +3271,35 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.1.9 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v7.1.10 — no lock-out on the first deploy: the typed name applies until the first sign-in e-mail is filled in ══
+(function v7110(){
+  console.log("\n══ v7.1.10. bootstrap of the sign-in identity ══");
+  const Pm = B("permissions.domain.js");
+  t("no entry carries an e-mail → the typed name still decides (the owner can reach Settings); the first e-mail switches the rule on", () => {
+    const noEmails = [{ id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} }, { id: 2, name: "Anna", isOwner: false, modules: {}, finance: {} }];
+    eq(Pm.signInNotLinkedYet(noEmails), true); eq(Pm.effectiveUserName(noEmails, "Hazem Osman", "hazem@marianna-biz.com"), "Hazem Osman"); eq(Pm.canOpenModule(noEmails, Pm.effectiveUserName(noEmails, "Hazem Osman", "hazem@marianna-biz.com"), "settings"), true, "Settings reachable");
+    const withEmails = [{ ...noEmails[0], email: "hazem@marianna-biz.com" }, noEmails[1]];
+    eq(Pm.signInNotLinkedYet(withEmails), false); eq(Pm.effectiveUserName(withEmails, "Hazem Osman", "anna@marianna-biz.com").startsWith("\u2205"), true, "Anna has no e-mail yet → not matched, whatever she typed");
+    eq(Pm.effectiveUserName(withEmails, "", "hazem@marianna-biz.com"), "Hazem Osman");
+  });
+  console.log("v7.1.10 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.1.11 — one gate for every road into a module ══
+(function v7111(){
+  console.log("\n══ v7.1.11. permissions enforced on every road, not only the tabs ══");
+  t("navigate(), openDoc(), the document links and the render itself all pass mayOpen()", () => {
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+    ok(/const mayOpen = \(k: string\) => canOpenModule\(users, who,/.test(src), "one gate");
+    ok(/const navigate = \(target: string\) => \{\s*\n\s*if \(!mayOpen\(target\)\)/.test(src), "navigate refuses");
+    ok(/const target = docModule\(num\); if \(!target\) return;\s*\n\s*if \(!mayOpen\(target\)\)/.test(src), "openDoc refuses");
+    ok(/canOpen: \(num: string\) => \{ const m = docModule\(num\); return !!m && mayOpen\(m\); \}/.test(src), "a link to a closed module is not a link");
+    ok(/function renderActive\(\) \{\s*\n\s*if \(!mayOpen\(activeModule\)\)/.test(src), "the module is not rendered without the right");
+    ok(!/canOpen=\{\(k: string\) => canOpenModule\(users, who/.test(src), "the top bar uses the same gate");
+  });
+  console.log("v7.1.11 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

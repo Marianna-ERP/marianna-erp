@@ -58,9 +58,15 @@ export function userBySignIn(users: AppUser[], email: any): AppUser | undefined 
 /** The name the app works under: in shared mode the signed-in person's entry (or a marker nobody matches), otherwise the typed name. */
 export function effectiveUserName(users: AppUser[], typedName: any, signInEmail: any): string {
   if (!signInEmail) return String(typedName || "");
+  // v7.1.10 (owner 6 Oct, locked out right after deploying v7.1.9 — my sequencing fault: no entry could carry an e-mail before the field
+  // existed): while NO entry in the Users list carries a sign-in e-mail yet, the typed name still applies, so the owner can open Settings
+  // and fill the e-mails in; from the first e-mail on, the sign-in decides.
+  if (!(users || []).some(u => String((u as any).email || "").trim())) return String(typedName || "");
   const u = userBySignIn(users, signInEmail);
   return u ? String(u.name || "") : `\u2205 ${String(signInEmail)}`;   // a name nobody in the list carries → Dashboard only
 }
+/** True while the Users list has no sign-in e-mail at all — the top bar then asks the owner to fill them in. */
+export function signInNotLinkedYet(users: AppUser[]): boolean { return (users || []).length > 0 && !(users || []).some(u => String((u as any).email || "").trim()); }
 
 /** May this user open the module? Owner: always. No users defined: always.
  *  Defined users but no match: only the dashboard — visible and explainable. */
