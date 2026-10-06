@@ -3323,9 +3323,21 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(Pm.canOpenModule(list, Pm.effectiveUserName(list, "", "x@x"), "settings"), true, "even an unlinked sign-in");
     const fixed = [...list, { id: 3, name: "Hazem Osman", isOwner: true, email: "hazem2@marianna-biz.com", modules: {}, finance: {} }];
     eq(Pm.canOpenModule(fixed, who, "settings"), false, "an owner exists → the ticks decide"); eq(Pm.canOpenModule(fixed, "Hazem Osman", "settings"), true);
-    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8"); ok(/No owner is defined in Settings/.test(src), "the banner");
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8"); ok(/No owner with a sign-in e-mail is defined in Settings/.test(src), "the banner");
   });
   console.log("v7.1.14 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.1.15 — an owner without a sign-in e-mail is nobody (shared copy) ══
+(function v7115(){
+  console.log("\n══ v7.1.15. the owner must be reachable ══");
+  const Pm = B("permissions.domain.js");
+  t("off the shared copy an e-mail-less owner counts; the Settings tick refuses an owner without e-mail on the shared copy", () => {
+    const list = [{ id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} }]; eq(Pm.hasOwner(list), true, "single-browser mode: counts");
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/permissions.domain.ts"), "utf8"); ok(/x\.isOwner && \(!isSharedMode\(\) \|\| String\(\(x as any\)\.email \|\| ""\)\.trim\(\) !== ""\)/.test(src), "on the shared copy the owner needs an e-mail");
+    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/cannot be made owner without a sign-in e-mail/.test(st), "the tick refuses");
+  });
+  console.log("v7.1.15 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
