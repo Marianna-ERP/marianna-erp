@@ -1,3 +1,4 @@
+import { isSharedMode } from "./remoteStore";   // v7.1.15
 // ── USERS & PERMISSIONS (v6.79.0, F-5) ───────────────────────────────────────
 // Owner ruling (2 Sept 2026): each user sees only the modules ticked for them;
 // Finance P/L and client analysis are visible to the OWNER only.
@@ -58,15 +59,25 @@ export function userBySignIn(users: AppUser[], email: any): AppUser | undefined 
 /** The name the app works under: in shared mode the signed-in person's entry (or a marker nobody matches), otherwise the typed name. */
 export function effectiveUserName(users: AppUser[], typedName: any, signInEmail: any): string {
   if (!signInEmail) return String(typedName || "");
+  // v7.1.13: the v7.1.10 typed-name bootstrap is gone — an unlinked sign-in claims its entry from the top bar instead (one rule)
   const u = userBySignIn(users, signInEmail);
   return u ? String(u.name || "") : `\u2205 ${String(signInEmail)}`;   // a name nobody in the list carries → Dashboard only
 }
+/** True while the Users list has no sign-in e-mail at all — the top bar then asks the owner to fill them in. */
+export function signInNotLinkedYet(users: AppUser[]): boolean { return (users || []).length > 0 && !(users || []).some(u => String((u as any).email || "").trim()); }
 
 /** May this user open the module? Owner: always. No users defined: always.
  *  Defined users but no match: only the dashboard — visible and explainable. */
+// v7.1.15 (owner 6 Oct: "it should not have allowed an owner without a valid e-mail"): on the shared copy an owner entry COUNTS as an
+// owner only when it carries a sign-in e-mail — an e-mail-less owner is nobody, so Settings stays open until the owner is reachable.
+export function hasOwner(users: AppUser[]): boolean { return (users || []).some(x => x && x.isOwner && (!isSharedMode() || String((x as any).email || "").trim() !== "")); }
 export function canOpenModule(users: AppUser[], userName: any, moduleKey: string): boolean {
   const u = currentUser(users, userName);
   if (u === null) return true;
+  // v7.1.14 (owner 6 Oct, trapped with no owner entry and two limited users): while NO entry is marked owner, Settings — and only
+  // Settings — stays open to every signed-in person, so an owner can be set; the moment an owner exists the ticks decide again.
+  // (The same rule as v7.0.2, cancelled when an owner existed; reinstated with a visible banner — see App.)
+  if (moduleKey === "settings" && !hasOwner(users)) return true;
   if (!u) return moduleKey === "dashboard";
   if (u.isOwner) return true;
   return u.modules?.[moduleKey] !== false;
@@ -90,4 +101,39 @@ export function usersGaps(users: AppUser[]): string[] {
   const names = new Set<string>();
   (users || []).forEach(u => { const k = String(u.name || "").trim().toLowerCase(); if (names.has(k)) gaps.push(`Duplicate user name "${u.name}".`); names.add(k); });
   return gaps;
+}
+
+// ─── v7.2.0 (A-SET-1, owner 6 Oct): THE USERS LIST IS EDITED AS A DRAFT AND SAVED ON PURPOSE ─────────────────────────
+/** What a save would change, in plain lines for the confirmation. */
+export function usersDiff(before: AppUser[], after: AppUser[]): string[] {
+  const out: string[] = []; const B = new Map((before || []).map(u => [String(u.id), u])); const A = new Map((after || []).map(u => [String(u.id), u]));
+  const nm = (u: any) => String(u?.name || "").trim() || "(no name)";
+  (after || []).forEach(u => { if (!B.has(String(u.id))) out.push(`+ new user ${nm(u)}${u.isOwner ? " (owner)" : ""}${(u as any).email ? ` · ${(u as any).email}` : ""}`); });
+  (before || []).forEach(u => { if (!A.has(String(u.id))) out.push(`− REMOVED ${nm(u)}${u.isOwner ? " (the owner)" : ""}`); });
+  (after || []).forEach(u => {
+    const b: any = B.get(String(u.id)); if (!b) return; const a: any = u;
+    if (nm(b) !== nm(a)) out.push(`${nm(b)} renamed to ${nm(a)}`);
+    if (!!b.isOwner !== !!a.isOwner) out.push(`${nm(a)}: ${a.isOwner ? "becomes the OWNER" : "is no longer the owner"}`);
+    if (String(b.email || "").trim() !== String(a.email || "").trim()) out.push(`${nm(a)}: sign-in e-mail ${String(b.email || "").trim() || "(none)"} → ${String(a.email || "").trim() || "(none)"}`);
+    if (String(b.role || "") !== String(a.role || "")) out.push(`${nm(a)}: role label "${b.role || ""}" → "${a.role || ""}"`);
+    const ticks = (g: "modules" | "finance") => { const keys = new Set([...Object.keys(b[g] || {}), ...Object.keys(a[g] || {})]); keys.forEach(k => { const x = (b[g] || {})[k], y = (a[g] || {})[k]; const on = (v: any) => (g === "modules" ? v !== false : v === true); if (on(x) !== on(y)) out.push(`${nm(a)}: ${g === "finance" ? "Finance → " : ""}${k} ${on(y) ? "ticked" : "unticked"}`); }); };
+    ticks("modules"); ticks("finance");
+  });
+  return out;
+}
+/** Why a save must be refused — a list that would lock anyone out is never written. */
+export function usersSaveProblems(list: AppUser[], opts: { shared: boolean; signInEmail?: string; typedName?: string }): string[] {
+  const p: string[] = []; const L = list || []; if (!L.length) return p;
+  const owners = L.filter(u => u.isOwner);
+  if (owners.length !== 1) p.push(owners.length ? `${owners.length} entries are marked owner — exactly one may be.` : "No entry is marked owner — exactly one must be.");
+  if (opts.shared && owners.length === 1 && !String((owners[0] as any).email || "").trim()) p.push(`The owner "${owners[0].name}" has no sign-in e-mail — on the shared data the owner must be reachable.`);
+  L.forEach(u => { if (!String(u.name || "").trim()) p.push("An entry has no name."); });
+  const names = new Map<string, number>(); L.forEach(u => { const k = String(u.name || "").trim().toLowerCase(); if (k) names.set(k, (names.get(k) || 0) + 1); }); names.forEach((n, k) => { if (n > 1) p.push(`The name "${k}" is used ${n} times.`); });
+  const mails = new Map<string, number>(); L.forEach(u => { const k = String((u as any).email || "").trim().toLowerCase(); if (k) mails.set(k, (mails.get(k) || 0) + 1); }); mails.forEach((n, k) => { if (n > 1) p.push(`The sign-in e-mail ${k} is on ${n} entries — one person, one entry.`); });
+  L.forEach(u => { const e = String((u as any).email || "").trim(); if (e && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) p.push(`"${e}" (on ${u.name}) is not an e-mail address.`); });
+  // the person saving must keep Settings — nobody saves themselves out
+  const me = opts.shared && opts.signInEmail ? userBySignIn(L, opts.signInEmail) : currentUser(L, opts.typedName);
+  if (opts.shared && opts.signInEmail && !me) p.push(`Your own sign-in (${opts.signInEmail}) is on no entry — saving would lock you out.`);
+  if (me && !me.isOwner && me.modules?.settings === false) p.push(`Your own entry (${me.name}) would lose Settings — saving would lock you out.`);
+  return Array.from(new Set(p));
 }

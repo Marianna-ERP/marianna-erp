@@ -1,11 +1,12 @@
 import { ModulePage } from "./ui";
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue, DATA_KEYS } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
+import { useUnsavedGuard } from "./unsaved";   // v7.2.0
 import { isSharedMode, isTestCopy, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, ENV_LABEL } from "./remoteStore";   // v7.0.0 (A-SH-1)
-import { userBySignIn } from "./permissions.domain";   // v7.1.0 (A-USR-1)
+import { userBySignIn, usersDiff, usersSaveProblems } from "./permissions.domain";   // v7.1.0 (A-USR-1) · v7.2.0 (A-SET-1)
 import { AutoBackupCard } from "./BackupPanel";   // v6.99.70 (A-BK-1)
 import { downloadAllData, flushFolderBackup } from "./autoBackup";
 import { fetchDepartments } from "./fakturownia";
@@ -486,9 +487,24 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
 // Each user sees only the modules ticked; Finance P/L, client analysis and
 // budgets default to the OWNER only. Convenience gate on localStorage; becomes
 // row-level security on Supabase with exactly this shape.
-function UsersPanel({ users = [], setUsers = null }: any) {
+function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null }: any) {
+  // v7.2.0 (A-SET-1, owner 6 Oct): the list is edited as a DRAFT — nothing is written until "Save users", which shows what changes and
+  // refuses a list that would lock anyone out. Before, every tick and letter went to the shared data at once.
+  const [users, setUsers] = useState<any[]>(savedUsers || []);
+  const savedJson = JSON.stringify(savedUsers || []); const dirty = JSON.stringify(users) !== savedJson;
+  const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
+  useEffect(() => { if (!dirtyRef.current) setUsers(savedUsers || []); }, [savedJson]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useUnsavedGuard({ id: "settings-users", label: "Settings → Users & permissions", draft: users, resetKey: savedJson, save: () => saveDraft() });
   const [name, setName] = useState("");
-  if (typeof setUsers !== "function") return null;
+  const shared = isSharedMode(); const signInEmail = shared ? (readSession()?.email || "") : "";
+  const problems = dirty ? usersSaveProblems(users, { shared, signInEmail }) : [];
+  function saveDraft(): boolean {
+    const p = usersSaveProblems(users, { shared, signInEmail }); if (p.length) { window.alert(`The users can't be saved yet:\n\n• ${p.join("\n• ")}`); return false; }
+    const d = usersDiff(savedUsers || [], users); if (!d.length) return true;
+    if (!window.confirm(`Save these changes to the users${shared ? " — for everyone" : ""}?\n\n${d.join("\n")}`)) return false;
+    saveUsers(users); recordAudit({ module: "Settings", docType: "Users", docNumber: "users", action: "updated", summary: d.join(" · ").slice(0, 900) }); return true;
+  }
+  if (typeof saveUsers !== "function") return null;
   const MOD_LABEL: Record<string, string> = { dashboard: "Dashboard", pos: "Purchase Orders", lots: "Inventory", orders: "Sales Orders", shipments: "Shipments", loadplans: "Load plans", invoices: "Invoices", claims: "Claims", finance: "Finance", contacts: "Counterparties", audit: "Audit trail", settings: "Settings" };
   const FIN_LABEL: Record<string, string> = { ledger: "Receivables & Payables", bank: "Bank import", costs: "Operational costs", warehouse: "Warehouse charges", pl: "Sales P/L (owner)", clients: "Client analysis (owner)", budget: "Budgets (owner)" };
   const gaps = usersGaps(users);
@@ -507,9 +523,9 @@ function UsersPanel({ users = [], setUsers = null }: any) {
         <div key={String(u.id)} style={{ borderTop: "1px solid #F1F5F9", padding: "10px 0" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
             <div style={{ fontSize: 13, fontWeight: 800 }}>{u.name}</div>
-            <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!u.isOwner} onChange={() => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, isOwner: !x.isOwner } : x))} /> owner (sees everything)</label>
+            <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!u.isOwner} onChange={() => { if (!u.isOwner && isSharedMode() && !String(u.email || "").trim()) { window.alert(`"${u.name}" cannot be made owner without a sign-in e-mail — fill in the sign-in e-mail first (v7.1.15).`); return; } setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, isOwner: !x.isOwner } : x)); }} /> owner (sees everything)</label>
             <input value={u.role || ""} onChange={e => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, role: e.target.value } : x))} placeholder="role label" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "3px 8px", fontSize: 11.5, width: 150 }} />
-            <input value={u.email || ""} onChange={e => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, email: e.target.value.trim() } : x))} placeholder="sign-in e-mail" title="v7.1.0 (A-USR-1): on the shared data the person who signs in with this e-mail IS this user" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12, width: 220 }} />
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "#475569" }}><span style={{ fontWeight: 700 }}>sign-in e-mail</span><input value={u.email || ""} onChange={e => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, email: e.target.value.trim() } : x))} placeholder="the e-mail this person signs in with" title="on the shared data the person who signs in with this e-mail IS this user (v7.1.0)" style={{ border: `1px solid ${String(u.email || "").trim() ? "#E5E7EB" : "#FCD34D"}`, borderRadius: 6, padding: "4px 8px", fontSize: 12, width: 250, background: String(u.email || "").trim() ? "#fff" : "#FFFBEB" }} />{!String(u.email || "").trim() && <span style={{ color: "#92400E", fontWeight: 700 }}>not linked</span>}</label>{/* v7.1.13 */}
             <button onClick={() => setUsers((prev: any[]) => (prev || []).filter((x: any) => x.id !== u.id))} style={{ marginLeft: "auto", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Remove</button>
           </div>
           {!u.isOwner && (<>
@@ -523,6 +539,12 @@ function UsersPanel({ users = [], setUsers = null }: any) {
           </>)}
         </div>
       ))}
+      {/* v7.2.0 (A-SET-1): nothing is written until Save; the bar says what is pending and why a save is refused */}
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #F1F5F9", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <button disabled={!dirty} onClick={() => saveDraft()} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: dirty ? (problems.length ? "#B45309" : "#16A34A") : "#E5E7EB", color: dirty ? "#fff" : "#94A3B8", fontSize: 12.5, fontWeight: 800, cursor: dirty ? "pointer" : "default" }}>Save users</button>
+        <button disabled={!dirty} onClick={() => { if (window.confirm("Discard the changes to the users?")) setUsers(savedUsers || []); }} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", color: dirty ? "#111" : "#94A3B8", fontSize: 12.5, fontWeight: 700, cursor: dirty ? "pointer" : "default" }}>Cancel</button>
+        {dirty ? <span style={{ fontSize: 11.5, color: problems.length ? "#B45309" : "#475569", fontWeight: 600 }}>{problems.length ? `Not savable yet: ${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ""}` : `${usersDiff(savedUsers || [], users).length} change(s) not saved yet`}</span> : <span style={{ fontSize: 11.5, color: "#94A3B8" }}>no unsaved changes</span>}
+      </div>
     </div>
   );
 }
@@ -548,8 +570,28 @@ function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
 
 
 // ── v6.99.3 (SE-1): COMPANY — identity printed on every document; default bank account per currency ──
-function CompanyPanel({ company = {}, setCompany = null }: any) {
-  if (typeof setCompany !== "function") return null;
+
+// ─── v7.2.1 (A-SET-1): the same explicit Save for the other sections that change identity or numbering ──────────────────
+function useSectionDraft(saved: any, save: ((v: any) => void) | null, id: string, label: string) {
+  const savedJson = JSON.stringify(saved ?? {}); const [draft, setDraft] = useState<any>(saved ?? {});
+  const dirty = JSON.stringify(draft) !== savedJson; const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
+  useEffect(() => { if (!dirtyRef.current) setDraft(saved ?? {}); }, [savedJson]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const doSave = () => { if (!dirty || typeof save !== "function") return true; const keys = Array.from(new Set([...Object.keys(saved || {}), ...Object.keys(draft || {})])).filter(k => JSON.stringify((saved || {})[k]) !== JSON.stringify((draft || {})[k]));
+    if (!window.confirm(`Save ${label}${isSharedMode() ? " — for everyone" : ""}?\n\n${keys.map(k => `${k}: ${JSON.stringify((saved || {})[k] ?? "")} → ${JSON.stringify((draft || {})[k] ?? "")}`).join("\n")}`)) return false;
+    save(draft); recordAudit({ module: "Settings", docType: label, docNumber: id, action: "updated", summary: keys.join(", ") }); return true; };
+  useUnsavedGuard({ id: `settings-${id}`, label: `Settings → ${label}`, draft, resetKey: savedJson, save: doSave });
+  const bar = (
+    <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>
+      <button disabled={!dirty} onClick={() => doSave()} style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: dirty ? "#16A34A" : "#E5E7EB", color: dirty ? "#fff" : "#94A3B8", fontSize: 12, fontWeight: 800, cursor: dirty ? "pointer" : "default" }}>Save</button>
+      <button disabled={!dirty} onClick={() => setDraft(saved ?? {})} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", color: dirty ? "#111" : "#94A3B8", fontSize: 12, fontWeight: 700, cursor: dirty ? "pointer" : "default" }}>Cancel</button>
+      <span style={{ fontSize: 11.5, color: dirty ? "#475569" : "#94A3B8" }}>{dirty ? "changes not saved yet" : "no unsaved changes"}</span>
+    </div>);
+  return { draft, setDraft, bar };
+}
+
+function CompanyPanel({ company: savedCompany = {}, setCompany: saveCompany = null }: any) {
+  const { draft: company, setDraft: setCompany, bar } = useSectionDraft(savedCompany, saveCompany, "company", "Company information");   // v7.2.1
+  if (typeof saveCompany !== "function") return null;
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const set = (k: string, v: any) => setCompany((prev: any) => ({ ...(prev || {}), [k]: v }));
   return (
@@ -564,20 +606,22 @@ function CompanyPanel({ company = {}, setCompany = null }: any) {
         <input placeholder="Address" value={company.address || ""} onChange={e => set("address", e.target.value)} style={{ ...inp, gridColumn: "1 / 3" }} />
         <input placeholder="E-mail" value={company.email || ""} onChange={e => set("email", e.target.value)} style={inp} />
       </div>
-      <div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", margin: "8px 0 4px" }}>DEFAULT BANK ACCOUNT PER CURRENCY (Fakturownia department id) — used when a client has none of its own (SE-5)</div>
-      <div style={{ display: "flex", gap: 14 }}>{["PLN", "EUR", "USD"].map(c => <label key={c} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{c}<input value={company.defaultDepartment?.[c] || ""} onChange={e => set("defaultDepartment", { ...(company.defaultDepartment || {}), [c]: e.target.value })} placeholder="department id" style={{ ...inp, width: 130 }} /></label>)}</div>
+      {/* v7.2.2 (A-SET-2, owner): "default bank account per currency" removed — nothing read it (the push uses the Invoices module's own default); this section is the company block printed on documents */}
+      {bar}{/* v7.2.1 (A-SET-1) */}
     </div>
   );
 }
 // ── v6.99.3 (SE-3): NUMBERING — prefixes per document type; the DDL replaces the year-scan with sequences ──
-function NumberingPanel({ numbering = {}, setNumbering = null }: any) {
-  if (typeof setNumbering !== "function") return null;
+function NumberingPanel({ numbering: savedNumbering = {}, setNumbering: saveNumbering = null }: any) {
+  const { draft: numbering, setDraft: setNumbering, bar } = useSectionDraft(savedNumbering, saveNumbering, "numbering", "Numbering");   // v7.2.1
+  if (typeof saveNumbering !== "function") return null;
   const kinds = [["PO", "Purchase order"], ["SO", "Sales order"], ["SHP", "Shipment"], ["LOT", "Lot"], ["CLM", "Claim"], ["LP", "Loading protocol"], ["SET", "Settlement"]];
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🔢 Numbering</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Prefix per document type — numbers are PREFIX-YYYY-NNNN, sequence resets each year. Existing documents keep their numbers. On Supabase the sequence is issued by the database (no collisions across browsers).</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>{kinds.map(([k, label]) => <label key={k} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{label}<input value={numbering?.[k] ?? k} onChange={e => setNumbering((prev: any) => ({ ...(prev || {}), [k]: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || k }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 70, fontFamily: "ui-monospace, Menlo, monospace" }} /></label>)}</div>
+      {bar}{/* v7.2.1 (A-SET-1) */}
     </div>
   );
 }
@@ -750,6 +794,7 @@ export default function Settings({
       await flushFolderBackup();   // v6.99.70 (A-BK): the folder gets the state before the overwrite
       // v7.0.0 (A-SH-1): in shared mode a backup is restored INTO the shared copy, for everyone — counted, typed, the old copy downloaded first
       if (isSharedMode()) {
+        { const meU = userBySignIn(users || [], readSession()?.email); if (!meU || !meU.isOwner) { setMessage({ kind: "error", text: "Only the owner can restore a backup into the shared data." }); return; } }   // v7.2.4 (A-SET-4)
         let parsed: any; try { parsed = storesFromExport(result); } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; }
         const word = window.prompt(`RESTORE this file into the SHARED data${ENV_LABEL ? ` (${ENV_LABEL})` : ""} — for everyone?\n\nFile: ${file.name}\nExported: ${String(parsed.meta?.exportedAt || "?").replace("T", " ").slice(0, 16)}, app ${parsed.meta?.appVersion || "?"}\nIt holds: ${parsed.summary}\n\nEvery colleague's screen will show this data. The shared copy as it is now will be downloaded first.\n\nType RESTORE to go ahead:`);
         if (String(word || "").trim().toUpperCase() !== "RESTORE") { setMessage({ kind: "info", text: "Restore not done (the confirmation word was not typed)." }); return; }
@@ -920,12 +965,7 @@ export default function Settings({
           buttonLabel="Manage products…"
           onManage={() => setManage("products")}
         />
-        <ManageCard
-          title="LOCATIONS — managed in the Directory (Counterparties → Ports & crossings; sites on each counterparty)"
-          summary={(() => { const PORT = new Set(["Port", "PortWarehouse"]); const all = allLocations().filter((l: any) => Number(l.id) < LOGISTICS_POINT_BASE); const c = all.filter((l: any) => Number(l.id) >= CUSTOM_LOCATION_ID_BASE).length; const b = all.filter((l: any) => Number(l.id) < CUSTOM_LOCATION_ID_BASE && PORT.has(String(l.type))).length; return `${b} port built-ins · ${c} custom · party facilities are managed in Parties`; })()}
-          buttonLabel="Manage ports & locations…"
-          onManage={() => setManage("locations")}
-        />
+        {/* v7.2.3 (A-SET-3, owner): the Locations card is gone — Counterparties → Places is the one place to edit them (rule 7) */}
         <ManageCard
           title="PACKAGING TYPES — capacity, tare, boxes per pallet, pallet tare (feeds gross weight, pallet tables, kg per box)"
           summary={`${(packagingTypes || []).length} type${(packagingTypes || []).length === 1 ? "" : "s"} · box capacity + empty weight drive the gross weight printed on transport orders`}
@@ -1050,6 +1090,22 @@ export default function Settings({
           <Button onClick={handleExport} variant="primary">📥 Export all data as JSON</Button>
         </Card>
 
+        {/* v7.2.4 (A-SET-4, owner): on the shared data this RESTORES a backup into the shared data for everyone — the owner only */}
+        {isSharedMode() && !(() => { const me = userBySignIn(users || [], readSession()?.email); return !!(me && me.isOwner); })() ? (
+          <Card style={{ marginBottom: 16 }}>
+            <SectionTitle>RESTORE A BACKUP INTO THE SHARED DATA</SectionTitle>
+            <div style={{ fontSize: 13, color: "#64748B", lineHeight: 1.55 }}>Only the owner can restore a backup — it replaces the shared data for everyone.</div>
+          </Card>
+        ) : isSharedMode() ? (
+          <Card style={{ marginBottom: 16 }}>
+            <SectionTitle>RESTORE A BACKUP INTO THE SHARED DATA</SectionTitle>
+            <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
+              Choose a backup file (from the automatic backup folder or an export). It <strong>replaces the shared data for everyone</strong>: you see the file's date and counts first, type RESTORE to confirm, and the shared data as it is now is downloaded before anything changes.
+            </div>
+            <input ref={fileInputRef} type="file" accept=".json,application/json" onChange={handleFileSelected} style={{ display: "none" }} />
+            <Button onClick={handleImportClick}>📤 Choose the backup file…</Button>
+          </Card>
+        ) : (
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>IMPORT</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
@@ -1058,9 +1114,18 @@ export default function Settings({
           <input ref={fileInputRef} type="file" accept=".json,application/json" onChange={handleFileSelected} style={{ display: "none" }} />
           <Button onClick={handleImportClick}>📤 Choose JSON file to import...</Button>
         </Card>
+        )}
 
         <AutoBackupCard />
 
+        {/* v7.2.5 (A-SET-5, owner): on the shared data no local snapshots are taken — only the old ones can be deleted, after checking the folder backup */}
+        {isSharedMode() ? (
+          <Card style={{ marginBottom: 16 }}>
+            <SectionTitle>OLD LOCAL SNAPSHOTS</SectionTitle>
+            <div style={{ fontSize: 13, color: "#444", lineHeight: 1.55, marginBottom: 10 }}>On the shared data this browser no longer takes snapshots — the automatic backup folder and the restore's own download keep the copies. {(() => { const n = listBackups().length; return n ? `${n} old snapshot${n === 1 ? "" : "s"} still use this browser's room.` : "No old snapshot is left."; })()}</div>
+            {listBackups().length > 0 && <Button variant="danger" onClick={() => { const n = listBackups().length; if (!window.confirm(`Delete the ${n} old snapshot(s) from this browser?\n\nCheck first that the automatic backup folder shows a recent file. This touches only this browser — not the shared data.`)) return; listBackups().forEach((b: any) => deleteBackup(b.id)); setMessage({ kind: "success", text: `${n} old snapshot(s) deleted from this browser.` }); refreshBackups && refreshBackups(); }}>Delete the old snapshots</Button>}
+          </Card>
+        ) : (
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>LOCAL BACKUPS</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
@@ -1084,6 +1149,7 @@ export default function Settings({
             </div>
           )}
         </Card>
+        )}
 
         {/* v6.51.1: a manual repair, so a data fix is never at the mercy of an
             automatic trigger firing at the right moment. Safe to press at any time —

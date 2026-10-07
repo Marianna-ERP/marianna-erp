@@ -32,7 +32,7 @@ import { costTypeLabel, costInventoryType } from "./Shipments";
 import { localTodayISO } from "./dates";
 import { nextId as globalNextId, nextId } from "./ids";
 import { SHELL_SEED } from "./shell_seed";
-import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded, compactLocalBackups } from "./useLocalStoredState";
+import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded, compactLocalBackups, setLocalSnapshots } from "./useLocalStoredState";
 import { startAutoBackup, setBackupAllowed } from "./autoBackup";   // v6.99.70 (A-BK-1) · v7.1.8
 import { BackupBanner } from "./BackupPanel";
 import { setAuditSink, recordAudit } from "./audit";
@@ -46,7 +46,7 @@ import Invoices from "./Invoices";
 import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
 import { syncOverheadOpCosts } from "./operationalCosts";
 import { normaliseStoredSoStatus } from "./statusOwnership.domain";
-import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn } from "./permissions.domain";
+import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn, hasOwner } from "./permissions.domain";
 import { readSession, isSharedMode, logout } from "./remoteStore";   // v7.1.0 (A-USR-1)
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
@@ -515,6 +515,7 @@ export default function App() {
   const tabRef = useRef(tab); tabRef.current = tab;
   useEffect(() => { setBackupAllowed(() => !tabRef.current.readOnly && !tabRef.current.deciding); }, []);   // v7.1.8 (A-BK-5): a read-only tab never writes the backup folder
   const shared = useSharedStore(userName || "");   // v6.99.148: the shared store — login + pull when configured, otherwise nothing
+  setLocalSnapshots(!isSharedMode());   // v7.2.5 (A-SET-5): no local snapshots on the shared data
   // v7.1.0 (A-USR-1, owner 6 Oct): on the shared copy the SIGNED-IN e-mail decides who you are — the typed "Your name" is ignored there
   const signInEmail = isSharedMode() ? (readSession()?.email || "") : "";
   const who = effectiveUserName(users, userName, signInEmail);
@@ -522,7 +523,11 @@ export default function App() {
   // v6.99.58 (A-US-2, owner): every way of leaving a module passes here. An open editor with unsaved changes is named, and
   // the choice is Save and continue (the editor's own Save — gates apply; refused = stay) · Leave without saving · Stay.
   const [leaveAsk, setLeaveAsk] = useState<{ target: string; labels: string[]; canSave: boolean; saving?: boolean; refused?: boolean } | null>(null);
+  // v7.1.11 (owner 6 Oct, security): permissions used to hide the tabs only — a Dashboard or document link still opened the module.
+  // ONE gate now: every road into a module passes mayOpen(), and the module is not even rendered when the person may not open it.
+  const mayOpen = (k: string) => canOpenModule(users, who, k === "loadPlans" ? "loadplans" : k);
   const navigate = (target: string) => {
+    if (!mayOpen(target)) { window.alert("You don't have access to this module. Ask the owner (Settings → Users)."); return; }
     if (target === activeModule) return;
     const d = dirtyEntries();
     if (!d.length) { setActiveModule(target); return; }
@@ -537,6 +542,7 @@ export default function App() {
   };
   const openDoc = (num: string, from = "") => {
     const target = docModule(num); if (!target) return;
+    if (!mayOpen(target)) { window.alert("You don't have access to this module. Ask the owner (Settings → Users)."); return; }   // v7.1.11
     if (dirtyEntries().length) { navigate(target); return; }   // an unsaved form: the leave-guard asks first, as for any move
     setNavBack(from ? { module: activeModule, number: from } : { module: activeModule, number: "" });
     if (target === "pos") setOpenPO({ number: num, action: "" });
@@ -544,7 +550,7 @@ export default function App() {
     else setOpenDocNum(p => ({ module: target, number: num, n: p.n + 1 }));
     setActiveModule(target);
   };
-  const docNav = { open: openDoc, canOpen: (num: string) => !!docModule(num) };
+  const docNav = { open: openDoc, canOpen: (num: string) => { const m = docModule(num); return !!m && mayOpen(m); } };   // v7.1.11: a link to a module the person may not open is not a link
   // US-3: closing or reloading the tab while something is unsaved → the browser's own "leave site?" prompt
   useEffect(() => { const h = (e: any) => { if (dirtyEntries().length) { e.preventDefault(); e.returnValue = ""; return ""; } }; window.addEventListener("beforeunload", h); return () => window.removeEventListener("beforeunload", h); }, []);
   const [openShipmentNumber, setOpenShipmentNumber] = useState("");   // v6.99.42: cross-module hand-off (PO → its supplier truck)
@@ -586,6 +592,7 @@ export default function App() {
   }
 
   function renderActive() {
+    if (!mayOpen(activeModule)) return <div style={{ padding: 40, textAlign: "center", color: "#64748B", fontSize: 14 }}>You don't have access to this module. <button onClick={() => setActiveModule("dashboard")} style={{ marginLeft: 8, padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>Dashboard</button></div>;   // v7.1.11
     switch (activeModule) {
       case "dashboard":
         return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={who} integrityIssues={integrityIssuesForDashboard} />;
@@ -623,6 +630,7 @@ export default function App() {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
       <EnvironmentStrip />{/* v6.99.149 */}
+      {(users || []).length > 0 && !hasOwner(users) && <div style={{ background: "#FEF3C7", color: "#92400E", borderBottom: "1px solid #FDE68A", textAlign: "center", fontSize: 12.5, fontWeight: 700, padding: "6px 0", flexShrink: 0 }}>No owner with a sign-in e-mail is defined in Settings → Users. Until there is one, Settings is open to every signed-in person — set the owner and their e-mail now.</div>}{/* v7.1.14 */}
       {tab.readOnly && (   /* v6.99.114 (AUD-02): a second tab of the app in this browser is read-only — two writing tabs overwrite each other */
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px 26px", width: 460, maxWidth: "92vw", boxShadow: "0 24px 60px rgba(0,0,0,0.3)" }}>
@@ -651,15 +659,35 @@ export default function App() {
           </div>
         </div>
       )}
-      <TopNav active={activeModule} onNav={navigate} canOpen={(k: string) => canOpenModule(users, who, k === "loadPlans" ? "loadplans" : k)} userSlot={(() => {
+      <TopNav active={activeModule} onNav={navigate} canOpen={mayOpen} userSlot={(() => {
         // v7.1.0 (A-USR-1): shared mode — the signed-in person; not in the Users list → their e-mail and a notice (Dashboard only until the owner adds it).
         // Single-browser mode keeps the typed name; an unmatched browser picks its person from the list (v7.0.1). The v7.0.2 'change' link is gone (owner).
-        if (signInEmail) {
+        if (signInEmail) {   // v7.1.13: ONE rule on the shared copy — the sign-in; the v7.1.10 typed-name bootstrap is gone
           const me = userBySignIn(users, signInEmail);
-          if ((users || []).length && !me) return <span title="ask the owner to add your sign-in e-mail to your entry in Settings → Users" style={{ padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>{signInEmail} · not in the Users list</span>;
+          const signOut = <button onClick={() => { if (window.confirm(`Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.`)) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button>;
+          if (!(users || []).length) return <><span title={signInEmail}>{signInEmail}</span>{signOut}</>;
+          if (!me) {
+            // v7.1.12 (owner 6 Oct, trapped again): a sign-in that matches no entry CLAIMS its entry here — only an entry that carries no
+            // e-mail yet can be claimed, the claim writes the e-mail (so it can never be claimed twice) and is audit-logged. Nobody is
+            // ever locked out of Settings by the state of the list again.
+            const free = (users || []).filter((u: any) => !String(u.email || "").trim());
+            return (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
+                {signInEmail} is not linked to an entry.{free.length ? " Which entry is you?" : " Every entry is already linked to another sign-in — ask the owner."}
+                {free.length > 0 && <select value="" onChange={e => { const id = e.target.value; if (!id) return; const u = free.find((x: any) => String(x.id) === id); if (!u) return;
+                  if (!window.confirm(`Link ${signInEmail} to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}?\n\nThis is recorded in the audit trail and cannot be undone from here.`)) return;
+                  setUsers((prev: any[]) => (prev || []).map((x: any) => String(x.id) === id ? { ...x, email: signInEmail } : x));
+                  recordAudit({ module: "Settings", docType: "User", docNumber: String(u.name), action: "updated", summary: `${signInEmail} linked itself to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}` });
+                }} style={{ border: "1px solid #FCD34D", borderRadius: 6, padding: "2px 6px", fontSize: 11.5, background: "#fff" }}>
+                  <option value="">choose…</option>
+                  {free.map((u: any) => <option key={u.id ?? u.name} value={String(u.id)}>{u.name}{u.isOwner ? " (owner)" : ""}</option>)}
+                </select>}
+                {signOut}
+              </span>);
+          }
           const label = String((me && me.name) || signInEmail).trim(); const initials = label.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0].toUpperCase()).join("");
           return <><span title={signInEmail}>{label}</span><div title={signInEmail} style={{ width: 28, height: 28, borderRadius: "50%", background: "#111", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{initials || "·"}</div>
-            <button onClick={() => { if (window.confirm(`Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.`)) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button></>;   // v7.1.1 (A-USR-2)
+            {signOut}</>;   // v7.1.1 (A-USR-2)
         }
         const me = currentUser(users, userName);
         if ((users || []).length && !me) return (

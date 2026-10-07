@@ -3271,6 +3271,106 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.1.9 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v7.1.10 — RETIRED in v7.1.13: the typed-name bootstrap is gone; an unlinked sign-in claims its entry ══
+// ══ v7.1.11 — one gate for every road into a module ══
+(function v7111(){
+  console.log("\n══ v7.1.11. permissions enforced on every road, not only the tabs ══");
+  t("navigate(), openDoc(), the document links and the render itself all pass mayOpen()", () => {
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+    ok(/const mayOpen = \(k: string\) => canOpenModule\(users, who,/.test(src), "one gate");
+    ok(/const navigate = \(target: string\) => \{\s*\n\s*if \(!mayOpen\(target\)\)/.test(src), "navigate refuses");
+    ok(/const target = docModule\(num\); if \(!target\) return;\s*\n\s*if \(!mayOpen\(target\)\)/.test(src), "openDoc refuses");
+    ok(/canOpen: \(num: string\) => \{ const m = docModule\(num\); return !!m && mayOpen\(m\); \}/.test(src), "a link to a closed module is not a link");
+    ok(/function renderActive\(\) \{\s*\n\s*if \(!mayOpen\(activeModule\)\)/.test(src), "the module is not rendered without the right");
+    ok(!/canOpen=\{\(k: string\) => canOpenModule\(users, who/.test(src), "the top bar uses the same gate");
+  });
+  console.log("v7.1.11 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.1.12 — a sign-in claims its entry; nobody is locked out by the list's state ══
+(function v7112(){
+  console.log("\n══ v7.1.12. claim your entry ══");
+  t("an unmatched sign-in may claim only an entry without e-mail; the claim writes the e-mail and is audit-logged", () => {
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+    ok(/const free = \(users \|\| \[\]\)\.filter\(\(u: any\) => !String\(u\.email \|\| ""\)\.trim\(\)\);/.test(src), "only entries without e-mail");
+    ok(/\{ \.\.\.x, email: signInEmail \}/.test(src), "the claim writes the e-mail"); ok(/linked itself to the entry/.test(src), "audit-logged");
+  });
+  console.log("v7.1.12 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.1.13 — one rule on the shared copy: the sign-in ══
+(function v7113(){
+  console.log("\n══ v7.1.13. one rule: the sign-in ══");
+  const Pm = B("permissions.domain.js");
+  t("on the shared copy the typed name never decides; an unlinked sign-in gets the Dashboard and the claim; Sign out is always there", () => {
+    const noEmails = [{ id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} }, { id: 2, name: "marina@marianna-biz.com", isOwner: false, modules: { settings: false }, finance: {} }];
+    const w = Pm.effectiveUserName(noEmails, "marina@marianna-biz.com", "marina@marianna-biz.com"); ok(w.startsWith("\u2205"), "an e-mail typed as a NAME links nothing: " + w); eq(Pm.canOpenModule(noEmails, w, "orders"), false);
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+    ok(!/signInNotLinkedYet/.test(src), "no bootstrap left"); ok((src.match(/\{signOut\}/g) || []).length >= 3, "Sign out on every shared-mode branch");
+    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/sign-in e-mail<\/span><input value=\{u\.email/.test(st), "the e-mail field is labelled");
+  });
+  console.log("v7.1.13 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.1.14 — no owner → Settings open (reinstated, with a banner) ══
+(function v7114(){
+  console.log("\n══ v7.1.14. no owner → Settings open ══");
+  const Pm = B("permissions.domain.js");
+  t("two limited entries and no owner: Settings opens for any signed-in person (and nothing else); with an owner, the ticks decide", () => {
+    const list = [{ id: 1, name: "marina@marianna-biz.com", isOwner: false, email: "hazem@marianna-biz.com", modules: { settings: false, orders: true, finance: false }, finance: {} }, { id: 2, name: "info@marianna-biz.com", isOwner: false, modules: { settings: false }, finance: {} }];
+    const who = Pm.effectiveUserName(list, "", "hazem@marianna-biz.com"); eq(who, "marina@marianna-biz.com");
+    eq(Pm.canOpenModule(list, who, "settings"), true, "no owner → Settings open"); eq(Pm.canOpenModule(list, who, "finance"), false, "nothing else opens");
+    eq(Pm.canOpenModule(list, Pm.effectiveUserName(list, "", "x@x"), "settings"), true, "even an unlinked sign-in");
+    const fixed = [...list, { id: 3, name: "Hazem Osman", isOwner: true, email: "hazem2@marianna-biz.com", modules: {}, finance: {} }];
+    eq(Pm.canOpenModule(fixed, who, "settings"), false, "an owner exists → the ticks decide"); eq(Pm.canOpenModule(fixed, "Hazem Osman", "settings"), true);
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8"); ok(/No owner with a sign-in e-mail is defined in Settings/.test(src), "the banner");
+  });
+  console.log("v7.1.14 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.1.15 — an owner without a sign-in e-mail is nobody (shared copy) ══
+(function v7115(){
+  console.log("\n══ v7.1.15. the owner must be reachable ══");
+  const Pm = B("permissions.domain.js");
+  t("off the shared copy an e-mail-less owner counts; the Settings tick refuses an owner without e-mail on the shared copy", () => {
+    const list = [{ id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} }]; eq(Pm.hasOwner(list), true, "single-browser mode: counts");
+    const src = require("fs").readFileSync(require("path").join(__dirname, "../src/permissions.domain.ts"), "utf8"); ok(/x\.isOwner && \(!isSharedMode\(\) \|\| String\(\(x as any\)\.email \|\| ""\)\.trim\(\) !== ""\)/.test(src), "on the shared copy the owner needs an e-mail");
+    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/cannot be made owner without a sign-in e-mail/.test(st), "the tick refuses");
+  });
+  console.log("v7.1.15 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.2.0–7.2.5 — the Settings batch ══
+(function v72(){
+  console.log("\n══ v7.2.x. Settings: draft + Save, checks, restore owner-only, no local snapshots ══");
+  const Pm = B("permissions.domain.js"); const ST = B("useLocalStoredState.js");
+  const owner = { id: 1, name: "Hazem Osman", isOwner: true, email: "hazem@marianna-biz.com", modules: {}, finance: {} };
+  const anna = { id: 2, name: "Marina", isOwner: false, email: "marina@marianna-biz.com", modules: { settings: false }, finance: {} };
+  t("A-SET-1: the checks refuse every list that locks someone out", () => {
+    const ok0 = Pm.usersSaveProblems([owner, anna], { shared: true, signInEmail: "hazem@marianna-biz.com" }); eq(ok0.length, 0, ok0.join(" | "));
+    ok(Pm.usersSaveProblems([anna], { shared: true, signInEmail: "hazem@marianna-biz.com" }).some(p => /No entry is marked owner/.test(p)));
+    ok(Pm.usersSaveProblems([{ ...owner, email: "" }, anna], { shared: true, signInEmail: "hazem@marianna-biz.com" }).some(p => /no sign-in e-mail/.test(p)));
+    ok(Pm.usersSaveProblems([owner, { ...anna, email: "hazem@marianna-biz.com" }], { shared: true, signInEmail: "hazem@marianna-biz.com" }).some(p => /on 2 entries/.test(p)));
+    ok(Pm.usersSaveProblems([owner, { ...anna, isOwner: true }], { shared: true, signInEmail: "hazem@marianna-biz.com" }).some(p => /2 entries are marked owner/.test(p)));
+    ok(Pm.usersSaveProblems([owner, anna], { shared: true, signInEmail: "marina@marianna-biz.com" }).some(p => /would lose Settings/.test(p)), "a person without Settings cannot save a list that leaves them without it");
+    ok(Pm.usersSaveProblems([owner, { ...anna, name: "marina@marianna-biz.com", email: "marina@" }], { shared: true, signInEmail: "hazem@marianna-biz.com" }).some(p => /is not an e-mail/.test(p)));
+    ok(Pm.usersSaveProblems([{ ...owner, email: "x@y.pl" }, anna], { shared: true, signInEmail: "hazem@marianna-biz.com" }).some(p => /saving would lock you out/.test(p)), "removing your own e-mail is refused");
+  });
+  t("A-SET-1: the confirmation lists exactly what changes", () => {
+    const d = Pm.usersDiff([owner, anna], [owner, { ...anna, modules: { settings: false, finance: false }, email: "m@marianna-biz.com" }, { id: 3, name: "Info", isOwner: false, modules: {}, finance: {} }]);
+    ok(d.some(l => /^\+ new user Info/.test(l))); ok(d.some(l => /Marina: sign-in e-mail marina@marianna-biz.com → m@marianna-biz.com/.test(l))); ok(d.some(l => /Marina: finance unticked/.test(l)));
+    ok(Pm.usersDiff([owner, anna], [owner]).some(l => /REMOVED Marina/.test(l)));
+  });
+  t("A-SET-1..5 in the screens: draft + Save users; Company and Numbering saved on purpose; bank default and Locations card gone; restore owner-only; no snapshots on the shared data", () => {
+    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8");
+    ok(/Save users<\/button>/.test(st) && /useUnsavedGuard\(\{ id: "settings-users"/.test(st)); ok(/useSectionDraft\(savedCompany, saveCompany, "company"/.test(st) && /useSectionDraft\(savedNumbering, saveNumbering, "numbering"/.test(st));
+    ok(!/DEFAULT BANK ACCOUNT PER CURRENCY/.test(st), "bank default gone"); ok(!/title="LOCATIONS — managed in the Directory/.test(st), "Locations card gone");
+    ok(/Only the owner can restore a backup/.test(st)); ok(/OLD LOCAL SNAPSHOTS/.test(st));
+    ST.setLocalSnapshots(false); eq(ST.createBackup("x"), null, "no snapshot on the shared data"); ST.setLocalSnapshots(true);
+  });
+  console.log("v7.2.5 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

@@ -196,6 +196,23 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.2 — Settings saved on purpose (v7.2.0–7.2.5)
+
+- **Users & permissions are edited as a draft.** Nothing is written until **Save users**; the
+  confirmation lists exactly what changes. A save is refused while the list would lock
+  anyone out: exactly one owner, with a sign-in e-mail; no empty or repeated names; no
+  e-mail on two entries; no malformed e-mail; you cannot remove your own access to Settings.
+  **Cancel** discards the draft; leaving the page with unsaved changes asks first.
+- **Company information** and **Numbering** have their own Save / Cancel too.
+- Company information no longer has "default bank account per currency" (nothing read it);
+  the Locations card left Settings — **Counterparties → Places** is the one place.
+- **Restore a backup into the shared data** (the former Import) is for the owner only.
+- On the shared data the browser takes **no local snapshots** any more; old ones can be
+  deleted from Settings once the automatic backup folder shows a recent file.
+- Since v7.1.12–7.1.15: a sign-in not yet linked chooses its own entry from the top bar
+  (only entries without an e-mail, recorded in the audit trail); an owner without a sign-in
+  e-mail counts as no owner, so Settings stays reachable until there is one.
+
 ### Version 7.1 — who you are, the result of a sale, links (v7.1.0–7.1.9)
 
 - **Who you are comes from your sign-in.** Each person in Settings → Users carries their

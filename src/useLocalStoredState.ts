@@ -280,7 +280,12 @@ function writeBackupIndex(list: BackupMeta[]): void {
   catch (err) { console.warn("[backup] index write failed:", err); }
 }
 
+// v7.2.5 (A-SET-5, owner 6 Oct): on the shared data the browser takes NO local snapshots — the folder backup and the restore's own
+// download keep the copies, and the browser's room is kept for the data. App switches this off when the shared data is on.
+let snapshotsOn = true;
+export function setLocalSnapshots(on: boolean) { snapshotsOn = !!on; }
 export function createBackup(label: string): BackupMeta | null {
+  if (!snapshotsOn) return null;
   if (typeof window === "undefined" || !window.localStorage) return null;
   try {
     const json = exportAllData(false);   // v6.99.70 (A-BK-3): compact — same content, about a third smaller
