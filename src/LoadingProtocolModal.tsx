@@ -9,7 +9,7 @@ import { inspectLink } from "./docLinks.domain";
 import {
   buildLoadingProtocol, deriveRows, protocolTotals, protocolExceptions, protocolGaps,
   unitGoodsLines, protocolForUnit, protocolsForShipment, checkTruckLoad, signatureWarnings,
-  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS, packagingResolution, confirmAsLoaded,
+  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS, packagingResolution, confirmAsLoaded, addBlankRow,
   PALLET_CAPACITY,
 } from "./loadingProtocol.domain";
 
@@ -163,10 +163,7 @@ export default function LoadingProtocolModal({
     setP((x: any) => ({ ...x, rows: (x.rows || []).map((r: any, ri: number) => ri === i ? { ...r, [k]: v } : r) }));
 
   const renumber = (rows: any[]) => rows.map((r: any, i: number) => ({ ...r, no: i + 1 }));
-  const addRow = () => setP((x: any) => {
-    const last = (x.rows || [])[(x.rows || []).length - 1];
-    return { ...x, rows: renumber([...(x.rows || []), { no: 0, boxes: last?.boxes || 72, kgPerBox: last?.kgPerBox || 13, size: "", boxesOk: null, goodsOk: null, remarks: "", observations: "" }]) };
-  });
+  const addRow = () => setP((x: any) => ({ ...x, rows: addBlankRow(x.rows || []) }));   // v7.11.4 (A-RV-27): the tested addBlankRow — inherits from the last pallet that carries goods
   const removeRow = (i: number) => setP((x: any) => ({ ...x, rows: renumber((x.rows || []).filter((_: any, ri: number) => ri !== i)) }));
   const regenerate = async () => {
     if (!(await uiConfirm({ tone: "warn", title: "Re-derive the pallet table?", message: "The rows will be rebuilt from what this truck is assigned to carry. Anything typed into the table (calibres, conditions, remarks) will be lost.", confirmLabel: "Re-derive" }))) return;

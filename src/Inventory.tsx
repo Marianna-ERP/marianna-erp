@@ -1529,7 +1529,10 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                   if (a.kind === "direct") return <><div style={{ fontSize: 11.5, fontWeight: 700, color: "#7C3AED" }}>Direct</div><div style={{ fontSize: 11, color: "#64748B" }}>{a.loaded ? `loaded ${D(a.loaded)}` : ""}{a.delivered ? ` · delivered ${D(a.delivered)}` : ""}</div></>;
                   if (a.kind === "expected") return <div style={{ fontSize: 11.5, color: "#B45309", fontWeight: 600 }}>expected {D(a.date)}</div>;
                   return <span style={{ color: "#CCC" }}>—</span>; })()}
-                  {(() => { const w = lotWarningsShown(l, localTodayISO()); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10.5, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected" : (x.why.match(/^(over|short) by [^)]*\)/) || [x.field])[0]).join(" · ")}</div> : null; })()}{/* v7.10.3 (A-RV-15) */}</div>
+                  {(() => { const w = lotWarningsShown(l, localTodayISO()); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10.5, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected"
+                    : x.field === "unexplained movements" ? (x.why.match(/^(\d+) movement/) || [])[1] + " unexplained movement(s)"   // v7.11.2 (A-RV-24)
+                    : x.field === "ageing stock" ? (x.why.match(/in store (\d+) days/) || [])[1] + " d in store, unsold"   // v7.11.2 (A-RV-24)
+                    : (x.why.match(/^(over|short) by [^)]*\)/) || [x.field])[0]).join(" · ")}</div> : null; })()}{/* v7.10.3 (A-RV-15) */}</div>
                 <div>
                   {(() => {
                     const onHand = parseNum(l.physicalKg, 0) || parseNum(l.receivedKg, 0) || parseNum(l.expectedKg, 0);

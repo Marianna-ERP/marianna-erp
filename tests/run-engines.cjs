@@ -3491,15 +3491,7 @@ T("shipment warnings name their consequence", () => {
     .some(x => x.field.endsWith(" load")), "an explicit split says nothing — note 'loading date' also contains 'load'");
 });
 
-T("THE INVENTORY GATE: stock cannot go negative", () => {
-  const lot = { number: "LOT-1", physicalKg: 5000 };
-  assert.equal(MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 5000 }), "");
-  const over = MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 8000 });
-  assert.ok(over.includes("5 000 kg") || over.includes("5000 kg"), over);
-  assert.ok(over.includes("cannot go negative"));
-  assert.equal(MG.movementBlockReason(lot, { type: "IN", qtyKg: 99999 }), "", "a receipt ADDS stock — never blocked");
-  assert.equal(MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 5000.5 }), "", "whole-box rounding is not an overdraw");
-});
+// v7.11.1 (A-RV-23): "THE INVENTORY GATE" test removed with movementBlockReason — the movement window keeps its own, more complete limit
 
 T("a lot expected more than ten days is called out (owner's number)", () => {
   const base = { number: "LOT-2", status: "Expected", expectedKg: 19422, loadingDate: "2026-09-01" };

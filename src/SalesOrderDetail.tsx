@@ -226,6 +226,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
                 <StatusBadge status={order.status} />
+                {order.statusOverride ? <span data-status-by-hand="1" title="This status was set by hand — the shipments do not show it yet" style={{ fontSize: 11.5, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "2px 8px" }}>set by hand{order.statusOverrideReason ? ` — ${order.statusOverrideReason}` : ""}{order.statusOverrideAt ? ` · ${formatDMY(order.statusOverrideAt)}` : ""}</span> : null}{/* v7.11.3 (A-RV-25) */}
               </div>
               <div style={{ fontSize: 24, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.number}</div>
               <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>{order.client?.name || "—"}</div>

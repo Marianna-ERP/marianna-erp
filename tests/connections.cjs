@@ -86,5 +86,56 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     ok(/ofPrompt\(/.test(src) && /applyStatusOverride\(o, nv, why,/.test(src), "the reason is not asked"); ok(!/Set by hand — shipments do not show it yet/.test(src), "the fixed sentence is still written");
   });
 
+  // ══ v7.11.x — the second batch of the review (A-RV-23 / 24 / 25 / 27 / 28) ══
+  const setVal = (el, v) => { const proto = el.tagName === "SELECT" ? dom.window.HTMLSelectElement.prototype : dom.window.HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, "value").set.call(el, v); el.dispatchEvent(new dom.window.Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true })); };
+  await t("A-RV-23: the shipment window warns when ONE PO line goes over what was ordered (amber, per line)", async () => {
+    const SC = require(path.resolve("./src/ShipmentCreate")); const Cr = SC.CreateShipmentModal || SC.default;
+    // a confirmed PO with two lines and no live shipment yet — every line still has its quantity box
+    const po = d.pos.find(p => p.status !== "Draft" && p.status !== "Cancelled" && (p.items || []).length >= 2 && (p.items || []).every(it => parseFloat(it.qty) > 0)
+      && !d.shipments.some(s => s.status !== "Cancelled" && (s.poRefs || []).includes(p.number)));
+    ok(po, "no confirmed, not yet shipped PO with two lines in the file");
+    const host2 = document.createElement("div"); document.body.appendChild(host2); const r2 = createRoot(host2);
+    await act(async () => { r2.render(React.createElement(Cr, { pos: d.pos, orders: d.orders, lots: d.lots, contacts: d.contacts, shipments: d.shipments, onCancel: noop, onCreate: noop })); });
+    const sel = Array.from(host2.querySelectorAll("select")).find(s => Array.from(s.options).some(o => o.value === po.number)); ok(sel, "no PO reference select");
+    await act(async () => { setVal(sel, po.number); });
+    ok(!host2.querySelector('[data-over-receipt="1"]'), "warns before anything goes over");
+    const qtyInputs = Array.from(host2.querySelectorAll('input[inputmode="decimal"]')); ok(qtyInputs.length >= 2, "no per-line quantity inputs");
+    const ordered = parseFloat(po.items[0].qty); await act(async () => { setVal(qtyInputs[0], String(ordered + 500)); });
+    const w = host2.querySelector('[data-over-receipt="1"]'); ok(w, "no warning when line 1 is 500 kg over");
+    ok(/would be over-received by 500 kg/.test((w.textContent || "").replace(/[\u00a0\u202f]/g, " ")), "the sentence does not name the 500 kg: " + w.textContent);
+    ok(!/#DC2626|#991B1B/i.test(w.getAttribute("style") || ""), "the warning is red");
+    await act(async () => { r2.unmount(); });
+  });
+  await t("A-RV-23: the unused engine copy of the movement limit is gone (the movement window keeps its own)", async () => {
+    ok(!/export function movementBlockReason/.test(fs.readFileSync(path.resolve("./src/moduleGuards.domain.ts"), "utf8")), "movementBlockReason still there");
+  });
+  await t("A-RV-24: the Inventory list also marks unexplained movements and stock in store > 30 days", async () => {
+    const h = T(renderToStaticMarkup(React.createElement(Inv, invProps)));
+    const a = (h.match(/unexplained movement\(s\)/g) || []).length, b = (h.match(/d in store, unsold/g) || []).length;
+    ok(a + b > 0, "neither warning shown"); console.log(`      (${a} lots with unexplained movements, ${b} lots in store > 30 days, on the 2 Oct file)`);
+  });
+  await t("A-RV-28: a lot received twice (LOT-2026-0026, +100 %) carries no ±5 % warning on top of its badge", async () => {
+    const h = T(renderToStaticMarkup(React.createElement(Inv, { ...invProps, initialSelectedNumber: "LOT-2026-0026" })));
+    ok(/LOT-2026-0026/.test(h), "the lot did not open"); ok(!/Received against ordered/.test(h), "the variance warning is still shown");
+  });
+  await t("A-RV-25: the SO view shows a status set by hand, with its reason and date", async () => {
+    const so0 = d.orders.find(o => o.status === "Confirmed") || d.orders[0];
+    const so = { ...so0, status: "Shipped", statusOverride: "Shipped", statusOverrideReason: "client collected at the warehouse", statusOverrideAt: "2026-10-08" };
+    const SOm = require(path.resolve("./src/SalesOrders")).default;
+    const h = T(renderToStaticMarkup(React.createElement(SOm, { orders: d.orders.map(o => o.id === so.id ? so : o), setOrders: noop, invLots: d.lots, setLots: noop, allPOs: d.pos, contacts: d.contacts, shipments: d.shipments, setShipments: noop, invoices: d.invoices || [], setInvoices: noop, claims: d.claims || [], packagingTypes: d.packagingTypes || [], initialSelectedNumber: so.number })));
+    ok(/set by hand — client collected at the warehouse · 08\/10\/2026/.test(h), "no 'set by hand' mark: " + (h.match(/Shipped.{0,120}/) || [""])[0]);
+  });
+  await t("A-RV-27: '+ Pallet' gives the new pallet the product, variety and calibre of the last real pallet", async () => {
+    const LP = require(path.resolve("./src/LoadingProtocolModal")).default; const sh = d.shipments.find(s => s.number === "SHP-2026-0039");
+    const host3 = document.createElement("div"); document.body.appendChild(host3); const r3 = createRoot(host3);
+    await act(async () => { r3.render(React.createElement(LP, { shipment: sh, contacts: d.contacts, pos: d.pos, packagingTypes: d.packagingTypes || [], allShipments: d.shipments, onSave: noop, onClose: noop })); });
+    const sizes = () => Array.from(host3.querySelectorAll('input[placeholder="70-80"]')).map(i => i.value);
+    const before = sizes(); const lastReal = before.filter(Boolean).pop(); ok(lastReal, "no pallet with a calibre to inherit from");
+    const btn = Array.from(host3.querySelectorAll("button")).find(b => /\+ Pallet/.test(b.textContent || "")); ok(btn, "no '+ Pallet' button");
+    await act(async () => { btn.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+    const after = sizes(); ok(after.length === before.length + 1, "no pallet added"); ok(after[after.length - 1] === lastReal, `the new pallet's calibre is "${after[after.length - 1]}", not "${lastReal}"`);
+    await act(async () => { r3.unmount(); });
+  });
+
   console.log(`CONNECTIONS: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);
 })();

@@ -77,7 +77,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
               <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}><QualityBadge quality={lot.quality} /><LocationPill locationId={lot.locationId} lot={lot} /><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} pos={pos} /></div>
               {(() => { const w = lotWarningsShown(lot, localTodayISO()); return w.length ? (   /* v7.10.3 (A-RV-15): the owner's lot warnings, amber */
                 <div data-lot-warning="1" style={{ marginTop: 8, padding: "7px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.45 }}>
-                  {w.map((x, i) => <div key={i}><b>⚠ {x.field === "still expected" ? "Still expected" : "Received against ordered"}:</b> {x.why}</div>)}
+                  {w.map((x, i) => <div key={i}><b>⚠ {({ "still expected": "Still expected", variance: "Received against ordered", "unexplained movements": "Unexplained movements", "ageing stock": "Ageing stock" } as any)[x.field] || x.field}:</b> {x.why}</div>)}{/* v7.11.2 (A-RV-24): all four */}
                 </div>) : null; })()}
             </div>
             <div style={{ textAlign: "right" }}>

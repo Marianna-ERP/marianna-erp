@@ -196,6 +196,23 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.11 — warnings per line, all lot warnings, hand-set status shown (v7.11.0–7.11.5)
+
+- **"More than ordered", per line:** when you create a shipment from a PO and the kilos of one
+  line (already on this PO's shipments plus what this truck loads) go more than 1 kg over that
+  line's order, an amber sentence names the line: "… would be over-received by 500 kg — ordered …,
+  arriving …". It is a warning, never a block — over-loading is recorded as variance. (Before
+  v7.11.0 this warning added up the whole PO and, in practice, never appeared.)
+- **All four lot warnings, in amber**, on the Inventory list and on the lot: still expected after
+  10 days; received kilos 5 % or more off the order; **movements with no shipment, note or
+  reason**; **stock in store more than 30 days** since its last receipt.
+- **Lots received twice** (the "+100 %" badge, kept as history) no longer get the ±5 % warning on
+  top — the badge already says it.
+- **A sales order status set by hand** shows, next to the status: "set by hand — *the reason* ·
+  *date*".
+- **Loading protocol → "+ Pallet"** gives the new pallet the product, variety and calibre of the
+  last pallet that carries goods.
+
 ### Version 7.10 — checks connected to the screens (v7.10.0–7.10.6)
 
 - **A claim's cost chain also offers the sale's freight:** besides the lots' own costs, the chain

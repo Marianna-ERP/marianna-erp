@@ -9,6 +9,7 @@ import { truckLoadPlaces } from "./shipmentModel.domain";
 import { appendSourceGoods } from "./shipments.domain";   // v6.99.94
 import { placeForPrint } from "./locations";
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
+import { overReceiptCheck, receiptWarningText } from "./receipts.domain";   // v7.11.0 (A-RV-23)
 
 export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel, onCreate }: any) {
   const [sourceType, setSourceType] = useState("PO");
@@ -104,8 +105,14 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     // v6.55.0: these are now WARNINGS, never blocks. A producer loading more than
     // ordered is routine and the PO already carries a variance field; refusing to
     // record the truck that is standing at the dock helps nobody.
-    const overReceipt = sourceType === "PO" && String((form as any).flow || (form as any).purpose || "").toUpperCase().includes("PICKUP") && poQty > 0 && projected > poQty + 1;
-    return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), overReceipt, exceedBy: Math.max(0, Math.round(projected - poQty)) };
+    // v7.11.0 (A-RV-23, owner 8 Oct): the warning checks EACH PO LINE (receipts.overReceiptCheck) — a size over its line warns even
+    // when the PO total is under. Until v7.10.6 it summed the whole PO and read a 'flow' the form never had, so it never fired.
+    // Counted: the kilos already on this PO's live shipments (the same count that pre-fills each line) + what this shipment loads.
+    const pendingByLine: Record<string, number> = {};
+    srcItems.forEach((it: any, idx: number) => { const id = String(it.id ?? idx + 1); if (selectedItemIds.length === 0 || selectedItemIds.map(String).includes(id)) pendingByLine[id] = enteredFor(it, idx); });
+    const overLines = sourceType === "PO" ? overReceiptCheck(srcItems, lineShippedKgOuter, pendingByLine) : [];
+    const overReceipt = overLines.length > 0;
+    return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), overReceipt, overLines };
   })();
 
   // v6.34.4: per-LINE shipped kg (across non-cancelled shipments of this PO), so each
@@ -266,11 +273,9 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
                 <span><span style={{ display: "inline-block", width: 9, height: 9, background: poShipState.overReceipt ? "#D97706" : "#22C55E", borderRadius: 2, marginRight: 4 }} />This shipment <strong>{fmtNum(poShipState.thisKg)}</strong></span>
                 <span>{sourceType} total <strong>{fmtNum(poShipState.poQty)}</strong> kg</span>
               </div>
-              {blocked && (
-                <div style={{ fontSize: 12.5, color: "#991B1B", fontWeight: 700, marginTop: 10 }}>
-                  {poShipState.overReceipt
-                    ? `More is arriving than was ordered — over by ${fmtNum(poShipState.exceedBy)} kg. Recorded as variance; nothing is blocked.`
-                    : `${fmtNum(poShipState.remaining)} kg of this ${sourceType} not yet received.`}
+              {poShipState.overReceipt && (   /* v7.11.0 (A-RV-23): the line that goes over, in amber — a warning, never a block */
+                <div data-over-receipt="1" style={{ fontSize: 12.5, color: "#92400E", fontWeight: 700, marginTop: 10 }}>
+                  ⚠ {receiptWarningText(poShipState.overLines)}
                 </div>
               )}
             </Card>

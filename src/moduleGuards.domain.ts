@@ -1,5 +1,6 @@
 // ── SHIPMENT & INVENTORY GATES (v6.78.0) ────────────────────────────────────
 import { S } from "./format";
+import { lotLoadedTwice } from "./lotView.domain";   // v7.11.5 (A-RV-28)
 // The same shape Purchase Orders got in v6.72.0: a very small number of hard
 // gates, more warnings that state their CONSEQUENCE, and a readiness view while
 // you work rather than a refusal at the save button.
@@ -84,17 +85,9 @@ export function shipmentWarnings(shipment: any, opts: { strict?: boolean; isExpo
 
 // ── INVENTORY ───────────────────────────────────────────────────────────────
 
-/** THE HARD GATE, and the only one: a lot cannot issue kilos it does not hold.
- *  Physical, not policy — whatever the paperwork says, the stock is not there. */
-export function movementBlockReason(lot: any, movement: { type: string; qtyKg: any }): string {
-  const t = S(movement?.type).toUpperCase();
-  if (!["SHIP_OUT", "TRANSFER", "DAMAGE", "SORTING"].includes(t)) return "";
-  const want = num(movement?.qtyKg);
-  if (want <= 0) return "";
-  const have = num(lot?.physicalKg);
-  if (want <= have + 1) return "";   // 1 kg of slack for whole-box rounding
-  return `${S(lot?.number) || "This lot"} holds ${Math.round(have).toLocaleString("pl-PL")} kg and this movement takes ${Math.round(want).toLocaleString("pl-PL")} kg out. Stock cannot go negative — check the quantity, or record the missing receipt first.`;
-}
+// v7.11.1 (A-RV-23, owner 8 Oct): movementBlockReason retired — no screen called it, and the movement window's own limit
+// (InventoryWindows maxByType) is the more complete rule: direct lots count their expected kilos, an edited movement is not
+// counted against itself. One rule, the one people use.
 
 /** A lot expected for too long. Owner ruling: TEN DAYS.
  *  Either it arrived and nobody said so — in which case the sales orders drawing
@@ -146,10 +139,12 @@ export function lotWarnings(lot: any, todayISO: string): Warning[] {
 /** v7.10.3 (A-RV-15, owner 8 Oct): the lot warnings shown on screen — the two the owner approved (a lot still expected after
  *  ten days; received kilos 5 % or more off the order). The other two of lotWarnings (unexplained movements, ageing stock)
  *  wait for the owner (registered A-RV-24). Shown in amber: they are hints, not errors. */
-export const LOT_WARNINGS_SHOWN = ["still expected", "variance"];
+export const LOT_WARNINGS_SHOWN = ["still expected", "variance", "unexplained movements", "ageing stock"];   // v7.11.2 (A-RV-24, owner 8 Oct): all four
 export function lotWarningsShown(lot: any, todayISO: string): Warning[] {
   if (/Cancelled|Deleted/.test(S(lot?.status))) return [];
-  return lotWarnings(lot, todayISO).filter(w => LOT_WARNINGS_SHOWN.includes(w.field));
+  // v7.11.5 (A-RV-28, owner 8 Oct): a lot received twice (kept as history by ruling) already says so with its +100 % badge — no ±5 % warning on top
+  const twice = !!lotLoadedTwice(lot);
+  return lotWarnings(lot, todayISO).filter(w => LOT_WARNINGS_SHOWN.includes(w.field) && !(w.field === "variance" && twice));
 }
 
 function daysBetween(fromISO: string, toISO: string): number | null {
