@@ -147,8 +147,10 @@ export function buildCostChain(input: {
   affectedShare?: number;
   clientLines?: PassThroughInput[];
   plnPerEur?: any;
+  /** v7.10.0 (A-RV-15 · CL-5): the sale's own delivery / return freight — claimsPlus.saleDirectCostLines, already scaled */
+  saleLines?: ChainCostLine[];
 }): ChainTotals {
-  const ours = ourChainCosts(input.lots, input.lotRefs, input.affectedShare ?? 1);
+  const ours = [...ourChainCosts(input.lots, input.lotRefs, input.affectedShare ?? 1), ...(input.saleLines || [])];
   const theirs = clientPassThroughCosts(input.clientLines || []);
   const lines = [...ours, ...theirs];
   const oursPLN = r2(ours.reduce((s, l) => s + l.amountPLN, 0));

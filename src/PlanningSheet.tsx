@@ -10,6 +10,7 @@ import { SHEET_COLUMNS, SheetTab, SheetRow, SheetLogEntry, blankRow, sid, parseC
 import { HER_HEADERS } from "./board.domain";
 import { unifiedLocations } from "./locations";
 import { S } from "./format";
+import { activeParties } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 
 const nowISO = () => new Date().toISOString();
 const rolesOf = (c: any) => (Array.isArray(c?.roles) && c.roles.length ? c.roles : [c?.type, ...(c?.additionalTypes || [])]).map((x: any) => String(x || ""));
@@ -24,7 +25,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
 
   // ── the Directory lists the dropdown cells choose from ──
   const lists = useMemo(() => {
-    const by = (r: string) => (contacts || []).filter((c: any) => rolesOf(c).includes(r)).map((c: any) => c.name).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
+    const by = (r: string) => activeParties(contacts).filter((c: any) => rolesOf(c).includes(r))   // v7.10.2 (A-RV-15 · CP-4).map((c: any) => c.name).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
     const locs = unifiedLocations(contacts || []);
     const ports = locs.filter((l: any) => String(l.type) === "Port" || String((l as any).legacyType) === "PORT").map((l: any) => l.name);
     return { clients: by("Client"), suppliers: by("Supplier"), carriers: by("Carrier"), forwarders: Array.from(new Set([...by("Forwarder"), ...by("Shipping line")])),

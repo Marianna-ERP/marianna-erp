@@ -196,6 +196,31 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.10 — checks connected to the screens (v7.10.0–7.10.6)
+
+- **A claim's cost chain also offers the sale's freight:** besides the lots' own costs, the chain
+  now lists the delivery and return freight of the sales that carried those lots (outbound
+  shipments only — inbound freight is already in the lot's cost). It is scaled to the affected
+  share like the rest of the chain.
+- **The notice deadline follows the agreement:** when a claim is linked to a company and that
+  company has **Notice days (claims)** filled in (Counterparties → the company's terms), the
+  suggested deadline uses those days and says "Agreement with …". Otherwise the usual default
+  applies (CMR 7 days, Hague-Visby 3, commercial 14 / 30). A date someone typed is never replaced.
+- **Archived companies leave the lists you pick from:** carriers, forwarders, customs agents,
+  cost suppliers on a shipment, the party of an invoice or a finance note, warehouses on an
+  imported cost line, and the suggestions of the planning sheet and the sorting window. A document
+  that already names an archived company keeps showing it, marked **(archived)**. Counterparties
+  itself and the warehouse-charges report still show them.
+- **Lot warnings, in amber:** a lot still **expected more than 10 days** after its loading date,
+  and a lot whose **received kilos are 5 % or more** away from what was ordered, are marked on the
+  Inventory list (hover for the sentence) and explained on the lot itself.
+- **Shipments → filter → "Customs open (N)":** the shipments whose customs clearance applies and
+  is not yet Cleared, without opening each one.
+- **Loading protocol → "✓ Loaded exactly as printed":** one click marks every pallet that carries
+  goods Boxes OK = Tak, Goods OK = Tak and fills an empty remark with "Brak"; spare lines stay blank.
+- **A sales order status set by hand asks why:** when you choose a status the shipments do not
+  show yet, the app asks for the reason and keeps it on the order. No reason, no change.
+
 ### Version 7.9 — Incoterms 2020 (v7.9.0–7.9.2)
 
 - The app knows the eleven ICC Incoterms® 2020 rules: for each, where the RISK passes (delivery

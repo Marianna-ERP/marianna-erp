@@ -143,6 +143,15 @@ export function lotWarnings(lot: any, todayISO: string): Warning[] {
   return out;
 }
 
+/** v7.10.3 (A-RV-15, owner 8 Oct): the lot warnings shown on screen — the two the owner approved (a lot still expected after
+ *  ten days; received kilos 5 % or more off the order). The other two of lotWarnings (unexplained movements, ageing stock)
+ *  wait for the owner (registered A-RV-24). Shown in amber: they are hints, not errors. */
+export const LOT_WARNINGS_SHOWN = ["still expected", "variance"];
+export function lotWarningsShown(lot: any, todayISO: string): Warning[] {
+  if (/Cancelled|Deleted/.test(S(lot?.status))) return [];
+  return lotWarnings(lot, todayISO).filter(w => LOT_WARNINGS_SHOWN.includes(w.field));
+}
+
 function daysBetween(fromISO: string, toISO: string): number | null {
   const a = S(fromISO).slice(0, 10), b = S(toISO).slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b)) return null;

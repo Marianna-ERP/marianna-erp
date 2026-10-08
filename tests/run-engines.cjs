@@ -2957,6 +2957,9 @@ T("a deadline someone typed is never overwritten by a default", () => {
   assert.equal(CR.applyDeadlineDefault({ respondent: { kind: "Carrier" }, date: "2026-08-01" }).noticeDeadline, "2026-08-08");
   // The delivery date wins over the claim date when one is known.
   assert.equal(CR.applyDeadlineDefault({ respondent: { kind: "Carrier" }, date: "2026-08-10" }, "2026-08-01").noticeDeadline, "2026-08-08");
+  // v7.10.1 (A-RV-15 · CL-8): an agreed period replaces the legal default; a zero rule leaves the default
+  assert.equal(CR.suggestNoticeDeadline({ respondent: { kind: "Supplier" }, date: "2026-08-01" }, undefined, { days: 21, from: "discovery", basis: "Agreement" }).deadline, "2026-08-22");
+  assert.equal(CR.suggestNoticeDeadline({ respondent: { kind: "Supplier" }, date: "2026-08-01" }, undefined, { days: 0, from: "", basis: "" }).deadline, "2026-08-15");
 });
 
 T("deadline state, and what it means", () => {

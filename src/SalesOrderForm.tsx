@@ -8,7 +8,7 @@ import { PAGE_MAX } from "./ui";
 import { SO_STATUSES } from "./types";
 import { clientExposurePLN } from "./payments.domain";
 import { defaultFxRate } from "./fx";
-import { deriveSoStatus, statusContradiction, isPhysicalStatus, effectiveSoStatus, isShippedOrLater, soRank } from "./statusOwnership.domain";
+import { deriveSoStatus, statusContradiction, isPhysicalStatus, effectiveSoStatus, isShippedOrLater, soRank, applyStatusOverride } from "./statusOwnership.domain";   // v7.10.6: + applyStatusOverride
 import { gradeAvailability as gradeAvailabilityOf } from "./seasonOps.domain";
 import { lineFromPOLine, lockRate } from "./so.domain";
 import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, convertLineUnit, kgPerBoxForLine, unresolvedBoxLines, documentTotals, totalsLine, effectiveCounts } from "./pricingUnit.domain";
@@ -213,7 +213,7 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
 }
 
 export function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, onSave, onCancel, onPrint, onEmail , allInvoices = [] }: any) {
-  const { confirm: ofConfirm, alert: ofAlert, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning) + v6.63.0 (D-10 forward-only alert)
+  const { confirm: ofConfirm, alert: ofAlert, prompt: ofPrompt, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning) + v6.63.0 (D-10 forward-only alert)
   // v6.99.15: the destination is a LocationPicker over unifiedLocations() — no module-level list any more.
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   // v6.79.0 (W-1): locks read the EFFECTIVE status — a typed label cannot unlock what the shipments locked, or lock what never moved.
@@ -586,7 +586,10 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                         message: `${clash}\n\nSetting it here records an override, so the screen will show it was set by hand rather than taken from the shipments.`,
                         confirmLabel: `Set ${nv} anyway`, cancelLabel: "Go back" });
                       if (!go) return;
-                      setOrder((o: any) => ({ ...o, statusOverride: nv, statusOverrideReason: "Set by hand — shipments do not show it yet", statusOverrideAt: localTodayISO() }));
+                      // v7.10.6 (A-RV-15): the reason is asked, never invented — an override with no reason reads like drift (statusOwnership.applyStatusOverride)
+                      const why = String((await ofPrompt({ tone: "warn", title: `Why is it ${nv}?`, message: "Say in a few words why the shipments do not show it yet (e.g. 'client collected at the warehouse, shipment to be entered'). It is kept on the order.", confirmLabel: `Set ${nv}`, cancelLabel: "Go back", placeholder: "the reason" })) ?? "").trim();
+                      if (!why) { await ofAlert({ tone: "warn", title: "Reason needed", message: `The status was not changed: a status set by hand keeps its reason.` }); return; }
+                      setOrder((o: any) => applyStatusOverride(o, nv, why, localTodayISO()));
                     }
                   }
                   if (willLock && !wasLocked) {

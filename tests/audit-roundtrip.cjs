@@ -1420,6 +1420,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("CL-8: the counterparty's agreed notice period overrides the legal default", () => {
     eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, {}).days, 7);
     eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, { name: "TBX", noticeDays: 10 }).days, 10);
+    eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, { name: "TBX", terms: { noticeDays: 12 } }).days, 12, "v7.10.1: the company form writes terms.noticeDays");
   });
   console.log("v6.97.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs

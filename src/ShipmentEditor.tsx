@@ -19,6 +19,7 @@ import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
 import { locationById, placeForPrint } from "./locations";
 import { useUnsavedGuard, dirtyEntries } from "./unsaved";
 import { COST_TYPES, Card, HEADER_MODES, Inp, LEG_MODES, LEG_STATUSES, Lbl, ModeBadge, STATUS_ORDER, SectionTitle, Sel, Stage, allUnitsCarrierNames, blankTransportUnit, costLinesByCarrierLegApply, countryOfLocation, findUnitIn, fmtMoney, fmtNum, goodsRowCap, isFreightCostType, logisticsProviders, modeChangePatch, parseNum, shipmentCostPLN, shipmentVehicleCount, syncCustomsCostLine, todayISO, transportUnitsForLeg, withStandardDocs, setContactsRef, setOtherShipmentsRef } from "./Shipments";
+import { pickerParties, archivedMark } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 
 export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [], packagingTypes = [], onSave, onCancel, allShipmentsForCap = [], invoices = [] }: any) {
   setContactsRef(contacts || []);
@@ -89,7 +90,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
   // v6.93.0: roadProviders no longer used — carriers live on the units (A-R8-4/9)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const roadProviders = logisticsProviders(contacts, "Road");
-  const customsProviders = logisticsProviders(contacts, "Customs");
+  const customsProviders = logisticsProviders(pickerParties(contacts, draft?.brokerId), "Customs");   // v7.10.2 (A-RV-15 · CP-4)
   function sf(k, v) { setDraft(prev => ({ ...prev, [k]: v })); }
   function updateLeg(idx, k, v) {
     // FB-16: a later leg can't load before the previous leg delivers.
@@ -460,7 +461,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             <Card>
               <SectionTitle>Booking (sea / air / rail) — one place for the booking</SectionTitle>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(170px, 1.6fr) minmax(120px, 1fr) 132px 132px 132px", gap: 10 }}>
-                <div><Lbl>Forwarder</Lbl><Sel value={b?.forwarderId ?? ""} onChange={e => sb("forwarderId", e.target.value || null)} title="v6.99.8: one forwarder per booking — every container on it is carried by him; the sea freight line names him"><option value="">— forwarder —</option>{(contacts || []).filter((c: any) => ["Forwarder", "Carrier", "ShippingLine"].includes(c.type) || (c.roles || []).some((r: string) => ["Forwarder", "Carrier", "ShippingLine"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}</Sel></div>
+                <div><Lbl>Forwarder</Lbl><Sel value={b?.forwarderId ?? ""} onChange={e => sb("forwarderId", e.target.value || null)} title="v6.99.8: one forwarder per booking — every container on it is carried by him; the sea freight line names him"><option value="">— forwarder —</option>{pickerParties(contacts, b?.forwarderId).filter((c: any) => ["Forwarder", "Carrier", "ShippingLine"].includes(c.type) || (c.roles || []).some((r: string) => ["Forwarder", "Carrier", "ShippingLine"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}{archivedMark(c)}</option>)}</Sel></div>
                 <div><Lbl>Booking no.</Lbl><Inp value={b?.number || ""} onChange={e => sb("number", e.target.value)} placeholder="from the forwarder" /></div>
                 <div><Lbl>Cut-off</Lbl><Inp type="date" value={b?.cutOff || ""} onChange={e => sb("cutOff", e.target.value)} /></div>
                 <div><Lbl>ETD</Lbl><div style={ring(!b?.etd)}><Inp type="date" value={b?.etd || ""} onChange={e => sb("etd", e.target.value)} /></div></div>
@@ -594,7 +595,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   {uMode !== "Road" ? <div style={{ gridColumn: "2 / -1", gridRow: 1 }}><Lbl>Carrier (from the booking)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB" }}>{(() => { const f = (contacts || []).find((c: any) => String(c.id) === String((draft.bookings || [])[0]?.forwarderId)); return f ? f.name : "— set the forwarder on the booking —"; })()}</div></div> : <div><Lbl>Carrier</Lbl>
                     <Sel value={u.carrierId ?? ""} onChange={e => updateVehicle(i, ui, "carrierId", e.target.value || null)} title="v6.85.0 (D9): the carrier lives on the unit — one shipment may use several; transport orders go out per carrier">
                       <option value="">— choose the carrier —</option>{/* v6.99.44 (L-2, owner): "leg default" was a vestige of the pre-v6.99.8 leg carrier that nothing reads */}
-                      {(contacts || []).filter((c: any) => ["Carrier", "Forwarder"].includes(c.type) || (c.roles || []).some((r: string) => ["Carrier", "Forwarder"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}</option>)}
+                      {pickerParties(contacts, u.carrierId).filter((c: any) => ["Carrier", "Forwarder"].includes(c.type) || (c.roles || []).some((r: string) => ["Carrier", "Forwarder"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}{archivedMark(c)}</option>)}
                     </Sel>
                   </div>}
                   {uMode === "Road" && <div><Lbl>Truck plate</Lbl><Inp value={u.truckPlate || u.vehiclePlate || ""} onChange={e => updateVehicle(i, ui, "truckPlate", e.target.value)} /></div>}
@@ -754,7 +755,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       <div><Lbl>Customs / broker</Lbl>
                         <Sel value={draft.brokerId || ""} onChange={e => sf("brokerId", e.target.value ? parseNum(e.target.value) : null)}>
                           <option value="">None / not required</option>
-                          {customsProviders.map(p2 => <option key={p2.id} value={p2.id}>{p2.name}</option>)}
+                          {customsProviders.map(p2 => <option key={p2.id} value={p2.id}>{p2.name}{archivedMark((contacts || []).find((c: any) => String(c.id) === String(p2.id)))}</option>)}
                         </Sel>
                       </div>
                       <div><Lbl>Customs cost</Lbl><Inp type="number" value={c.cost ?? ""} onChange={e => setC("cost", parseNum(e.target.value))} /></div>
@@ -921,7 +922,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
           )}
           {(draft.costs || []).map((c, i) => <div key={c.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.7fr 0.6fr 0.8fr 1fr 1fr 0.5fr", gap: 8, marginBottom: 8 }}>
             <div><Lbl>Type</Lbl><Sel value={c.type} onChange={e => updateCost(i, "type", e.target.value)}>{COST_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
-            <div><Lbl>Supplier{!c.supplierId ? <span style={{ color: "#DC2626", fontWeight: 800 }}> · missing</span> : null}</Lbl><Sel value={c.supplierId || ""} style={!c.supplierId ? { borderColor: "#DC2626", background: "#FEF2F2" } : undefined} onChange={e => updateCost(i, "supplierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— choose the supplier —</option>{logisticsProviders(contacts).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Sel></div>   {/* v6.99.59 (A-CB-1): no silent first option */}
+            <div><Lbl>Supplier{!c.supplierId ? <span style={{ color: "#DC2626", fontWeight: 800 }}> · missing</span> : null}</Lbl><Sel value={c.supplierId || ""} style={!c.supplierId ? { borderColor: "#DC2626", background: "#FEF2F2" } : undefined} onChange={e => updateCost(i, "supplierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— choose the supplier —</option>{logisticsProviders(pickerParties(contacts, c.supplierId)).map(p => <option key={p.id} value={p.id}>{p.name}{archivedMark((contacts || []).find((x: any) => String(x.id) === String(p.id)))}</option>)}</Sel></div>   {/* v7.10.2 (A-RV-15 · CP-4) · v6.99.59 (A-CB-1): no silent first option */}
             <div><Lbl>Amount</Lbl><Inp type="number" value={c.amount} onChange={e => updateCost(i, "amount", e.target.value)} /></div>
             <div><Lbl>Curr.</Lbl><Sel value={c.currency} onChange={e => updateCost(i, "currency", e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
             <div><Lbl>FX</Lbl><Inp type="number" value={c.fxRate} onChange={e => updateCost(i, "fxRate", e.target.value)} /></div>

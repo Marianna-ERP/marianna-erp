@@ -9,7 +9,7 @@ import { inspectLink } from "./docLinks.domain";
 import {
   buildLoadingProtocol, deriveRows, protocolTotals, protocolExceptions, protocolGaps,
   unitGoodsLines, protocolForUnit, protocolsForShipment, checkTruckLoad, signatureWarnings,
-  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS, packagingResolution,
+  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS, packagingResolution, confirmAsLoaded,
   PALLET_CAPACITY,
 } from "./loadingProtocol.domain";
 
@@ -355,6 +355,8 @@ export default function LoadingProtocolModal({
             <div style={{ fontSize: 12, fontWeight: 700 }}>Pallet table — {totals.pallets} pallets · {totals.boxes} boxes · net {totals.netKg.toLocaleString("pl-PL")} kg · gross {totals.grossKg.toLocaleString("pl-PL")} kg</div>
             <div style={{ flex: 1 }} />
             <SmallButton onClick={addRow}>+ Pallet</SmallButton>
+            {/* v7.10.5 (A-RV-15): the usual case in one click — every pallet carrying goods: boxes OK, goods OK, remarks "Brak"; spare lines untouched */}
+            <SmallButton title="Every pallet that carries goods: Boxes OK = Tak, Goods OK = Tak, remarks 'Brak' where empty. Spare lines are left blank." onClick={() => setP((x: any) => ({ ...x, rows: confirmAsLoaded(x.rows || []) }))}>✓ Loaded exactly as printed</SmallButton>
             <SmallButton onClick={regenerate}>↻ Re-derive from goods</SmallButton>
             <span style={{ fontSize: 10.5, color: "#64748B", marginLeft: 8 }}>
               {usedRows} pallet{usedRows === 1 ? "" : "s"} loaded · sheet prints {Math.max(SHEET_MIN_ROWS, (p.rows || []).length)} lines

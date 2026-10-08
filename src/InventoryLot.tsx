@@ -13,6 +13,7 @@ import { localTodayISO, formatDMY } from "./dates";
 import { gradeSplit, inspectionTotals } from "./seasonOps.domain";
 import { INSPECTION_CONTEXTS, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel } from "./Inventory";
 import { SeasonActions } from "./InventoryWindows";
+import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
 
 export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [], season = null , userName = "" }: any) {
   // v6.99.30 (A-R21-3, owner): a recall document must be identifiable afterwards — it carries its own number,
@@ -74,6 +75,10 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
               {/* v6.99.81 (A-IN-8, owner): line 2 — product, item, size, packaging, origin; line 3 — class, location and flow */}
               <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.packaging || "—"} · {lot.origin || "—"}</div>
               <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}><QualityBadge quality={lot.quality} /><LocationPill locationId={lot.locationId} lot={lot} /><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} pos={pos} /></div>
+              {(() => { const w = lotWarningsShown(lot, localTodayISO()); return w.length ? (   /* v7.10.3 (A-RV-15): the owner's lot warnings, amber */
+                <div data-lot-warning="1" style={{ marginTop: 8, padding: "7px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.45 }}>
+                  {w.map((x, i) => <div key={i}><b>⚠ {x.field === "still expected" ? "Still expected" : "Received against ordered"}:</b> {x.why}</div>)}
+                </div>) : null; })()}
             </div>
             <div style={{ textAlign: "right" }}>
               {/* v6.99.81 (A-IN-7/8, owner): the value in the lot's own state — in stock · delivered · expected — and the cost per kg; received kg lives in the breakdown below */}

@@ -63,6 +63,14 @@ export function missingPeopleInfo(contacts: any[], used: Set<string>): string[] 
 export function activeParties(contacts: any[], role?: string): any[] {
   return (contacts || []).filter(c => c && !c.archived && (!role || (c.roles || [c.type]).includes(role)));
 }
+/** v7.10.2 (A-RV-15 · CP-4): what a company picker offers — the live companies (activeParties), plus any archived one this
+ *  document already names, so an existing document keeps showing its company (marked by archivedMark). */
+export function pickerParties(contacts: any[], keep?: any): any[] {
+  const keepIds = new Set((Array.isArray(keep) ? keep : [keep]).filter((v: any) => v !== undefined && v !== null && v !== "").map((v: any) => S(v)));
+  const kept = (contacts || []).filter(c => c && c.archived && keepIds.has(S(c.id)));
+  return [...activeParties(contacts), ...kept];
+}
+export const archivedMark = (c: any): string => (c && c.archived ? " (archived)" : "");
 
 // ── CP-5: Fakturownia id kept; match by id, then NIP ──────────────────────────
 export function matchImported(contacts: any[], imported: { fakturowniaId?: any; nip?: any; name?: any }): any | null {

@@ -34,6 +34,8 @@ import { clientReportKg } from "./seasonOps.domain";   // v6.99.87   // v6.99.72
 import { CreateShipmentModal } from "./ShipmentCreate";
 import { ShipmentDetail } from "./ShipmentDetail";
 import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDocuments";
+import { outstandingCustoms } from "./customs.domain";   // v7.10.4 (A-RV-15)
+const CUSTOMS_OPEN = "Customs open";   // v7.10.4 (A-RV-15): the Shipments list filter for clearances not yet Cleared
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
 export let CONTACTS_REF: any[] = [];
 export function setContactsRef(v: any[]) { CONTACTS_REF = v || []; }   // v6.99.68 (A-AUD-2): assigned from the split editor
@@ -1309,19 +1311,21 @@ export default function Shipments({ archive = null,
   const sorted = useMemo(() => [...shipments].sort((a, b) => statusRank(a.status) - statusRank(b.status) || String(b.loadingDate || "").localeCompare(String(a.loadingDate || ""))), [shipments]);
   // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
   const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("shipment", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
+  const customsOpenSet = useMemo(() => new Set(outstandingCustoms(shipments).map(r => r.number)), [shipments]);   // v7.10.4 (A-RV-15)
   const filtered = useMemo(() => {
     const q = norm(query);
     return sorted.filter(s => {
       if (!archiveShow(s)) return false;   // v6.99.54 (AR-4)
       if (modeFilter !== "All" && s.mode !== modeFilter) return false;
       if (statusFilter === "Open" && ["Closed", "Cancelled"].includes(s.status)) return false;
-      if (statusFilter !== "All" && statusFilter !== "Open" && s.status !== statusFilter) return false;
+      if (statusFilter === CUSTOMS_OPEN) { if (!customsOpenSet.has(String(s.number))) return false; }   // v7.10.4 (A-RV-15): shipments whose customs clearance is still open
+      else if (statusFilter !== "All" && statusFilter !== "Open" && s.status !== statusFilter) return false;
       if (!q) return true;
       const hay = [s.number, s.transportOrderNo, s.status, s.mode, s.purpose, ...(s.poRefs || []), ...(s.soRefs || []), ...(s.lotRefs || []), providerName(s.carrierId || s.forwarderId, contacts), ...(s.goods || []).map(g => g.product)].join(" ").toLowerCase();
       return hay.includes(q);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sorted, query, modeFilter, statusFilter, contacts, archive]);
+  }, [sorted, query, modeFilter, statusFilter, contacts, archive, customsOpenSet]);
   const selected = shipments.find(s => s.id === selectedId) || filtered[0] || shipments[0] || null;
 
   // v6.58.0 one-time reconcile: shipments that reached Loaded/Arrived before
@@ -1801,7 +1805,7 @@ export default function Shipments({ archive = null,
         <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "grid", gap: 10 }}>
             <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}</Sel></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}<option value={CUSTOMS_OPEN}>{CUSTOMS_OPEN} ({customsOpenSet.size})</option></Sel></div>
           </div>
           <div style={{ overflow: "auto", flex: 1 }}>
             {filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}

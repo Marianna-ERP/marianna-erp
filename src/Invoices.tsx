@@ -27,6 +27,7 @@ import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
 import { companyProfile } from "./useLocalStoredState";
+import { pickerParties, archivedMark } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 
 const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the company block comes from Settings (defaults = the former literal)
 
@@ -288,7 +289,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     {r.tag === "WAREHOUSE" && (
                       <select style={{ ...inp, width: "100%" }} value={r.warehouseId || ""} onChange={(e: any) => upd(r.key, { warehouseId: e.target.value })}>
                         <option value="">— choose the warehouse —</option>{/* v6.99.59 (A-CB-2) */}
-                        {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                        {warehouses.filter((w: any) => !w.archived || String(w.id) === String(r.warehouseId)).map((w: any) => <option key={w.id} value={w.id}>{w.name}{archivedMark(w)}</option>)}
                       </select>
                     )}
                     {r.tag === "OVERHEAD" && (
@@ -869,7 +870,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
   const sf = (k: string, v: any) => setForm((f: any) => recomputeInvoiceMoney({ ...f, [k]: v }));
   const isSales = form.kind === "SALES";
   const wanted = isSales ? ["Client"] : form.category === "FORWARDER" ? ["Forwarder"] : form.category === "BROKER" ? ["Broker"] : form.category === "WAREHOUSE" ? ["Warehouse"] : form.category === "TRANSPORT" ? ["Carrier"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
-  const partyOptions = (contacts || []).filter((c: any) => { const ts = [c.type, ...(c.additionalTypes || [])]; return ts.some((t: string) => wanted.includes(t)); });
+  const partyOptions = pickerParties(contacts, form.counterparty?.id).filter((c: any) => { const ts = [c.type, ...(c.additionalTypes || [])]; return ts.some((t: string) => wanted.includes(t)); });   // v7.10.2 (A-RV-15 · CP-4)
   // v6.63.0 (D-06, M3/M4): the old picker concatenated ALL SOs+POs+shipments and
   // hard-capped the render at 40 buttons — any PO past position 40 simply never
   // appeared, and the wall of unfiltered buttons was unusable. Now: search box,
@@ -973,7 +974,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
 function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders, pos, shipments }: any) {
   const sf = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
   const wanted = form.direction === "outgoing" ? ["Client"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
-  const partyOptions = Array.from(new Set((contacts || []).filter((c: any) => { const ts = [c.type, ...(c.additionalTypes || [])]; return ts.some((t: string) => wanted.includes(t)); }).map((c: any) => c.name).filter(Boolean))).sort();
+  const partyOptions = Array.from(new Set((contacts || []).filter((c: any) => (!c.archived || String(c.name) === String(form.partyName)) && [c.type, ...(c.additionalTypes || [])].some((t: string) => wanted.includes(t))).map((c: any) => c.name).filter(Boolean))).sort();   // v7.10.2 (A-RV-15 · CP-4): archived companies out; the one the note already names stays
   const invoiceOptions = (invoices || []).filter((i: Invoice) => form.direction === "outgoing" ? i.kind === "SALES" : i.kind === "COST");
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>

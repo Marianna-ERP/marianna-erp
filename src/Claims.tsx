@@ -1,7 +1,7 @@
 import { ModuleHeader } from "./ui";
 import React, { useState, useMemo } from "react";
 import { recordAudit } from "./audit";
-import { inspectionCandidates, evidenceCandidates, attachEvidence, qcReportWarning, defectFromInspection, offsetNoteAgainstInvoice, claimMoneyLabel } from "./claimsPlus.domain";
+import { inspectionCandidates, evidenceCandidates, attachEvidence, qcReportWarning, defectFromInspection, offsetNoteAgainstInvoice, claimMoneyLabel, saleDirectCostLines, noticeRuleFor } from "./claimsPlus.domain";   // v7.10.0–7.10.1 (A-RV-15): CL-5 + CL-8 connected
 import DateInput from "./DateInput";
 import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { claimBlockReason, staleClaimWarnings } from "./cancellation.domain";
@@ -475,12 +475,15 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                         : ds.state === "notified" ? <span style={{ color: "#16A34A", fontWeight: 700 }}> · notified</span> : null}</Lbl>; })()}
                     <DateInput value={selected.noticeDeadline || ""} onChange={e => patch(selected.id, { noticeDeadline: e.target.value })} style={INP} />
                     {(() => {
-                      const sug = suggestNoticeDeadline(selected);
+                      // v7.10.1 (A-RV-15 · CL-8): the company the claim is linked to (by id, never by name) brings its agreed notice days
+                      const linkedCo = selected.respondent?.contactId != null ? (contacts || []).find((c: any) => String(c.id) === String(selected.respondent.contactId)) : null;
+                      const rule = noticeRuleFor(selected, linkedCo);
+                      const sug = suggestNoticeDeadline(selected, undefined, rule);
                       if (!sug) return null;
                       const ds = deadlineStatus(selected, today);
                       return <div style={{ fontSize: 10, color: ds.state === "passed" ? "#B91C1C" : "#94A3B8", marginTop: 3, lineHeight: 1.45 }}>
                         {!selected.noticeDeadline
-                          ? <>Suggested {sug.deadline} — {sug.basis}. <span onClick={() => patch(selected.id, applyDeadlineDefault(selected))} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use it</span></>
+                          ? <>Suggested {sug.deadline} — {sug.basis}. <span onClick={() => patch(selected.id, applyDeadlineDefault(selected, undefined, rule))} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use it</span></>
                           : ds.message}
                       </div>;
                     })()}
@@ -658,7 +661,8 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                 const pct = num(selected.defectPct);
                 const share = pct > 0 ? Math.min(1, pct / 100) : 1;
                 const clientLines = selected.clientCosts || [];
-                const chain = buildCostChain({ lots, lotRefs, affectedShare: share, clientLines, plnPerEur: selected.plnPerEur });
+                const saleLines = saleDirectCostLines(lotRefs, orders, shipments, share);   // v7.10.0 (A-RV-15 · CL-5): the sale's delivery / return freight
+                const chain = buildCostChain({ lots, lotRefs, affectedShare: share, clientLines, plnPerEur: selected.plnPerEur, saleLines });
                 const gaps = chainGaps(chain, clientLines);
                 const setClient = (i: number, field: string, v: any) => patch(selected.id, {
                   clientCosts: clientLines.map((x: any, xi: number) => xi === i ? { ...x, [field]: v } : x),
@@ -684,14 +688,14 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     </div>
                     {chain.totalEUR > 0 && <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>≈ €{chain.totalEUR.toLocaleString("pl-PL")} at {selected.plnPerEur} PLN/EUR</div>}
 
-                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Ours — derived from the lots</div>
+                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Ours — the lots&apos; costs and the sale&apos;s freight</div>
                     {chain.lines.filter((l: any) => l.origin === "OURS").map((l: any) => (
                       <div key={l.key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F8FAFC", fontSize: 11.5 }}>
                         <span style={{ color: "#475569" }}>{l.label}</span>
                         <span style={{ fontWeight: 600 }}>{Math.round(l.amountPLN).toLocaleString("pl-PL")}</span>
                       </div>
                     ))}
-                    {!chain.lines.some((l: any) => l.origin === "OURS") && <div style={{ fontSize: 11, color: "#94A3B8" }}>No allocated cost on these lots yet.</div>}
+                    {!chain.lines.some((l: any) => l.origin === "OURS") && <div style={{ fontSize: 11, color: "#94A3B8" }}>No allocated cost on these lots yet, and no delivery or return freight on their sales.</div>}
 
                     <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", margin: "12px 0 5px" }}>The client&apos;s — he incurred them, he charged them to us</div>
                     {clientLines.map((l: any, i: number) => (

@@ -21,6 +21,8 @@ import { useUnsavedGuard } from "./unsaved";
 import { r0 } from "./format";
 import { LotDetail } from "./InventoryLot";
 import { MovementModal } from "./InventoryWindows";
+import { activeParties } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
+import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 
@@ -991,7 +993,7 @@ export function SortingWindow({ f, setF, lot, inspections = [], contacts = [], o
           </Sel>
         </QhField>
         <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{x.date} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
-        <QhField label="Sorted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} placeholder="our team / warehouse" style={qhInp} list="qh-sorters" /><datalist id="qh-sorters">{(contacts || []).filter((c: any) => (c.roles || [c.type]).includes("Warehouse")).map((c: any) => <option key={String(c.id)} value={c.name} />)}</datalist></QhField>
+        <QhField label="Sorted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} placeholder="our team / warehouse" style={qhInp} list="qh-sorters" /><datalist id="qh-sorters">{activeParties(contacts).filter((c: any) => (c.roles || [c.type]).includes("Warehouse")).map((c: any) => <option key={String(c.id)} value={c.name} />)}</datalist></QhField>
         <QhField label="Hours"><input type="number" value={f.hours ?? ""} onChange={e => set("hours", e.target.value)} style={qhInp} /></QhField>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
@@ -1526,7 +1528,8 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                   if (a.kind === "stock") return <><div style={{ fontSize: 12, color: "#334155" }}>arrived {D(a.date)}</div>{a.days !== undefined && <div style={{ fontSize: 11, fontWeight: 700, color: ageColor(a.days) }}>{a.days} d on stock</div>}</>;
                   if (a.kind === "direct") return <><div style={{ fontSize: 11.5, fontWeight: 700, color: "#7C3AED" }}>Direct</div><div style={{ fontSize: 11, color: "#64748B" }}>{a.loaded ? `loaded ${D(a.loaded)}` : ""}{a.delivered ? ` · delivered ${D(a.delivered)}` : ""}</div></>;
                   if (a.kind === "expected") return <div style={{ fontSize: 11.5, color: "#B45309", fontWeight: 600 }}>expected {D(a.date)}</div>;
-                  return <span style={{ color: "#CCC" }}>—</span>; })()}</div>
+                  return <span style={{ color: "#CCC" }}>—</span>; })()}
+                  {(() => { const w = lotWarningsShown(l, localTodayISO()); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10.5, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected" : (x.why.match(/^(over|short) by [^)]*\)/) || [x.field])[0]).join(" · ")}</div> : null; })()}{/* v7.10.3 (A-RV-15) */}</div>
                 <div>
                   {(() => {
                     const onHand = parseNum(l.physicalKg, 0) || parseNum(l.receivedKg, 0) || parseNum(l.expectedKg, 0);

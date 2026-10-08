@@ -123,7 +123,7 @@ export function foldLegacyClaimFields(claim: any): { claim: any; changed: boolea
 export function noticeRuleFor(claim: any, counterparty: any): { days: number; from: string; basis: string } {
   const kind = S(claim?.respondent?.kind);
   const d = NOTICE_DEFAULTS[kind];
-  const override = num(counterparty?.noticeDays);
+  const override = num(counterparty?.terms?.noticeDays) || num(counterparty?.noticeDays);   // v7.10.1 (A-RV-15 · CL-8): the company form writes terms.noticeDays (CP-2); the old top-level field still read
   if (override > 0) return { days: override, from: d?.from || "delivery", basis: `Agreement with ${S(counterparty?.name) || kind}: ${override} day(s)` };
   return d ? { days: d.days, from: d.from, basis: d.basis } : { days: 0, from: "delivery", basis: "" };
 }

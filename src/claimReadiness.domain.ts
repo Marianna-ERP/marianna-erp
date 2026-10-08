@@ -62,9 +62,10 @@ export interface DeadlineSuggestion { deadline: string; days: number; from: stri
  *  where one is known, else the claim's own date (the day it was raised, which
  *  is the day the problem was discovered). Never overwrites a deadline the user
  *  has already set — see applyDeadlineDefault. */
-export function suggestNoticeDeadline(claim: any, baseDate?: string): DeadlineSuggestion | null {
+export function suggestNoticeDeadline(claim: any, baseDate?: string, ruleIn?: { days: number; from: string; basis: string } | null): DeadlineSuggestion | null {
   const kind = S(claim?.respondent?.kind);
-  const rule = NOTICE_DEFAULTS[kind];
+  // v7.10.1 (A-RV-15 · CL-8): the period agreed with that company (claimsPlus.noticeRuleFor) replaces the legal default when given
+  const rule = ruleIn && ruleIn.days > 0 ? ruleIn : NOTICE_DEFAULTS[kind];
   if (!rule) return null;
   const base = S(baseDate) || S(claim?.date);
   const deadline = addDays(base, rule.days);
@@ -74,9 +75,9 @@ export function suggestNoticeDeadline(claim: any, baseDate?: string): DeadlineSu
 
 /** Set the deadline only when the claim has none. A deadline someone typed is a
  *  decision — a default must never quietly replace it. */
-export function applyDeadlineDefault(claim: any, baseDate?: string): any {
+export function applyDeadlineDefault(claim: any, baseDate?: string, ruleIn?: { days: number; from: string; basis: string } | null): any {
   if (S(claim?.noticeDeadline)) return claim;
-  const s = suggestNoticeDeadline(claim, baseDate);
+  const s = suggestNoticeDeadline(claim, baseDate, ruleIn);
   return s ? { ...claim, noticeDeadline: s.deadline } : claim;
 }
 
