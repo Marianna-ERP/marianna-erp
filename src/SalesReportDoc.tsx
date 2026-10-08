@@ -10,7 +10,7 @@ import { formatDMY } from "./dates";
 const n0 = (v: number) => Math.round(v || 0).toLocaleString("pl-PL");
 const n2 = (v: number) => (v || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export default function SalesReportDoc({ order, calc, supplierRef = "", no = "", today = "", producerName = "" }: any) {
+export default function SalesReportDoc({ order, calc, supplierRef = "", no = "", today = "", producerName = "", provisionalNo = "" }: any) {
   const cur = calc.currency || "EUR"; const prod = producerName || order?.supplier?.name || "the producer";
   const cell: any = { border: "1px solid #ccc", padding: "5px 7px", fontSize: 10.5 };
   const th: any = { ...cell, background: "#F3F4F6", fontWeight: 700, fontSize: 9.5, textAlign: "right" };
@@ -59,7 +59,7 @@ export default function SalesReportDoc({ order, calc, supplierRef = "", no = "",
         {cur !== "PLN" ? row("Sales after costs", `${n2(calc.netSalesEUR)} ${cur}`, true) : null}
         {row(`Our commission ${calc.commissionPct} %`, `${n2(calc.commissionEUR)} ${cur}`)}
         {row("Due to the producer after commission", `${n2(calc.netAfterCommissionEUR)} ${cur}`, true)}
-        {calc.provisionalEUR ? row(`Producer's provisional invoice${calc.provisionalCurrency !== cur ? ` (${n2(calc.provisionalOriginal)} ${calc.provisionalCurrency})` : ""}`, `${n2(calc.provisionalEUR)} ${cur}`) : null}
+        {calc.provisionalEUR ? row(`Producer's provisional invoice${provisionalNo ? ` ${provisionalNo}` : ""}${calc.provisionalCurrency !== cur ? ` (${n2(calc.provisionalOriginal)} ${calc.provisionalCurrency})` : ""}`, `${n2(calc.provisionalEUR)} ${cur}`) : null}
         {calc.provisionalEUR ? row(calc.correctionEUR >= 0 ? `1 · ${prod} issues an EXTRA INVOICE` : `1 · ${prod} issues a CREDIT NOTE`, `${n2(Math.abs(calc.correctionEUR))} ${cur}`, true, calc.correctionEUR >= 0 ? "#B45309" : "#6D28D9") : null}
         {calc.provisionalEUR ? row(`2 · ${COMPANY.name} issues its COMMISSION INVOICE`, `${n2(calc.commissionEUR)} ${cur}`, true) : null}
         {calc.provisionalEUR ? row(`3 · After compensation — ${bal >= 0 ? `we owe ${prod}` : `${prod} owes us`}`, `${n2(Math.abs(bal))} ${cur}`, true, "#15803D") : null}

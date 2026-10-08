@@ -3468,6 +3468,24 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.7.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v7.8.0–7.8.3 ══
+(function v78(){
+  console.log("\n══ v7.8.x. producer's reference · lot card · PO layout · producer's settlement ══");
+  const R = B("supplierRef.domain.js");
+  t("A-PO-REF-1: the same reference (spaces, dashes, case aside) on another live PO is found; the PO itself and deleted ones do not count", () => {
+    const pos = [{ number: "PO-1", supplierRef: "VP-0012" }, { number: "PO-2", supplierRef: "x" }, { number: "PO-3", status: "Cancelled", supplierRef: "vp 0012" }];
+    eq(R.supplierRefUsedOn("vp 0012", "PO-2", pos, []).join(), "PO-1"); eq(R.supplierRefUsedOn("VP-0012", "PO-1", pos, []).length, 0, "its own PO"); eq(R.supplierRefUsedOn("", "PO-2", pos, []).length, 0);
+    eq(R.duplicateSupplierRefs([...pos, { number: "PO-4", supplierRef: "VP/0012" }], []).length, 1, "the integrity check finds the existing duplicate");
+  });
+  t("A-ST-12 / A-SO-PK-2 / A-PV-7 / A-PL-2 in the code", () => {
+    const rd = f => require("fs").readFileSync(require("path").join(__dirname, "../src/" + f), "utf8");
+    ok(/Producer's provisional invoice\$\{provisionalNo/.test(rd("SalesReportDoc.tsx")), "the number on the report");
+    ok(/ · at \$\{\(lot as any\)\.locationName\}/.test(rd("SalesOrderForm.tsx")) && /expected \$\{formatDMY/.test(rd("SalesOrderForm.tsx")), "where the goods are; expected, not arrived");
+    ok(/Producer's settlement — /.test(rd("PurchaseOrders.tsx")) && /Result of this truck → Finance/.test(rd("PurchaseOrders.tsx")), "the statement titled, the link"); ok(/CONSIGNMENT TRUCKS — OUR RESULT/.test(rd("Finance.tsx")));
+  });
+  console.log("v7.8.3 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

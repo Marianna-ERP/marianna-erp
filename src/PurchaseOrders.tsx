@@ -446,7 +446,7 @@ export function LifecycleTimeline({ status }: any) {
 // ── v6.99.1 (FN-5): THE RESULT OF EVERY PURCHASE — the firm-price mirror of the consignment settlement ──
 
 // ── v6.90.0: THE TRUCK'S FINAL RESULT — settlement per PO (owner rulings V1…V6) ──
-export function TruckSettlementCard({ order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null, financeNotes = [] }: any) {
+export function TruckSettlementCard({ onOpenResult = null, order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null, financeNotes = [] }: any) {
   const rec: any = (settlements || []).find((s: any) => String(s.poNumber) === String(order.number)) || null;
   const producer = (contacts || []).find((c: any) => String(c.id) === String(order.supplier?.id)) || null;
   const rateRec = producer ? currentCommissionRate(producer, order.loadingDate || order.orderDate || localTodayISO()) : null;   // v6.99.129 (AUD-13): the rate valid when the truck was bought, not today's
@@ -478,7 +478,7 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
   const myIns = (inspections || []).filter((x: any) => calc.lines.some(l => String(l.lotNumber) === String(x.lotNumber)));
   return (
     <Card style={{ marginBottom: 16, borderLeft: "4px solid #7C3AED" }}>
-      <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: closed ? "#16A34A" : "#B45309" }}>{closed ? `CLOSED ${rec.closedAt}` : (calc.fullySold ? "FULLY SOLD — ready to close" : "INTERIM")}</span>}>Truck settlement — {order.number}{rec?.number ? ` · ${rec.number}` : ""}</SectionTitle>
+      <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: closed ? "#16A34A" : "#B45309" }}>{closed ? `CLOSED ${rec.closedAt}` : (calc.fullySold ? "FULLY SOLD — ready to close" : "INTERIM")}</span>}>Producer's settlement — {order.number}{rec?.number ? ` · ${rec.number}` : ""}{onOpenResult && <button onClick={() => onOpenResult(order)} style={{ marginLeft: 10, padding: "2px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 0 }}>Result of this truck → Finance</button>}</SectionTitle>{/* v7.8.3 (A-PL-2): the producer's statement; our result lives in Finance */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
         <div><Lbl>{cur === "PLN" ? "Rate — the PO is in PLN" : `Rate PLN→${cur} (last sales invoice + bank cost)`}</Lbl><input type="number" step="0.0001" disabled={closed || cur === "PLN"} value={cur === "PLN" ? 1 : (rate || "")} onChange={e => upd({ ratePLNperEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
         <div><Lbl>Commission % {bandPct != null ? `(band → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pct ?? ""} onChange={e => upd({ commissionPct: parseFloat(e.target.value) || 0 })} style={inp} /></div>
@@ -577,7 +577,7 @@ export function TruckSettlementCard({ order, lots = [], orders = [], invoices = 
         {closed && rec?.commissionInvoiceId && <span style={{ fontSize: 11, color: "#94A3B8" }}>commission invoiced — the settlement is final</span>}
       </div>
       <div id={`sales-report-doc-${order.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff" }}>
-        <SalesReportDoc order={order} calc={calc} no={lastReportNumber("SRP", order.number)} today={localTodayISO()} producerName={prodName} supplierRef={order.supplierRef || (shipments || []).find((s2: any) => (s2.poRefs || []).includes(order.number) && s2.supplierRef)?.supplierRef || ""} />
+        <SalesReportDoc provisionalNo={String(rec?.provisionalInvoiceNo || "")} order={order} calc={calc} no={lastReportNumber("SRP", order.number)} today={localTodayISO()} producerName={prodName} supplierRef={order.supplierRef || (shipments || []).find((s2: any) => (s2.poRefs || []).includes(order.number) && s2.supplierRef)?.supplierRef || ""} />
       </div>
       <div id={`qc-report-${order.id}`} style={{ position: "absolute", left: -10000, top: 0, width: 780, background: "#fff" }}>
         {/* v6.99.37 (QA-1, owner ruling): the settlement prints the SAME quality report the lot prints —
@@ -794,7 +794,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], financeNotes: extFinanceNotes = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
+export default function PurchaseOrders({ canOpenResult = false, onOpenResult = null, archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], financeNotes: extFinanceNotes = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
@@ -1192,7 +1192,7 @@ ${blockNote}`.trim(),
             setPackingWindow(false);
             await uiAlert({ tone: pl.unpriced.length ? "warn" : "info", title: "Quantities final", message: [...pl.soChanges, pl.unpriced.length ? `Price to agree before invoicing: ${pl.unpriced.join(", ")}` : ""].filter(Boolean).join("\n") || "The lots and the shipments not yet loaded follow the final lines." });
           }} />; })()}
-        {truckWindow && selected && <SupplierTruckWindow order={selected} lots={extLots} onClose={() => setTruckWindow(false)} onConfirm={(f: any) => {
+        {truckWindow && selected && <SupplierTruckWindow order={selected} lots={extLots} pos={extPOs || []} shipments={extShipments || []} onClose={() => setTruckWindow(false)} onConfirm={(f: any) => {
           const etaISO = String(f.eta || "").slice(0, 10);
           let created: any = null;
           extSetShipments((prev: any[]) => { const all = prev || []; const yr = new Date().getFullYear();
@@ -1213,7 +1213,7 @@ ${blockNote}`.trim(),
             : [] /* v6.80.0 (D-42): EXW/FCA/FOB/CIF goods arrive on OUR shipment — the receipt is posted there */}
           ctxOrders={extSOs}
           onPackingResult={() => setPackingWindow(true)}   // v6.99.50 (TO-2): one window instead of a chain of prompts
-          settlement={{ lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, financeNotes: extFinanceNotes, setInvoices: extSetInvoices }}
+          settlement={{ onOpenResult: canOpenResult ? onOpenResult : null, lots: extLots, orders: extSOs, invoices: extInvoices, shipments: extShipments, claims: extClaims, inspections: extInspections, contacts: extContacts, settlements: extSettlements, setSettlements: extSetSettlements, setFinanceNotes: extSetFinanceNotes, financeNotes: extFinanceNotes, setInvoices: extSetInvoices }}
           onRegisterTruck={typeof extSetShipments === "function" ? () => setTruckWindow(true) : null}
           onReceiveLot={(l: any) => {
             // v6.99.86 (owner 1 Oct): a window instead of a bare prompt — kilos, the truck's date, the place; the posting is unchanged

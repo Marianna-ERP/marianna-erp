@@ -188,6 +188,25 @@ function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSett
 
 // ── v6.99.26 (owner ruling 15 Sept): PURCHASE RESULTS — what every firm purchase earned. Analysis belongs to Finance;
 // the PO screen stays operational. The consignment trucks keep their settlement on the PO (it issues documents).
+
+// v7.8.3 (A-PL-2, owner 8 Oct): OUR result on each consignment truck — the commission is our income; the producer's statement stays on the PO
+function ConsignmentResultsCard({ pos = [], lots = [], orders = [], invoices = [], shipments = [], claims = [], financeNotes = [], poSettlements = [] }: any) {
+  const rows = consignmentPositions({ pos, lots, orders, invoices, shipments, claims, financeNotes, poSettlements });
+  if (!rows.length) return null;
+  const pln = (v: number) => Math.round(v || 0).toLocaleString("pl-PL") + " PLN";
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <SectionTitle>CONSIGNMENT TRUCKS — OUR RESULT</SectionTitle>
+      <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 8 }}>Our commission on the producer's net sales. Our own costs that are not recharged to the producer, and the share of overheads, are not deducted yet.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "130px 1.4fr 80px 1fr 70px 1fr", gap: 8, padding: "6px 8px", fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}><div>PO</div><div>PRODUCER</div><div>STATE</div><div style={{ textAlign: "right" }}>NET SALES</div><div style={{ textAlign: "right" }}>%</div><div style={{ textAlign: "right" }}>OUR COMMISSION</div></div>
+      {rows.map((r: any) => <div key={r.poNumber} style={{ display: "grid", gridTemplateColumns: "130px 1.4fr 80px 1fr 70px 1fr", gap: 8, padding: "7px 8px", fontSize: 12, borderTop: "1px solid #F1F5F9" }}>
+        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#1D4ED8" }}>{r.poNumber}</div><div>{r.producer}</div><div style={{ color: r.state === "closed" ? "#15803D" : "#B45309" }}>{r.state}</div>
+        <div style={{ textAlign: "right" }}>{pln(r.netPLN)}</div><div style={{ textAlign: "right" }}>{r.pctMissing ? "—" : `${r.commissionPct}%`}</div><div style={{ textAlign: "right", fontWeight: 800, color: "#15803D" }}>{r.pctMissing ? "rate missing" : pln((r.netPLN || 0) * (r.commissionPct || 0) / 100)}</div>
+      </div>)}
+    </Card>
+  );
+}
+
 function PurchaseResultsCard({ pos = [], lots = [], orders = [], shipments = [] }: any) {
   const [supplier, setSupplier] = React.useState("");
   const rows = (pos || [])
@@ -935,6 +954,7 @@ export default function Finance({ focusResultOf = null,
                 <StatBlock label="OVERHEAD" value={fmtPLN(totalAgg.totalOverheadPLN)} valueColor="#64748B" sub="allocated operating cost" />
                 <StatBlock label="NET P/L" value={fmtPLN(totalAgg.totalNetMarginPLN)} valueColor={totalAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgNetMarginPct)} />
               </div>
+              {canOpenFinance(users, userName, "pl") && <ConsignmentResultsCard pos={pos} lots={lots} orders={orders} invoices={invoices} shipments={shipments} financeNotes={financeNotes} />}{/* v7.8.3 (A-PL-2) */}
               {canOpenFinance(users, userName, "pl") && <PurchaseResultsCard pos={pos} lots={lots} orders={orders} shipments={shipments} />}
               {canOpenFinance(users, userName, "pl") && <MonthCloseCard totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs: [], todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
               {canOpenFinance(users, userName, "budget") && typeof setBudgets === "function" && (() => {

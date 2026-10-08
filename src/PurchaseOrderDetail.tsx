@@ -1,3 +1,4 @@
+import { supplierRefUsedOn } from "./supplierRef.domain";   // v7.8.0
 // PurchaseOrderDetail.tsx — v6.99.68 (A-AUD-2, owner): moved out of PurchaseOrders.tsx unchanged; the module's shared helpers are imported from it.
 import DateInput from "./DateInput";
 import React from "react";
@@ -90,9 +91,10 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
   );
 }
 
-export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: any) {
+export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm, pos = [], shipments = [] }: any) {
   const [f, setF] = React.useState<any>({ plate: "", trailer: "", driver: "", supplierRef: "", eta: "", recorder: "", note: "" });
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
+  const refDupes = supplierRefUsedOn(f.supplierRef, order.number, pos, shipments);   // v7.8.0 (A-PO-REF-1)
   const myLots = (lots || []).filter((l: any) => String(l.poRef) === String(order.number));
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const [asking, setAsking] = React.useState(false);
@@ -108,7 +110,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: an
             <div><Lbl>Truck plate</Lbl><input value={f.plate} onChange={e => set("plate", e.target.value)} placeholder="WGM 4421K" style={inp} /></div>
             <div><Lbl>Trailer plate</Lbl><input value={f.trailer} onChange={e => set("trailer", e.target.value)} style={inp} /></div>
             <div><Lbl>Driver</Lbl><input value={f.driver} onChange={e => set("driver", e.target.value)} style={inp} /></div>
-            <div><Lbl>Supplier's reference</Lbl><input value={f.supplierRef} onChange={e => set("supplierRef", e.target.value)} placeholder="GM-004" style={inp} title="their own shipment reference — the link between their paperwork and ours" /></div>
+            <div><Lbl>Supplier's reference</Lbl><input value={f.supplierRef} onChange={e => set("supplierRef", e.target.value)} placeholder="GM-004" style={{ ...inp, ...(refDupes.length ? { borderColor: "#DC2626" } : {}) }} title="their own shipment reference — the link between their paperwork and ours" />{refDupes.length > 0 && <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>Already used on {refDupes.join(", ")}</div>}</div>
             <div><Lbl>ETA</Lbl><DateInput value={f.eta} onChange={(e: any) => set("eta", e.target.value)} /></div>
             <div><Lbl>Temperature recorder</Lbl><input value={f.recorder} onChange={e => set("recorder", e.target.value)} placeholder="TR-88412" style={inp} /></div>
           </div>
@@ -122,7 +124,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: an
           <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <SmallButton kind="close" onClick={onClose}>Close</SmallButton>
             {asking
-              ? <><SmallButton onClick={() => setAsking(false)}>No</SmallButton><button onClick={() => onConfirm(f)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, register</button></>
+              ? <><SmallButton onClick={() => setAsking(false)}>No</SmallButton><button disabled={refDupes.length > 0} onClick={() => { if (refDupes.length) return; onConfirm(f); }} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, register</button></>
               : <button onClick={() => setAsking(true)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Register truck</button>}
           </span>
         </div>
@@ -194,7 +196,7 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
 
           {/* Two-column body */}
           {/* v6.99.104 (A-PV-3, owner): the truck settlement takes the whole width */}
-          {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
+          {/* v7.8.2 (A-PV-7): the truck settlement moved below Line items | Supplier and the supplier's truck */}
           <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 20 }}>
             <div>
               {/* Line items */}
@@ -274,41 +276,6 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
               </Card>
 
               {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
-              {/* v6.99.36 (A-R25-6): SUPPLIER'S TRUCK — its own box under the lines, showing what was registered */}
-              {["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status !== "Draft" && (() => {
-                const trucks = supplierTrucks || [];   // v6.99.42 (hotfix): was filtering a list of NUMBERS for .arrangedBy — never matched, the box always read empty
-                return (
-                  <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>
-                    <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 {trucks.length ? "Register another truck" : "Register supplier's truck"}</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
-                    {!trucks.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No truck registered yet. Register it when the supplier announces the plates and the ETA.</div>}
-                    {trucks.map((s: any) => { const u = (s.legs || []).flatMap((l: any) => l.vehicles || [])[0] || {}; return (
-                      <div key={s.number} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr 1fr 1fr auto", gap: 8, fontSize: 12, alignItems: "center" }}>
-                          <div><b>{s.number}</b></div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
-                          <div>{s.supplierRef || u.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef || u.supplierRef}</span> : <span style={{ color: "#94A3B8" }}>no supplier ref</span>}</div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
-                          <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
-                          <div>{typeof onOpenShipment === "function" && <SmallButton onClick={() => onOpenShipment(s.number)}>Open</SmallButton>}</div>
-                        </div>
-                        <div style={{ fontSize: 11, color: "#64748B", marginTop: 3 }}>
-                          {u.driverName ? `driver ${u.driverName}${u.driverPhone ? " · " + u.driverPhone : ""} · ` : ""}
-                          {(s.goods || []).length ? `carrying ${(s.goods || []).map((g: any) => `${g.lotRef || g.product} ${Math.round(Number(g.qtyKg) || 0).toLocaleString("pl-PL")} kg`).join(", ")}` : ""}
-                          {s.notes ? ` · ${s.notes}` : ""}
-                        </div>
-                      </div>
-                    ); })}
-                  </Card>
-                );
-              })()}
-
-              {order.notes && (
-                <Card style={{ marginBottom: 16 }}>
-                  <SectionTitle>NOTES</SectionTitle>
-                  <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{order.notes}</div>
-                </Card>
-              )}
             </div>
 
             {/* Right column */}
@@ -365,6 +332,43 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
 
             </div>
           </div>
+          {/* v7.8.2 (A-PV-7, owner 7 Oct): under the two columns, full width — the supplier's truck, then (consignment) the truck settlement */}
+          {/* v6.99.36 (A-R25-6): SUPPLIER'S TRUCK — its own box under the lines, showing what was registered */}
+          {["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status !== "Draft" && (() => {
+            const trucks = supplierTrucks || [];   // v6.99.42 (hotfix): was filtering a list of NUMBERS for .arrangedBy — never matched, the box always read empty
+            return (
+              <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>
+                <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 {trucks.length ? "Register another truck" : "Register supplier's truck"}</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
+                {!trucks.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No truck registered yet. Register it when the supplier announces the plates and the ETA.</div>}
+                {trucks.map((s: any) => { const u = (s.legs || []).flatMap((l: any) => l.vehicles || [])[0] || {}; return (
+                  <div key={s.number} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr 1fr 1fr auto", gap: 8, fontSize: 12, alignItems: "center" }}>
+                      <div><b>{s.number}</b></div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
+                      <div>{s.supplierRef || u.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef || u.supplierRef}</span> : <span style={{ color: "#94A3B8" }}>no supplier ref</span>}</div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
+                      <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
+                      <div>{typeof onOpenShipment === "function" && <SmallButton onClick={() => onOpenShipment(s.number)}>Open</SmallButton>}</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64748B", marginTop: 3 }}>
+                      {u.driverName ? `driver ${u.driverName}${u.driverPhone ? " · " + u.driverPhone : ""} · ` : ""}
+                      {(s.goods || []).length ? `carrying ${(s.goods || []).map((g: any) => `${g.lotRef || g.product} ${Math.round(Number(g.qtyKg) || 0).toLocaleString("pl-PL")} kg`).join(", ")}` : ""}
+                      {s.notes ? ` · ${s.notes}` : ""}
+                    </div>
+                  </div>
+                ); })}
+              </Card>
+            );
+          })()}
+
+          {order.notes && (
+            <Card style={{ marginBottom: 16 }}>
+              <SectionTitle>NOTES</SectionTitle>
+              <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{order.notes}</div>
+            </Card>
+          )}
+          {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
         </div>
       </div>
     </div>

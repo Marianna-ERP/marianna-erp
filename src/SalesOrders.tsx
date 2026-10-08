@@ -125,6 +125,7 @@ function _adaptLotsFromInventory(invLots: any[], inspections: any[] = []) {
     size: l.size,
     origin: l.origin,
     warehouse: l.warehouse || "—",
+    locationName: (() => { try { return locationById(l.locationId)?.name || ""; } catch { return ""; } })(),   // v7.8.1 (A-SO-PK-2)
     // v6.99.127 (A-ONE-1, owner): a lot not yet received is sold on its EXPECTED kilos — selling from the PO is selling the lot made from it
     availableKg: rejectedByReport(l, inspections) ? 0 : (parseNum(l.physicalKg) || parseNum(l.receivedKg)) > 0 ? (l.physicalKg ?? l.receivedKg ?? 0) : parseNum(l.expectedKg),
     rejected: rejectedByReport(l, inspections),

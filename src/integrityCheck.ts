@@ -1,3 +1,4 @@
+import { duplicateSupplierRefs } from "./supplierRef.domain";   // v7.8.0
 import { locationById } from "./locations";   // v7.3.2 (A-LOC-3)
 import { lotReceiptDate } from "./seasonOps.domain";
 import { isRealISODate, noteNames } from "./format";
@@ -728,6 +729,8 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     (inp.orders || []).filter((o: any) => o && o.status !== "Cancelled" && o.destinationLocationId != null && o.destinationLocationId !== "" && !known(o.destinationLocationId))
       .forEach((o: any) => add("warning", "PLACE_UNKNOWN", "SOs", String(o.number), `${o.number}: its destination (id ${o.destinationLocationId}) is no location any more${o.destinationText ? ` — it read "${o.destinationText}"` : ""}. Choose the location on the sale.`));
   }
+  // v7.8.0 (A-PO-REF-1): the producer's reference used on more than one PO
+  duplicateSupplierRefs(inp.pos || [], inp.shipments || []).forEach(d => add("warning", "SUPPLIER_REF_DUPLICATE", "POs", d.on.join(", "), `The producer's reference "${d.ref}" is used on ${d.on.join(" and ")} — each PO needs its own.`));
   return { issues, counts, okay: counts.error === 0 };
 }
 

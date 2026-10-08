@@ -431,7 +431,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const Fin = require(path.resolve("./src/Finance")).default;
     const fh = renderToStaticMarkup(React.createElement(Fin, { ...c9, financeNotes: [], claims: [], userName: "Hazem Osman", users: [] })); const ft = T(fh);
     if (!/CONSIGNMENT POSITIONS/.test(ft)) bad.push("no consignment positions card");
-    const fi = ft.indexOf("PO-2026-0043"); const frow = ft.slice(fi, fi + 500);
+    const fi = ft.indexOf("PO-2026-0043", ft.indexOf("CONSIGNMENT POSITIONS")); const frow = ft.slice(fi, fi + 500);   // v7.8.3: the positions card, not "our result" above it
     ["Vega-Pro Kft.", "14 300", "171 600,00 PLN", "36 884,14 EUR", "37 000,00 EUR", "not in the register", "Vega-Pro Kft. owes us 115,86 EUR", "OPEN"].forEach(w => { if (!frow.includes(w)) bad.push("positions row lacks " + JSON.stringify(w)); });
     if (!bad.length) { passed++; console.log("  \u2713 consignment: the provisional picked from the register (still to transfer 36 884,14), LOT-0126 ≈ 11,26 PLN/kg provisional / priced at settlement, the Finance positions row"); }
     else { failed++; console.log("  \u2717 consignment — " + bad.join(" · ")); }
@@ -540,7 +540,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const POm = require(path.resolve("./src/PurchaseOrders"));
     _where = "PO view PO-2026-0044"; const pv = renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0044" })); const pt = T(pv);
     ["SO-2026-0027", "SO-2026-0028", "SO-2026-0029"].forEach(n => { if (!pt.includes(n)) bad.push("linked documents lack " + n); });
-    const iS = pt.indexOf("Truck settlement"), iL = pt.indexOf("LINKED DOCUMENTS"), iLI = pt.indexOf("LINE ITEMS"); if (!(iS > 0 && iLI > iS && iL > iLI)) bad.push(`order: settlement ${iS}, line items ${iLI}, linked ${iL}`);   // v7.1.5 (A-PV-6): Linked documents under Line items
+    const iS = pt.indexOf("Producer's settlement"), iL = pt.indexOf("LINKED DOCUMENTS"), iLI = pt.indexOf("LINE ITEMS"); if (!(iLI > 0 && iL > iLI && iS > iL)) bad.push(`order: line items ${iLI}, linked ${iL}, settlement ${iS}`);   // v7.8.2 (A-PV-7): Line items | Supplier first, the settlement below
     if (/less: .* 0,00 PLN|−0,00/.test(pt)) bad.push("a zero or signed line shows"); if (!/Sales \(excl\. VAT\)/.test(pt)) bad.push("sales line missing");
     if (!/↳ SO-2026-0028/.test(pt) || !/↳ SO-2026-0029/.test(pt)) bad.push("the settlement lines do not name their sales (A-ST-9)");
     const lh2 = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9 }))); if (/PO-2026-0010/.test(lh2)) bad.push("a deleted PO shows in the list by default (A-DEL-4)");
@@ -554,7 +554,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
     const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [], poSettlements: d9.poSettlements || [], claims: d9.claims || [], notes: d9.financeNotes || [] };
     _where = "PO-2026-0044 settlement class I"; const POm = require(path.resolve("./src/PurchaseOrders")); const pt = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: "PO-2026-0044" })));
-    const i127 = pt.indexOf("LOT-2026-0127"); const row = pt.slice(i127, i127 + 160); if (!/10 985 10 985/.test(row.replace(/\s+/g, " "))) bad.push("settlement row: class I not 10 985: " + row.slice(0, 120));
+    const i127 = pt.indexOf("LOT-2026-0127", pt.indexOf("Producer's settlement")); const row = pt.slice(i127, i127 + 160);   // v7.8.2: the settlement now sits below the lines if (!/10 985 10 985/.test(row.replace(/\s+/g, " "))) bad.push("settlement row: class I not 10 985: " + row.slice(0, 120));
     _where = "invoice 128/09/2026 (AGRO-HURT)"; const Inv = require(path.resolve("./src/Invoices")).default;
     const ih = T(renderToStaticMarkup(React.createElement(Inv, { ...c9, setInvoices: () => {}, setLots: () => {}, initialSelectedNumber: "128/09/2026" })));
     if (!/Allocate to lots/.test(ih)) bad.push("the warehouse invoice offers no Allocate to lots: " + (ih.match(/128\/09\/2026.{0,100}/) || [""])[0]);

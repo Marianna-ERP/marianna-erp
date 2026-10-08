@@ -196,6 +196,20 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.8 — references, lot card, PO layout, producer's settlement (v7.8.0–7.8.3)
+
+- **The producer's reference is unique:** the supplier's-truck window says "Already used on PO-…"
+  and will not confirm; spaces, dashes and capitals do not count; the data issues list any
+  duplicates already in the data.
+- **Sales report:** "Producer's provisional invoice <number>".
+- **Lot card:** the status badge and "from PO-…" once on the left; under the product, the
+  supplier, when it arrived (or is expected) and WHERE the goods are now.
+- **PO view:** Line items | Supplier first, then the supplier's truck and (consignment) the
+  settlement, both full width.
+- **Consignment:** the box on the PO is the **Producer's settlement**; people with Finance and P/L
+  see "Result of this truck → Finance", where **Consignment trucks — our result** lists our
+  commission per truck (own non-recharged costs and overheads not yet deducted).
+
 ### Version 7.7 — selling ahead, the lot picker, leftovers retired (v7.7.0–7.7.2)
 
 - **A lot not yet received** offers its expected kilos (as class I, less what other sales already
