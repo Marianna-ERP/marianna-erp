@@ -269,7 +269,11 @@ export function gradeStockNow(lot: any): { I: number; II: number; waste: number 
   // how 20 kg of waste came to be sold as class I.
   const live = (lot?.movements || []).filter((m: any) => m && !m.voided);
   const sum = (f: (m: any) => boolean) => r0(live.filter(f).reduce((s: number, m: any) => s + num(m.qtyKg), 0));
-  const received = sum((m: any) => m.type === "IN");
+  const receivedIn = sum((m: any) => m.type === "IN");
+  // v7.7.0 (A-ONE-2, owner 8 Oct): a lot NOT YET RECEIVED is sold ahead on its EXPECTED kilos, all class I until the receipt says otherwise —
+  // before, the picker showed 0 kg for every expected lot while the reservation engine counted the expected kilos
+  const notYetReceived = !live.length && !(num(lot?.receivedKg) > 0) && !/Cancelled|Shipped|Delivered|Closed/i.test(String(lot?.status || ""));   // nothing has happened to it yet
+  const received = notYetReceived ? num(lot?.expectedKg) : receivedIn;
   const toII = sum((m: any) => m.type === "RECLASS" && String(m.toGrade || "II").toUpperCase() === "II");
   const backToI = sum((m: any) => m.type === "RECLASS" && String(m.toGrade).toUpperCase() === "I");
   const waste = sum((m: any) => m.type === "DAMAGE" && String(m.source || "").startsWith("sorting:"));

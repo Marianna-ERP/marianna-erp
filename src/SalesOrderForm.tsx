@@ -23,13 +23,19 @@ import { CLIENTS, CURRENCIES, INCOTERMS_SELL, Inp, LOTS, PACKAGING_TYPES_REF, PO
 // Lets the user pick where a SO line's goods will come from: a stock lot, or a PO.
 // Filters intelligently by product (case-insensitive substring match).
 export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId = null, onCancel, onPick }: any) {
-  const [tab, setTab] = useState("STOCK"); // STOCK | PO
+  const [tab] = useState("STOCK");   // v7.7.2: one source (lots) — the tab state stays only to keep the list mounted
   const [filter, setFilter] = useState(lineItem.product || "");
 
   const productMatch = (p) => !filter || (p || "").toLowerCase().includes(filter.toLowerCase());
 
   const byNumDesc = (a: any, b: any) => String(b?.number || "").localeCompare(String(a?.number || ""), undefined, { numeric: true });
   const matchingLots = LOTS.filter(l => productMatch(l.product)).sort(byNumDesc); // v6.81.0 (D-58): newest first
+  // v7.7.2 (A-SO-PK-1, owner 8 Oct): lots that can be sold come first (in stock → expected → direct); the rest fold away
+  const [showNA, setShowNA] = useState(false);
+  const canSell = (l: any) => Number(l.availableKg) > 0 && !(l as any).rejected && !/Shipped|Delivered|Cancelled|Closed/i.test(String(l.status || ""));
+  const stateRank = (l: any) => (l as any).lotState === "in stock" ? 0 : (l as any).lotState === "expected" ? 1 : (l as any).lotState === "direct" ? 2 : 3;
+  const availLots = matchingLots.filter(canSell).sort((a: any, b: any) => stateRank(a) - stateRank(b) || byNumDesc(a, b));
+  const naLots = matchingLots.filter((l: any) => !canSell(l));
   // PO lines: flatten POs to their items, filter on product
   const matchingPOLines = [...PO_REFS].sort(byNumDesc).flatMap(po =>
     po.items.map(it => ({ ...it, _po: po }))
@@ -76,16 +82,16 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
       <div style={{ background: "#fff", borderRadius: 14, width: "min(820px, 96vw)", maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Pick source for line {lineIndex + 1}</div>
-            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Source the goods from stock (lot in our warehouse) or from a PO (pre-sold from supplier)</div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>Choose the lot for line {lineIndex + 1}</div>
+            <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>A lot in our stock, expected from a PO, or sold direct from the producer — the ones with kilos available come first.</div>
           </div>
           <ActionButton action="close" onClick={onCancel} />
         </div>
 
         <div style={{ padding: "12px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={() => setTab("STOCK")} style={{ padding: "6px 14px", borderRadius: 7, border: tab === "STOCK" ? "1px solid #0369A1" : "1px solid #E5E7EB", background: tab === "STOCK" ? "#E0F2FE" : "#fff", color: tab === "STOCK" ? "#0369A1" : "#555", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📦 From Stock ({matchingLots.length})</button>
+          <span style={{ fontSize: 12.5, color: "#334155", fontWeight: 600 }}>{matchingLots.length} lots · <span style={{ color: "#15803D" }}>{availLots.length} with kilos available</span></span>{/* v7.7.2: the leftover "From Stock" button is gone */}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 11, color: "#888" }}>Filter by product:</span>
+            <span style={{ fontSize: 11, color: "#475569" }}>Filter by product:</span>
             <Inp value={filter} onChange={e => setFilter(e.target.value)} placeholder="e.g. Carrot" style={{ width: 200 }} />
           </div>
         </div>
@@ -93,9 +99,9 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
         <div style={{ padding: 20, overflowY: "auto", flex: 1, background: "#FAFAFA" }}>
           {tab === "STOCK" && (
             matchingLots.length === 0 ? (
-              <div style={{ textAlign: "center", color: "#AAA", padding: 30, fontSize: 13 }}>No matching lots in stock.</div>
+              <div style={{ textAlign: "center", color: "#64748B", padding: 30, fontSize: 13 }}>No matching lots in stock.</div>
             ) : (
-              matchingLots.map(lot => {
+              [...availLots, ...(showNA ? naLots : [])].map(lot => {
                 const live = lotReservations(lot, allOrders, currentOrderId);
                 // v6.99.38 (A-R26-3, owner): a class I line may only be offered what class I holds. The lot's raw
                 // stock would show class II fruit as if it could serve a class I sale — which is how a sorted lot
@@ -126,8 +132,8 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
                         two different layouts. The 4th column is gone: it held a
                         warehouse for stock and a permanent dash for a PO line
                         that has not arrived anywhere yet. */}
-                    <div style={{ fontSize: 11, color: "#888" }}>{lot.size} · {lot.origin} · {lot.packaging}</div>
-                    <div style={{ fontSize: 10, color: "#AAA", marginTop: 2 }}>
+                    <div style={{ fontSize: 11, color: "#475569" }}>{lot.size} · {lot.origin} · {lot.packaging}</div>
+                    <div style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>
                       Supplier: {(() => { const po = PO_REFS.find((x: any) => x.number === lot.poRef); return po?.supplierName || po?.supplier?.name || "—"; })()}
                       {(lot as any).arrivalDate ? ` · arrived ${formatDMY((lot as any).arrivalDate)}` : " · arrival not recorded"}
                       {lot.poRef ? ` · from ${lot.poRef}` : ""}
@@ -141,16 +147,16 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
                   </div>
                   <div><QualityBadge quality={lot.quality} /></div>
                   <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#16A34A" }}>{fmtNum(offer)} kg</div>
-                    <div style={{ fontSize: 10, color: "#888" }}>available as class {lineClass}</div>
-                    {byGrade && (byGrade.II > 0 || byGrade.I > 0) && <div style={{ fontSize: 9.5, color: "#94A3B8" }}>lot holds I {fmtNum(byGrade.I)} · II {fmtNum(byGrade.II)}</div>}
+                    <div style={{ fontSize: isEmpty ? 13 : 18, fontWeight: 800, color: isEmpty ? "#9CA3AF" : "#15803D" }}>{isEmpty ? "sold out" : `${fmtNum(offer)} kg`}</div>{/* v7.7.2 (A-SO-PK-1): the figure that matters stands out */}
+                    <div style={{ fontSize: 10.5, color: "#475569" }}>{isEmpty ? `nothing left as class ${lineClass}` : `available as class ${lineClass}`}</div>
+                    {byGrade && (byGrade.II > 0 || byGrade.I > 0) && <div style={{ fontSize: 9.5, color: "#64748B" }}>lot holds I {fmtNum(byGrade.I)} · II {fmtNum(byGrade.II)}</div>}
                     {live.totalReserved > 0 && (
-                      <div style={{ fontSize: 9.5, color: "#AAA", marginTop: 1 }}>of {fmtNum(lot.availableKg)} total</div>
+                      <div style={{ fontSize: 9.5, color: "#64748B", marginTop: 1 }}>of {fmtNum(lot.availableKg)} total</div>
                     )}
                   </div>
                 </div>
                 );
-              })
+              }).concat(naLots.length ? [<button key="__na" onClick={() => setShowNA(v => !v)} style={{ width: "100%", marginTop: 6, padding: "8px", borderRadius: 8, border: "1px dashed #CBD5E1", background: "#fff", color: "#475569", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{showNA ? "Hide" : "Show"} not available ({naLots.length}) — shipped, delivered or sold out</button>] : [])
             )
           )}
           {tab === "PO" && (

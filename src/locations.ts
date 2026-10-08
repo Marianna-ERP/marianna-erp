@@ -649,7 +649,7 @@ export function unifiedLocations(contacts: any[] = []): Location[] {
 /** Resolve any location id — built-in, custom or counterparty site. */
 export function locationById(id: any, contacts: any[] = []): Location | null {
   if (id === null || id === undefined || id === "") return null;
-  return unifiedLocations(contacts).find(l => String(l.id) === String(id)) || DEMO_SEEDS.find(l => String(l.id) === String(id)) || null;
+  return unifiedLocations(contacts).find(l => String(l.id) === String(id)) || null;   // v7.7.1 (A-RET-1): no demo fallback — used demo ids became ordinary locations (v7.3.4)
 }
 /** Demo seeds that stored documents still point at become custom locations (once). */
 export function migrateReferencedSeeds(referencedIds: Iterable<any>): Location[] {

@@ -8,7 +8,7 @@ import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Lbl, useConfirm, ActionButton, notifySaved } from "./ui";
 import { nextId } from "./ids";
 import { parseAddress, formatAddress } from "./address.domain";
-import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, readLocationOverrides, writeLocationOverride, LOCATIONS_ALL_BUILTIN, newSiteId } from "./locations";
+import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, writeLocationOverride, newSiteId } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -1428,8 +1428,8 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
   // visible in the pickers and removable nowhere. Counterparty sites are shown read-only; they are edited on their party.
   // (v7.6.1: replaced by the chips and the search)
   // (v7.6.1: replaced by the chips and the search)
-  const overrides = readLocationOverrides();
-  const hiddenIds = new Set(Object.keys(overrides).filter(k => (overrides as any)[k]?.hidden));
+  // (v7.7.1: location overrides retired)
+  // (v7.7.1: no hidden built-ins any more)
   const customIds = new Set(readCustomLocations().map((l: any) => String(l.id)));
   const siteIds = new Set(counterpartyLocations(counterparties || []).map((l: any) => String(l.id)));
   const sourceOf = (l: any) => siteIds.has(String(l.id)) ? "counterparty site" : (customIds.has(String(l.id)) ? ((readCustomLocations().find((x: any) => String(x.id) === String(l.id)) as any)?.migratedFromSeed ? "migrated (legacy)" : "added here") : "built-in");
@@ -1462,9 +1462,9 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
   const CHIPS: Array<[string, string, (l: any) => boolean]> = [
     ["all", "All", () => true], ["ports", "Ports & airports", (l: any) => ["Port", "Airport", "PortWarehouse"].includes(String(l.type)) || String(l.legacyType) === "PORT"],
     ["border", "Border crossings", (l: any) => String(l.type) === "BorderCrossing" || String(l.legacyType) === "BORDER"], ["customs", "Customs", (l: any) => String(l.type) === "Customs" || String(l.legacyType) === "CUSTOMS"],
-    ["company", "Companies' places", (l: any) => ownerOf(l) != null], ["hidden", "Hidden", (l: any) => !!(l as any).__hidden],
+    ["company", "Companies' places", (l: any) => ownerOf(l) != null],   /* v7.7.1 (A-RET-1): no "Hidden" chip — the built-ins it showed are gone */
   ];
-  const base = [...unifiedLocations(counterparties || []), ...(chip === "hidden" ? (LOCATIONS_ALL_BUILTIN || []).filter((l: any) => hiddenIds.has(String(l.id))).map((l: any) => ({ ...l, __hidden: true })) : [])];
+  const base = [...unifiedLocations(counterparties || [])];
   const test = (CHIPS.find(c => c[0] === chip) || CHIPS[0])[2]; const needle = q.trim().toLowerCase();
   const shown = base.filter(test).filter((l: any) => !needle || [l.name, l.address, l.country, companyName(ownerOf(l))].join(" ").toLowerCase().includes(needle)).sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
   const count = (key: string) => base.filter((CHIPS.find(c => c[0] === key) || CHIPS[0])[2]).length;

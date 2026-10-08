@@ -196,6 +196,17 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.7 — selling ahead, the lot picker, leftovers retired (v7.7.0–7.7.2)
+
+- **A lot not yet received** offers its expected kilos (as class I, less what other sales already
+  reserved) in the sales-order picker, so selling ahead works from the screen.
+- **The lot picker:** "Choose the lot for line N", with how many lots have kilos available; lots
+  you can sell come first (in stock, expected, direct) with the available kilos large and green;
+  shipped, delivered or sold-out lots fold into "Show not available (N)"; the text is readable.
+- **Retired on the shared data:** the load-plans and logistics-points stores, the demo-places
+  fallback, the "Hidden" locations chip, the per-browser role, and seven pre-v7 one-time repairs
+  that still ran silently at every start.
+
 ### Version 7.6 — the Locations tab (v7.6.0–7.6.2)
 
 - **Counterparties → Locations** (formerly Places) works like Companies and People: a search

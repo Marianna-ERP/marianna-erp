@@ -957,16 +957,7 @@ export default function Settings({ roles = [], setRoles = null,
             Your role controls who can see Sales Order profitability (P/L). Assistant and Operations don't see P/L at all; Sales sees P/L only for orders they created; Financial Director and General Manager see all P/L. (No login yet — this is a simple switch for testing.)
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Role</label>
-              <select
-                value={userRole || "General Manager"}
-                onChange={e => setUserRole && setUserRole(e.target.value)}
-                style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}
-              >
-                {["Assistant", "Operations", "Sales", "Financial Director", "General Manager"].map(r => <option key={r}>{r}</option>)}
-              </select>
-            </div>
+            {/* v7.7.1 (A-RET-1): the per-browser role is retired — what a person may do comes from their role in Users */}
             {isSharedMode() ? (
               <div>{/* v7.1.0 (A-USR-1): on the shared data the sign-in decides — nothing to type */}
                 <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>You are signed in as</label>

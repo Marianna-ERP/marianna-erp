@@ -1100,8 +1100,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(all.some(l => String(l.name).includes("Al Baraka")), "client site derived from the counterparty");
     ok(!all.some(l => String(l.name).startsWith("WH-0")), "no demo warehouse");
   });
-  t("locationById resolves a demo seed still referenced by old data (read-forward)", () => {
-    const seed = loc.DEMO_SEEDS[0];
+  t("locationById resolves a demo seed still referenced by old data (read-forward) — since v7.7.1 once it became an ordinary location (v7.3.4)", () => {
+    const seed = loc.DEMO_SEEDS[0]; loc.ensureUsedBuiltinsAreOrdinary(new Set([String(seed.id)]));
     ok(loc.locationById(seed.id, []) !== null);
   });
   console.log("v6.86.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -3439,11 +3439,33 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ v7.6.x. locations tab ══");
   t("A-PT-5 / A-LOC-1: Locations tab with chips, search, actions and a window; a company's locations on its card; a location carries its owner", () => {
     const c = require("fs").readFileSync(require("path").join(__dirname, "../src/Contacts.tsx"), "utf8");
-    ok(/label: "Locations", icon: "📍"/.test(c), "renamed"); ok(/\["company", "Companies' places"/.test(c) && /\["hidden", "Hidden"/.test(c), "chips instead of tick boxes"); ok(/placeholder="Search locations, address, country, company…"/.test(c)); ok(/\+ New location<\/button>/.test(c) && /Belongs to company \(optional\)/.test(c), "+ New location in a window, with the owner company");
+    ok(/label: "Locations", icon: "📍"/.test(c), "renamed"); ok(/\["company", "Companies' places"/.test(c), "chips instead of tick boxes (the Hidden chip retired in v7.7.1)"); ok(/placeholder="Search locations, address, country, company…"/.test(c)); ok(/\+ New location<\/button>/.test(c) && /Belongs to company \(optional\)/.test(c), "+ New location in a window, with the owner company");
     ok(/>LOCATIONS<\/div>/.test(c) && /\+ add location<\/button>/.test(c), "the company card lists its locations and adds one"); ok(/open company →/.test(c), "a company's address opens its company");
     const l = require("fs").readFileSync(require("path").join(__dirname, "../src/locations.ts"), "utf8"); ok(/ownerId: input\.ownerId/.test(l), "a new location keeps its owner");
   });
   console.log("v7.6.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.7.0–7.7.2 — expected lots sell ahead; leftovers retired; the lot picker ══
+(function v77(){
+  console.log("\n══ v7.7.x. ══");
+  const Q = B("seasonOps.domain.js"); const ST = B("useLocalStoredState.js"); const Lm = B("locations.js");
+  t("A-ONE-2: an expected lot offers its expected kilos as class I; a received lot keeps the receipt's split", () => {
+    const fx = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!fx) return; const d = require(fx);
+    eq(Q.gradeAvailability(d.lots.find(l => l.number === "LOT-2026-0004"), []).I, 550, "was 0");
+    eq(Q.gradeStockNow({ receivedKg: 0, expectedKg: 300, movements: [] }).I, 300); eq(Q.gradeStockNow({ receivedKg: 280, expectedKg: 300, movements: [{ type: "IN", qtyKg: 280 }] }).I, 280, "received: the receipt decides");
+  });
+  t("A-RET-1: the retired stores are no longer shared; the demo fallback is gone; the pre-v7 repairs do not run on the shared data", () => {
+    ok(!ST.DATA_KEYS.includes("loadPlans") && !ST.DATA_KEYS.includes("logisticsPoints"));
+    eq(Lm.locationById(3, []), null, "a demo id resolves only once it became an ordinary location");
+    const app = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
+    eq((app.match(/healDone\(MARK\) \|\| isSharedMode\(\)\) return;/g) || []).length, 3); eq((app.match(/if \(isSharedMode\(\)\) return;   \/\* v7\.7\.1 \(A-RET-1\)/g) || []).length, 4); ok(!/useLocalStoredState\("userRole"/.test(app)); ok(!/same version\./.test(app));
+  });
+  t("A-SO-PK-1: the picker's header, order and fold", () => {
+    const f = require("fs").readFileSync(require("path").join(__dirname, "../src/SalesOrderForm.tsx"), "utf8");
+    ok(/Choose the lot for line/.test(f) && !/setTab\("STOCK"\)/.test(f), "no leftover stock button"); ok(/\[\.\.\.availLots, \.\.\.\(showNA \? naLots : \[\]\)\]/.test(f)); ok(/not available \(\{naLots\.length\}\)/.test(f));
+  });
+  console.log("v7.7.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict

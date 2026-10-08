@@ -186,8 +186,7 @@ export const DATA_KEYS = [
   "roles",   // v7.5.0 (A-ROLE-1): the business's roles and their rights — shared
   "heals",   // v6.99.145 (AUD-46): which one-time heals this DATASET has had — travels with the data, so an older file imported here is healed again
   "contacts", "pos", "lots", "orders", "shipments", "operationalCosts",
-  "customLocations", "warehouseInvoices", "settledRefs", "creditNotes", "logisticsPoints",
-  // v6.18.1: the Invoicing module's stores were missing — without these, invoices
+  "customLocations", "warehouseInvoices", "settledRefs", "creditNotes", // v6.18.1: the Invoicing module's stores were missing — without these, invoices
   // and credit/debit notes were dropped from shared JSON files, auto-backups and
   // reset. They are real data and must travel with everything else.
   "invoices", "financeNotes",
@@ -198,7 +197,6 @@ export const DATA_KEYS = [
   // v6.48.0: claims are their own document now (were nested in lot.claims[]).
   "claims",
   // v6.56.0: load plans — real data, must travel with export/import and backup.
-  "loadPlans",
   // v6.69.0: advance payments (v6.68.0 F-1) and the bank accounts registry
   // (v6.68.0 F-4) were declared in App but NEVER REGISTERED HERE — so every
   // export, auto-backup and import silently dropped them, exactly as happened
@@ -402,7 +400,7 @@ export function importAllData(jsonString: string, opts: { autoBackup?: boolean }
 // ── v6.99.51 (A-FS-1, owner 23 Sept): START A FRESH SEASON — the master data stays, everything transactional goes TOGETHER ──
 // The only wipe was "clear ALL data" (contacts included), so the season was reset by deleting documents one by one,
 // which left lots, invoices and claims pointing at documents that no longer existed. One action, one moment, nothing dependent survives.
-export const MASTER_KEYS = ["contacts", "customLocations", "logisticsPoints", "productCatalog", "packagingTypes", "users", "fxSettings", "company", "numbering", "bankAccounts", "defectCatalogue", "defectTolerances", "budgets", "archivedSeasons", "seasonSettings"];
+export const MASTER_KEYS = ["contacts", "customLocations", "productCatalog", "packagingTypes", "users", "fxSettings", "company", "numbering", "bankAccounts", "defectCatalogue", "defectTolerances", "budgets", "archivedSeasons", "seasonSettings"];
 export const TRANSACTIONAL_KEYS = DATA_KEYS.filter(k => !MASTER_KEYS.includes(k));
 export function transactionalCounts(): Array<{ key: string; count: number }> {
   if (typeof window === "undefined" || !window.localStorage) return [];
