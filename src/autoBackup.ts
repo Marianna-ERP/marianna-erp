@@ -12,7 +12,7 @@ import { ENV_LABEL } from "./remoteStore";
 // not in DATA_KEYS, never exported, never imported.
 
 import { useEffect, useState } from "react";
-import { exportAllData, DATA_KEYS, dataKey, STORAGE_VERSION } from "./useLocalStoredState";
+import { exportAllData, DATA_KEYS, dataKey, STORAGE_VERSION, listBackups, deleteBackup, snapshotsEnabled } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { tick, afterWrite, afterFailure, autoFileName, planRetention, fingerprint, localDay, EMPTY_CLOCK, BackupClock, TICK_MS, setBackupCopyLabel } from "./autoBackup.domain";
 
@@ -136,6 +136,8 @@ async function writeFile(fp: string): Promise<boolean> {
     clock = afterWrite(clock, fp, now.getTime());
     patchPrefs({ writtenFp: fp, wroteAt: now.getTime(), lastWrittenAt: now.toISOString(), lastFileName: name, filesKept: kept });
     setStatus({ mode: "active", busy: false, lastError: "", lastWrittenAt: now.toISOString(), lastFileName: name, filesKept: kept });
+    // v7.3.1 (A-SET-6, owner 7 Oct): a copy now exists outside the browser — on the shared data the old local snapshots go by themselves
+    try { if (!snapshotsEnabled()) listBackups().forEach((b: any) => deleteBackup(b.id)); } catch { /* the clean-up never fails a backup */ }
     return true;
   } catch (err: any) {
     clock = afterFailure(clock, now.getTime());

@@ -58,6 +58,12 @@ function notifyHealth() { storageHealth.listeners.forEach(fn => { try { fn(); } 
 
 export function readStoreValue(name: string): any { return readFromStorage(name, []); }
 export function writeStoreValue(name: string, value: any): void { writeToStorage(name, value); }
+/** v7.3.3 (A-SYNC-1): a shared store written OUTSIDE a React hook (places, the report register…) must reach the shared data too —
+ *  before, these writes stayed in the one browser and the next reload pulled the older shared copy over them. */
+export function writeSharedStoreValue(name: string, value: any): void {
+  writeToStorage(name, value);
+  if (onStoreWritten) { try { onStoreWritten(name, JSON.stringify(value)); } catch { /* best effort */ } }
+}
 function markWriteFailing(name: string, err: any): void {
   console.warn(`[localStorage] Could not write "${name}":`, err);
   storageHealth.failing = true;
@@ -177,6 +183,7 @@ export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T
 // colleague's name/role. v6.17: creditNotes + logisticsPoints were missing, so
 // shared files silently dropped them — now included.
 export const DATA_KEYS = [
+  "roles",   // v7.5.0 (A-ROLE-1): the business's roles and their rights — shared
   "heals",   // v6.99.145 (AUD-46): which one-time heals this DATASET has had — travels with the data, so an older file imported here is healed again
   "contacts", "pos", "lots", "orders", "shipments", "operationalCosts",
   "customLocations", "warehouseInvoices", "settledRefs", "creditNotes", "logisticsPoints",
@@ -284,6 +291,7 @@ function writeBackupIndex(list: BackupMeta[]): void {
 // download keep the copies, and the browser's room is kept for the data. App switches this off when the shared data is on.
 let snapshotsOn = true;
 export function setLocalSnapshots(on: boolean) { snapshotsOn = !!on; }
+export function snapshotsEnabled(): boolean { return snapshotsOn; }
 export function createBackup(label: string): BackupMeta | null {
   if (!snapshotsOn) return null;
   if (typeof window === "undefined" || !window.localStorage) return null;

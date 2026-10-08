@@ -4,9 +4,10 @@ import { PAGE_MAX } from "./ui";
 import React, { useRef, useState, useEffect } from "react";
 import { importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue, DATA_KEYS } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
+import RecoveryPanel from "./RecoveryPanel";   // v7.4.2 (A-REC-1)
 import { useUnsavedGuard } from "./unsaved";   // v7.2.0
 import { isSharedMode, isTestCopy, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, ENV_LABEL } from "./remoteStore";   // v7.0.0 (A-SH-1)
-import { userBySignIn, usersDiff, usersSaveProblems } from "./permissions.domain";   // v7.1.0 (A-USR-1) · v7.2.0 (A-SET-1)
+import { userBySignIn, usersDiff, usersSaveProblems, rolesOrDefault, materializeUser, rightsSummary } from "./permissions.domain";   // v7.1.0 (A-USR-1) · v7.2.0 (A-SET-1)
 import { AutoBackupCard } from "./BackupPanel";   // v6.99.70 (A-BK-1)
 import { downloadAllData, flushFolderBackup } from "./autoBackup";
 import { fetchDepartments } from "./fakturownia";
@@ -14,7 +15,7 @@ import { mapDepartments } from "./fakturowniaDepartments.domain";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
 import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
 import { referencesToLocation } from "./referenceGuards";
-import { blankUser, warehouseUser, MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
+import { MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
 import { CN_CODES } from "./cnCodes";
 import { nextId as mintId } from "./ids";
 import { renameCatalogItem } from "./productCatalog";
@@ -487,7 +488,44 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
 // Each user sees only the modules ticked; Finance P/L, client analysis and
 // budgets default to the OWNER only. Convenience gate on localStorage; becomes
 // row-level security on Supabase with exactly this shape.
-function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null }: any) {
+
+// ─── v7.5.0 (A-ROLE-1, owner 6–7 Oct): THE ROLES — rights ticked once per role; users choose a role ────────────────
+const MOD_LABEL_R: Record<string, string> = { dashboard: "Dashboard", pos: "POs", lots: "Inventory", orders: "SOs", shipments: "Shipments", loadplans: "Load plans", invoices: "Invoices", claims: "Claims", finance: "Finance", contacts: "Parties", audit: "Audit", settings: "Settings" };
+function RolesPanel({ roles: savedRoles = [], setRoles: saveRoles = null, users = [], setUsers = null }: any) {
+  const base = rolesOrDefault(savedRoles);
+  const { draft, setDraft, bar } = useSectionDraft(base, (next: any) => {
+    if (typeof saveRoles !== "function") return; saveRoles(next);
+    if (typeof setUsers === "function") setUsers((users || []).map((u: any) => materializeUser(u, next)));   // users follow their role at once
+  }, "roles", "Roles");
+  const list: any[] = Array.isArray(draft) ? draft : base;
+  const setRole = (id: string, patch: any) => setDraft(list.map((r: any) => r.id === id ? { ...r, ...patch } : r));
+  if (typeof saveRoles !== "function") return null;
+  return (
+    <div style={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🧩 Roles</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Tick once what each role may open; every user chooses a role below. The General Manager sees everything and manages users, roles and backups.{!(savedRoles || []).length && <b style={{ color: "#B45309" }}> These are the proposed roles — press Save to adopt them.</b>}</div>
+      {list.map((r: any) => (
+        <div key={r.id} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 4 }}>
+            <input value={r.name} onChange={e => setRole(r.id, { name: e.target.value })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12.5, fontWeight: 800, width: 180 }} />
+            {r.isGM && <span style={{ fontSize: 11, color: "#15803D", fontWeight: 700 }}>sees everything</span>}
+          </div>
+          {!r.isGM && <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11.5 }}>
+            {MODULE_KEYS.filter(k => k !== "loadplans").map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={!!r.modules?.[k]} onChange={e => setRole(r.id, { modules: { ...r.modules, [k]: e.target.checked } })} />{MOD_LABEL_R[k] || k}</label>)}
+          </div>}
+          {!r.isGM && r.modules?.finance && <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11, color: "#475569", marginTop: 4, paddingLeft: 12 }}>Finance →
+            {FINANCE_KEYS.map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={!!r.finance?.[k]} onChange={e => setRole(r.id, { finance: { ...r.finance, [k]: e.target.checked } })} />{k}</label>)}
+          </div>}
+        </div>
+      ))}
+      <button onClick={() => { const name = window.prompt("Name of the new role:"); if (name && name.trim()) setDraft([...list, { id: `role-${Date.now().toString(36)}`, name: name.trim(), modules: { dashboard: true }, finance: {} }]); }} style={{ marginTop: 6, padding: "5px 12px", borderRadius: 7, border: "1px dashed #94A3B8", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add role</button>
+      {bar}
+    </div>
+  );
+}
+
+function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles: savedRolesU = [] }: any) {
+  const roleList = rolesOrDefault(savedRolesU); const [editing, setEditing] = useState<Record<string, boolean>>({});   // v7.5.1 (A-USR-8)
   // v7.2.0 (A-SET-1, owner 6 Oct): the list is edited as a DRAFT — nothing is written until "Save users", which shows what changes and
   // refuses a list that would lock anyone out. Before, every tick and letter went to the shared data at once.
   const [users, setUsers] = useState<any[]>(savedUsers || []);
@@ -495,7 +533,7 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null }: any)
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   useEffect(() => { if (!dirtyRef.current) setUsers(savedUsers || []); }, [savedJson]);   // eslint-disable-line react-hooks/exhaustive-deps
   useUnsavedGuard({ id: "settings-users", label: "Settings → Users & permissions", draft: users, resetKey: savedJson, save: () => saveDraft() });
-  const [name, setName] = useState("");
+  // (v7.5.1: removed with the old per-user tick grid)
   const shared = isSharedMode(); const signInEmail = shared ? (readSession()?.email || "") : "";
   const problems = dirty ? usersSaveProblems(users, { shared, signInEmail }) : [];
   function saveDraft(): boolean {
@@ -505,40 +543,34 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null }: any)
     saveUsers(users); recordAudit({ module: "Settings", docType: "Users", docNumber: "users", action: "updated", summary: d.join(" · ").slice(0, 900) }); return true;
   }
   if (typeof saveUsers !== "function") return null;
-  const MOD_LABEL: Record<string, string> = { dashboard: "Dashboard", pos: "Purchase Orders", lots: "Inventory", orders: "Sales Orders", shipments: "Shipments", loadplans: "Load plans", invoices: "Invoices", claims: "Claims", finance: "Finance", contacts: "Counterparties", audit: "Audit trail", settings: "Settings" };
-  const FIN_LABEL: Record<string, string> = { ledger: "Receivables & Payables", bank: "Bank import", costs: "Operational costs", warehouse: "Warehouse charges", pl: "Sales P/L (owner)", clients: "Client analysis (owner)", budget: "Budgets (owner)" };
+  // (v7.5.1: removed with the old per-user tick grid)
+  // (v7.5.1: removed with the old per-user tick grid)
   const gaps = usersGaps(users);
-  const toggle = (u: any, group: "modules" | "finance", k: string) => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, [group]: { ...(x[group] || {}), [k]: !(x[group] || {})[k] } } : x));
+  // (v7.5.1: removed with the old per-user tick grid)
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>👥 Users & permissions</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Tick what each user may open. With no users defined everyone sees everything; the first user should be the owner. The user is recognised by the name entered in Settings → "Your name".</div>
       {gaps.map((g, i) => <div key={i} style={{ fontSize: 11.5, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", marginBottom: 6 }}>{g}</div>)}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="User's name (exactly as they enter it)" style={{ flex: 1, border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13 }} />
-        <button onClick={() => { if (!name.trim()) return; setUsers((prev: any[]) => [...(prev || []), blankUser(mintId(), name, !(prev || []).length)]); setName(""); }} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add user</button>
-        <button onClick={() => { if (!name.trim()) return; setUsers((prev: any[]) => [...(prev || []), warehouseUser(mintId(), name)]); setName(""); }} title="v6.89.0: the rented warehouse's user — Inventory only" style={{ padding: "7px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#444", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Warehouse user</button>
-      </div>
-      {(users || []).map((u: any) => (
-        <div key={String(u.id)} style={{ borderTop: "1px solid #F1F5F9", padding: "10px 0" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-            <div style={{ fontSize: 13, fontWeight: 800 }}>{u.name}</div>
-            <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!u.isOwner} onChange={() => { if (!u.isOwner && isSharedMode() && !String(u.email || "").trim()) { window.alert(`"${u.name}" cannot be made owner without a sign-in e-mail — fill in the sign-in e-mail first (v7.1.15).`); return; } setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, isOwner: !x.isOwner } : x)); }} /> owner (sees everything)</label>
-            <input value={u.role || ""} onChange={e => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, role: e.target.value } : x))} placeholder="role label" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "3px 8px", fontSize: 11.5, width: 150 }} />
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "#475569" }}><span style={{ fontWeight: 700 }}>sign-in e-mail</span><input value={u.email || ""} onChange={e => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? { ...x, email: e.target.value.trim() } : x))} placeholder="the e-mail this person signs in with" title="on the shared data the person who signs in with this e-mail IS this user (v7.1.0)" style={{ border: `1px solid ${String(u.email || "").trim() ? "#E5E7EB" : "#FCD34D"}`, borderRadius: 6, padding: "4px 8px", fontSize: 12, width: 250, background: String(u.email || "").trim() ? "#fff" : "#FFFBEB" }} />{!String(u.email || "").trim() && <span style={{ color: "#92400E", fontWeight: 700 }}>not linked</span>}</label>{/* v7.1.13 */}
-            <button onClick={() => setUsers((prev: any[]) => (prev || []).filter((x: any) => x.id !== u.id))} style={{ marginLeft: "auto", border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer" }}>Remove</button>
+      {/* v7.5.1 (A-USR-8, owner 6 Oct): each user is a row — name · role (from the Roles above) · sign-in e-mail — read-only once saved, Edit unlocks it */}
+      <button onClick={() => { const id = mintId(); setUsers((prev: any[]) => [...(prev || []), { id, name: "", roleId: "", email: "", isOwner: false, modules: { dashboard: true }, finance: {} }]); setEditing(e => ({ ...e, [String(id)]: true })); }} style={{ marginBottom: 10, padding: "6px 14px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>+ Add user</button>
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 1.6fr 1.4fr 150px", gap: 8, padding: "6px 0", fontSize: 10.5, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>NAME</div><div>ROLE</div><div>SIGN-IN E-MAIL</div><div>RIGHTS</div><div /></div>
+      {(users || []).map((u: any) => { const ed = !!editing[String(u.id)]; const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+        const upd = (patch: any) => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? materializeUser({ ...x, ...patch }, roleList) : x));
+        return (
+        <div key={String(u.id)} style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 1.6fr 1.4fr 150px", gap: 8, padding: "8px 0", borderTop: "1px solid #F1F5F9", alignItems: "center", fontSize: 12.5, background: ed ? "#FFFBEB" : "transparent" }}>
+          {ed ? <input value={u.name || ""} placeholder="full name" onChange={e => upd({ name: e.target.value })} style={inp} /> : <div style={{ fontWeight: 800 }}>{u.name || "—"}{u.isOwner ? <span style={{ color: "#15803D", fontWeight: 700 }}> · GM</span> : null}</div>}
+          {ed ? <select value={u.roleId || ""} onChange={e => upd({ roleId: e.target.value })} style={inp}><option value="">choose a role…</option>{roleList.map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}</select> : <div style={{ color: u.roleId ? "#111" : "#B45309" }}>{(roleList.find((r: any) => String(r.id) === String(u.roleId)) || {} as any).name || (u.role ? `${u.role} (choose a role)` : "no role")}</div>}
+          {ed ? <input value={u.email || ""} placeholder="the e-mail they sign in with" onChange={e => upd({ email: e.target.value.trim() })} style={inp} /> : <div style={{ color: u.email ? "#334155" : "#B45309" }}>{u.email || "not linked"}</div>}
+          <div style={{ fontSize: 11.5, color: "#475569" }}>{rightsSummary(u, roleList)}
+            {ed && u.roleId && <details style={{ marginTop: 4 }}><summary style={{ cursor: "pointer", color: "#64748B" }}>extra modules for this person</summary>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>{MODULE_KEYS.filter(k => k !== "loadplans" && !((roleList.find((r: any) => String(r.id) === String(u.roleId)) || {} as any).modules || {})[k]).map(k => <label key={k} style={{ display: "flex", gap: 3, alignItems: "center" }}><input type="checkbox" checked={(u.extraModules || []).includes(k)} onChange={e => upd({ extraModules: e.target.checked ? [...(u.extraModules || []), k] : (u.extraModules || []).filter((x: string) => x !== k) })} />{k}</label>)}</div></details>}
           </div>
-          {!u.isOwner && (<>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 11.5 }}>
-              {MODULE_KEYS.map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={u.modules?.[k] !== false} onChange={() => toggle(u, "modules", k)} />{MOD_LABEL[k]}</label>)}
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 11.5, marginTop: 6, color: "#334155" }}>
-              <span style={{ fontWeight: 700, color: "#94A3B8" }}>Finance:</span>
-              {FINANCE_KEYS.map(k => <label key={k} title={u.modules?.finance === false ? "applies only when Finance is ticked" : ""} style={{ display: "flex", gap: 4, alignItems: "center", opacity: u.modules?.finance === false ? 0.4 : 1 }}><input type="checkbox" disabled={u.modules?.finance === false} checked={u.finance?.[k] === true} onChange={() => toggle(u, "finance", k)} />{FIN_LABEL[k]}</label>)}
-            </div>
-          </>)}
-        </div>
-      ))}
+          <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+            <button onClick={() => setEditing(e => ({ ...e, [String(u.id)]: !ed }))} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{ed ? "Done" : "Edit"}</button>
+            <button onClick={() => { if (window.confirm(`Remove ${u.name || "this user"} from the list? (Nothing changes until Save users.)`)) setUsers((prev: any[]) => (prev || []).filter((x: any) => x.id !== u.id)); }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 12, cursor: "pointer" }}>Remove</button>
+          </div>
+        </div>); })}
       {/* v7.2.0 (A-SET-1): nothing is written until Save; the bar says what is pending and why a save is refused */}
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #F1F5F9", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <button disabled={!dirty} onClick={() => saveDraft()} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: dirty ? (problems.length ? "#B45309" : "#16A34A") : "#E5E7EB", color: dirty ? "#fff" : "#94A3B8", fontSize: 12.5, fontWeight: 800, cursor: dirty ? "pointer" : "default" }}>Save users</button>
@@ -637,7 +669,7 @@ async function pushStoresToShared(keys: string[], what: string): Promise<string>
   const n = await replaceSharedStores(stores, readSession()?.email || "");
   return `${n} store(s) replaced in the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}; the shared copy as it was is in your downloads`;
 }
-export default function Settings({
+export default function Settings({ roles = [], setRoles = null,
   reloadFromStorage,
   refStores = {},
   repairInventory = () => null,
@@ -662,6 +694,7 @@ export default function Settings({
   archivedSeasons = [],
   setArchivedSeasons = null,
 }: {
+  roles?: any[]; setRoles?: any;   // v7.5.0
   reloadFromStorage: () => void;
   refStores?: any;
   repairInventory?: () => any;
@@ -746,6 +779,7 @@ export default function Settings({
 
   const [backups, setBackups] = useState<BackupMeta[]>(() => listBackups());
   const refreshBackups = () => setBackups(listBackups());
+  const [showRecovery, setShowRecovery] = useState(false);   // v7.4.2 (A-REC-1)
 
   function handleExport() {
     try {
@@ -916,6 +950,7 @@ export default function Settings({
           </div>
         )}
 
+        {!isSharedMode() && (   /* v7.5.2 (A-ROLE-1): on the shared data who you are = your sign-in, what you may do = your role — no per-browser user & role */
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>CURRENT USER &amp; ROLE</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
@@ -950,13 +985,15 @@ export default function Settings({
             )}
           </div>
         </Card>
+        )}
 
         {/* v6.99.14 (owner): CONFIGURATION lives on the main page — nothing hidden inside another editor */}
         <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", margin: "18px 0 10px" }}>CONFIGURATION</div>
         <CompanyPanel company={company} setCompany={setCompany} />
         <FxSettingsPanel fxSettings={fxSettings} setFxSettings={setFxSettings} />
         <NumberingPanel numbering={numbering} setNumbering={setNumbering} />
-        <UsersPanel users={users} setUsers={setUsers} />
+        <RolesPanel roles={roles} setRoles={setRoles} users={users} setUsers={setUsers} />{/* v7.5.0 (A-ROLE-1) */}
+        <UsersPanel users={users} setUsers={setUsers} roles={roles} />
 
         {/* v6.38.0 (R1-C): reference data opens in dedicated editor windows */}
         <ManageCard
@@ -1096,7 +1133,14 @@ export default function Settings({
             <SectionTitle>RESTORE A BACKUP INTO THE SHARED DATA</SectionTitle>
             <div style={{ fontSize: 13, color: "#64748B", lineHeight: 1.55 }}>Only the owner can restore a backup — it replaces the shared data for everyone.</div>
           </Card>
-        ) : isSharedMode() ? (
+        ) : isSharedMode() ? (<>
+          {/* v7.4.2 (A-REC-1): record-by-record recovery first — the full replace stays below for a real disaster */}
+          <Card style={{ marginBottom: 16, borderLeft: "3px solid #16A34A" }}>
+            <SectionTitle>RECOVER FROM A BACKUP</SectionTitle>
+            <div style={{ fontSize: 13, color: "#444", marginBottom: 12, lineHeight: 1.55 }}>Bring back lost or damaged records from a backup file or a Supabase snapshot — you see what is missing or different, tick what to bring back, and each record returns with what it needs (its company, its place, its PO…). <strong>Nothing that exists now is removed.</strong></div>
+            <Button variant="primary" onClick={() => setShowRecovery(true)}>Recover from a backup…</Button>
+            {showRecovery && <RecoveryPanel onClose={() => setShowRecovery(false)} />}
+          </Card>
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>RESTORE A BACKUP INTO THE SHARED DATA</SectionTitle>
             <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
@@ -1105,6 +1149,7 @@ export default function Settings({
             <input ref={fileInputRef} type="file" accept=".json,application/json" onChange={handleFileSelected} style={{ display: "none" }} />
             <Button onClick={handleImportClick}>📤 Choose the backup file…</Button>
           </Card>
+        </>
         ) : (
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>IMPORT</SectionTitle>
@@ -1119,13 +1164,8 @@ export default function Settings({
         <AutoBackupCard />
 
         {/* v7.2.5 (A-SET-5, owner): on the shared data no local snapshots are taken — only the old ones can be deleted, after checking the folder backup */}
-        {isSharedMode() ? (
-          <Card style={{ marginBottom: 16 }}>
-            <SectionTitle>OLD LOCAL SNAPSHOTS</SectionTitle>
-            <div style={{ fontSize: 13, color: "#444", lineHeight: 1.55, marginBottom: 10 }}>On the shared data this browser no longer takes snapshots — the automatic backup folder and the restore's own download keep the copies. {(() => { const n = listBackups().length; return n ? `${n} old snapshot${n === 1 ? "" : "s"} still use this browser's room.` : "No old snapshot is left."; })()}</div>
-            {listBackups().length > 0 && <Button variant="danger" onClick={() => { const n = listBackups().length; if (!window.confirm(`Delete the ${n} old snapshot(s) from this browser?\n\nCheck first that the automatic backup folder shows a recent file. This touches only this browser — not the shared data.`)) return; listBackups().forEach((b: any) => deleteBackup(b.id)); setMessage({ kind: "success", text: `${n} old snapshot(s) deleted from this browser.` }); refreshBackups && refreshBackups(); }}>Delete the old snapshots</Button>}
-          </Card>
-        ) : (
+        {/* v7.3.1 (A-SET-6, owner 7 Oct): no snapshots card on the shared data — each browser deletes its old snapshots by itself after a folder backup */}
+        {isSharedMode() ? null : (
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>LOCAL BACKUPS</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>

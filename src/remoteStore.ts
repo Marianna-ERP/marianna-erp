@@ -172,3 +172,17 @@ export async function sharedCopyAsExport(appVersion: string, storageVersion: num
   const rows = await fetchRows(); const out: any = { _meta: { app: "marianna-erp", version: storageVersion, appVersion, exportedAt: new Date().toISOString(), source: "shared copy" + (ENV_LABEL ? ` (${ENV_LABEL})` : "") } };
   rows.forEach(r => { out[r.key] = r.data; }); return JSON.stringify(out);
 }
+
+// ─── v7.4.1 (A-REC-2, owner 6 Oct): THE TWICE-A-DAY SNAPSHOTS SUPABASE KEEPS (13:00 and 20:00 Warsaw, 30 days) ─────────
+/** The moments a snapshot exists for, newest first (empty when the snapshots table is not set up yet). */
+export async function listSnapshots(): Promise<string[]> {
+  try { const res = await rest("store_snapshots?select=taken_at&order=taken_at.desc&limit=2000"); if (!res.ok) return []; const rows: any[] = await res.json(); return Array.from(new Set(rows.map(r => String(r.taken_at)))); }
+  catch { return []; }
+}
+/** The whole shared data as it was at that moment, as stores. */
+export async function readSnapshot(takenAt: string): Promise<Record<string, any>> {
+  const res = await rest(`store_snapshots?select=key,data&taken_at=eq.${encodeURIComponent(takenAt)}`); if (!res.ok) throw new Error(`reading the snapshot failed (${res.status})`);
+  const rows: any[] = await res.json(); const out: Record<string, any> = {}; rows.forEach(r => { out[r.key] = r.data; }); return out;
+}
+/** Today's shared data as stores (for the comparison). */
+export async function readSharedNow(): Promise<Record<string, any>> { const rows = await fetchRows("key,data"); const out: Record<string, any> = {}; rows.forEach(r => { out[r.key] = r.data; }); return out; }

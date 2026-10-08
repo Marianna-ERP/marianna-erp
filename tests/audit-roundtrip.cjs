@@ -1096,7 +1096,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("unifiedLocations = ports + counterparty sites, deduped and sorted; a client's address is a CLIENT site", () => {
     const contacts = [{ id: 70, name: "Al Baraka", type: "Client", address: "Damietta Free Zone", country: "Egypt" }];
     const all = loc.unifiedLocations(contacts);
-    ok(all.some(l => l.legacyType === "PORT"), "ports present");
+    ok(!all.some(l => l.legacyType === "PORT"), "v7.3.4 (A-LOC-2): no built-in port is offered any more"); loc.ensureUsedBuiltinsAreOrdinary(new Set(["126"])); ok(loc.allLocations().some(l => String(l.id) === "126" && /Damietta/.test(l.name)), "a port a document uses becomes an ordinary location (same id)");
     ok(all.some(l => String(l.name).includes("Al Baraka")), "client site derived from the counterparty");
     ok(!all.some(l => String(l.name).startsWith("WH-0")), "no demo warehouse");
   });
@@ -3307,7 +3307,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const w = Pm.effectiveUserName(noEmails, "marina@marianna-biz.com", "marina@marianna-biz.com"); ok(w.startsWith("\u2205"), "an e-mail typed as a NAME links nothing: " + w); eq(Pm.canOpenModule(noEmails, w, "orders"), false);
     const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
     ok(!/signInNotLinkedYet/.test(src), "no bootstrap left"); ok((src.match(/\{signOut\}/g) || []).length >= 3, "Sign out on every shared-mode branch");
-    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/sign-in e-mail<\/span><input value=\{u\.email/.test(st), "the e-mail field is labelled");
+    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/SIGN-IN E-MAIL<\/div>/.test(st) && /placeholder="the e-mail they sign in with"/.test(st), "the e-mail is its own labelled column (v7.5.1)");
   });
   console.log("v7.1.13 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
@@ -3335,7 +3335,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("off the shared copy an e-mail-less owner counts; the Settings tick refuses an owner without e-mail on the shared copy", () => {
     const list = [{ id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} }]; eq(Pm.hasOwner(list), true, "single-browser mode: counts");
     const src = require("fs").readFileSync(require("path").join(__dirname, "../src/permissions.domain.ts"), "utf8"); ok(/x\.isOwner && \(!isSharedMode\(\) \|\| String\(\(x as any\)\.email \|\| ""\)\.trim\(\) !== ""\)/.test(src), "on the shared copy the owner needs an e-mail");
-    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/cannot be made owner without a sign-in e-mail/.test(st), "the tick refuses");
+    const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/isOwner: !!r\.isGM/.test(require("fs").readFileSync(require("path").join(__dirname, "../src/permissions.domain.ts"), "utf8")), "v7.5: the owner comes from the General Manager role; a GM without e-mail is refused at save (v7.2 checks)");
   });
   console.log("v7.1.15 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
@@ -3344,8 +3344,8 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v72(){
   console.log("\n══ v7.2.x. Settings: draft + Save, checks, restore owner-only, no local snapshots ══");
   const Pm = B("permissions.domain.js"); const ST = B("useLocalStoredState.js");
-  const owner = { id: 1, name: "Hazem Osman", isOwner: true, email: "hazem@marianna-biz.com", modules: {}, finance: {} };
-  const anna = { id: 2, name: "Marina", isOwner: false, email: "marina@marianna-biz.com", modules: { settings: false }, finance: {} };
+  const owner = { id: 1, name: "Hazem Osman", isOwner: true, roleId: "gm", email: "hazem@marianna-biz.com", modules: {}, finance: {} };
+  const anna = { id: 2, name: "Marina", isOwner: false, roleId: "ops", email: "marina@marianna-biz.com", modules: { settings: false }, finance: {} };
   t("A-SET-1: the checks refuse every list that locks someone out", () => {
     const ok0 = Pm.usersSaveProblems([owner, anna], { shared: true, signInEmail: "hazem@marianna-biz.com" }); eq(ok0.length, 0, ok0.join(" | "));
     ok(Pm.usersSaveProblems([anna], { shared: true, signInEmail: "hazem@marianna-biz.com" }).some(p => /No entry is marked owner/.test(p)));
@@ -3365,10 +3365,85 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8");
     ok(/Save users<\/button>/.test(st) && /useUnsavedGuard\(\{ id: "settings-users"/.test(st)); ok(/useSectionDraft\(savedCompany, saveCompany, "company"/.test(st) && /useSectionDraft\(savedNumbering, saveNumbering, "numbering"/.test(st));
     ok(!/DEFAULT BANK ACCOUNT PER CURRENCY/.test(st), "bank default gone"); ok(!/title="LOCATIONS — managed in the Directory/.test(st), "Locations card gone");
-    ok(/Only the owner can restore a backup/.test(st)); ok(/OLD LOCAL SNAPSHOTS/.test(st));
+    ok(/Only the owner can restore a backup/.test(st)); ok(/isSharedMode\(\) \? null : \(/.test(st), "v7.3.1 (A-SET-6): no snapshots card on the shared data");
     ST.setLocalSnapshots(false); eq(ST.createBackup("x"), null, "no snapshot on the shared data"); ST.setLocalSnapshots(true);
   });
   console.log("v7.2.5 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.3.0–7.3.5 — locations, sync of side stores, snapshots, the people button ══
+(function v73(){
+  console.log("\n══ v7.3.x. locations batch ══");
+  const Lm = B("locations.js"); const I = B("integrityCheck.js");
+  t("A-LOC-1: an unticked company's address still RESOLVES (prints, old documents) but is not OFFERED; ticked carriers become places", () => {
+    const cs = [{ id: 501, name: "Prod A", type: "Supplier", address: "Farm 1, 05-555 X", country: "Poland" }, { id: 502, name: "Client Office", type: "Client", isPlace: false, address: "Office 2", country: "Poland" }, { id: 503, name: "Carrier Yard", type: "Carrier", isPlace: true, address: "Yard 3", country: "Poland" }, { id: 504, name: "Forwarder", type: "Forwarder", address: "Office 4", country: "Poland" }];
+    Lm.registerCounterpartyLocations(cs); const all = Lm.allLocations(); const has = n => all.some(l => l.name === n);
+    ok(has("Prod A"), "a producer is offered"); ok(!has("Client Office"), "unticked → not offered"); ok(has("Carrier Yard"), "a ticked carrier is offered"); ok(!has("Forwarder"), "a forwarder by default is not");
+    const off = Lm.counterpartyLocations([cs[1]])[0]; ok(Lm.locationById(off.id, cs), "the unticked address still resolves for documents and prints");
+  });
+  t("A-LOC-2: no built-in place is offered; the ones documents use become ordinary locations, once (idempotent)", () => {
+    const used = new Set(["113", "999999999"]); const n1 = Lm.ensureUsedBuiltinsAreOrdinary(used); const n2 = Lm.ensureUsedBuiltinsAreOrdinary(used);
+    ok(n1 <= 1 && n2 === 0, `added ${n1} then ${n2}`); ok(Lm.allLocations().some(l => String(l.id) === "113" && /Koper/.test(l.name)));
+    eq(Lm.usedLocationIds({ pos: [{ destinationLocationId: 5 }], shipments: [{ legs: [{ fromId: 7, toId: 8 }] }] }).size, 3);
+  });
+  t("A-LOC-3: a PO whose named place is no location any more is listed with the text it read", () => {
+    const r = I.checkIntegrity({ contacts: [], pos: [{ number: "PO-T", status: "Confirmed", destinationLocationId: "178456227978300", destinationText: "Kozietuły 55, Mogielnica" }], lots: [], orders: [], shipments: [], invoices: [], financeNotes: [], warehouseInvoices: [], operationalCosts: [] });
+    const p = r.issues.find(x => x.code === "PLACE_UNKNOWN"); ok(p && /Kozietuły 55/.test(p.message), p && p.message);
+  });
+  t("A-SYNC-1 / A-SET-6 / A-PT-4 in the code", () => {
+    const rd = f => require("fs").readFileSync(require("path").join(__dirname, "../src/" + f), "utf8");
+    ok(/writeSharedStoreValue\("customLocations", list\)/.test(rd("locations.ts")), "places reach the shared data"); ok(/writeSharedStoreValue\("reportRegister"/.test(rd("reportNumbers.ts")), "report numbers reach the shared data");
+    ok(/if \(!snapshotsEnabled\(\)\) listBackups\(\)\.forEach/.test(rd("autoBackup.ts")), "old snapshots go after a folder backup"); ok(/setViewMode\("companies"\)/.test(rd("Contacts.tsx")), "the → opens the company on its tab");
+  });
+  console.log("v7.3.5 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.4.0–7.4.2 — recovery record by record ══
+(function v74(){
+  console.log("\n══ v7.4.x. recover from a backup ══");
+  const R = B("recovery.domain.js"); const fx = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!fx) return; const d = require(fx);
+  const po = d.pos.find(p => p.number === "PO-2026-0044"); const prodId = String(po.supplier.id);
+  const now = { ...d, pos: d.pos.filter(p => p.number !== "PO-2026-0044"), lots: d.lots.filter(l => l.poRef !== "PO-2026-0044"), contacts: d.contacts.filter(c => String(c.id) !== prodId) };
+  t("A-REC-1: the comparison names what is missing; recovering the PO brings its producer along, removes nothing, leaves the rest alone", () => {
+    const diffs = R.compareBackup(now, d); eq(diffs.find(x => x.key === "pos").missing.map(R.labelOf).join(), "PO-2026-0044"); eq(diffs.find(x => x.key === "lots").missing.length, 2);
+    const plan = R.planRecovery(now, d, [{ key: "pos", rec: po }]); eq(plan.take.map(t => t.key).sort().join(), "contacts,pos", "the PO + the producer it needs");
+    const next = R.applyRecovery(now, plan); eq(next.pos.length, d.pos.length); eq(next.contacts.length, d.contacts.length); ok(!next.lots, "lots untouched — they are listed to tick on their own");
+    const today = { ...d, pos: d.pos.map(p => p.number === "PO-2026-0043" ? { ...p, notes: "edited today" } : p) }; const df = R.compareBackup(today, d).find(x => x.key === "pos"); eq(df.differ.length, 1, "a record edited since is 'different', not missing");
+    const keep = R.applyRecovery(today, R.planRecovery(today, d, [])); eq(Object.keys(keep).length, 0, "nothing ticked → nothing changes");
+  });
+  console.log("v7.4.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.5.0–7.5.2 — roles and the users list ══
+(function v75(){
+  console.log("\n══ v7.5.x. roles ══");
+  const Pm = B("permissions.domain.js");
+  t("A-ROLE-1: six proposed roles; a user's rights come from the role (+ extras); the General Manager role makes the owner", () => {
+    eq(Pm.DEFAULT_ROLES.map(r => r.name).join(), "General Manager,Administration,Finance,Operations,Sales,Warehouse");
+    const u = Pm.materializeUser({ id: 2, name: "Marina", roleId: "ops", email: "m@x.pl", extraModules: ["invoices"] }, Pm.DEFAULT_ROLES);
+    eq(u.modules.pos, true); eq(u.modules.invoices, true, "extra"); eq(u.modules.finance, false); eq(u.isOwner, false); eq(Pm.rightsSummary(u, Pm.DEFAULT_ROLES), "Operations + invoices");
+    eq(Pm.canOpenModule([Pm.materializeUser({ id: 1, name: "H", roleId: "gm", email: "h@x.pl" }, Pm.DEFAULT_ROLES), u], "Marina", "settings"), false);
+    eq(Pm.materializeUser({ id: 1, name: "H", roleId: "gm" }, Pm.DEFAULT_ROLES).isOwner, true);
+    eq(Pm.materializeUser({ id: 9, name: "Old", modules: { pos: true } }, Pm.DEFAULT_ROLES).modules.pos, true, "a user without a role keeps the old ticks until one is chosen");
+  });
+  t("A-USR-8: on the shared data a user without a role or an e-mail is refused at save", () => {
+    const gm = Pm.materializeUser({ id: 1, name: "Hazem", roleId: "gm", email: "hazem@marianna-biz.com" }, Pm.DEFAULT_ROLES);
+    ok(Pm.usersSaveProblems([gm, { id: 2, name: "New", modules: {}, finance: {} }], { shared: true, signInEmail: "hazem@marianna-biz.com" }).some(p => /has no role/.test(p)));
+    eq(Pm.usersSaveProblems([gm], { shared: true, signInEmail: "hazem@marianna-biz.com" }).length, 0);
+  });
+  console.log("v7.5.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
+// ══ v7.6.0–7.6.2 — the Locations tab and a company's locations ══
+(function v76(){
+  console.log("\n══ v7.6.x. locations tab ══");
+  t("A-PT-5 / A-LOC-1: Locations tab with chips, search, actions and a window; a company's locations on its card; a location carries its owner", () => {
+    const c = require("fs").readFileSync(require("path").join(__dirname, "../src/Contacts.tsx"), "utf8");
+    ok(/label: "Locations", icon: "📍"/.test(c), "renamed"); ok(/\["company", "Companies' places"/.test(c) && /\["hidden", "Hidden"/.test(c), "chips instead of tick boxes"); ok(/placeholder="Search locations, address, country, company…"/.test(c)); ok(/\+ New location<\/button>/.test(c) && /Belongs to company \(optional\)/.test(c), "+ New location in a window, with the owner company");
+    ok(/>LOCATIONS<\/div>/.test(c) && /\+ add location<\/button>/.test(c), "the company card lists its locations and adds one"); ok(/open company →/.test(c), "a company's address opens its company");
+    const l = require("fs").readFileSync(require("path").join(__dirname, "../src/locations.ts"), "utf8"); ok(/ownerId: input\.ownerId/.test(l), "a new location keeps its owner");
+  });
+  console.log("v7.6.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict

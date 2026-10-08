@@ -11,7 +11,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { migrateReferencedSeeds, pruneOrphanMigratedSeeds, migratePlaceAddresses, stampSiteIds } from "./locations";
+import { migrateReferencedSeeds, pruneOrphanMigratedSeeds, migratePlaceAddresses, stampSiteIds, ensureUsedBuiltinsAreOrdinary, usedLocationIds } from "./locations";
 import { normaliseLot } from "./seasonOps.domain";
 import { normalisePO } from "./po.domain";
 import { normaliseSO } from "./so.domain";
@@ -221,6 +221,7 @@ export default function App() {
   const [bankAccounts, setBankAccounts] = useLocalStoredState("bankAccounts", []);
   // v6.79.0 (F-5/F-6, owner rulings): users & tick-box permissions; monthly budgets.
   const [users, setUsers] = useLocalStoredState("users", []);
+  const [roles, setRoles] = useLocalStoredState("roles", [] as any[]);   // v7.5.0 (A-ROLE-1)
   const [budgets, setBudgets] = useLocalStoredState("budgets", []);
   // v6.89.0 (consignment season): inspections (per lot), stock counts, defect catalogue (Settings).
   const [inspections, setInspections] = useLocalStoredState("inspections", []);
@@ -516,6 +517,9 @@ export default function App() {
   useEffect(() => { setBackupAllowed(() => !tabRef.current.readOnly && !tabRef.current.deciding); }, []);   // v7.1.8 (A-BK-5): a read-only tab never writes the backup folder
   const shared = useSharedStore(userName || "");   // v6.99.148: the shared store — login + pull when configured, otherwise nothing
   setLocalSnapshots(!isSharedMode());   // v7.2.5 (A-SET-5): no local snapshots on the shared data
+  // v7.3.4 (A-LOC-2): a built-in place still used by a document becomes an ordinary location (same id) — re-checked whenever the
+  // data changes (idempotent), so it also lands after the shared data has been pulled and reaches everyone
+  useEffect(() => { try { const n = ensureUsedBuiltinsAreOrdinary(usedLocationIds({ pos, orders, lots, shipments })); if (n) recordAudit({ module: "Parties", docType: "Locations", docNumber: "built-in", action: "updated", summary: `${n} built-in place(s) used by documents became ordinary locations (same ids)` }); } catch { /* never blocks the start */ } }, [shared.ready, (pos || []).length, (orders || []).length, (lots || []).length, (shipments || []).length]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v7.1.0 (A-USR-1, owner 6 Oct): on the shared copy the SIGNED-IN e-mail decides who you are — the typed "Your name" is ignored there
   const signInEmail = isSharedMode() ? (readSession()?.email || "") : "";
   const who = effectiveUserName(users, userName, signInEmail);
@@ -615,7 +619,7 @@ export default function App() {
       case "invoices":
         return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} setLots={setLots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
       case "settings":
-        return <Settings seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
+        return <Settings roles={roles} setRoles={setRoles} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
       default:
         return null;
     }

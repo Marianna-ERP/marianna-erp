@@ -4,10 +4,10 @@ import { recordAudit } from "./audit";
 import { currentUser } from "./permissions.domain";
 
 import DateInput from "./DateInput";
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Lbl, useConfirm, ActionButton, notifySaved } from "./ui";
 import { nextId } from "./ids";
-import { parseAddress, formatAddress, shortAddress } from "./address.domain";
+import { parseAddress, formatAddress } from "./address.domain";
 import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, readLocationOverrides, writeLocationOverride, LOCATIONS_ALL_BUILTIN, newSiteId } from "./locations";
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
@@ -277,6 +277,11 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               </div>
               {/* v6.99.40 (A-ADDR, owner): an address is four facts. They print as three lines on every document,
                   map 1:1 to Fakturownia's fields, and let a city be filtered. The old one-line text is kept until the DDL. */}
+              {/* v7.3.5 (A-LOC-1, owner 7 Oct): the legal address is the address on documents; ticked, it is also offered as a loading / delivery place */}
+              <label style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#334155", margin: "4px 0 8px" }}>
+                <input type="checkbox" checked={form.isPlace !== undefined ? !!form.isPlace : (() => { const t = [form.type, ...(form.additionalTypes || [])]; return t.includes("Supplier") || t.includes("Client") || t.includes("Warehouse"); })()} onChange={e => setForm((f: any) => ({ ...f, isPlace: e.target.checked }))} />
+                <span><b>Goods are loaded / delivered at this address</b> <span style={{ color: "#94A3B8" }}>— offered in the location pickers as this company's place (on for producers, suppliers, clients and warehouses unless you untick it)</span></span>
+              </label>
               <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: "2fr 0.8fr 1.2fr", gap: 8 }}>
                 <div><Lbl>Street and number</Lbl><Inp value={form.addr?.street ?? ""} onChange={e => setAddr("street", e.target.value)} placeholder="ul. Piękna 13" /></div>
                 <div><Lbl>Postcode</Lbl><Inp value={form.addr?.postcode ?? ""} onChange={e => setAddr("postcode", e.target.value)} placeholder="05-555" /></div>
@@ -464,7 +469,7 @@ function PersonEditor({ person, onSave, onCancel }: any) {
 }
 
 // ─── DETAIL PANEL — counterparty header + person list ───────────────────────
-function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany, onClose, onEmail, onSavePerson, onDeletePerson, onSetPrimary }: any) {
+function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany, onClose, onEmail, onSavePerson, onDeletePerson, onSetPrimary, onAddLocation = null }: any) {
   const { confirm: cdConfirm, dialogNode: cdNode } = useConfirm(); // P2-6
   const [editingPersonId, setEditingPersonId] = useState(null); // person.id | "new" | null
   const typeStyle = TYPE_COLORS[counterparty.type] || TYPE_COLORS["Other"];
@@ -560,6 +565,19 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
         )}
 
         {/* Contact persons */}
+          {/* v7.6.2 (A-LOC-1, owner 7 Oct): the company's places — its legal address (when ticked) and its other loading / delivery sites */}
+          <div style={{ margin: "0 20px 12px", padding: "10px 0 0", borderTop: "1px solid #F3F4F6" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>LOCATIONS</div>
+              {onAddLocation && <button onClick={() => onAddLocation(counterparty)} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>+ add location</button>}
+            </div>
+            {(() => { const own = readCustomLocations().filter((l: any) => String((l as any).ownerId) === String(counterparty.id)); const legal = counterparty.isPlace !== false && counterpartyLocations([counterparty]).length > 0;
+              return <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.6 }}>
+                {legal && <div>📍 <b>legal address</b> <span style={{ color: "#94A3B8" }}>— goods are loaded / delivered here</span></div>}
+                {own.map((l: any) => <div key={l.id}>📍 <b>{l.name}</b>{l.address ? <span style={{ color: "#64748B" }}> · {l.address}</span> : null}</div>)}
+                {!legal && !own.length && <div style={{ color: "#94A3B8" }}>no loading / delivery place — tick the legal address in Edit, or + add location</div>}
+              </div>; })()}
+          </div>
         <div style={{ margin: "0 20px 20px", paddingTop: 10, borderTop: "1px solid #F3F4F6" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>CONTACT PEOPLE ({counterparty.contacts.length})</div>
@@ -1398,15 +1416,18 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
 // ── v6.99.11 (owner, 13 Sept): PORTS TAB — ports · border crossings · customs points. Everything with an owner
 // (warehouses, port warehouses like Silvertech, supplier / client sites) lives on its COUNTERPARTY; these are the
 // places nobody invoices us for. Edited here, read everywhere through the one LocationPicker.
-function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [] }: any) {
+function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [], onOpenCompany = null, prefillOwner = null, onPrefillUsed = null }: any) {
+  // v7.6.1 (A-PT-5, owner 7 Oct): the LOCATIONS tab works like Companies and People — search, filter chips, one table with actions, "+ New location" in a window
+  const [q, setQ] = useState(""); const [chip, setChip] = useState("all"); const [winOpen, setWinOpen] = useState(false);
+  useEffect(() => { if (prefillOwner) { setEditId(null); setForm({ name: `${prefillOwner.name} — `, country: prefillOwner.country || "", type: "ClientFacility", street: "", postcode: "", city: "", unlocode: "", ownerId: prefillOwner.id }); setWinOpen(true); onPrefillUsed && onPrefillUsed(); } }, [prefillOwner]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [, force] = useState(0);
   const [form, setForm] = useState<any>({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "" });
   const [editId, setEditId] = useState<any>(null);
   const KINDS: Array<[string, string]> = [["Port", "Port"], ["PortWarehouse", "Port warehouse / terminal"], ["Airport", "Airport"], ["BorderCrossing", "Border crossing"], ["Customs", "Customs point"], ["Other", "Other place"]];   // v6.99.45 (PL-1, owner)
   // v6.99.29 (A-R19-5, owner): EVERY place is listed here with its source — a stray legacy place (WH-01) used to be
   // visible in the pickers and removable nowhere. Counterparty sites are shown read-only; they are edited on their party.
-  const [showAll, setShowAll] = useState(true);
-  const [showHidden, setShowHidden] = useState(false);   // v6.99.45 (PL-3)
+  // (v7.6.1: replaced by the chips and the search)
+  // (v7.6.1: replaced by the chips and the search)
   const overrides = readLocationOverrides();
   const hiddenIds = new Set(Object.keys(overrides).filter(k => (overrides as any)[k]?.hidden));
   const customIds = new Set(readCustomLocations().map((l: any) => String(l.id)));
@@ -1420,53 +1441,76 @@ function PortsView({ counterparties = [], pos = [], orders = [], lots = [], ship
     (shipments || []).forEach((sh: any) => (sh.legs || []).forEach((lg: any) => { if (String(lg.fromLocationId) === s || String(lg.toLocationId) === s) n++; (lg.vehicles || []).forEach((u: any) => { if (String(u.pickupLocationId) === s || String(u.deliveryLocationId) === s) n++; }); }));
     return n;
   };
-  const isPortKind = (l: any) => ["Port", "Airport", "BorderCrossing", "Customs"].includes(String(l.type)) || ["PORT", "CUSTOMS", "BORDER"].includes(String(l.legacyType));
-  const hiddenRows: any[] = showHidden ? (LOCATIONS_ALL_BUILTIN || []).filter((l: any) => hiddenIds.has(String(l.id))).map((l: any) => ({ ...l, __hidden: true })) : [];
-  const rows = [...unifiedLocations(counterparties || []).filter((l: any) => showAll || isPortKind(l)), ...hiddenRows].sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pl"));
+  // (v7.6.1: the chips decide the kinds)
+  // (v7.6.1: the Hidden chip replaces the old show-hidden tick)
+  // (v7.6.1: replaced by the chips and the search)
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const save = () => {
     if (!String(form.name).trim()) return;
     const addr = { street: form.street || "", postcode: form.postcode || "", city: form.city || "", country: form.country || "" };
     const oneLine = formatAddress(addr, { oneLine: true, withCountry: false });   // the legacy text mirrors the parts until the DDL
     if (editId != null && form.__builtin) { writeLocationOverride(Number(editId), { name: form.name, country: form.country, address: oneLine, unlocode: form.unlocode } as any); }   // v6.99.45 (PL-3): built-ins are edited through the override layer
-    else if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type });
-    else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: oneLine, addr });
+    else if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type, ownerId: form.ownerId ?? undefined });
+    else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: oneLine, addr, ownerId: form.ownerId ?? undefined });
+    setWinOpen(false);   // v7.6.1
     recordAudit({ module: "Counterparties", docType: "Place", docNumber: form.name, action: editId != null ? "status" : "created", summary: `${form.type} ${editId != null ? "updated" : "added"} in the Directory` });
     setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "" }); setEditId(null); force(x => x + 1);
     setTimeout(() => window.location.reload(), 150);   // the location registry is module-level; every picker re-reads on reload (as Settings did)
   };
+  const companyName = (id: any) => (counterparties || []).find((c: any) => String(c.id) === String(id))?.name || "";
+  const ownerOf = (l: any) => (l as any).ownerId != null ? (l as any).ownerId : (sourceOf(l) === "counterparty site" ? (counterparties || []).find((c: any) => counterpartyLocations([c]).some((x: any) => String(x.id) === String(l.id)))?.id : null);
+  const CHIPS: Array<[string, string, (l: any) => boolean]> = [
+    ["all", "All", () => true], ["ports", "Ports & airports", (l: any) => ["Port", "Airport", "PortWarehouse"].includes(String(l.type)) || String(l.legacyType) === "PORT"],
+    ["border", "Border crossings", (l: any) => String(l.type) === "BorderCrossing" || String(l.legacyType) === "BORDER"], ["customs", "Customs", (l: any) => String(l.type) === "Customs" || String(l.legacyType) === "CUSTOMS"],
+    ["company", "Companies' places", (l: any) => ownerOf(l) != null], ["hidden", "Hidden", (l: any) => !!(l as any).__hidden],
+  ];
+  const base = [...unifiedLocations(counterparties || []), ...(chip === "hidden" ? (LOCATIONS_ALL_BUILTIN || []).filter((l: any) => hiddenIds.has(String(l.id))).map((l: any) => ({ ...l, __hidden: true })) : [])];
+  const test = (CHIPS.find(c => c[0] === chip) || CHIPS[0])[2]; const needle = q.trim().toLowerCase();
+  const shown = base.filter(test).filter((l: any) => !needle || [l.name, l.address, l.country, companyName(ownerOf(l))].join(" ").toLowerCase().includes(needle)).sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
+  const count = (key: string) => base.filter((CHIPS.find(c => c[0] === key) || CHIPS[0])[2]).length;
+  const openEdit = (l: any) => { setEditId(l.id); const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address || ""); setForm({ name: l.name, country: l.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: (l as any).unlocode || "", ownerId: (l as any).ownerId ?? null, __builtin: sourceOf(l) === "built-in" }); setWinOpen(true); };
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <div style={{ fontSize: 13, fontWeight: 800 }}>📍 Places</div>
-        <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!showAll} onChange={e => setShowAll(!e.target.checked)} /> ports, crossings &amp; customs only</label>
-        <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={showHidden} onChange={e => setShowHidden(e.target.checked)} /> show hidden</label>
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        {CHIPS.map(([k, label]) => <button key={k} onClick={() => setChip(k)} style={{ padding: "6px 14px", borderRadius: 20, border: "1px solid", borderColor: chip === k ? "#111" : "#E5E7EB", background: chip === k ? "#111" : "#fff", color: chip === k ? "#fff" : "#374151", fontSize: 12.5, cursor: "pointer" }}>{label} <span style={{ opacity: 0.6, marginLeft: 4 }}>{count(k)}</span></button>)}
+        <button onClick={() => { setEditId(null); setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "", ownerId: null }); setWinOpen(true); }} style={{ marginLeft: "auto", padding: "8px 16px", borderRadius: 8, border: "none", background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ New location</button>
       </div>
-      <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Places nobody invoices us for. A warehouse near a port (Silvertech, Koper) is a COUNTERPARTY with the flag "charged through our forwarder" — add it under Companies. Everything here appears in every location picker, alphabetically.</div>
-      {/* v6.99.41 (ADDR-2, owner): a place has the same four-part address as a counterparty — one shape, one formatter on documents */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1.2fr 1.8fr 0.8fr 1.2fr auto", gap: 8, alignItems: "end", marginBottom: 12 }}>
-        <div><Lbl>Name</Lbl><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Koper Port" style={inp} /></div>
-        <div><Lbl>Kind</Lbl><select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inp}>{KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-        <div><Lbl>Country</Lbl><select value={form.country || ""} onChange={e => setForm({ ...form, country: e.target.value })} style={inp}><option value="">— country —</option>{readCountries().map((x: any) => <option key={x.iso} value={x.name}>{x.name}</option>)}{form.country && !readCountries().some((x: any) => x.name === form.country) && <option value={form.country}>{form.country}</option>}</select></div>
-        <div><Lbl>Street / terminal</Lbl><input value={form.street ?? ""} onChange={e => setForm({ ...form, street: e.target.value })} placeholder="Vojkovo nabrežje 38" style={inp} /></div>
-        <div><Lbl>Postcode</Lbl><input value={form.postcode ?? ""} onChange={e => setForm({ ...form, postcode: e.target.value })} placeholder="6501" style={inp} /></div>
-        <div><Lbl>City</Lbl><input value={form.city ?? ""} onChange={e => setForm({ ...form, city: e.target.value })} placeholder="Koper" style={inp} /></div>
-        <div style={{ display: form.type === "Port" ? undefined : "none" }}><Lbl>UN/LOCODE <span style={{ color: "#AAA", fontWeight: 400 }}>· optional, quoted on bookings</span></Lbl><input value={form.unlocode} onChange={e => setForm({ ...form, unlocode: e.target.value.toUpperCase() })} placeholder="SIKOP" style={inp} /></div>
-        <button onClick={save} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "+ Add"}</button>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search locations, address, country, company…" style={{ width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 12 }} />
+      <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 0.9fr 0.8fr 1.8fr 1.1fr 170px", gap: 8, padding: "10px 16px", background: "#F9FAFB", fontSize: 10.5, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>LOCATION</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>COMPANY · USED BY</div><div style={{ textAlign: "right" }}>ACTIONS</div></div>
+        {shown.length === 0 && <div style={{ padding: 24, textAlign: "center", color: "#94A3B8", fontSize: 13 }}>No location here.</div>}
+        {shown.map((l: any) => { const src = sourceOf(l); const used = usageOf(l.id); const mine = src === "added here" || src === "migrated (legacy)"; const owner = ownerOf(l); return (
+          <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "1.6fr 0.9fr 0.8fr 1.8fr 1.1fr 170px", gap: 8, padding: "10px 16px", borderTop: "1px solid #F3F4F6", fontSize: 12.5, alignItems: "center", opacity: (l as any).__hidden ? 0.55 : 1 }}>
+            <div style={{ fontWeight: 700 }}>{l.name}</div><div style={{ color: "#475569" }}>{(KINDS.find(k => k[0] === l.type) || [0, l.type])[1]}</div><div>{l.country || "—"}</div>
+            <div style={{ color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.address || "—"}</div>
+            <div style={{ fontSize: 11.5, color: "#64748B" }}>{owner != null ? companyName(owner) : "—"}{used ? ` · ${used} doc.` : ""}</div>
+            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+              {src === "counterparty site" && onOpenCompany && <button onClick={() => onOpenCompany(owner)} title="the legal address is edited on its company" style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>open company →</button>}
+              {(mine || src === "built-in") && !(l as any).__hidden && <button onClick={() => openEdit(l)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #BFDBFE", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Edit</button>}
+              {mine && <button onClick={() => { if (used > 0) { window.alert(`${l.name} is used by ${used} document(s) — it cannot be removed while they reference it.`); return; } if (window.confirm(`Remove ${l.name}?`)) { removeCustomLocation(Number(l.id)); force(x => x + 1); } }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 12, cursor: "pointer" }}>Remove</button>}
+              {(l as any).__hidden && <button onClick={() => { writeLocationOverride(Number(l.id), { hidden: false } as any); setTimeout(() => window.location.reload(), 150); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Show again</button>}
+            </div>
+          </div>); })}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>NAME</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>SOURCE · USED BY</div><div /></div>
-      {rows.map((l: any) => { const src = sourceOf(l); const used = usageOf(l.id); const mine = src === "added here" || src === "migrated (legacy)";
-        return <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 12, padding: "5px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}>
-        <div><b>{l.name}</b></div><div>{l.type || l.legacyType}</div><div>{l.country || ""}</div><div style={{ color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.address || ""}>{l.address || shortAddress(l) || ""}</div>
-        <div style={{ fontSize: 10.5, color: src === "migrated (legacy)" ? "#B45309" : "#64748B" }}>{src}{used ? ` · ${used} doc(s)` : ""}</div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {(mine || src === "built-in") && <button onClick={() => { setEditId(l.id); { const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address, l.country); setForm({ name: l.name, country: l.country || a.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: l.unlocode || "", __builtin: src === "built-in" }); } }} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button>}
-          {src === "built-in" && !(l as any).__hidden && <button title="v6.99.45 (PL-3): a built-in is HIDDEN, not deleted — documents that already reference it still resolve" onClick={() => { if (!window.confirm(`Hide ${l.name} from every picker?`)) return; writeLocationOverride(Number(l.id), { hidden: true } as any); setTimeout(() => window.location.reload(), 150); }} style={{ fontSize: 11, border: "1px solid #FDE68A", color: "#92400E", background: "#FFFBEB", borderRadius: 6, cursor: "pointer" }}>Hide</button>}
-          {(l as any).__hidden && <button onClick={() => { writeLocationOverride(Number(l.id), { hidden: false } as any); setTimeout(() => window.location.reload(), 150); }} style={{ fontSize: 11, border: "1px solid #BBF7D0", color: "#166534", background: "#F0FDF4", borderRadius: 6, cursor: "pointer" }}>Unhide</button>}
-          {mine && <button onClick={() => { if (used > 0) { window.alert(`${l.name} is used by ${used} document(s) — it cannot be removed while they reference it.`); return; } if (window.confirm(`Remove ${l.name}?`)) { removeCustomLocation(Number(l.id)); setTimeout(() => window.location.reload(), 150); } }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button>}
-          {src === "counterparty site" && <span style={{ fontSize: 10.5, color: "#94A3B8" }}>edited on its party</span>}
+      {winOpen && <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setWinOpen(false)}>
+        <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 620, maxWidth: "95vw", padding: 22, boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}>
+          <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>{editId != null ? "Edit location" : "New location"}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ gridColumn: "1 / -1" }}><Lbl>Name</Lbl><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={inp} /></div>
+            <div><Lbl>Kind</Lbl><select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inp}>{KINDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}</select></div>
+            <div><Lbl>Belongs to company (optional)</Lbl><select value={form.ownerId ?? ""} onChange={e => setForm({ ...form, ownerId: e.target.value || null })} style={inp}><option value="">— none (port, crossing…) —</option>{(counterparties || []).slice().sort((a: any, b: any) => String(a.name).localeCompare(String(b.name))).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <div style={{ gridColumn: "1 / -1" }}><Lbl>Street / terminal</Lbl><input value={form.street ?? ""} onChange={e => setForm({ ...form, street: e.target.value })} style={inp} /></div>
+            <div><Lbl>Postcode</Lbl><input value={form.postcode ?? ""} onChange={e => setForm({ ...form, postcode: e.target.value })} style={inp} /></div>
+            <div><Lbl>City</Lbl><input value={form.city ?? ""} onChange={e => setForm({ ...form, city: e.target.value })} style={inp} /></div>
+            <div><Lbl>Country</Lbl><input value={form.country ?? ""} onChange={e => setForm({ ...form, country: e.target.value })} style={inp} /></div>
+            <div><Lbl>UN/LOCODE (optional)</Lbl><input value={form.unlocode ?? ""} onChange={e => setForm({ ...form, unlocode: e.target.value })} style={inp} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+            <button onClick={() => setWinOpen(false)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+            <button disabled={!String(form.name || "").trim()} onClick={save} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: String(form.name || "").trim() ? "#111" : "#E5E7EB", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "Add location"}</button>
+          </div>
         </div>
-      </div>; })}
+      </div>}
     </div>
   );
 }
@@ -1517,6 +1561,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   const [filterType, setFilterType] = useState("All");
   const [viewMode, setViewMode] = useState(() => { try { const t = window.sessionStorage.getItem("marianna:contactsTab"); window.sessionStorage.removeItem("marianna:contactsTab"); return t || "companies"; } catch { return "companies"; } }); // companies | people | ports (v6.99.11)
   const [selectedId, setSelectedId] = useState(null);
+  const [newLocFor, setNewLocFor] = useState<any>(null);   // v7.6.2 (A-LOC-1): "+ add location" from a company card
   const [modal, setModal] = useState(null); // null | "new" | counterparty-to-edit
   const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
   const [showImport, setShowImport] = useState(false);
@@ -1796,7 +1841,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
           {[
             { key: "companies", label: "Companies", icon: "🏢" },
             { key: "people", label: "People", icon: "👤" },
-            { key: "ports", label: "Places", icon: "📍" },
+            { key: "ports", label: "Locations", icon: "📍" },   // v7.6.1 (owner): renamed
             { key: "countries", label: "Countries", icon: "🌍" },   // v6.99.11 (owner): the Directory's places tab is back — ports, border crossings, customs points
           ].map(o => (
             <button key={o.key} onClick={() => setViewMode(o.key)}
@@ -1838,7 +1883,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
           {/* Table */}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
             {viewMode === "ports" ? (
-              <PortsView counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} />
+              <PortsView counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} onOpenCompany={(id: any) => { if (id == null) return; setSelectedId(id); setViewMode("companies"); }} prefillOwner={newLocFor} onPrefillUsed={() => setNewLocFor(null)} />
             ) : viewMode === "countries" ? (
               <CountriesView />
             ) : (<>
@@ -1858,7 +1903,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
               ) : (
                 <PeopleTable
                   rows={filteredPeople}
-                  onOpenCompany={id => setSelectedId(id)}
+                  onOpenCompany={id => { setSelectedId(id); setViewMode("companies"); setTimeout(() => { try { document.querySelector(`[data-company-row="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {} }, 60); }}   // v7.3.0 (A-PT-4): the company opens on its own tab
                   onEmail={(c, p) => setEmailTarget({ counterparty: c, person: p })}
                 />
               )}
@@ -1875,6 +1920,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
         {selected && viewMode === "companies" && (   // v6.99.87 (A-PT-3): the company panel shows on its own tab only; the selection is kept for coming back
           <CounterpartyDetailPanel
             counterparty={selected}
+            onAddLocation={(c: any) => { setNewLocFor({ id: c.id, name: c.name, country: c.country }); setViewMode("ports"); }}
             onEditCompany={c => setModal(c)}
             onDeleteCompany={deleteCounterparty}
             onClose={() => setSelectedId(null)}
@@ -1911,7 +1957,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
       {rows.map((c, idx) => {
         const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
         return (
-          <div key={c.id}
+          <div key={c.id} data-company-row={c.id}
             onClick={() => onSelect(c.id)}
             style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 110px 80px 130px", padding: "13px 20px", borderBottom: idx < rows.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: selectedId === c.id ? "#F8FAFF" : "#fff", cursor: "pointer", borderLeft: selectedId === c.id ? "3px solid #2563EB" : "3px solid transparent", transition: "background 0.1s" }}
             onMouseEnter={e => { if (selectedId !== c.id) e.currentTarget.style.background = "#FAFAFA"; }}

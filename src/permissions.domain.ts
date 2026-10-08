@@ -128,6 +128,7 @@ export function usersSaveProblems(list: AppUser[], opts: { shared: boolean; sign
   if (owners.length !== 1) p.push(owners.length ? `${owners.length} entries are marked owner — exactly one may be.` : "No entry is marked owner — exactly one must be.");
   if (opts.shared && owners.length === 1 && !String((owners[0] as any).email || "").trim()) p.push(`The owner "${owners[0].name}" has no sign-in e-mail — on the shared data the owner must be reachable.`);
   L.forEach(u => { if (!String(u.name || "").trim()) p.push("An entry has no name."); });
+  if (opts.shared) L.forEach(u => { if (!(u as any).roleId) p.push(`${String(u.name || "").trim() || "A new user"} has no role — choose one.`); if (!String((u as any).email || "").trim()) p.push(`${String(u.name || "").trim() || "A new user"} has no sign-in e-mail.`); });   // v7.5.1 (A-USR-8)
   const names = new Map<string, number>(); L.forEach(u => { const k = String(u.name || "").trim().toLowerCase(); if (k) names.set(k, (names.get(k) || 0) + 1); }); names.forEach((n, k) => { if (n > 1) p.push(`The name "${k}" is used ${n} times.`); });
   const mails = new Map<string, number>(); L.forEach(u => { const k = String((u as any).email || "").trim().toLowerCase(); if (k) mails.set(k, (mails.get(k) || 0) + 1); }); mails.forEach((n, k) => { if (n > 1) p.push(`The sign-in e-mail ${k} is on ${n} entries — one person, one entry.`); });
   L.forEach(u => { const e = String((u as any).email || "").trim(); if (e && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) p.push(`"${e}" (on ${u.name}) is not an e-mail address.`); });
@@ -136,4 +137,31 @@ export function usersSaveProblems(list: AppUser[], opts: { shared: boolean; sign
   if (opts.shared && opts.signInEmail && !me) p.push(`Your own sign-in (${opts.signInEmail}) is on no entry — saving would lock you out.`);
   if (me && !me.isOwner && me.modules?.settings === false) p.push(`Your own entry (${me.name}) would lose Settings — saving would lock you out.`);
   return Array.from(new Set(p));
+}
+
+// ─── v7.5.0 (A-ROLE-1, owner 6–7 Oct): ONE ROLE MODEL — rights are ticked per ROLE, each user CHOOSES a role ──────────
+export interface AppRole { id: string; name: string; isGM?: boolean; modules: Record<string, boolean>; finance: Record<string, boolean> }
+const ticks = (keys: readonly string[], on: string[]) => Object.fromEntries(keys.map(k => [k, on.includes(k)]));
+const ALL_FIN = [...FINANCE_KEYS];
+export const DEFAULT_ROLES: AppRole[] = [
+  { id: "gm", name: "General Manager", isGM: true, modules: ticks(MODULE_KEYS, [...MODULE_KEYS]), finance: ticks(FINANCE_KEYS, ALL_FIN) },
+  { id: "admin", name: "Administration", modules: ticks(MODULE_KEYS, ["dashboard", "pos", "lots", "orders", "shipments", "invoices", "claims", "contacts"]), finance: ticks(FINANCE_KEYS, []) },
+  { id: "finance", name: "Finance", modules: ticks(MODULE_KEYS, ["dashboard", "invoices", "finance", "claims", "contacts", "audit"]), finance: ticks(FINANCE_KEYS, ALL_FIN) },
+  { id: "ops", name: "Operations", modules: ticks(MODULE_KEYS, ["dashboard", "pos", "lots", "orders", "shipments", "claims", "contacts"]), finance: ticks(FINANCE_KEYS, []) },
+  { id: "sales", name: "Sales", modules: ticks(MODULE_KEYS, ["dashboard", "orders", "lots", "contacts", "claims"]), finance: ticks(FINANCE_KEYS, []) },
+  { id: "wh", name: "Warehouse", modules: ticks(MODULE_KEYS, ["dashboard", "lots", "shipments"]), finance: ticks(FINANCE_KEYS, []) },
+];
+export function rolesOrDefault(roles: any): AppRole[] { return Array.isArray(roles) && roles.length ? roles : DEFAULT_ROLES; }
+/** A user's rights written from their role (+ their own extra modules); the General Manager role makes the owner. */
+export function materializeUser(u: any, roles: AppRole[]): any {
+  const r = (roles || []).find(x => String(x.id) === String(u?.roleId)); if (!r) return u;
+  const extra: string[] = Array.isArray(u.extraModules) ? u.extraModules : [];
+  const modules = { ...r.modules }; extra.forEach(k => { modules[k] = true; });
+  return { ...u, role: r.name, isOwner: !!r.isGM, modules, finance: { ...r.finance } };
+}
+/** "Operations + Invoices" — the role and the person's own extras, for the list. */
+export function rightsSummary(u: any, roles: AppRole[]): string {
+  const r = (roles || []).find(x => String(x.id) === String(u?.roleId)); if (!r) return u?.role ? `${u.role} (no role chosen)` : "no role chosen";
+  const extra: string[] = (Array.isArray(u.extraModules) ? u.extraModules : []).filter((k: string) => !r.modules[k]);
+  return r.name + (extra.length ? ` + ${extra.join(", ")}` : "");
 }

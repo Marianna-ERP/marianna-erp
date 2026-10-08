@@ -1,3 +1,4 @@
+import { locationById } from "./locations";   // v7.3.2 (A-LOC-3)
 import { lotReceiptDate } from "./seasonOps.domain";
 import { isRealISODate, noteNames } from "./format";
 import { lotLoadedTwice } from "./lotView.domain";
@@ -719,6 +720,14 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   const rank = { error: 0, warning: 1, info: 2 } as const;
   issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
+  // v7.3.2 (A-LOC-3, owner 7 Oct): a PO / SO whose place points to no location at all — the document shows no destination
+  {
+    const known = (id: any) => !!locationById(id, inp.contacts || []);
+    (inp.pos || []).filter((p: any) => p && p.status !== "Cancelled" && p.destinationLocationId != null && p.destinationLocationId !== "" && !known(p.destinationLocationId))
+      .forEach((p: any) => add("warning", "PLACE_UNKNOWN", "POs", String(p.number), `${p.number}: its named place (id ${p.destinationLocationId}) is no location any more${p.destinationText ? ` — it read "${p.destinationText}"` : ""}. Choose the location on the PO.`));
+    (inp.orders || []).filter((o: any) => o && o.status !== "Cancelled" && o.destinationLocationId != null && o.destinationLocationId !== "" && !known(o.destinationLocationId))
+      .forEach((o: any) => add("warning", "PLACE_UNKNOWN", "SOs", String(o.number), `${o.number}: its destination (id ${o.destinationLocationId}) is no location any more${o.destinationText ? ` — it read "${o.destinationText}"` : ""}. Choose the location on the sale.`));
+  }
   return { issues, counts, okay: counts.error === 0 };
 }
 

@@ -1,5 +1,5 @@
 import { nextId } from "./ids";
-import { dataKey } from "./useLocalStoredState";
+import { dataKey, writeSharedStoreValue } from "./useLocalStoredState";
 import { formatAddress as _fmtAddr, parseAddress as _parseAddr } from "./address.domain";
 const formatAddressOneLine = (a: any) => _fmtAddr(a, { oneLine: true });
 // ─── SHARED LOCATIONS (v5.8 trunk, Option B consolidation) ──────────────────
@@ -112,7 +112,29 @@ const BUILTIN_ALL: Location[] = [
 ];
 export const DEMO_SEEDS: Location[] = BUILTIN_ALL.filter(l => l.legacyType !== "PORT" && !l.aliasOf);
 export const LOCATIONS_ALL_BUILTIN: Location[] = BUILTIN_ALL;   // v6.99.45 (PL-3): the hidden view needs the whole list
-export const LOCATIONS: Location[] = BUILTIN_ALL.filter(l => l.legacyType === "PORT" || !!l.aliasOf);
+// v7.3.4 (A-LOC-2, owner 7 Oct: "no built-in locations — real data only"): the list written in the code is no longer offered anywhere.
+// It survives ONLY as a translation table: a built-in id still used by a real document is copied once into the ordinary
+// locations (same id, the browser's renames applied) by ensureUsedBuiltinsAreOrdinary(), and from then on it is an ordinary,
+// editable location. Unused built-ins simply disappear.
+export const LOCATIONS: Location[] = [];
+/** Copy into the ordinary locations every built-in id the documents still use (idempotent; returns how many were added). */
+export function ensureUsedBuiltinsAreOrdinary(usedIds: Set<string>): number {
+  const list = readCustomLocations(); const have = new Set(list.map(l => String(l.id))); const ov = readLocationOverrides(); let added = 0;
+  BUILTIN_ALL.forEach(b => {
+    const k = String(b.id); if (!usedIds.has(k) || have.has(k)) return;
+    const o: any = (ov as any)[k] || {};
+    list.push({ ...b, name: o.name || b.name, country: o.country || b.country, address: o.address || b.address, ...(o.unlocode ? { unlocode: o.unlocode } : {}), aliasOf: undefined, fromBuiltIn: true } as any);
+    added++;
+  });
+  if (added) { writeSharedStoreValue("customLocations", list); list.forEach(cl => { if (!LOCATIONS.find(l => String(l.id) === String(cl.id))) LOCATIONS.push(cl); }); }
+  return added;
+}
+/** Every location id the documents use (POs, SOs, lots and movements, shipments). */
+export function usedLocationIds(data: { pos?: any[]; orders?: any[]; lots?: any[]; shipments?: any[] }): Set<string> {
+  const out = new Set<string>(); const keyRe = /^(.*LocationId|locationId|toId|fromId|polId|podId|originId|destinationId|loadingPlaceId|unloadingPlaceId|placeId)$/;
+  const walk = (o: any) => { if (Array.isArray(o)) return o.forEach(walk); if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) { if (keyRe.test(k) && v != null && v !== "") out.add(String(v)); else if (v && typeof v === "object") walk(v); } };
+  [data.pos, data.orders, data.lots, data.shipments].forEach(walk); return out;
+}
 
 
 // ─── CUSTOM LOCATIONS (v6.3.0) ──────────────────────────────────────────────
@@ -196,13 +218,13 @@ export function readCustomLocations(): Location[] {
 function writeCustomLocations(list: Location[]): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
-    window.localStorage.setItem(CUSTOM_LOCATIONS_KEY, JSON.stringify(list));
+    writeSharedStoreValue("customLocations", list);   /* v7.3.3 (A-SYNC-1) */
   } catch (err) {
     console.warn("[locations] Could not write custom locations:", err);
   }
 }
 
-export function addCustomLocation(input: { name: string; country: string; type: LocationType; address?: string; addr?: any }): Location {
+export function addCustomLocation(input: { name: string; country: string; type: LocationType; address?: string; addr?: any; ownerId?: any }): Location {
   const existing = readCustomLocations();
   const nextId = Math.max(CUSTOM_LOCATION_ID_BASE, ...existing.map(l => Number(l.id) || 0)) + 1;
   const loc: Location = {
@@ -213,7 +235,7 @@ export function addCustomLocation(input: { name: string; country: string; type: 
     country: (input.country || "").trim(),
     address: (input.address || "").trim() || undefined,
   };
-  writeCustomLocations([...existing, { ...loc, custom: true } as any]);
+  writeCustomLocations([...existing, { ...loc, custom: true, ...(input.addr ? { addr: input.addr } : {}), ...(input.ownerId != null && input.ownerId !== "" ? { ownerId: input.ownerId } : {}) } as any]);   // v7.6.0 (A-LOC-1): a location may belong to a company
   return loc;
 }
 
@@ -222,7 +244,7 @@ export function removeCustomLocation(id: number): void {
 }
 
 // v6.36.0: edit an existing custom location (name / country / address / type).
-export function updateCustomLocation(id: number, patch: { name?: string; country?: string; address?: string; addr?: any; type?: LocationType }): void {
+export function updateCustomLocation(id: number, patch: { name?: string; country?: string; address?: string; addr?: any; type?: LocationType; ownerId?: any }): void {
   writeCustomLocations(readCustomLocations().map(l => Number(l.id) === Number(id)
     ? { ...l, ...patch, ...(patch.type ? { legacyType: legacyTypeFor(patch.type) } : {}) }
     : l));
@@ -379,7 +401,7 @@ export function sortLocations(list: Location[]): Location[] {
 }
 
 export function allLocations(): Location[] {
-  return sortLocations(applyLocationOverrides(LOCATIONS.filter(l => !l.aliasOf), readLocationOverrides()));
+  return sortLocations(applyLocationOverrides(LOCATIONS.filter(l => !l.aliasOf && (l as any).pickable !== false), readLocationOverrides()));   // v7.3.5: unticked company addresses are not offered
 }
 
 // ─── v6.10: WAREHOUSE COUNTERPARTIES AS LOCATIONS ───────────────────────────
@@ -513,6 +535,7 @@ function counterpartyLocationRole(c: any): { legacyType: string; type: LocationT
   const types = [c?.type, ...((c?.additionalTypes) || [])];
   if (types.includes("Supplier")) return { legacyType: "SUPPLIER", type: "SupplierFacility" };
   if (types.includes("Client")) return { legacyType: "CLIENT", type: "ClientFacility" };
+  if (c?.isPlace === true) return { legacyType: "OTHER", type: "ClientFacility" };   // v7.3.5 (A-LOC-1): any company may be ticked as a place
   return null; // carriers / forwarders / brokers are providers, not delivery places
 }
 
@@ -531,6 +554,9 @@ export function counterpartyLocations(contacts: any[]): Location[] {
         type: role.type, legacyType: role.legacyType,
         name: index === 0 ? String(c.name) : `${c.name} — ${address || `address ${index + 1}`}`,
         country: c.country || "", address: address || undefined,
+        // v7.3.5 (A-LOC-1, owner 7 Oct): "goods are loaded / delivered here" — unticked, the address still resolves for every document
+        // and print (same id), but it is no longer OFFERED in the location pickers
+        ...({ ownerId: c.id, pickable: c.isPlace !== false } as any),
       });
     });
   });
@@ -542,7 +568,7 @@ export function registerCounterpartyLocations(contacts: any[]): void {
   counterpartyLocations(contacts).forEach((loc: Location) => {
     const existing = LOCATIONS.find(l => String(l.id) === String(loc.id));
     if (!existing) LOCATIONS.push(loc);
-    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; }
+    else { existing.name = loc.name; existing.address = loc.address; existing.country = loc.country; existing.type = loc.type; existing.legacyType = loc.legacyType; (existing as any).pickable = (loc as any).pickable; (existing as any).ownerId = (loc as any).ownerId; }   // v7.3.5
   });
 }
 
@@ -636,7 +662,7 @@ export function migrateReferencedSeeds(referencedIds: Iterable<any>): Location[]
       const raw = window.localStorage.getItem(CUSTOM_LOCATIONS_KEY);
       const list = raw ? JSON.parse(raw) : [];
       list.push({ ...seed, source: "Custom", migratedFromSeed: true });
-      window.localStorage.setItem(CUSTOM_LOCATIONS_KEY, JSON.stringify(list));
+      writeSharedStoreValue("customLocations", list);   /* v7.3.3 (A-SYNC-1) */
       added.push(seed);
     } catch { /* best effort */ }
   });

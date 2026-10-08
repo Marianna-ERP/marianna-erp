@@ -43,6 +43,7 @@ const file = FX.ownerDataFile(process.argv[2]);
 const d = JSON.parse(fs.readFileSync(file, "utf8"));
 // seed the browser stores the modules read directly
 try { localStorage.setItem("marianna-erp:v2:customLocations", JSON.stringify(d.customLocations || [])); } catch {}
+try { const Lm0 = require(path.resolve("./src/locations")); if (Lm0.ensureUsedBuiltinsAreOrdinary) Lm0.ensureUsedBuiltinsAreOrdinary(Lm0.usedLocationIds(d)); } catch (e) { console.log("(start-up step:", e.message, ")"); }   // v7.3.4: as the app does at start
 const noop = () => {}; const S = (k, v) => [d[k] || v || [], noop];
 let passed = 0, failed = 0;
 const render = (name, el) => { _where = name; try { const html = renderToStaticMarkup(el); if (!html || html.length < 50) throw new Error("empty render"); passed++; console.log("  ✓", name, `(${html.length} chars)`); } catch (e) { failed++; console.log("  ✗", name, "—", (e && e.message || String(e)).split("\n")[0].slice(0, 160)); } };
@@ -261,6 +262,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 { try {
     const p35 = FX.fixture("marianna-erp_v6.99.72_schema-v2_2026-09-28T13-44-40.json"); if (!p35) throw new Error("fixture missing");
     const d9 = JSON.parse(fs.readFileSync(p35, "utf8")); const sh = d9.shipments.find(x => x.number === "SHP-2026-0035"); const bad = [];
+    try { localStorage.setItem("marianna-erp:v2:customLocations", JSON.stringify(d9.customLocations || [])); const Lm = require(path.resolve("./src/locations")); Lm.ensureUsedBuiltinsAreOrdinary(Lm.usedLocationIds(d9)); } catch (e) { console.log("    (start-up step:", e.message, ")"); }   // v7.3.4: as the app does at start
     const SD = require(path.resolve("./src/ShipmentDocuments")); const txt = h => h.replace(/<\/(td|th)>/g, " | ").replace(/<\/tr>/g, "\n").replace(/<[^>]+>/g, "");
     _where = "SHP-2026-0035 sea order";
     const sea = txt(renderToStaticMarkup(React.createElement(SD.TransportOrderDocument, { shipment: sh, contacts: d9.contacts, providerId: sh.bookings[0].forwarderId, legIds: ["2"], orders: d9.orders, pos: d9.pos, packagingTypes: d9.packagingTypes || [] })));

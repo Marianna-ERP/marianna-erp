@@ -196,6 +196,59 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.6 — the Locations tab (v7.6.0–7.6.2)
+
+- **Counterparties → Locations** (formerly Places) works like Companies and People: a search
+  box, filter chips (All · Ports & airports · Border crossings · Customs · Companies' places ·
+  Hidden), one table with actions — **Edit** and **Remove** for your own locations, **open
+  company →** for a company's legal address — and **+ New location** in a window.
+- A location can **belong to a company** (its warehouse, its second farm…). The company's card
+  lists its LOCATIONS — the legal address when ticked, and its own sites — with
+  **+ add location**, which opens the window already set to that company.
+
+### Version 7.5 — roles (v7.5.0–7.5.2)
+
+- **Settings → Roles:** General Manager, Administration, Finance, Operations, Sales, Warehouse —
+  each with its modules (and Finance options) ticked once. The six arrive as a proposal: press
+  **Save** to adopt them, then adjust; **+ Add role** for another. Saving a role updates at once
+  the rights of everyone who has it.
+- **Settings → Users:** each person is one row — name · role · sign-in e-mail · rights
+  ("Operations + invoices"). Rows are read-only; **Edit** unlocks one; **+ Add user** opens an
+  empty row. A person can get extra modules beyond their role ("extra modules for this
+  person"). The General Manager role makes the owner. **Save users** stays the only way to
+  write, and refuses a person without a role or a sign-in e-mail.
+- Existing users keep their old ticks until a role is chosen for them — choose a role for each
+  and save once.
+- The per-browser "Current user & role" section is gone on the shared data.
+
+### Version 7.4 — recover from a backup (v7.4.0–7.4.2)
+
+- **Settings → Recover from a backup** (General Manager): choose a backup file, or a Supabase
+  snapshot once step 6 of the set-up guide is done. The app compares it with today's data,
+  module by module: what is **missing now**, what is **different**, what was **added since**.
+  Tick what to bring back; each record returns with what it needs that is missing too (a PO
+  with its producer, a sale with its client…). Nothing that exists now is removed; a record
+  that differs is replaced only when ticked. The shared data as it was is downloaded first.
+- **Snapshots in Supabase** at 13:00 and 20:00 (Warsaw, summer time; an hour earlier in
+  winter), kept 30 days — set up once with the SQL in the guide, step 6.
+- The full "Restore a backup into the shared data" stays below it, for a real disaster.
+
+### Version 7.3 — locations (v7.3.0–7.3.5)
+
+- **A company's legal address** is the address on documents. On the company form, the tick
+  **"Goods are loaded / delivered at this address"** decides whether it is also offered as a
+  loading / delivery place (on for producers, suppliers, clients and warehouses unless you
+  untick it; any other company can be ticked). Unticking never changes a document or a print:
+  the address keeps resolving everywhere it was used.
+- **No built-in places any more.** The ports a document uses (Venice / Marghera, Koper,
+  Trieste, Port Said, Rijeka, Damietta in the real data) became ordinary locations under the
+  same ids — edit or delete them like any other.
+- Places added on the shared data, and quality-report numbers, now reach everyone (before,
+  they stayed in the browser that created them).
+- The integrity check lists documents whose place no longer exists, with the text they read.
+- People → the arrow opens the company on the Companies tab.
+- Each browser deletes its old local snapshots by itself once its backup folder holds a new file.
+
 ### Version 7.2 — Settings saved on purpose (v7.2.0–7.2.5)
 
 - **Users & permissions are edited as a draft.** Nothing is written until **Save users**; the
