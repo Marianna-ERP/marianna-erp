@@ -52,6 +52,7 @@
     "../src/remoteStore.ts",
     "../src/recovery.domain.ts",
     "../src/supplierRef.domain.ts",
+    "../src/incoterms.domain.ts",
     "../src/claimCostChain.domain.ts",
     "../src/claimReadiness.domain.ts",
     "../src/statusOwnership.domain.ts",

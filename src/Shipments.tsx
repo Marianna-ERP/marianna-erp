@@ -1,3 +1,4 @@
+import { fillEmptyPlaces } from "./incoterms.domain";   // v7.9.2
 import { statusWord } from "./format";
 import { ModuleHeader, ActionButton, notifySaved } from "./ui";
 import React, { useMemo, useState } from "react";
@@ -1366,6 +1367,7 @@ export default function Shipments({ archive = null,
   }, [shipments]);
 
   async function saveShipment(next) {
+    { const f = fillEmptyPlaces(next, { orders: extOrders || [], lots: extLots || [] }); if (f.filled.length) next = f.next; }   // v7.9.2 (A-INC-1): empty places filled from their owners, never overwritten
     // v6.66.0 (owner ruling): over-shipping an SO is confirm-gated, not silent.
     const over = overShipReport(next, shipments, extOrders || []);
     if (over.length) {
@@ -1583,7 +1585,7 @@ export default function Shipments({ archive = null,
     // shipment with no goods posts nothing and still reports the movement as
     // done — the same class as the phantom receipts. Booking is never gated:
     // the transport order goes to the carrier before the goods are final.
-    const postBlock = shipmentPostBlockReason(sh, status);
+    const postBlock = shipmentPostBlockReason(sh, status, { orders: extOrders || [], lots: extLots || [] });   // v7.9.1 (A-SHP-GATE-1)
     if (postBlock) {
       await shConfirm({ tone: "warn", title: `${sh.number} has no goods`, message: postBlock, confirmLabel: "OK" });
       return;

@@ -19,10 +19,18 @@ const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")
  *
  *  Booking is deliberately NOT gated: the owner books a truck and sends the
  *  transport order before the goods are final, which is a real workflow. */
-export function shipmentPostBlockReason(shipment: any, nextStatus: string): string {
+export function shipmentPostBlockReason(shipment: any, nextStatus: string, ctx: { orders?: any[]; lots?: any[] } = {}): string {
   if (!["Loaded", "Arrived", "Delivered", "Closed"].includes(S(nextStatus))) return "";
   const rows = (shipment?.goods || []).filter((g: any) => num(g?.qtyKg) > 0);
-  if (rows.length) return "";
+  if (rows.length) {
+    // v7.9.1 (A-SHP-GATE-1, owner rule 8 Oct): a shipment may be booked on a draft sale and expected goods (the transport orders go out early),
+    // but it moves on only when what it carries is confirmed — every sale Confirmed, every lot with its REAL kilos
+    const open: string[] = [];
+    const soNos = Array.from(new Set([...(shipment?.soRefs || []), ...rows.map((g: any) => g.soRef)].filter(Boolean).map(String)));
+    soNos.forEach(no => { const so = (ctx.orders || []).find((o: any) => String(o.number) === no); if (so && S(so.status) === "Draft") open.push(`${no} is still a Draft — confirm it first`); });
+    Array.from(new Set(rows.map((g: any) => g.lotRef).filter(Boolean).map(String))).forEach(no => { const lot = (ctx.lots || []).find((l: any) => String(l.number) === no); if (!lot) return; const real = num(lot.receivedKg) > 0 || (lot.movements || []).some((m: any) => m && !m.voided && m.type === "IN") || !!lot.directFlow; if (!real) open.push(`${no} has no real kilos yet — ${lot.poRef ? `${lot.poRef} not received` : "not received"}`); });
+    return open.length ? `${S(shipment?.number) || "This shipment"} cannot become ${nextStatus} yet:\n• ${open.join("\n• ")}` : "";
+  }
   return `${S(shipment?.number) || "This shipment"} carries no goods, so marking it ${nextStatus} would post nothing to inventory and still report the movement as done. Add what is on the truck first.`;
 }
 

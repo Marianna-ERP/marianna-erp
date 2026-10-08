@@ -196,6 +196,19 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.9 — Incoterms 2020 (v7.9.0–7.9.2)
+
+- The app knows the eleven ICC Incoterms® 2020 rules: for each, where the RISK passes (delivery
+  point), up to where the seller PAYS carriage (named place — different from the risk point for
+  CFR, CIF, CPT and CIP), who clears export and import, and the seller's insurance (CIF: minimum
+  Institute Cargo Clauses C; CIP: clauses A).
+- **A shipment moves on only when what it carries is confirmed:** it may be booked on a draft
+  sale and on expected goods (the transport orders go out early), but it cannot become Loaded
+  or later while a sale is still a Draft or a lot has no real kilos — the message names each.
+- **Empty places fill themselves when a shipment is saved:** origin from where the goods are,
+  the sea leg and the road pre-carriage from the booking's ports, the destination from the
+  sale's named place. A place someone set is never overwritten.
+
 ### Version 7.8 — references, lot card, PO layout, producer's settlement (v7.8.0–7.8.3)
 
 - **The producer's reference is unique:** the supplier's-truck window says "Already used on PO-…"

@@ -3486,6 +3486,25 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("v7.8.3 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
+// ══ v7.9.0–7.9.2 — Incoterms 2020; the shipment gate; places filled from their owners ══
+(function v79(){
+  console.log("\n══ v7.9.x. incoterms ══");
+  const I = B("incoterms.domain.js"); const G = B("moduleGuards.domain.js");
+  t("A-INC-1: the 11 rules of Incoterms 2020 — risk point and cost point apart for the C-rules; clearance and insurance", () => {
+    eq(Object.keys(I.INCOTERMS_2020).length, 11);
+    eq(I.ruleOf("CIF").riskAt, "on-board"); eq(I.ruleOf("CIF").costsTo, "named-destination"); eq(I.ruleOf("CIF").insurance, "ICC (C) minimum"); eq(I.ruleOf("CIP").insurance, "ICC (A)");
+    eq(I.weArrangeCarriage("CIF", "sell"), true); eq(I.weArrangeCarriage("EXW", "sell"), false); eq(I.weArrangeCarriage("EXW", "buy"), true); eq(I.weArrangeCarriage("DAP", "buy"), false);
+    eq(I.weClear("DDP", "sell", "import"), true); eq(I.weClear("EXW", "buy", "export"), true); eq(I.weClear("FCA", "buy", "export"), false);
+    eq(I.ruleOf("FOB").seaOnly, true); eq(I.ruleOf("FCA").seaOnly, false); eq(I.ruleOf("xyz"), null);
+  });
+  t("A-SHP-GATE-1: SHP-2026-0043 cannot become Loaded — SO-2026-0032 Draft, LOT-2026-0106 without real kilos; booking stays allowed", () => {
+    const fx = "/tmp/d8.json"; if (!require("fs").existsSync(fx)) { console.log("      (8 Oct file not present — skipped)"); return; } const d = require(fx); const sh = d.shipments.find(s => s.number === "SHP-2026-0043");
+    const r = G.shipmentPostBlockReason(sh, "Loaded", { orders: d.orders, lots: d.lots }); ok(/SO-2026-0032 is still a Draft/.test(r) && /LOT-2026-0106 has no real kilos yet/.test(r), r); eq(G.shipmentPostBlockReason(sh, "Booked", { orders: d.orders, lots: d.lots }), "");
+    const f = I.fillEmptyPlaces(sh, { orders: d.orders, lots: d.lots }); eq(f.next.legs.map(l => l.mode + ":" + l.fromLocationId + ">" + l.toLocationId).join(), "Road:126>113,Sea:113>126", "Koper from the booking; nothing overwritten");
+  });
+  console.log("v7.9.2 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
