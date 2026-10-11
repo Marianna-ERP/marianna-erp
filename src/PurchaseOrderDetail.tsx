@@ -1,9 +1,10 @@
 import { supplierRefUsedOn } from "./supplierRef.domain";   // v7.8.0
 // PurchaseOrderDetail.tsx — v6.99.68 (A-AUD-2, owner): moved out of PurchaseOrders.tsx unchanged; the module's shared helpers are imported from it.
 import DateInput from "./DateInput";
+import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import React from "react";
 import { Card, Lbl, SectionTitle, ActionButton } from "./ui";
-import { ItemVarietyPicker } from "./ProductPicker";
+import { ItemVarietyPicker, CatalogValuePicker } from "./ProductPicker";   // v7.18.3 (A-AU-5)
 import { PAGE_MAX, SmallButton } from "./ui";
 import { cnCodeForItem } from "./productCatalog";
 import { effectiveCounts } from "./pricingUnit.domain";
@@ -11,6 +12,7 @@ import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { isEstimatedLine } from "./so.domain";
 import { paymentText } from "./po.domain";   // v6.99.76 (A-PV-2)
 import { CONTACTS_REF, FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, PO_PACKAGING_TYPES, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg } from "./PurchaseOrders";
+import { nextId } from "./ids";   // v7.17.5 (A-RV-06): extra packing-list lines take the one counter
 
 // ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
 // ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
@@ -48,23 +50,22 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
           <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>ADDITIONAL ITEMS — loaded, not on the order</div>
           {/* v6.99.57 (A-PK-1, owner): the PO line's own editors — item/variety from the catalogue, size, quality, quantity, price, coloration, packaging.
               Origin and unit come from the order; the quantity is FINAL (it is what is loaded); CN code, boxes and pallets derive. */}
-          <datalist id="pk-sizes">{Array.from(new Set((order.items || []).map((x: any) => String(x.size || "")).filter(Boolean))).map((v: any) => <option key={v} value={v} />)}</datalist>
-          <datalist id="pk-colorations">{Array.from(new Set((order.items || []).map((x: any) => String(x.coloration || "")).filter(Boolean))).map((v: any) => <option key={v} value={v} />)}</datalist>
+          {/* v7.18.3 (A-AU-5): size and coloration are picked from the item's lists in the catalog — no suggestion lists any more */}
           {added.map((a, i) => { const set = (patch: any) => setAdded(added.map((x, k) => k === i ? { ...x, ...patch } : x)); return (
             <div key={a.id || i} style={{ border: "1px solid #EDE9FE", borderRadius: 8, padding: "8px", marginBottom: 6, background: "#FFFFFF" }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 2fr) 0.8fr 0.7fr 0.8fr 0.8fr 1fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
                 <div><Lbl>Item / Variety</Lbl><ItemVarietyPicker catalog={catalog} setCatalog={setCatalog || (() => {})} item={a.product || ""} variety={a.variety || ""} onItem={(v: string) => set({ product: v, variety: "", cnCode: cnCodeForItem(catalog, v) || "" })} onVariety={(v: string) => set({ variety: v })} /></div>
-                <div><Lbl>Size</Lbl><input list="pk-sizes" value={a.size} onChange={e => set({ size: e.target.value })} placeholder="60-65" style={missingOf(a).includes("size") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
+                <div><Lbl>Size</Lbl><div style={missingOf(a).includes("size") ? { outline: "1px solid #DC2626", borderRadius: 7 } : undefined}><CatalogValuePicker catalog={catalog} setCatalog={setCatalog} item={a.product} kind="calibres" value={a.size} onChange={(v: string) => set({ size: v })} /></div></div>
                 <div><Lbl>Quality</Lbl><select value={a.quality || "I"} onChange={e => set({ quality: e.target.value })} style={inp}>{QUALITY_GRADES.map(g => <option key={g}>{g}</option>)}</select></div>
                 <div><Lbl>Quantity ({a.pricingUnit || "kg"})</Lbl><input type="number" value={a.qty} onChange={e => set({ qty: e.target.value })} placeholder="final" style={missingOf(a).includes("quantity") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
                 <div><Lbl>Unit price ({order.currency || "PLN"})</Lbl><input type="number" value={a.unitPrice} onChange={e => set({ unitPrice: e.target.value })} style={missingOf(a).includes("unit price") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
-                <div><Lbl>Coloration</Lbl><input list="pk-colorations" value={a.coloration || ""} onChange={e => set({ coloration: e.target.value })} style={inp} /></div>
+                <div><Lbl>Coloration</Lbl><CatalogValuePicker catalog={catalog} setCatalog={setCatalog} item={a.product} kind="colorations" value={a.coloration} onChange={(v: string) => set({ coloration: v })} /></div>
                 <div><Lbl>Packaging</Lbl><select value={a.packagingId ?? ""} onChange={e => { const pk = (packagingTypes || []).find((t: any) => String(t.id) === e.target.value); set({ packagingId: pk ? pk.id : null, packaging: pk ? pk.label : "" }); }} style={missingOf(a).includes("packaging") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp}><option value="">— choose —</option>{(packagingTypes || []).map((t: any) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div>
                 <button onClick={() => setAdded(added.filter((_, k) => k !== i))} title="remove this item" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 32, cursor: "pointer" }}>✕</button>
               </div>
               <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 4 }}>taken from the order: origin <b>{a.origin || "—"}</b> · unit <b>{a.pricingUnit || "kg"}</b> · quantity <b>final</b>{a.cnCode ? <> · CN <b>{a.cnCode}</b></> : null} · boxes and pallets derive from the packaging</div>
             </div>); })}
-          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${Date.now()}-${added.length + 1}`, product: b.product || "", variety: "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", coloration: "", packaging: "", packagingId: null, cnCode: cnCodeForItem(catalog, b.product) || "", origin: b.origin || "", pricingUnit: b.pricingUnit || "kg" }]); }}
+          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${nextId()}`, product: b.product || "", variety: "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", coloration: "", packaging: "", packagingId: null, cnCode: cnCodeForItem(catalog, b.product) || "", origin: b.origin || "", pricingUnit: b.pricingUnit || "kg" }]); }}
             style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add additional items</button>
           <div style={{ marginTop: 12, fontSize: 13, fontWeight: 800 }}>Truck total: {Math.round(total).toLocaleString("pl-PL")} kg</div>
           {/* v6.99.56 (A-PL-2, owner): what follows — the sale is what was loaded, so it takes the final kilos; a new size joins it at a price to agree */}
@@ -133,7 +134,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm, pos 
   );
 }
 
-export function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+export function OrderDetail({ termsFindings = [], users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -169,12 +170,13 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
         <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
+          {termsFindings.length ? <div style={{ marginBottom: 16 }}><TermsFindingsBox findings={termsFindings} here={order.number} /></div> : null}{/* v7.20.0 (A-INC-2): the terms to review under this purchase's incoterm */}
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, gap: 20 }}>
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status} />
-                {(order.buyIncoterm || order.tradeMovement) && <FlowBadge order={order} />}
+                {order.buyIncoterm && <FlowBadge order={order} />}
                 <VarianceBadge variance={order.variance} />
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>

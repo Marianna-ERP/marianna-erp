@@ -17,6 +17,7 @@
 // gentle flat factor so nothing breaks, and mark it as an estimate.
 
 import type { } from "./types";
+import { parseNum } from "./numbers";   // v7.18.0 (A-AU-1): the one number parser (source gate)
 
 export interface PackagingType {
   id: string;              // stable key, e.g. "wooden-box-13"
@@ -121,4 +122,87 @@ export function grossForGoodsLine(
 
   // 4: fallback
   return { ...empty, grossKg: Math.round(net * FALLBACK_GROSS_FACTOR * 1000) / 1000, estimated: true };
+}
+
+// ══ v7.18.0 (A-AU-1, owner 9 Oct — P-8, 'lists instead of typing') ═══════════════════════════════════════════════════════════
+// An order line's packaging is PICKED from Settings → Packaging types; kilos per box and tare come from the type. A new type is
+// added to that same list from the picker. The spellings typed before are listed once, grouped under the type they most likely
+// are (a suggestion only), and the owner links each one once: its lines then name the type, and print the type's name.
+const spellKey = (s: any) => lc(s).replace(/\s+/g, " ");
+const isPcsType = (t: PackagingType) => /\b(pcs|szt)\b/.test(lc(t.label));
+const live = (types: PackagingType[]) => (types || []).filter((t: any) => t && !t.deleted);
+
+/** A type from the picker's small window — the same checks as Settings → Packaging types. A deleted type of the same name comes back. */
+export function packagingTypeFromForm(form: any, existing: PackagingType[]): { type?: PackagingType; error?: string; restored?: boolean } {
+  const label = String(form?.label ?? "").trim();
+  const blank = (v: any) => String(v ?? "").trim() === "";
+  const cap = parseNum(form?.capacityKg), tare = blank(form?.tareKg) ? NaN : parseNum(form?.tareKg);
+  if (!label) return { error: "Give the packaging a name, e.g. \u201cWooden box (13 kg)\u201d." };
+  if (!(cap > 0)) return { error: "How many kg of product does one unit hold?" };
+  if (!(tare >= 0)) return { error: "How much does the empty unit weigh?" };
+  const same = (existing || []).find(t => lc(t.label) === lc(label));
+  if (same && !(same as any).deleted) return { error: `\u201c${label}\u201d is already a packaging type \u2014 pick it from the list.` };
+  const figures = { capacityKg: cap, tareKg: tare, boxesPerPallet: parseNum(form?.boxesPerPallet) || 0, palletTareKg: parseNum(form?.palletTareKg) || 0 };
+  if (same) { const { deleted, deletedAt, ...rest } = same as any; return { type: { ...rest, label, ...figures }, restored: true }; }
+  const ids = new Set((existing || []).map(t => String(t.id)));
+  let id = lc(label).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "packaging";
+  if (ids.has(id)) { let k = 2; while (ids.has(`${id}-${k}`)) k++; id = `${id}-${k}`; }
+  return { type: { id, label, ...figures, appliesTo: [] } };
+}
+
+/** The type a typed spelling most likely is — a suggestion the owner confirms, never applied on its own. Only one
+ *  candidate is ever suggested: the kilos (or pieces) written in the text must match the type's, and a material named in
+ *  the text (wood, carton, bag) must be the type's too. "13 kg boxes" fits two types, so nothing is suggested. */
+export function suggestPackagingType(text: any, types: PackagingType[]): PackagingType | null {
+  const s = spellKey(text); if (!s) return null;
+  const list = live(types);
+  const exact = list.find(t => lc(t.label) === s); if (exact) return exact;
+  const m = s.match(/(\d+(?:[.,]\d+)?)\s*(kg|pcs|szt)?/); if (!m) return null;
+  const n = parseNum(m[1]); const pcs = m[2] === "pcs" || m[2] === "szt";
+  const mat = /wood|drewn/.test(s) ? "wood" : /bag|mesh|worek|siatk/.test(s) ? "bag" : /cart|kart|caron/.test(s) ? "carton" : "";
+  let cands = list.filter(t => pcs ? (isPcsType(t) && new RegExp(`(^|\\D)${n}(\\D|$)`).test(lc(t.label))) : (!isPcsType(t) && num(t.capacityKg) === n));
+  if (mat) cands = cands.filter(t => `${lc(t.label)} ${lc(t.id)}`.includes(mat));
+  return cands.length === 1 ? cands[0] : null;
+}
+
+export interface TypedSpelling { spelling: string; key: string; poLines: number; soLines: number; docs: string[]; suggestion: string | null; }
+const linkedLine = (it: any, ids: Set<string>) => it?.packagingId != null && String(it.packagingId) !== "" && ids.has(lc(it.packagingId));
+const openDoc = (doc: any) => !!doc && !doc.deleted && doc.status !== "Cancelled";
+
+/** Every packaging typed on a live PO / SO line and not linked to a type — once per spelling (case and spaces ignored). */
+export function typedPackagingSpellings(stores: { pos?: any[]; orders?: any[] }, types: PackagingType[]): TypedSpelling[] {
+  const ids = new Set((types || []).map(t => lc(t.id)));
+  const map = new Map<string, TypedSpelling>();
+  const visit = (doc: any, side: "po" | "so") => {
+    if (!openDoc(doc)) return;
+    (doc.items || []).forEach((it: any) => {
+      const txt = String(it?.packaging ?? "").trim(); if (!txt || linkedLine(it, ids)) return;
+      const key = spellKey(txt); let e = map.get(key);
+      if (!e) { e = { spelling: txt.replace(/\s+/g, " "), key, poLines: 0, soLines: 0, docs: [], suggestion: suggestPackagingType(txt, types)?.id ?? null }; map.set(key, e); }
+      if (side === "po") e.poLines++; else e.soLines++;
+      if (!e.docs.includes(String(doc.number))) e.docs.push(String(doc.number));
+    });
+  };
+  (stores.pos || []).forEach(p => visit(p, "po")); (stores.orders || []).forEach(o => visit(o, "so"));
+  return Array.from(map.values()).sort((a, b) => (b.poLines + b.soLines) - (a.poLines + a.soLines) || a.spelling.localeCompare(b.spelling));
+}
+
+/** Link one spelling to its type on a list of POs or SOs: every live line typed that way names the type and takes its name.
+ *  Lines already linked, other spellings, deleted and cancelled documents are left as they are. */
+export function linkSpellingOnDocs(docs: any[], key: string, type: PackagingType, types: PackagingType[]): { docs: any[]; changed: string[]; lines: number } {
+  const ids = new Set((types || []).map(t => lc(t.id))); ids.add(lc(type.id));
+  const changed: string[] = []; let lines = 0;
+  const next = (docs || []).map((doc: any) => {
+    if (!openDoc(doc)) return doc;
+    let hit = false;
+    const items = (doc.items || []).map((it: any) => {
+      if (spellKey(it?.packaging) !== key) return it;
+      if (linkedLine(it, ids) && String(it.packagingId) !== String(type.id)) return it;   // it already names another type
+      if (String(it?.packagingId ?? "") === String(type.id) && String(it.packaging) === type.label) return it;
+      hit = true; lines++; return { ...it, packagingId: type.id, packaging: type.label };
+    });
+    if (!hit) return doc;
+    changed.push(String(doc.number)); return { ...doc, items };
+  });
+  return { docs: next, changed, lines };
 }

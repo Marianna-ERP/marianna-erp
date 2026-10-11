@@ -1,5 +1,14 @@
 # Red colour survey — v6.99.107 (A-CLR-1, owner ruling 2 Oct)
 
+> **v7.17.3 (A-RV-11, 10 Oct) — second look done.** Overdue and due dates are amber: the Invoices list due date and
+> "N d late", the OVERDUE tile and the Overdue badge; the Finance ledger due date and status, the receivables "overdue"
+> line, the counterparty statement ("Overdue now", its due dates) and the credit table's overdue column; the PO list's
+> overdue-loading tile. Money going out is not an error, so it is neutral: the PAYABLE · OPEN tiles (Invoices, Finance),
+> the "↓ Payable" direction mark, the "+ Cost invoice" button and the "Other cost" chip. Red stays for real risks only:
+> losses (negative margin or position), a passed claim notice deadline, missing data and failed actions.
+
+
+
 Rule: red = an error or a hazard (something wrong, blocked, dangerous — missing data, blockers, overdue money, old perishables, delete). A plain timing hint uses amber.
 
 Red uses found: 211 (plus the one changed). Changed in this release: 1 — PurchaseOrders.tsx, the list's date column when an active PO's loading date has passed (a timing hint) → amber. Of the rest, 92 sit next to a fault word (missing, blocked, overdue, damaged, delete…) and are kept; 119 have no such word on their line and are marked for a second look — they are mostly delete buttons, status badges and emphasis in forms, but each should be glanced at before the rule is called complete.

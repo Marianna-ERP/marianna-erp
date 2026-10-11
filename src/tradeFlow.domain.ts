@@ -1,3 +1,5 @@
+import { isEU } from "./counterparty.domain";   // v7.12.0 (A-TD-1): the one country table
+import { isReceiptOfPO } from "./receipts.domain";   // v7.12.0 (A-TD-1): the first movement of the goods
 // ─────────────────────────────────────────────────────────────────────────────
 // tradeFlow.domain.ts — structured PO trade fields ⇄ legacy flow key (Batch 4b)
 //
@@ -49,11 +51,8 @@ export function handoverPointForIncoterm(incoterm: string): string {
 
 // ═══ Batch 6b: PURCHASE TERMS collapse + 4-class movement + Phase B core ═══
 
-// EU membership for the movement matrix (customs perspective, EU-27).
-const EU_COUNTRIES = new Set(["austria","belgium","bulgaria","croatia","cyprus","czechia","czech republic","denmark","estonia","finland","france","germany","greece","hungary","ireland","italy","latvia","lithuania","luxembourg","malta","netherlands","poland","polska","portugal","romania","slovakia","slovenia","spain","sweden"]);
-export function isEUCountry(country: any): boolean {
-  return EU_COUNTRIES.has(String(country || "").trim().toLowerCase());
-}
+// v7.12.0 (A-TD-1, owner 8 Oct): the separate EU list (English names only) is gone — EU or not comes from the ONE country
+// table, counterparty.isEU (names in English and Polish, ISO codes, and the countries added in Settings).
 
 // The movement matrix (BP-56 final): origin × named place, from the EU-customs view.
 //   origin ∉ EU, place ∈ EU  → IMPORT       (goods enter EU customs)
@@ -129,49 +128,54 @@ export function poDirectFromSOs(po: any, orders: any[]): boolean {
 
 
 
-/** A country string for the shipment's ORIGIN — the producer, from the PO. */
-export function poOriginCountry(po: any, resolveCountry?: (id: any) => string): string {
+/** A country string for the goods' ORIGIN — the producer, from the PO. */
+export function poOriginCountry(po: any): string {
   if (!po) return "";
   return String(po.supplier?.country || (po.items || [])[0]?.origin || "").trim();
 }
 
-/** A country string for the FINAL DESTINATION — from the governing SO. Prefers
- *  the SO's named destination (per its sell incoterm) over the client's home
- *  country: a CIF-to-a-port sale goes where the goods physically go (ruling #2).
- *  resolveCountry maps a destinationLocationId → its country. */
-export function soDestinationCountry(so: any, resolveCountry?: (id: any) => string): string {
-  if (!so) return "";
-  if (so.destinationLocationId != null && resolveCountry) {
-    const c = resolveCountry(so.destinationLocationId);
-    if (c) return String(c).trim();
-  }
-  if (so.destinationText) {
-    // free-typed place — best effort: a trailing country-ish token, else the client's country
-    const txt = String(so.destinationText).trim();
-    if (txt) return txt;
-  }
-  return String(so.client?.country || "").trim();
+// ── v7.12.0 (A-TD-1, owner 8 Oct): ONE RULE FOR THE TRADE DIRECTION, FROM THE REAL ENDS ─────────────────────────────
+// Until v7.11.5 the direction came from the producer's home country × the sale's destination, read a TYPED destination as if it
+// were a country (22 of 29 sales on the 2 Oct file), said "Import" whenever no sale governed the truck, and judged goods already
+// received in the EU from the producer's country. The rule now:
+//   ORIGIN      — the first movement of the goods (the PO's receipt, the supplier's own truck) → the producer's country
+//                 (their customs status is their origin); an onward movement → the shipment's starting place (filled from
+//                 where the lots are, v7.9.2), else the producer.
+//   DESTINATION — the governing sale's registered place → else the client's country (typed text is never read as a country)
+//                 → with no sale: the shipment's destination place → the PO's named place → our company's country.
+//   EU or not   — counterparty.isEU, the one country table. An end that cannot be known gives no direction ("—") and says
+//                 which place to set; nothing defaults to "Import".
+// v7.19.6 (A-TD-5): OUR country is Settings → Company's — App passes it in (the built-in "Poland" stands until it does, as COMPANY_DEFAULTS)
+let OUR_COUNTRY_V = "Poland";
+export function setOurCountry(c: any) { const v = String(c ?? "").trim(); if (v) OUR_COUNTRY_V = v; }
+export function ourCountry(): string { return OUR_COUNTRY_V; }
+export interface TradeEnd { country: string; from: string; }
+export interface TradeEnds { origin: TradeEnd; destination: TradeEnd; direction: string; missing: string; }
+const S_ = (v: any) => String(v ?? "").trim();
+export function shipmentTradeEnds(sh: any, ctx: { pos?: any[]; orders?: any[]; countryOf?: (id: any) => string } = {}): TradeEnds {
+  const cOf = (id: any) => (id === undefined || id === null || id === "" || !ctx.countryOf) ? "" : S_(ctx.countryOf(id));
+  const poRefs = (sh?.poRefs || []).map(String);
+  const po = (ctx.pos || []).find((p: any) => poRefs.includes(String(p?.number))) || null;
+  const so = S_(sh?.governingSoRef) ? (ctx.orders || []).find((o: any) => String(o?.number) === S_(sh.governingSoRef)) || null : null;
+  const legs = sh?.legs || [];
+  const first = isReceiptOfPO(sh) || S_(sh?.arrangedBy).toUpperCase() === "SUPPLIER";
+  let origin: TradeEnd = { country: "", from: "" };
+  if (!first) { const c = cOf(sh?.originLocationId) || cOf(legs[0]?.fromLocationId); if (c) origin = { country: c, from: "starting place" }; }
+  if (!origin.country) { const c = poOriginCountry(po); if (c) origin = { country: c, from: first ? "producer" : "producer — no starting place set" }; }
+  let destination: TradeEnd = { country: "", from: "" };
+  if (so) { const c = cOf(so.destinationLocationId); destination = c ? { country: c, from: "sale's place" } : S_(so.client?.country) ? { country: S_(so.client.country), from: "client's country" } : destination; }
+  if (!destination.country) { const c = cOf(sh?.destinationLocationId) || cOf(legs.length ? legs[legs.length - 1]?.toLocationId : null); if (c) destination = { country: c, from: "shipment's destination" }; }
+  if (!destination.country && po) { const c = cOf(po.destinationLocationId); if (c) destination = { country: c, from: "PO's named place" }; }
+  if (!destination.country) destination = { country: ourCountry(), from: "our company" };
+  if (!origin.country) return { origin, destination, direction: "", missing: "set the starting place (or link the PO)" };
+  const oEU = isEU(origin.country), dEU = isEU(destination.country);
+  if (oEU === null) return { origin, destination, direction: "", missing: `"${origin.country}" is not a country the system knows — add it in Settings → Countries` };
+  if (dEU === null) return { origin, destination, direction: "", missing: `"${destination.country}" is not a country the system knows — add it in Settings → Countries` };
+  return { origin, destination, direction: movementFromEnds(oEU, dEU), missing: "" };
 }
-
-/** The derived direction from two country strings, or "" when either is unknown. */
-export function directionFromCountries(originCountry: string, destCountry: string): string {
-  if (!originCountry || !destCountry) return "";
-  return movementFromEnds(isEUCountry(originCountry), isEUCountry(destCountry));
-}
-
-export function shipmentTradeDirection(shipment: any, po: any, so: any = null, resolveCountry?: (id: any) => string): string {
-  // 1. explicit manual override — always wins
-  if (shipment?.tradeDirection && MOVEMENT_LABELS[shipment.tradeDirection]) return shipment.tradeDirection;
-  // 2. derived from the real ends when a governing SO is known
-  if (so) {
-    const derived = directionFromCountries(poOriginCountry(po, resolveCountry), soDestinationCountry(so, resolveCountry));
-    if (derived) return derived;
-  }
-  // 3. PO provisional (no SO — unsold portion to warehouse)
-  if (po?.tradeMovement && MOVEMENT_LABELS[po.tradeMovement]) return po.tradeMovement;
-  // 4. legacy flow key, then Import
-  if (String(po?.flow || "").startsWith("EXP")) return "EXPORT";
-  return "IMPORT";
+/** The direction alone ("" when an end is unknown). Every reader asks this — nothing is stored (A-TD-2). */
+export function shipmentTradeDirection(sh: any, ctx: { pos?: any[]; orders?: any[]; countryOf?: (id: any) => string } = {}): string {
+  return shipmentTradeEnds(sh, ctx).direction;
 }
 
 // ── v6.34.6: does a shipment FULFIL its PO/SO (consume the shipped budget)? ──────

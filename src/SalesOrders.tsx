@@ -20,6 +20,7 @@ import { defaultFxRate } from "./fx";
 import { getCounterpartiesByType } from "./Contacts";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice } from "./fakturownia";
 import { locationById, placeForPrint } from "./locations";
+import { termsToReview, termsFindingsForDoc } from "./incoterms.domain";   // v7.20.0 (A-INC-2): the SO view shows its terms to review
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
@@ -262,7 +263,7 @@ function parsePaymentTermsDays(terms) {
 // Build a Sales Invoice (SINV) draft object from a Shipped SO.
 // Mirrors the shape of invoice objects in Invoices.tsx (INIT_INVOICES seed there)
 // so when integration happens, the object slots directly into the invoices state.
-export function buildInvoiceFromSO(order, invoiceNumber, today) {
+export function buildInvoiceFromSO(order, invoiceNumber, today, clientVatRate: any = null) {   // v7.18.7 (BP-46): + the client's default VAT rate
   const issueDate = today || localTodayISO();
   const saleDate = order.deliveryDate || issueDate; // when goods physically shipped
   const days = parsePaymentTermsDays(order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms);
@@ -272,7 +273,7 @@ export function buildInvoiceFromSO(order, invoiceNumber, today) {
   }
   // VAT — Polish food default is 5%, but it depends on product/destination.
   // We pre-fill 5% and flag for user review in the modal.
-  const VAT_DEFAULT = 5;
+  const VAT_DEFAULT = clientVatRate !== null && clientVatRate !== undefined && clientVatRate !== "" && [0, 5, 8, 23].includes(Number(clientVatRate)) ? Number(clientVatRate) : 5;   // v7.18.7 (BP-46): the client's default when it has one
   const net = netTotal(order.items);
   const vat = Math.round(net * VAT_DEFAULT) / 100;
   const gross = Math.round((net + vat) * 100) / 100;
@@ -671,7 +672,7 @@ function soTermsMissing(o: any): string | null {
   if (!o?.sellIncoterm) return "the sell incoterm";
   const mode = o.destinationMode || ((o.destinationLocationId || o.destinationText) ? "other" : "client");
   if (mode === "client") {
-    if (!(o.client?.address || "").trim()) return "the client's registered address (or pick another destination)";
+    if (!(o.destinationLocationId || (o.client?.address || "").trim())) return "the client's site (or pick another destination)";   // v7.18.1 (A-AU-3)
     return null;
   }
   if (!(o.destinationLocationId || (o.destinationText || "").trim())) return `the destination for ${o.sellIncoterm}`;
@@ -716,7 +717,7 @@ export default function SalesOrders({ archive = null,
   orders: extOrders, setOrders: extSetOrders,
   invLots: extInvLots, setLots: extSetLots, allPOs: extPOs, shipments: extShipments = [], setShipments: extSetShipments = null,
   contacts: extContacts,
-  packagingTypes = [],
+  packagingTypes = [], setPackagingTypes = null,   // v7.18.0 (A-AU-1)
   operationalCosts: extOperationalCosts = [],
   invoices: extInvoices = null, setInvoices: extSetInvoices = null,
   financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, inspections: extInspections = [],
@@ -767,13 +768,15 @@ export default function SalesOrders({ archive = null,
       if (!hit) {
         hit = fktList.find(iv => {
           const amtClose = Math.abs((iv.grossTotal || 0) - (reg.grossAmount || 0)) < 1;
-          const taxMatch = order.client?.nip && iv.buyerTaxNo && String(iv.buyerTaxNo).replace(/\D/g, "").includes(String(order.client.nip).replace(/\D/g, ""));
+          const taxMatch = order.client?.nip && iv.buyerTaxNo && String(iv.buyerTaxNo).replace(/\D/g, "") === String(order.client.nip).replace(/\D/g, "");   // v7.16.5 (A-RV-14): the same tax id, not one that contains it
           return amtClose && taxMatch;
         });
       }
       if (!hit) return reg;
       matched++;
-      return { ...reg, locked: true, fakturownia: { ...(reg.fakturownia || {}), exported: true, legalNumber: hit.number, ksef: hit.ksefNo || "", paid: !!hit.paid, status: hit.status } };
+      // v7.16.5 (A-RV-14 · rule 11): the bank is the only source of payment — Fakturownia's paid flag, and its status (which can say "paid"), are not kept
+      const { paid: _fktPaid, status: _fktStatus, ...fk } = (reg.fakturownia || {}) as any;
+      return { ...reg, locked: true, fakturownia: { ...fk, exported: true, legalNumber: hit.number, ksef: hit.ksefNo || "" } };
     }));
     setFktMatchMsg({ kind: matched ? "success" : "error", text: matched ? `Matched ${matched} invoice(s) from Fakturownia.` : "No matching invoice found in Fakturownia for this SO yet." });
   }
@@ -798,7 +801,8 @@ export default function SalesOrders({ archive = null,
     if (!line) return lot;
     return { ...lot, variety: lot.variety || line.variety || "", cnCode: lot.cnCode || line.cnCode || "" };
   });
-  const clients = useMemo(() => clientsFromContacts((extContacts || []).filter((c: any) => !c.archived)), [extContacts]); // v6.99.2 (CP-4): archived parties leave the picker
+  const termsAll = useMemo(() => termsToReview({ pos: extPOs || [], orders: orders || [], shipments: extShipments || [], claims: extClaims || [], contacts: extContacts || [], lots: extInvLots || [], placeOf: (id: any) => locationById(id, extContacts || []) }), [extPOs, orders, extShipments, extClaims, extContacts, extInvLots]);   // v7.20.0 (A-INC-2)
+  const clients = useMemo(() => clientsFromContacts((extContacts || []).filter((c: any) => !c.archived && !c.deleted)), [extContacts]); // v6.99.2 (CP-4): archived parties leave the picker
 
   // v6.99.35: an order can be opened directly (deep link, and the render smoke exercises the EDITOR, where the regression was)
   const openDirect = (extOrders || []).find((o: any) => String(o.number) === String(initialSelectedNumber)) || null;
@@ -1010,7 +1014,7 @@ export default function SalesOrders({ archive = null,
     const src = validateSourcing(o.items);
     const needsSource = !src.allSourced && o.status !== "Draft" && o.status !== "Cancelled";
     if (needsSource) {
-      await uiAlert({ tone: "warn", title: "Lines unsourced", message: `Cannot save SO as ${o.status} — ${src.unsourcedIndexes.length} line(s) unsourced. Pick a stock lot or a PO for every line first, or save as Draft.` });
+      await uiAlert({ tone: "warn", title: "Lines unsourced", message: `Cannot save SO as ${o.status} — ${src.unsourcedIndexes.length} line(s) unsourced. Pick a lot for every line first (expected, in stock or direct), or save as Draft.` });
       return;
     }
     const poIssues = validatePOReadinessForSO(o.items);
@@ -1193,6 +1197,7 @@ export default function SalesOrders({ archive = null,
           contacts={extContacts}
           productCatalog={productCatalog}
           setProductCatalog={setProductCatalog}
+          setPackagingTypes={setPackagingTypes}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={async () => {
@@ -1226,6 +1231,7 @@ export default function SalesOrders({ archive = null,
         {invoiceOrder && <InvoiceCreationModal order={invoiceOrder} existingInvoiceNumbers={allInvoiceNumbers()} onCancel={() => setInvoiceOrder(null)} onConfirm={confirmInvoiceCreation} />}
         <OrderDetail
           order={selected}
+          termsFindings={termsFindingsForDoc(termsAll, selected.number)}
           soInvoices={invoicesForSO(selected.number)} financeNotes={extFinanceNotes}
           allOrders={orders}
           fktConfigured={fktConfigured}

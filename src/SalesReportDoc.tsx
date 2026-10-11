@@ -6,6 +6,7 @@
 import React from "react";
 import { BiLbl, COMPANY, PrintLogo } from "./PurchaseOrders";
 import { formatDMY } from "./dates";
+import { companyAddressLines } from "./useLocalStoredState";   // v7.19.6 (A-TD-5): the country printed when the address does not name it
 
 const n0 = (v: number) => Math.round(v || 0).toLocaleString("pl-PL");
 const n2 = (v: number) => (v || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -34,7 +35,7 @@ export default function SalesReportDoc({ order, calc, supplierRef = "", no = "",
         <td style={{ ...cell, verticalAlign: "top" }}>
           <BiLbl en="Producer" pl="Producent" /><div style={{ marginTop: 3, fontWeight: 700, fontSize: 12 }}>{prod}</div>
           <div style={{ marginTop: 8 }}><BiLbl en="Sold by" pl="Sprzedawca" /></div><div style={{ marginTop: 3, fontWeight: 700, fontSize: 12 }}>{COMPANY.name}</div>
-          {COMPANY.address.split("\n").map((l: string, i: number) => <div key={i} style={{ fontSize: 10.5 }}>{l}</div>)}<div style={{ fontSize: 10.5 }}>NIP {COMPANY.nip}</div>
+          {companyAddressLines(COMPANY).map((l: string, i: number) => <div key={i} style={{ fontSize: 10.5 }}>{l}</div>)}<div style={{ fontSize: 10.5 }}>NIP {COMPANY.nip}</div>
         </td></tr></tbody></table>
 
       <div style={{ fontSize: 11, fontWeight: 700, margin: "4px 0" }}>Sales per variety <span style={{ fontWeight: 400, color: "#555" }}>· kg and PLN, excl. VAT{calc.salesBasis === "invoice" ? " · at the sales invoices' rates" : calc.salesBasis === "mixed" ? " · invoiced and ordered sales" : " · from the sales orders (not yet invoiced)"}</span></div>

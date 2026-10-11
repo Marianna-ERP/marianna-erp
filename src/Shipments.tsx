@@ -1,11 +1,11 @@
-import { fillEmptyPlaces } from "./incoterms.domain";   // v7.9.2
+import { fillEmptyPlaces, termsToReview } from "./incoterms.domain";   // v7.9.2 · v7.20.0 (A-INC-2): the incoterm review
+import { TermsReviewList, TERMS_REVIEW } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { statusWord } from "./format";
 import { ModuleHeader, ActionButton, notifySaved } from "./ui";
 import React, { useMemo, useState } from "react";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 
 import DateInput from "./DateInput";
-import { shipmentTradeDirection } from "./tradeFlow.domain";
 import { postShipmentToLots, derivePurpose, nextShipmentAction, syncLegFreightCostLines, legFreightSource, findLotForSOLine } from "./shipments.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
@@ -58,10 +58,10 @@ export function allUnitsCarrierNames(sh: any, contacts: any[]): string[] {
   return out;
 }
 setFxFallback((cur: string) => documentFxDefault(cur));
-export function costLinesByCarrierLegApply(sh: any): any {
+export function costLinesByCarrierLegApply(sh: any, payers?: Array<{ payer: string }>): any {   // v7.19.0 (A-INC-1): payers = incoterms.legFreightPayers
   const anyPriced = (sh.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => parseNum(u?.costAmount, 0) > 0));
-  if (!anyPriced) return syncLegFreightCostLines(sh);
-  return { ...sh, costs: costLinesByCarrierLeg(sh, (id: any) => (CONTACTS_REF.find((c: any) => String(c.id) === String(id)) || {}).name || "") };
+  if (!anyPriced) return syncLegFreightCostLines(sh, payers);
+  return { ...sh, costs: costLinesByCarrierLeg(sh, (id: any) => (CONTACTS_REF.find((c: any) => String(c.id) === String(id)) || {}).name || "", payers) };
 }
 
 
@@ -773,7 +773,6 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
     originCustom,
     destinationLocationId,
     destinationCustom,
-    costResponsibility: "Marianna",
     loadingDate: opts.loadingDate || po.loadingDate || todayISO(),
     expectedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(),
     actualLoadingDate: null,
@@ -800,7 +799,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
   // v6.45.0 (B): the shipment owns the trade direction — derived from its
   // governing SO (the from-PO builder already did this; this one never did,
   // which is why direct-export lots showed "Import").
-  const tradeDirection = shipmentTradeDirection(null, null, so, countryOfLocation);
+  // v7.12.1 (A-TD-2): no direction is written — every reader asks tradeFlow.shipmentTradeDirection (rule 7: one source)
   const id = nextId();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
@@ -842,7 +841,6 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
       poRef: it.sourceType === "PO" ? it.sourceRef : lot?.poRef || "",
       soRef: so.number,
       soLineId: it.id ?? idx + 1,   // v6.34.8: stamp the source SO line
-      tradeDirection,               // rows keep the derived direction for lot badges (read-only)
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product || "Goods",
       variety: it.variety || "",
@@ -882,7 +880,6 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
     forwarderId,
     brokerId: null,
     vehicleCount: 1,
-    costResponsibility: "Marianna",
     loadingDate: opts.loadingDate || todayISO(),
     expectedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(),
     actualLoadingDate: null,
@@ -931,7 +928,6 @@ function buildManualShipment__raw(opts, shipments) {
     forwarderId,
     brokerId: null,
     vehicleCount: 1,
-    costResponsibility: "Marianna",
     loadingDate: opts.loadingDate || todayISO(),
     expectedDeliveryDate: opts.expectedDeliveryDate || todayISO(),
     actualLoadingDate: null,
@@ -1072,6 +1068,11 @@ export function syncCustomsCostLine(sh: any) {
   const costs = (sh.costs || []).filter((c: any) => !(c._customsAuto || c.source === "customs-auto"));
   const c = sh.customs || {};
   const amt = parseNum(c.cost);
+  // v7.19.3 (A-INC-1, 4/5): when customs is not ours (the terms say the other side clears) an auto line that carries money is
+  // RELEASED as an ordinary line — flagged on the shipment, never dropped silently.
+  if (!(c.applies && amt > 0) && prevAuto && (parseNum(prevAuto.amount) > 0 || parseNum(prevAuto.amountPLN) > 0)) {
+    const { _customsAuto, source, ...rest } = prevAuto; costs.push({ ...rest, notes: prevAuto.notes || "Customs clearance" });
+  }
   if (c.applies && amt > 0) {
     const fx = parseNum(c.fxRate) || 1;
     costs.push({
@@ -1171,7 +1172,7 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
                   {t.truckPlate || `truck ${t.id}`}{f && <input type="number" placeholder="split kg" value={f.kg ?? ""} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, feeders: x.feeders.map((z: any) => String(z.truckId) === String(t.id) ? { ...z, kg: parseNum(e.target.value, 0) || undefined } : z) } : x))} style={{ ...inp, width: 68, padding: "1px 4px" }} />}
                 </label>; })}
             </div>
-            <ActionButton action="close" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} />
+            <ActionButton action="remove" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} />
           </div>
         ))}
         <div style={{ display: "flex", gap: 8 }}>
@@ -1187,7 +1188,7 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
             <input type="number" placeholder="kg" value={r.kg} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, kg: e.target.value } : x))} style={inp} />
             <select value={r.destKind} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, destKind: e.target.value } : x))} style={inp}><option value="WAREHOUSE">→ our warehouse (transfer)</option><option value="SO">→ client (SO)</option></select>
             {r.destKind === "SO" ? <select value={r.soNumber} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, soNumber: e.target.value } : x))} style={inp}><option value="">— sales order —</option>{(orders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft").map((o: any) => <option key={o.number} value={o.number}>{o.number} · {o.client?.name}</option>)}</select> : <span />}
-            <ActionButton action="close" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} />
+            <ActionButton action="remove" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} />
           </div>
         ))}
         <div style={{ display: "flex", gap: 8 }}>
@@ -1242,7 +1243,7 @@ export function ChecklistLine({ ok, label, warnText = "" }: any) {
   return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F1F5F9" }}><div style={{ fontSize: 12, color: "#444" }}>{label}</div><div style={{ fontSize: 11, fontWeight: 800, color: ok ? "#16A34A" : "#D97706" }}>{ok ? "OK" : (warnText || "Open")}</div></div>;
 }
 
-export default function Shipments({ archive = null,
+export default function Shipments({ archive = null, claims: extClaims = [], initialStatusFilter = "",   // v7.20.0 (A-INC-2): the claims the review reads; the Dashboard opens the list on its filter
   shipments: extShipments,
   packagingTypes = [],
   setClaims = null,
@@ -1292,7 +1293,7 @@ export default function Shipments({ archive = null,
   const [boardView, setBoardView] = useState(false);   // v6.99.55 (BD-1): list · detail · BOARD
   const [query, setQuery] = useState("");
   const [modeFilter, setModeFilter] = useState("All");
-  const [statusFilter, setStatusFilter] = useState("Open");
+  const [statusFilter, setStatusFilter] = useState(initialStatusFilter || "Open");   // v7.20.0: the Dashboard's 'Terms to review' tile opens on that filter
   const [showCreate, setShowCreate] = useState(false);
   // v6.56.0: Load Plan lives as a TAB inside Shipments (user ruling), not a
   // separate module — it is the same work, one level up.
@@ -1312,20 +1313,26 @@ export default function Shipments({ archive = null,
   // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
   const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("shipment", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const customsOpenSet = useMemo(() => new Set(outstandingCustoms(shipments).map(r => r.number)), [shipments]);   // v7.10.4 (A-RV-15)
+  // v7.20.0 (A-INC-2, P-9): every inconsistency with the incoterms — this season's shipments, sales and purchases (as the Dashboard counts them) and the claims
+  const inSeason = (kind: string, doc: any) => !archive || archive.includeArchived || !isArchived(kind as any, doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
+  const termsAll = useMemo(() => termsToReview({ pos: (pos || []).filter((p: any) => inSeason("po", p)), orders: (orders || []).filter((o: any) => inSeason("so", o)), shipments: (shipments || []).filter((s: any) => inSeason("shipment", s)), claims: extClaims || [], contacts, lots: lots || [], placeOf: (id: any) => locationById(id, contacts), countryOf: countryOfLocation }), [pos, orders, shipments, extClaims, contacts, lots, archive]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const termsShipmentSet = useMemo(() => new Set(termsAll.map(x => x.shipment).filter(Boolean)), [termsAll]);
+  const termsShown = useMemo(() => { const q = norm(query); return q ? termsAll.filter(x => [x.term, x.doc, x.record, x.text].join(" ").toLowerCase().includes(q)) : termsAll; }, [termsAll, query]);   // eslint-disable-line react-hooks/exhaustive-deps
   const filtered = useMemo(() => {
     const q = norm(query);
     return sorted.filter(s => {
       if (!archiveShow(s)) return false;   // v6.99.54 (AR-4)
       if (modeFilter !== "All" && s.mode !== modeFilter) return false;
       if (statusFilter === "Open" && ["Closed", "Cancelled"].includes(s.status)) return false;
-      if (statusFilter === CUSTOMS_OPEN) { if (!customsOpenSet.has(String(s.number))) return false; }   // v7.10.4 (A-RV-15): shipments whose customs clearance is still open
+      if (statusFilter === TERMS_REVIEW) { if (!termsShipmentSet.has(String(s.number))) return false; }   // v7.20.0 (A-INC-2): shipments with a term to review
+      else if (statusFilter === CUSTOMS_OPEN) { if (!customsOpenSet.has(String(s.number))) return false; }   // v7.10.4 (A-RV-15): shipments whose customs clearance is still open
       else if (statusFilter !== "All" && statusFilter !== "Open" && s.status !== statusFilter) return false;
       if (!q) return true;
       const hay = [s.number, s.transportOrderNo, s.status, s.mode, s.purpose, ...(s.poRefs || []), ...(s.soRefs || []), ...(s.lotRefs || []), providerName(s.carrierId || s.forwarderId, contacts), ...(s.goods || []).map(g => g.product)].join(" ").toLowerCase();
       return hay.includes(q);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sorted, query, modeFilter, statusFilter, contacts, archive, customsOpenSet]);
+  }, [sorted, query, modeFilter, statusFilter, contacts, archive, customsOpenSet, termsShipmentSet]);
   const selected = shipments.find(s => s.id === selectedId) || filtered[0] || shipments[0] || null;
 
   // v6.58.0 one-time reconcile: shipments that reached Loaded/Arrived before
@@ -1805,14 +1812,16 @@ export default function Shipments({ archive = null,
         <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "grid", gap: 10 }}>
             <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}<option value={CUSTOMS_OPEN}>{CUSTOMS_OPEN} ({customsOpenSet.size})</option></Sel></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}<option value={CUSTOMS_OPEN}>{CUSTOMS_OPEN} ({customsOpenSet.size})</option><option value={TERMS_REVIEW}>{TERMS_REVIEW} ({termsAll.length})</option></Sel></div>
           </div>
           <div style={{ overflow: "auto", flex: 1 }}>
-            {filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
+            {statusFilter === TERMS_REVIEW   // v7.20.0 (A-INC-2): the review — one line per inconsistency, sales and purchases included; a shipment line opens its editor
+              ? <TermsReviewList findings={termsShown} onOpenShipment={(no: string) => { const sh = shipments.find((x: any) => String(x.number) === String(no)); if (sh) { setSelectedId(sh.id); setEditShipment(sh); } }} />
+              : filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
+          {selected ? <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} termsFindings={termsAll.filter(x => x.shipment === String(selected.number))} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
             onMarkTOSent={(key: string) => { updateShipment(selected.id, (s: any) => ({ ...s, transportOrders: { ...(s.transportOrders || {}), [key]: { sentAt: todayISO(), told: sentCargoSnapshot(s, packagingTypes || []) } }, confirmationStatus: "Sent", confirmationSentAt: s.confirmationSentAt || todayISO() })); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "status", summary: `Transport order ${key} marked sent` }); }}
             onStuffing={(rows: any[]) => { updateShipment(selected.id, (s: any) => applyStuffingReport(s, rows, { nextId })); setToast(`${selected.number}: ${rows.length} container(s) created from the forwarder's report.`); }}
             onDevanning={(rows: any[]) => {
@@ -1827,13 +1836,14 @@ export default function Shipments({ archive = null,
       </div>
     </div>
 
-    {showCreate && <CreateShipmentModal pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
+    {showCreate && <CreateShipmentModal productCatalog={productCatalogProp} pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
     {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} allShipmentsForCap={shipments} invoices={extInvoices} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
     {showCustomsImport && <CustomsImportModal shipments={shipments} invoices={extInvoices} onClose={() => setShowCustomsImport(false)} setShipments={(next: any[]) => { setShipments(() => next); notifySaved("customs files"); }} />}
     {protocolShipment && <LoadingProtocolModal
       shipment={protocolShipment}
       contacts={contacts}
       pos={pos}
+      lots={lots}   /* v7.15.2 */
       packagingTypes={packagingTypes.length ? packagingTypes : PACKAGING_SEED}
       allShipments={shipments}
       companyName={COMPANY.name}

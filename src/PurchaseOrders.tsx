@@ -9,17 +9,18 @@ import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
-import { handoverSentence, MOVEMENT_LABELS, poDirectFromSOs } from "./tradeFlow.domain";
+import { handoverSentence, poDirectFromSOs } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
-import { FX_RATES } from "./fx";
+import { FX_RATES, nbpRateBefore } from "./fx";   // v7.18.6: + nbpRateBefore
 import { getCounterpartiesByType } from "./Contacts";
 import { locationById } from "./locations";
+import { termsToReview, termsFindingsForDoc } from "./incoterms.domain";   // v7.20.0 (A-INC-2): the PO view shows its terms to review
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
 import { isEstimatedLine, planPackingResult } from "./so.domain";
-import { computePOSettlement, provisionalCandidates, provisionalFromInvoice, expectedProducerExtraInvoice, defaultTruckRate, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun } from "./poSettlement.domain";
+import { computePOSettlement, provisionalCandidates, provisionalFromInvoice, expectedProducerExtraInvoice, salesReportRows, expectedProducerCreditNote, nextSettlementNumberPO, commissionRun, settlementRate } from "./poSettlement.domain";
 import { currentCommissionRate, commissionPctForSales } from "./consignment";
 import { printHtmlNode } from "./documentService";
 import SalesReportDoc from "./SalesReportDoc";   // v6.99.84 (A-ST-6)
@@ -28,7 +29,7 @@ import { suggestedReceiptDate } from "./shipmentModel.domain";
 import { PACKAGING_SEED } from "./packaging.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
-import { syncGoodsFromPO } from "./shipments.domain";
+import { syncGoodsFromPO, nextShipmentNumberPure } from "./shipments.domain";   // v7.14.1 (A-RV-03): + the one shipment numbering
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
 import { companyProfile } from "./useLocalStoredState";
@@ -180,14 +181,13 @@ export function FlowBadge({ flow, order = null, compact = false }: any) {
   // v6.43.0 (test-round #4/#5b): NO import/export direction is guessed here. Trade
   // direction is the shipment's truth, not the PO's — defaulting to "Import" showed
   // the wrong direction on export deals (e.g. CIF/CFR out of the EU). We show the
-  // incoterm + named place only; a direction word appears solely if the PO carries
-  // an explicit tradeMovement (legacy records that stored one).
-  if (order && (order.buyIncoterm || order.tradeMovement)) {
-    const dir = order.tradeMovement && MOVEMENT_LABELS[order.tradeMovement] ? MOVEMENT_LABELS[order.tradeMovement] : null;
+  // incoterm + named place only. v7.16.8 (A-TD-6): an old stored 'tradeMovement' no longer adds a direction word —
+  // the shipment's rule from the real ends is the one source of the trade direction.
+  if (order && order.buyIncoterm) {
     const place = order.destinationText || (locationById(order.destinationLocationId)?.name) || "";
     return (
       <span title={handoverSentence(order.buyIncoterm, place)} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
-        {dir ? <b style={{ color: dir.color }}>{dir.label} · </b> : null}{order.buyIncoterm ? <>{order.buyIncoterm}{place ? ` ${place}` : ""}</> : null}
+        {order.buyIncoterm}{place ? ` ${place}` : ""}
       </span>
     );
   }
@@ -450,8 +450,11 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
   const rec: any = (settlements || []).find((s: any) => String(s.poNumber) === String(order.number)) || null;
   const producer = (contacts || []).find((c: any) => String(c.id) === String(order.supplier?.id)) || null;
   const rateRec = producer ? currentCommissionRate(producer, order.loadingDate || order.orderDate || localTodayISO()) : null;   // v6.99.129 (AUD-13): the rate valid when the truck was bought, not today's
-  const defRate = defaultTruckRate(order, lots, orders, invoices);
-  const rate = rec?.ratePLNperEUR ?? defRate;
+  // v7.18.6 (A-AU-12, owner 9 Oct): the NBP rate of the day before the settlement's date — today while open, kept at closing
+  const [, setNbpRead] = React.useState(0);
+  const sr = settlementRate(order, rec, localTodayISO());
+  React.useEffect(() => { let off = false; const c = String(order.currency || "EUR").toUpperCase(); if (sr.kept || c === "PLN" || sr.rate > 0) return; nbpRateBefore(c, localTodayISO()).then(r => { if (!off && r) setNbpRead(t => t + 1); }); return () => { off = true; }; }, [order.currency, sr.kept, sr.rate]);
+  const rate = sr.rate;
   const pctDefault = rateRec ? (commissionPctForSales(rateRec, 0) ?? rateRec.pct) : 0;
   const pct = rec?.commissionPct ?? pctDefault;
   const calc = computePOSettlement({ po: order, lots, orders, invoices, shipments, claims, ratePLNperEUR: rate, provisionalEUR: rec?.provisionalEUR, commissionPct: pct, provisionalCurrency: rec?.provisionalCurrency, provisionalRate: rec?.provisionalRate, provisionalInvoiceNo: rec?.provisionalInvoiceNo, financeNotes });
@@ -468,7 +471,7 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
   const docBtn = (colour: string, bg: string): any => ({ padding: "7px 14px", borderRadius: 8, border: `1px solid ${colour}`, background: bg, color: colour, fontSize: 12.5, fontWeight: 800, cursor: "pointer" });
   function doClose() {
     const number = rec?.number || nextSettlementNumberPO(settlements, new Date().getFullYear());   // v6.99.117 (AUD-27): a re-closed settlement keeps its number (it may be on a printed statement)
-    upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, commissionPct: pct });
+    upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, fxTableDate: sr.tableDate, commissionPct: pct });   // v7.18.6: the NBP table kept with the rate
     const cn = expectedProducerCreditNote(order, calc, { nextId, todayISO: localTodayISO });
     if (cn && typeof setFinanceNotes === "function") { setFinanceNotes((prev: any[]) => [...(prev || []), cn]); upd({ expectedCreditNoteId: cn.id }); }
     const dn = expectedProducerExtraInvoice(order, calc, { nextId, todayISO: localTodayISO });   // v6.99.85 (A-CS-3): the other direction is expected too
@@ -480,7 +483,8 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
     <Card style={{ marginBottom: 16, borderLeft: "4px solid #7C3AED" }}>
       <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: closed ? "#16A34A" : "#B45309" }}>{closed ? `CLOSED ${rec.closedAt}` : (calc.fullySold ? "FULLY SOLD — ready to close" : "INTERIM")}</span>}>Producer's settlement — {order.number}{rec?.number ? ` · ${rec.number}` : ""}{onOpenResult && <button onClick={() => onOpenResult(order)} style={{ marginLeft: 10, padding: "2px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 0 }}>Result of this truck → Finance</button>}</SectionTitle>{/* v7.8.3 (A-PL-2): the producer's statement; our result lives in Finance */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
-        <div><Lbl>{cur === "PLN" ? "Rate — the PO is in PLN" : `Rate PLN→${cur} (last sales invoice + bank cost)`}</Lbl><input type="number" step="0.0001" disabled={closed || cur === "PLN"} value={cur === "PLN" ? 1 : (rate || "")} onChange={e => upd({ ratePLNperEUR: parseFloat(e.target.value) || 0 })} style={inp} /></div>
+        <div><Lbl>{cur === "PLN" ? "Rate — the PO is in PLN" : `Rate PLN→${cur} · NBP`}</Lbl><div data-settlement-rate="1" style={{ ...inp, background: "#F8FAFC", fontVariantNumeric: "tabular-nums" }}>{cur === "PLN" ? "1" : rate > 0 ? rate.toFixed(4) : "—"}</div>
+          {cur !== "PLN" && <div style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>{sr.kept ? `kept at closing${sr.tableDate ? ` · NBP ${sr.tableDate}` : ""}` : sr.tableDate ? `NBP table A of ${sr.tableDate}, the day before today — fixed when closed` : "NBP not read yet"}</div>}</div>{/* v7.18.6 (A-AU-12): not typed */}
         <div><Lbl>Commission % {bandPct != null ? `(band → ${bandPct}%)` : ""}</Lbl><input type="number" step="0.1" disabled={closed} value={pct ?? ""} onChange={e => upd({ commissionPct: parseFloat(e.target.value) || 0 })} style={inp} /></div>
         <div><Lbl>Producer's provisional invoice</Lbl>
           <select disabled={closed} value={rec?.provisionalInvoiceId ?? ""} title="v6.99.85 (A-CS-1): the producer's invoice from the register — its net, currency, rate and payments follow; type it only when it is not registered yet" onChange={e => { const inv = candidates.find((i: any) => String(i.id) === e.target.value); upd(inv ? provisionalFromInvoice(inv) : { provisionalInvoiceId: null }); }} style={inp}>
@@ -565,7 +569,9 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
                 <SmallButton onClick={() => setAskClose(false)}>No</SmallButton>
                 <button onClick={() => { setAskClose(false); doClose(); }} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Yes, close</button>
               </span>
-            : <button onClick={() => setAskClose(true)} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>🔒 Close settlement{calc.fullySold ? "" : " (interim)"}</button>
+            : (cur !== "PLN" && !(Number(rate) > 0))   /* v7.16.2 (AUD-31): a foreign-currency settlement closes only with its rate — once closed, the rate can no longer be entered */
+              ? <span data-close-needs-rate="1" style={{ fontSize: 11.5, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>Enter the PLN→{cur} rate to close — without it the net sales in {cur}, the commission and the producer's note can't be worked out.</span>
+              : <button onClick={() => setAskClose(true)} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>🔒 Close settlement{calc.fullySold ? "" : " (interim)"}</button>
         )}
         {closed && setSettlements && !rec?.commissionInvoiceId && (
           <button onClick={() => { if (!window.confirm(`Re-open settlement ${rec?.number || ""}? Its expected credit note is withdrawn and the figures become live again.`)) return;
@@ -794,7 +800,7 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ canOpenResult = false, onOpenResult = null, archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], financeNotes: extFinanceNotes = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
+export default function PurchaseOrders({ canOpenResult = false, onOpenResult = null, archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setPackagingTypes = null, setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], financeNotes: extFinanceNotes = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
   PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
@@ -802,9 +808,10 @@ export default function PurchaseOrders({ canOpenResult = false, onOpenResult = n
   // Integration mode: parent shell passes state in. Standalone: use baked-in seed.
   const [localOrders, setLocalOrders] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
   const orders = extPOs ?? localOrders;
+  const termsAll = useMemo(() => termsToReview({ pos: orders || [], orders: extSOs || [], shipments: extShipments || [], claims: extClaims || [], contacts: extContacts || [], lots: extLots || [], placeOf: (id: any) => locationById(id, extContacts || []) }), [orders, extSOs, extShipments, extClaims, extContacts, extLots]);   // v7.20.0 (A-INC-2): the PO view shows its terms to review
   const setOrders = extSetPOs ?? setLocalOrders;
   CONTACTS_REF = extContacts || [];
-  const suppliers = useMemo(() => suppliersFromContacts((extContacts || []).filter((c: any) => !c.archived)), [extContacts]); // v6.99.2 (CP-4)
+  const suppliers = useMemo(() => suppliersFromContacts((extContacts || []).filter((c: any) => !c.archived && !c.deleted)), [extContacts]); // v6.99.2 (CP-4)
   const lots = extLots || [];
   // v6.99.37: a PO can be opened directly — deep link, and the render smoke exercises the settlement card
   const openDirectPO = (extPOs || []).find((o: any) => String(o.number) === String(initialSelectedNumber)) || null;
@@ -1055,7 +1062,7 @@ ${blockNote}`.trim(),
       buyIncoterm: "", flow: "",
       supplier: null, destinationLocationId: null, destinationText: "", requiresSea: false,
       currency: "PLN", fxRate: 1, fxLockedAt: null,
-      items: [{ id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", currency: "PLN", packaging: "" }],
+      items: [{ id: nextId(), product: "", variety: "", cnCode: "", coloration: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", unitPrice: "", packaging: "" }],   // v7.18.8 (BP-51): no line currency
       notes: "",
       variance: null,
     });
@@ -1148,6 +1155,7 @@ ${blockNote}`.trim(),
           lots={lots}
           productCatalog={productCatalog}
           setProductCatalog={setProductCatalog}
+          setPackagingTypes={setPackagingTypes}
           onSave={saveOrder}
           onCancel={() => { setView("list"); setForm(null); }}
           onPrint={async () => {
@@ -1196,9 +1204,9 @@ ${blockNote}`.trim(),
           const etaISO = String(f.eta || "").slice(0, 10);
           let created: any = null;
           extSetShipments((prev: any[]) => { const all = prev || []; const yr = new Date().getFullYear();
-            const seq = all.map((s: any) => String(s.number || "")).filter((n: string) => n.includes(`-${yr}-`)).length + 1;
+            // v7.14.1 (A-RV-03, owner 9 Oct): the shipments' ONE generator (highest of the year + 1), never a count — rule 7
             created = supplierDeliveryFromPO({ ...selected, items: (selected.items || []).map((it: any, i2: number) => ({ ...it, lotRef: ((extLots || []).find((l: any) => String(l.poRef) === String(selected.number) && String(l.poLineId ?? i2 + 1) === String(it.id ?? i2 + 1)) || {}).number })) },
-              { nextId, nextNumber: () => `SHP-${yr}-${String(seq).padStart(4, "0")}`, todayISO: localTodayISO },
+              { nextId, nextNumber: () => nextShipmentNumberPure(all, yr), todayISO: localTodayISO },
               { plate: f.plate, driver: f.driver, eta: etaISO, supplierRef: f.supplierRef });
             // v6.99.36: the extra facts the one-step window collects but the builder does not take
             if (created) { const u = ((created.legs || [])[0]?.vehicles || [])[0]; if (u) { u.trailerPlate = f.trailer || u.trailerPlate; u.tempRecorderNo = f.recorder || u.tempRecorderNo; } if (f.note) created.notes = f.note; }
@@ -1208,6 +1216,7 @@ ${blockNote}`.trim(),
         }} />}
         <OrderDetail
           order={selected}
+          termsFindings={termsFindingsForDoc(termsAll, selected.number)}   // v7.20.0 (A-INC-2)
           expectedLots={["DDP", "DAP", "DPU"].includes(String(selected.buyIncoterm || "").toUpperCase())
             ? (extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))
             : [] /* v6.80.0 (D-42): EXW/FCA/FOB/CIF goods arrive on OUR shipment — the receipt is posted there */}
@@ -1291,7 +1300,7 @@ ${blockNote}`.trim(),
           </Card>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>LOADING OVERDUE</div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: overdueLoading > 0 ? "#DC2626" : "#111", marginTop: 2 }}>{overdueLoading}</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: overdueLoading > 0 ? "#B45309" : "#111", marginTop: 2 }}>{overdueLoading}</div>
           </Card>
         </div>
 

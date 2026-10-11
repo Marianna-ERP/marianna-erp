@@ -6,7 +6,7 @@ import { S } from "./format";
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
 const addDays = (iso: string, d: number) => { const m = S(iso).match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return ""; const x = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
 
-export interface Tile { key: string; title: string; count: number; detail: string; tone: "ok" | "warn" | "bad"; module: string; }
+export interface Tile { key: string; title: string; count: number; detail: string; tone: "ok" | "warn" | "bad"; module: string; filter?: string; }   // v7.20.0: filter = the list the tile opens on
 const tile = (key: string, title: string, items: string[], module: string, badWhen = 1, noneText = "none"): Tile => ({ key, title, count: items.length, detail: items.length ? items.slice(0, 4).join(" · ") + (items.length > 4 ? ` +${items.length - 4}` : "") : noneText, tone: items.length >= badWhen ? "bad" : items.length ? "warn" : "ok", module });
 
 // ── DA-2 · TODAY'S MOVEMENTS (operations) ────────────────────────────────────
@@ -70,6 +70,12 @@ export function warehouseTiles(lots: any[], shipments: any[], inspections: any[]
 export function integrityTile(issues: any[]): Tile {
   const e = (issues || []).filter(i => i.severity === "error").length, w = (issues || []).filter(i => i.severity === "warning").length, n = (issues || []).filter(i => i.severity === "info").length;
   return { key: "integrity", title: "DATA INTEGRITY", count: e + w, detail: e || w ? `${e} error(s) · ${w} warning(s) · ${n} info` : (n ? `all clear · ${n} info` : "all clear"), tone: e ? "bad" : w ? "warn" : "ok", module: "integrity" };
+}
+
+// ── v7.20.0 (A-INC-2, owner 11 Oct — P-9): TERMS TO REVIEW — every inconsistency with the incoterms; opens the Shipments filter ──
+export function termsTile(findings: Array<{ record: string }>): Tile {
+  const recs = Array.from(new Set((findings || []).map(f => String(f.record))));
+  return { key: "terms", title: "TERMS TO REVIEW", count: (findings || []).length, detail: recs.length ? recs.slice(0, 4).join(" · ") + (recs.length > 4 ? ` +${recs.length - 4}` : "") : "none", tone: recs.length ? "warn" : "ok", module: "shipments", filter: "Terms to review" };
 }
 
 /** DA-1: which tile sets a user sees — from the roles they hold (owner sees everything). */

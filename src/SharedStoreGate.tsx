@@ -1,6 +1,6 @@
 // v6.99.148: the login and the sync status for the shared store — shown only when the two settings are present
 import React, { useEffect, useState } from "react";
-import { remoteConfigured, readSession, login, logout, pullAll, uploadAllLocal, uploadStores, storesFromExport, startSync, onSync, SyncState, clearConflict, localSummary, ENV_LABEL } from "./remoteStore";
+import { remoteConfigured, readSession, login, logout, pullAll, uploadAllLocal, uploadStores, storesFromExport, startSync, onSync, SyncState, clearConflict, localSummary, ENV_LABEL, keepMine, dismissNotice } from "./remoteStore";   // v7.14.0: + keepMine, dismissNotice
 
 export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncState; node: React.ReactNode } {
   const configured = remoteConfigured();
@@ -65,6 +65,13 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
         </label>
       </>}
       {/* v7.1.1 (A-USR-2): the Sign out button now sits beside the person's initials in the top bar */}
+      {(sync.notices || []).map(n => (   /* v7.14.0 (A-RV-01): what a merge with a colleague's save has to say — amber, a choice where there is one */
+        <span key={`${n.kind}:${n.key}:${n.id}`} data-sync-notice={n.kind} style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>
+          {n.kind === "clash"
+            ? <>{n.label}: {n.by || "a colleague"} changed it at the same time — their version is kept, yours is set aside <button onClick={() => { keepMine(n.key, n.id); }} style={{ marginLeft: 4, fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 5, cursor: "pointer" }}>Use mine</button></>
+            : <>your new {n.label} is now {n.to} — {n.by || "a colleague"} took that number meanwhile</>}
+          <button onClick={() => dismissNotice(n.key, n.id, n.kind)} style={{ marginLeft: 4, fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 5, cursor: "pointer" }}>OK</button>
+        </span>))}
       {sync.conflicts.map(k => <span key={k} style={{ padding: "2px 8px", borderRadius: 6, background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}>{k}: a colleague{sync.by?.[k] ? ` (${sync.by[k]})` : ""} saved first — their copy was taken; your last change is kept as a conflict copy <button onClick={() => clearConflict(k)} style={{ marginLeft: 6, border: "none", background: "none", color: "#92400E", cursor: "pointer", fontWeight: 800 }}>✓</button></span>)}
     </span>
   );

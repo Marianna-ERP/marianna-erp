@@ -9,7 +9,7 @@ import { printHtmlNode } from "./documentService";
 import DateInput from "./DateInput";
 import { parseBankCSV, matchBankLines, bankPaymentEvent, upsertBankAccountFromStatement } from "./bankReconciliation.domain";
 import { advanceFromBankLine, advanceRemaining, applyAdvanceToInvoice, advanceSources, linkAdvanceToProforma } from "./advances.domain";
-import { realizedFxPLN } from "./payments.domain";
+import { realizedFxPLN, fxDifferencesByCounterparty } from "./payments.domain";   // v7.13.5 (A-AU-2)
 import { statementFor, statementCurrencies } from "./statement.domain";
 import { buildSnapshot, cashProjection } from "./periodClose.domain";
 import { clientRiskTable, poResult } from "./financePlus.domain";
@@ -23,6 +23,8 @@ import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { nextId } from "./ids";
 import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO, prevMonthISO } from "./dates";
+import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
+import { parseNum } from "./numbers";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
 import { buildLedger } from "./ledger";
 import {
@@ -259,7 +261,7 @@ function ClientRiskCard({ invoices = [], orders = [], contacts = [] }: any) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><div style={{ fontSize: 13, fontWeight: 800 }}>🛡 Client risk</div><span style={{ fontSize: 11, color: "#888" }}>exposure = open receivables · usage = (exposure + confirmed orders) / limit · feeds the credit gate at confirm</span>
         <span style={{ marginLeft: "auto" }}><SmallButton onClick={() => exportRowsToXlsx(`client_risk_${xlsStamp()}`, rows, [{ key: "client", label: "Client" }, { key: "limitPLN", label: "Limit PLN" }, { key: "exposurePLN", label: "Exposure PLN" }, { key: "openOrdersPLN", label: "Confirmed orders PLN" }, { key: "usagePct", label: "Usage %" }, { key: "overduePLN", label: "Overdue PLN" }, { key: "maxOverdueDays", label: "Max days late" }, { key: "avgDaysToPay", label: "Avg days to pay" }, { key: "lastPaymentDate", label: "Last payment" }], "Client risk")}>Export file (Excel)</SmallButton></span></div>
       <div style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>CLIENT</div><div>LIMIT</div><div>EXPOSURE</div><div>ORDERS</div><div>USAGE</div><div>OVERDUE</div><div>DAYS LATE</div><div>PAYS IN</div></div>
-      {rows.map(r => <div key={r.client} style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 11.5, padding: "3px 0", borderTop: "1px solid #F8FAFC" }}><div><b>{r.client}</b></div><div>{r.limitPLN ? fmt(r.limitPLN) : "—"}</div><div>{fmt(r.exposurePLN)}</div><div>{fmt(r.openOrdersPLN)}</div><div style={{ color: r.usagePct != null && r.usagePct > 100 ? "#DC2626" : r.usagePct != null && r.usagePct > 80 ? "#B45309" : "#111", fontWeight: 700 }}>{r.usagePct != null ? r.usagePct + "%" : "—"}</div><div style={{ color: r.overduePLN ? "#DC2626" : "#111" }}>{fmt(r.overduePLN)}</div><div style={{ color: r.maxOverdueDays > 30 ? "#DC2626" : r.maxOverdueDays ? "#B45309" : "#94A3B8" }}>{r.maxOverdueDays || "—"}</div><div>{r.avgDaysToPay != null ? r.avgDaysToPay + " d" : "—"}<span style={{ color: "#94A3B8" }}>{r.lastPaymentDate ? " · " + r.lastPaymentDate : ""}</span></div></div>)}
+      {rows.map(r => <div key={r.client} style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 11.5, padding: "3px 0", borderTop: "1px solid #F8FAFC" }}><div><b>{r.client}</b></div><div>{r.limitPLN ? fmt(r.limitPLN) : "—"}</div><div>{fmt(r.exposurePLN)}</div><div>{fmt(r.openOrdersPLN)}</div><div style={{ color: r.usagePct != null && r.usagePct > 100 ? "#DC2626" : r.usagePct != null && r.usagePct > 80 ? "#B45309" : "#111", fontWeight: 700 }}>{r.usagePct != null ? r.usagePct + "%" : "—"}</div><div style={{ color: r.overduePLN ? "#B45309" : "#111" }}>{fmt(r.overduePLN)}</div><div style={{ color: r.maxOverdueDays > 30 ? "#DC2626" : r.maxOverdueDays ? "#B45309" : "#94A3B8" }}>{r.maxOverdueDays || "—"}</div><div>{r.avgDaysToPay != null ? r.avgDaysToPay + " d" : "—"}<span style={{ color: "#94A3B8" }}>{r.lastPaymentDate ? " · " + r.lastPaymentDate : ""}</span></div></div>)}
     </div>
   );
 }
@@ -325,9 +327,9 @@ function StatementCard({ invoices = [], financeNotes = [] }: any) {
           <div style={{ fontWeight: 800, fontSize: 13 }}>Statement of account · {st.counterparty} · {st.from} → {st.to} · {st.currency}</div>
           <div style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, fontSize: 10, fontWeight: 700, color: "#94A3B8", marginTop: 8 }}><div>DATE</div><div>TYPE</div><div>REFERENCE</div><div>DUE</div><div style={{ textAlign: "right" }}>DEBIT</div><div style={{ textAlign: "right" }}>CREDIT</div><div style={{ textAlign: "right" }}>BALANCE</div></div>
           <div style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, padding: "3px 0", borderTop: "1px solid #F1F5F9", color: "#64748B" }}><div>{st.from}</div><div>Opening</div><div>balance brought forward</div><div /><div /><div /><div style={{ textAlign: "right", fontWeight: 700 }}>{fmt(st.opening)}</div></div>
-          {st.lines.map((l, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, padding: "3px 0", borderTop: "1px solid #F8FAFC", color: l.type === "Credit note" ? "#166534" : "#111" }}><div>{l.date}</div><div>{l.type}</div><div>{l.ref}{l.note ? <span style={{ color: "#94A3B8" }}> · {l.note}</span> : null}</div><div style={{ color: l.overdueDays ? "#DC2626" : "#64748B" }}>{l.dueDate || ""}{l.overdueDays ? ` (${l.overdueDays}d)` : ""}</div><div style={{ textAlign: "right" }}>{fmt(l.debit)}</div><div style={{ textAlign: "right" }}>{fmt(l.credit)}</div><div style={{ textAlign: "right", fontWeight: 700 }}>{fmt(l.balance)}</div></div>)}
+          {st.lines.map((l, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, padding: "3px 0", borderTop: "1px solid #F8FAFC", color: l.type === "Credit note" ? "#166534" : "#111" }}><div>{l.date}</div><div>{l.type}</div><div>{l.ref}{l.note ? <span style={{ color: "#94A3B8" }}> · {l.note}</span> : null}</div><div style={{ color: l.overdueDays ? "#B45309" : "#64748B" }}>{l.dueDate || ""}{l.overdueDays ? ` (${l.overdueDays}d)` : ""}</div><div style={{ textAlign: "right" }}>{fmt(l.debit)}</div><div style={{ textAlign: "right" }}>{fmt(l.credit)}</div><div style={{ textAlign: "right", fontWeight: 700 }}>{fmt(l.balance)}</div></div>)}
           <div style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, padding: "6px 0", borderTop: "2px solid #E5E7EB", fontWeight: 800 }}><div>{st.to}</div><div>Closing</div><div>{st.side === "client" ? "amount the client owes us" : "amount we owe"}</div><div /><div /><div /><div style={{ textAlign: "right" }}>{fmt(st.closing)} {st.currency}</div></div>
-          <div style={{ marginTop: 6, fontSize: 11, color: st.overdue ? "#DC2626" : "#64748B" }}>Overdue now: <b>{fmt(st.overdue) || "0,00"} {st.currency}</b> · aging: current {fmt(st.aging.current) || "0"} · 1–30 {fmt(st.aging.d30) || "0"} · 31–60 {fmt(st.aging.d60) || "0"} · 61–90 {fmt(st.aging.d90) || "0"} · &gt;90 {fmt(st.aging.older) || "0"}</div>
+          <div style={{ marginTop: 6, fontSize: 11, color: st.overdue ? "#B45309" : "#64748B" }}>Overdue now: <b>{fmt(st.overdue) || "0,00"} {st.currency}</b> · aging: current {fmt(st.aging.current) || "0"} · 1–30 {fmt(st.aging.d30) || "0"} · 31–60 {fmt(st.aging.d60) || "0"} · 61–90 {fmt(st.aging.d90) || "0"} · &gt;90 {fmt(st.aging.older) || "0"}</div>
         </div>
       )}
     </div>
@@ -533,21 +535,28 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
 
   const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
   const card: any = { background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 16px" };
-  const statusColor = (s: string) => s === "Overdue" ? "#DC2626" : s === "Paid" ? "#16A34A" : "#D97706";
+  const statusColor = (s: string) => s === "Overdue" ? "#B45309" : s === "Paid" ? "#16A34A" : "#D97706";   // v7.17.3 (A-RV-11): overdue is amber
 
   return (
     <>
       {lvNode}
       {(() => { const fx = (invoices || []).reduce((s: number, i: any) => s + realizedFxPLN(i), 0);
         return Math.abs(fx) > 0.005 ? <div style={{ fontSize: 11.5, fontWeight: 700, color: fx >= 0 ? "#065F46" : "#B91C1C", background: fx >= 0 ? "#ECFDF5" : "#FEF2F2", border: "1px solid " + (fx >= 0 ? "#A7F3D0" : "#FECACA"), borderRadius: 8, padding: "6px 12px", marginBottom: 10 }}>Realized FX {fx >= 0 ? "gain" : "loss"} to date: {fx.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN <span style={{ fontWeight: 400, color: "#64748B" }}>(from payments recorded with a bank settlement rate — v6.68.0 F-2)</span></div> : null; })()}
+      {(() => { const rows = fxDifferencesByCounterparty(invoices || []); if (!rows.length) return null;   /* v7.13.5 (A-AU-2): per client, realised against invoiced */
+        const f4 = (x: number) => x.toFixed(4); const fp = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return <div data-fx-clients="1" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 11.5 }}>
+          <div style={{ fontWeight: 800, fontSize: 11, color: "#64748B", marginBottom: 4 }}>EXCHANGE DIFFERENCES BY CLIENT / SUPPLIER — NBP of the day before the invoice vs the day before each payment</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ color: "#94A3B8", textAlign: "left" }}><th>Counterparty</th><th>Side</th><th style={{ textAlign: "right" }}>Paid</th><th style={{ textAlign: "right" }}>Invoice rate (avg)</th><th style={{ textAlign: "right" }}>Payment rate (avg)</th><th style={{ textAlign: "right" }}>Gain / loss PLN</th></tr></thead>
+          <tbody>{rows.map((r, i) => <tr key={i} style={{ borderTop: "1px solid #F1F5F9" }}><td>{r.counterparty}</td><td>{r.side === "receivable" ? "we receive" : "we pay"}</td><td style={{ textAlign: "right" }}>{fp(r.paid)} {r.currency} <span style={{ color: "#94A3B8" }}>({r.payments})</span></td><td style={{ textAlign: "right" }}>{f4(r.avgInvoiceRate)}</td><td style={{ textAlign: "right" }}>{f4(r.avgPaymentRate)}</td><td style={{ textAlign: "right", fontWeight: 700, color: r.gainPLN >= 0 ? "#065F46" : "#B91C1C" }}>{fp(r.gainPLN)}</td></tr>)}</tbody></table>
+        </div>; })()}
       <BankImportPanel invoices={invoices} setInvoices={setInvoices} nextId={nextId} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`ledger_${xlsStamp()}`, items, [{ key: "direction", label: "Direction" }, { key: "kind", label: "Kind" }, { key: "ref", label: "Reference" }, { key: "counterparty", label: "Counterparty" }, { key: "date", label: "Date" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "amount", label: "Amount" }, { key: "amountPLN", label: "Open PLN" }, { key: "status", label: "Status" }, { key: "daysOverdue", label: "Days overdue" }], "Ledger")} title="v6.99.0: exports the open items as listed">Export file (Excel)</SmallButton></div>
       {canOpenFinance(users, userName, "clients") && <ClientRiskCard invoices={invoices} orders={orders} contacts={contacts} />}
       <StatementCard invoices={invoices} financeNotes={financeNotes} />
       <AdvancesPanel advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} invoices={invoices} setInvoices={setInvoices} bankAccounts={bankAccounts} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
-        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
-        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#DC2626" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#B45309" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#111" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>NET POSITION</div><div style={{ fontSize: 19, fontWeight: 800, color: totals.netPositionPLN >= 0 ? "#16A34A" : "#DC2626" }}>{fmt(totals.netPositionPLN)}</div><div style={{ fontSize: 10.5, color: "#888" }}>receivable − payable</div></div>
         <div style={{ ...card, display: "flex", flexDirection: "column", justifyContent: "center", gap: 6 }}>
           <div style={{ display: "flex", gap: 4, background: "#F3F4F6", borderRadius: 7, padding: 3 }}>
@@ -572,7 +581,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
                 <td style={{ padding: "8px 10px", fontWeight: 600 }}>{i.counterparty}</td>
                 <td style={{ padding: "8px 10px", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.documentNo}</td>
                 <td style={{ padding: "8px 10px", color: "#888" }}>{i.date || "—"}</td>
-                <td style={{ padding: "8px 10px", color: i.status === "Overdue" ? "#DC2626" : "#888", fontWeight: i.status === "Overdue" ? 700 : 400 }}>{i.dueDate || "—"}</td>
+                <td style={{ padding: "8px 10px", color: i.status === "Overdue" ? "#B45309" : "#888", fontWeight: i.status === "Overdue" ? 700 : 400 }}>{i.dueDate || "—"}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{i.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}{i.currency !== "PLN" ? <span style={{ fontSize: 9.5, color: "#AAA" }}> PLN</span> : <span style={{ fontSize: 9.5, color: "#AAA" }}> PLN</span>}</td>
                 <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10.5, fontWeight: 800, color: statusColor(i.status) }}>{i.status}</span></td>
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>
@@ -598,6 +607,14 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
   const [whId, setWhId] = useState<any>(warehouses[0]?.id ?? "");
   const [period, setPeriod] = useState(localMonthISO());
   const [inv, setInv] = useState<any>({ invoiceNo: "", amount: "", currency: "PLN", fxRate: 1, date: localTodayISO(), notes: "" });
+  // v7.18.6 (A-AU-12, owner 9 Oct): a warehouse invoice in EUR / USD takes the NBP rate of the last working day before its date — not typed
+  const [whFx, setWhFx] = useState<any>({ note: "", tableDate: "" });
+  useEffect(() => { let off = false; const c = String(inv.currency || "PLN").toUpperCase();
+    if (c === "PLN") { if (Number(inv.fxRate) !== 1) setInv((x: any) => ({ ...x, fxRate: 1 })); setWhFx({ note: "", tableDate: "" }); return; }
+    if (!inv.date) { setWhFx({ note: "set the date — the rate follows it", tableDate: "" }); return; }
+    setWhFx({ note: "reading NBP…", tableDate: "" }); setInv((x: any) => ({ ...x, fxRate: 0 }));
+    nbpRateBefore(c, inv.date).then(r => { if (off) return; if (!r) { setWhFx({ note: "NBP not reachable", tableDate: "" }); return; } setInv((x: any) => ({ ...x, fxRate: r.rate })); setWhFx({ note: `NBP ${r.tableDate}`, tableDate: r.tableDate }); });
+    return () => { off = true; }; }, [inv.currency, inv.date]);   // eslint-disable-line react-hooks/exhaustive-deps
   const today = localTodayISO();
   const result = whId ? warehouseMonthCharges(lots, contacts, whId, period, today) : { rows: [], total: 0, totalPLN: 0, currency: "PLN" };
   const periodInvoices = (warehouseInvoices || []).filter((i: any) => String(i.warehouseId) === String(whId) && i.period === period);
@@ -609,6 +626,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     if (!setWarehouseInvoices || !whId) return;
     const amount = parseFloat(inv.amount) || 0;
     if (amount <= 0 || !inv.invoiceNo.trim()) return;
+    if (String(inv.currency || "PLN").toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0)) return;   // v7.18.6 (A-AU-12): no NBP rate yet — never at 1.0
     const fx = parseFloat(inv.fxRate) || 1;
     const rec = { id: nextId(), warehouseId: whId, warehouseName: wh?.name || "", period, invoiceNo: inv.invoiceNo.trim(), date: inv.date, amount, currency: inv.currency, fxRate: fx, amountPLN: Math.round(amount * fx * 100) / 100, status: "Received", notes: inv.notes };
     setWarehouseInvoices((prev: any[]) => [...(prev || []), rec]);
@@ -728,10 +746,10 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Invoice no.</div><input value={inv.invoiceNo} onChange={e => setInv({ ...inv, invoiceNo: e.target.value })} placeholder="FV/2026/06/123" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Amount</div><input type="number" value={inv.amount} onChange={e => setInv({ ...inv, amount: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Currency</div><select value={inv.currency} onChange={e => setInv({ ...inv, currency: e.target.value, fxRate: e.target.value === "PLN" ? 1 : inv.fxRate })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#fff" }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>FX→PLN</div><input type="number" step="0.01" value={inv.fxRate} onChange={e => setInv({ ...inv, fxRate: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
+          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>FX→PLN</div><div data-wh-rate="1" title={whFx.note} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F8FAFC", boxSizing: "border-box" }}>{String(inv.currency).toUpperCase() === "PLN" ? "1" : Number(inv.fxRate) > 0 ? Number(inv.fxRate).toFixed(4) : "—"}</div>{/* v7.18.6 (A-AU-12): NBP, not typed */}</div>
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Date</div><DateInput value={inv.date} onChange={e => setInv({ ...inv, date: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Notes</div><input value={inv.notes} onChange={e => setInv({ ...inv, notes: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
+          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0) || (String(inv.currency).toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0))} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
         </div>
         <div style={{ fontSize: 10.5, color: "#888", marginTop: 8, lineHeight: 1.5 }}>
           Approving an invoice splits its PLN amount across the month's lots proportionally to their expected charges and adds it to each lot's

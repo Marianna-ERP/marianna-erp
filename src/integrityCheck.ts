@@ -738,7 +738,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
 /** Lots whose PO no longer exists AND that hold no stock (nothing to lose): the leftovers of a season reset done by hand. */
 export function orphanLotsToRemove(lots: any[], pos: any[]): any[] {
   const poNums = new Set((pos || []).map((p: any) => String(p.number)));
-  return (lots || []).filter((l: any) => l && l.poRef && !poNums.has(String(l.poRef)) && !((Number(l.physicalKg) || 0) > 0) && !(l.movements || []).some((m: any) => m && !m.voided && (m.type === "IN") && (Number(m.qtyKg) || 0) > 0 && (Number(l.physicalKg) || 0) > 0));
+  return (lots || []).filter((l: any) => l && l.status !== "Cancelled" && l.poRef && !poNums.has(String(l.poRef))   /* v7.17.1: a lot already deleted is no longer offered */ && !((Number(l.physicalKg) || 0) > 0) && !(l.movements || []).some((m: any) => m && !m.voided && (m.type === "IN") && (Number(m.qtyKg) || 0) > 0 && (Number(l.physicalKg) || 0) > 0));
 }
 /** Invoice and claim links that point at documents that no longer exist. */
 export function danglingLinks(invoices: any[], claims: any[], pos: any[], orders: any[], shipments: any[]): { invoices: Array<{ id: any; number: string; links: any[] }>; claims: Array<{ id: any; number: string; subjects: any[] }> } {

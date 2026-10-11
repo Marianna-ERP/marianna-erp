@@ -2,7 +2,7 @@ import { ModulePage } from "./ui";
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
 import React, { useRef, useState, useEffect } from "react";
-import { importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue, DATA_KEYS } from "./useLocalStoredState";
+import { COMPANY_DEFAULTS, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue, DATA_KEYS } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import RecoveryPanel from "./RecoveryPanel";   // v7.4.2 (A-REC-1)
 import { useUnsavedGuard } from "./unsaved";   // v7.2.0
@@ -13,7 +13,7 @@ import { downloadAllData, flushFolderBackup } from "./autoBackup";
 import { fetchDepartments } from "./fakturownia";
 import { mapDepartments } from "./fakturowniaDepartments.domain";
 import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
-import { addCatalogItem, addCatalogVariety, removeCatalogItem, removeCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode } from "./productCatalog";
+import { addCatalogItem, addCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode, addCatalogValue } from "./productCatalog";   // v7.18.3: + addCatalogValue   // v7.17.1: removals are soft deletes (masterData.domain)
 import { referencesToLocation } from "./referenceGuards";
 import { MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
 import { CN_CODES } from "./cnCodes";
@@ -23,6 +23,10 @@ import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLoca
 import { DEFAULT_SEASON, seasonsPresent, currentSeason, docSeason, sliceSeason, removeSeason, appendArchive, STORE_KIND } from "./season.domain";
 import { recordAudit } from "./audit";
 import { localTodayISO } from "./dates";
+import { packagingUsers, catalogUsers, namedList, softDeleteCatalogItem, restoreCatalogItem, softDeleteVariety, catalogValueUsers, softDeleteCatalogValue, valuesInUse } from "./masterData.domain";   // v7.17.1 (A-RV-07) · v7.18.3 (A-AU-5)
+import { parseNum } from "./numbers";
+import { typedPackagingSpellings } from "./packaging.domain";   // v7.18.0 (A-AU-1)
+import { readCountries } from "./Contacts";   // v7.19.6 (A-TD-5): the company's country from the one country list
 
 // ─── SETTINGS MODULE ────────────────────────────────────────────────────────
 // Purpose: give testers tools to manage their local data — export it for
@@ -236,7 +240,7 @@ function LocationsPanel({ refStores = {} }: any) {
                       await lpAlert({ tone: "warn", title: `${l.name} is still in use`, message: `It can't be removed while referenced by:\n\n${refs.blockers.map((b: string) => "• " + b).join("\n")}\n\nRe-point or complete those documents first; an unused location can then be removed.` });
                       return;
                     }
-                    if (await lpConfirm({ tone: "danger", title: `Remove ${l.name}?`, message: "Nothing references this location. It will be removed.", confirmLabel: "Remove" })) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Remove</button>}
+                    if (await lpConfirm({ tone: "danger", title: `Delete ${l.name}?`, message: "Nothing references this location. It will be deleted.", confirmLabel: "Delete" })) { removeCustomLocation(Number(l.id)); reloadNote(); } }} style={{ border: "none", background: "#DC2626", color: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 700 }}>Delete</button>}
                 </>)}
               </div>
             </div>
@@ -283,11 +287,26 @@ function ManageCard({ title, summary, buttonLabel, onManage }: any) {
 // Gross weight is driven by packaging, not a flat percentage: a wooden box holds
 // 13 kg of apples and weighs 1.4 kg empty, so gross = net + boxes x tare. This
 // panel maintains that table; shipments derive gross from it.
-function PackagingPanel({ types, setTypes }: any) {
+export function PackagingPanel({ types, setTypes, refStores = {}, onLinkSpelling = null }: any) {   // v7.18.0: exported for the screen check   // v7.17.1: refStores — who uses a packaging type
   const { confirm: pkConfirm, alert: pkAlert, dialogNode: pkNode } = useConfirm(); // P2-6
   const blank = { id: "", label: "", capacityKg: "", tareKg: "", boxesPerPallet: "", palletTareKg: "", appliesTo: "" };
   const [form, setForm] = React.useState<any>(blank);
   const list = types || [];
+  // v7.18.0 (A-AU-1, owner 9 Oct): the spellings typed on order lines before the picker — each linked to its type ONCE.
+  // The type shown is a suggestion (the kilos and the material written in the text); nothing is linked until Link is pressed.
+  const [spellChoice, setSpellChoice] = React.useState<Record<string, string>>({});
+  const spellings = onLinkSpelling ? typedPackagingSpellings(refStores as any, list) : [];
+  const liveTypes = list.filter((t: any) => !t.deleted);
+  const pickOf = (s: any) => spellChoice[s.key] ?? (s.suggestion || "");
+  const spellGroups = (() => { const g: Record<string, any[]> = {}; spellings.forEach((s: any) => { (g[s.suggestion || ""] = g[s.suggestion || ""] || []).push(s); });
+    return Object.keys(g).map(k => ({ key: k, type: liveTypes.find((t: any) => String(t.id) === k) || null, rows: g[k] })).sort((a, b) => (a.type ? 0 : 1) - (b.type ? 0 : 1) || String(a.type?.label || "").localeCompare(String(b.type?.label || ""))); })();
+  const linkSpellings = async (rows: any[]) => {
+    const todo = rows.map((s: any) => ({ s, t: liveTypes.find((x: any) => String(x.id) === pickOf(s)) })).filter((x: any) => x.t);
+    if (!todo.length || !onLinkSpelling) return;
+    const n = todo.reduce((a: number, x: any) => a + x.s.poLines + x.s.soLines, 0);
+    if (!(await pkConfirm({ tone: "warn", title: todo.length === 1 ? `Link "${todo[0].s.spelling}" to ${todo[0].t.label}?` : `Link ${todo.length} spellings?`, message: `${n} order line(s) will name the type: kilos per box, tare and the pallet table come from it, and a reprint shows its name.`, confirmLabel: "Link" }))) return;
+    todo.forEach((x: any) => onLinkSpelling(x.s.key, x.t));
+  };
   const sf = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
   const save = async () => {
@@ -300,11 +319,17 @@ function PackagingPanel({ types, setTypes }: any) {
     const appliesTo = String(form.appliesTo || "").split(",").map((x: string) => x.trim()).filter(Boolean);
     const next = [...list.filter((t: any) => t.id !== id), { id, label, capacityKg: cap, tareKg: tare, boxesPerPallet: parseFloat(form.boxesPerPallet) || 0, palletTareKg: parseFloat(form.palletTareKg) || 0, appliesTo }];
     setTypes(next); setForm(blank);
+    recordAudit({ module: "Settings", docType: "Packaging", docNumber: label, action: "updated", summary: `Packaging type "${label}" saved — ${cap} kg per box, tare ${tare} kg` });   // v7.17.4 (A-RV-12)
   };
   const edit = (t: any) => setForm({ id: t.id, label: t.label, capacityKg: t.capacityKg, tareKg: t.tareKg, boxesPerPallet: t.boxesPerPallet ?? "", palletTareKg: t.palletTareKg ?? "", appliesTo: (t.appliesTo || []).join(", ") });
   const del = async (t: any) => {
-    if (!(await pkConfirm({ tone: "danger", title: `Remove "${t.label}"?`, message: "Shipment lines already using it keep their saved gross weight.", confirmLabel: "Remove" }))) return;
-    setTypes(list.filter((x: any) => x.id !== t.id));
+    // v7.17.1 (A-RV-07): blocked while a document uses it (box-priced POs take their kilos from it) — the documents named;
+    // otherwise marked Deleted: kept on record, struck through, out of every packaging list (App passes the live ones)
+    const users = packagingUsers(t, refStores);
+    if (users.length) { await pkAlert({ tone: "warn", title: `"${t.label}" can't be deleted`, message: `It is used by ${users.length} document(s): ${namedList(users)}.` }); return; }
+    if (!(await pkConfirm({ tone: "danger", title: `Delete "${t.label}"?`, message: "It stays on record, struck through, and leaves every packaging list.", confirmLabel: "Delete" }))) return;
+    setTypes(list.map((x: any) => x.id === t.id ? { ...x, deleted: true, deletedAt: localTodayISO() } : x));
+    recordAudit({ module: "Settings", docType: "Packaging", docNumber: String(t.label), action: "deleted", summary: `Packaging type "${t.label}" deleted — kept on record` });   // v7.17.4 (A-RV-12)
   };
 
   return (
@@ -327,7 +352,7 @@ function PackagingPanel({ types, setTypes }: any) {
         </tr></thead>
         <tbody>
           {list.map((t: any) => (
-            <tr key={t.id} style={{ borderTop: "1px solid #F1F5F9" }}>
+            <tr key={t.id} style={{ borderTop: "1px solid #F1F5F9", textDecoration: t.deleted ? "line-through" : "none", opacity: t.deleted ? 0.55 : 1 }}>
               <td style={{ padding: "7px 9px", fontWeight: 600 }}>{t.label}</td>
               <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.capacityKg}</td>
               <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.tareKg}</td>
@@ -335,14 +360,27 @@ function PackagingPanel({ types, setTypes }: any) {
               <td style={{ padding: "7px 9px", textAlign: "right" }}>{t.palletTareKg || "—"}</td>
               <td style={{ padding: "7px 9px", color: "#64748B" }}>{(t.appliesTo || []).join(", ") || "—"}</td>
               <td style={{ padding: "7px 9px", textAlign: "right", whiteSpace: "nowrap" }}>
-                <SmallButton onClick={() => edit(t)}>Edit</SmallButton>{" "}
-                <SmallButton kind="red" onClick={() => del(t)}>Remove</SmallButton>
+                {t.deleted ? <span style={{ fontSize: 11, color: "#9CA3AF" }}>Deleted {t.deletedAt || ""}</span> : <><SmallButton onClick={() => edit(t)}>Edit</SmallButton>{" "}
+                <SmallButton kind="red" onClick={() => del(t)}>Delete</SmallButton></>}
               </td>
             </tr>
           ))}
           {!list.length && <tr><td colSpan={7} style={{ padding: "10px 9px", color: "#9CA3AF" }}>No packaging types yet.</td></tr>}
         </tbody>
       </table>
+      {spellings.length > 0 && <Card style={{ marginBottom: 18, borderLeft: "4px solid #F59E0B" }}>{/* v7.18.0 (A-AU-1) */}
+        <SectionTitle>TYPED ON ORDER LINES — LINK EACH SPELLING ONCE</SectionTitle>
+        <div style={{ fontSize: 12, color: "#555", margin: "6px 0 10px", lineHeight: 1.5 }}>Before the picker, packaging was typed on PO and SO lines. Link each spelling to its type once: its lines then name the type, take kilos per box and tare from it, and print its name. The type shown is a suggestion — change it if it is wrong.</div>
+        {spellGroups.map((g: any) => <div key={g.key || "none"} style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 700, color: "#334155", margin: "6px 0" }}>{g.type ? `Suggested: ${g.type.label}` : "No suggestion — pick the type"}{g.type && g.rows.length > 1 ? <SmallButton onClick={() => linkSpellings(g.rows)}>Link all {g.rows.length}</SmallButton> : null}</div>
+          {g.rows.map((s: any) => <div key={s.key} data-typed-spelling={s.key} style={{ display: "grid", gridTemplateColumns: "1.3fr 1.2fr 1.4fr auto", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F1F5F9", fontSize: 12.5 }}>
+            <span style={{ fontWeight: 600 }}>{s.spelling}</span>
+            <span style={{ color: "#64748B" }}>{s.poLines} PO · {s.soLines} SO line{s.poLines + s.soLines === 1 ? "" : "s"} · {s.docs.length} document{s.docs.length === 1 ? "" : "s"}</span>
+            <select value={pickOf(s)} onChange={e => setSpellChoice((c: any) => ({ ...c, [s.key]: e.target.value }))} style={INP}><option value="">— pick the type —</option>{liveTypes.map((t: any) => <option key={String(t.id)} value={String(t.id)}>{t.label}</option>)}</select>
+            <SmallButton kind="dark" disabled={!pickOf(s)} onClick={() => linkSpellings([s])}>Link</SmallButton>
+          </div>)}
+        </div>)}
+      </Card>}
       <Card>
         <SectionTitle>{form.id ? "EDIT PACKAGING" : "ADD PACKAGING"}</SectionTitle>
         <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 2fr auto", gap: 10, alignItems: "end", marginTop: 10 }}>
@@ -362,7 +400,13 @@ function PackagingPanel({ types, setTypes }: any) {
   );
 }
 
-function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
+export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {   // v7.16.11: exported for the screen check (tests/connections)
+  const [valDraft, setValDraft] = useState<Record<string, string>>({});   // v7.18.3 (A-AU-5): the calibre / coloration being typed into the catalog (hooks first)
+  // v7.16.11 (A-RV-04 · the A-SET-1 root cause): the CN codes are typed into a draft and saved with Save, which lists the
+  // changes — like Company and Numbering. On the shared data a code is no longer pushed to everyone at each keystroke.
+  const cnSaved: any = (catalog || []).reduce((o: any, c: any) => { o[c.item] = c.defaultCnCode || ""; return o; }, {});
+  const { draft: cnDraft, setDraft: setCnDraft, bar: cnBar } = useSectionDraft(cnSaved, (next: any) => setCatalog((cat: any) =>
+    Object.keys(next || {}).reduce((acc: any, item: string) => String(next[item] ?? "") !== String(cnSaved[item] ?? "") ? setCatalogCnCode(acc, item, String(next[item] ?? "")) : acc, cat || [])), "catalog-cn", "CN codes");
   const { confirm: pcConfirm, alert: pcAlert, dialogNode: pcNode } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
   const [vDraft, setVDraft] = useState<Record<string, string>>({});
@@ -392,21 +436,48 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
     const note = used > 0 ? `\n\n⚠ ${used} existing PO/SO line(s) and lot(s) keep the OLD name "${item}" — renames don't cascade into issued documents. They will show as "(not in list)" until edited.` : "";
     if (!(await pcConfirm({ tone: "warn", title: `Rename "${item}" → "${target}"?`, message: `New documents will offer "${target}".${note}`, confirmLabel: "Rename" }))) return;
     setCatalog((c: any) => renameCatalogItem(c || [], item, target));
+    recordAudit({ module: "Settings", docType: "Catalog", docNumber: item, action: "updated", summary: `Catalog item "${item}" renamed to "${target}"` });   // v7.17.4 (A-RV-12)
   };
-  const itemsAll = catalog || [];
+  const itemsAll = (catalog || []).filter((c: any) => !c.deleted);   // v7.17.1 (A-RV-07): deleted items are listed apart, struck through
+  const deletedItems = (catalog || []).filter((c: any) => c.deleted);
   const items = catQuery.trim()
     ? itemsAll.filter((c: any) => String(c.item).toLowerCase().includes(catQuery.trim().toLowerCase())
         || (c.varieties || []).some((v: string) => String(v).toLowerCase().includes(catQuery.trim().toLowerCase())))
     : itemsAll;
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13, fontFamily: "inherit", outline: "none" };
 
-  const addItem = () => { const n = newItem.trim(); if (!n) return; setCatalog((c: any) => addCatalogItem(c || [], n)); setNewItem(""); };
-  const addVar = (item: string) => { const v = (vDraft[item] || "").trim(); if (!v) return; setCatalog((c: any) => addCatalogVariety(c || [], item, v)); setVDraft(d => ({ ...d, [item]: "" })); };
-  const rmVar = (item: string, v: string) => setCatalog((c: any) => removeCatalogVariety(c || [], item, v));
+  const lcS = (x: any) => String(x ?? "").trim().toLowerCase();
+  // v7.17.1 (A-RV-07): typing a deleted item's name again brings it back; v7.17.4 (A-RV-12): every catalog change is audited
+  const addItem = () => { const n = newItem.trim(); if (!n) return; setCatalog((c: any) => (c || []).some((x: any) => x.deleted && lcS(x.item) === lcS(n)) ? restoreCatalogItem(c || [], n) : addCatalogItem(c || [], n)); setNewItem("");
+    recordAudit({ module: "Settings", docType: "Catalog", docNumber: n, action: "created", summary: `Catalog item "${n}" added` }); };
+  const addVar = (item: string) => { const v = (vDraft[item] || "").trim(); if (!v) return; setCatalog((c: any) => addCatalogVariety(c || [], item, v).map((x: any) => lcS(x.item) === lcS(item) ? { ...x, deletedVarieties: (x.deletedVarieties || []).filter((d: string) => lcS(d) !== lcS(v)) } : x)); setVDraft(d => ({ ...d, [item]: "" }));
+    recordAudit({ module: "Settings", docType: "Catalog", docNumber: item, action: "updated", summary: `Variety "${v}" added to ${item}` }); };
+  const rmVar = async (item: string, v: string) => {   // v7.17.1 (A-RV-07): blocked while used — the documents named; otherwise kept, struck through
+    const users = catalogUsers(item, v, refStores);
+    if (users.length) { await pcAlert({ tone: "warn", title: `"${v}" can't be deleted`, message: `${item} ${v} is used by ${users.length} document(s): ${namedList(users)}.` }); return; }
+    setCatalog((c: any) => softDeleteVariety(c || [], item, v, localTodayISO()));
+    recordAudit({ module: "Settings", docType: "Catalog", docNumber: item, action: "deleted", summary: `Variety "${v}" of ${item} deleted — kept on record` });
+  };
+  // v7.18.3 (A-AU-5, owner 9 Oct): each item's calibre and coloration lists — the lines pick from them. Same rules as varieties:
+  // a value in use can't be deleted (its documents named); otherwise it is kept, struck through. The values already written on
+  // lines are offered for a one-click add.
+  const addValue = (item: string, kind: "calibres" | "colorations", given?: string) => { const v = String(given ?? valDraft[item + "|" + kind] ?? "").trim(); if (!v) return;
+    setCatalog((c: any) => addCatalogValue(c || [], item, kind, v)); setValDraft(d => ({ ...d, [item + "|" + kind]: "" }));
+    recordAudit({ module: "Settings", docType: "Catalog", docNumber: item, action: "updated", summary: `${kind === "calibres" ? "Calibre" : "Coloration"} "${v}" added to ${item}` }); };
+  const rmValue = async (item: string, kind: "calibres" | "colorations", v: string) => {
+    const users = catalogValueUsers(item, kind, v, refStores);
+    if (users.length) { await pcAlert({ tone: "warn", title: `"${v}" can't be deleted`, message: `${item} ${v} is used by ${users.length} document(s): ${namedList(users)}.` }); return; }
+    setCatalog((c: any) => softDeleteCatalogValue(c || [], item, kind, v, localTodayISO()));
+    recordAudit({ module: "Settings", docType: "Catalog", docNumber: item, action: "deleted", summary: `${kind === "calibres" ? "Calibre" : "Coloration"} "${v}" of ${item} deleted — kept on record` });
+  };
   const rmItem = async (item: string) => {
-    const used = usageCount(item);
-    const note = used > 0 ? ` ${used} existing document line(s)/lot(s) keep the name and will show "(not in list)".` : "";
-    if (await pcConfirm({ tone: "danger", title: `Remove "${item}"?`, message: `This removes the item and its varieties from the catalog.${note}`, confirmLabel: "Remove" })) setCatalog((c: any) => removeCatalogItem(c || [], item));
+    // v7.17.1 (A-RV-07): blocked while used (was a warning) — the documents named; otherwise marked Deleted, kept on record, struck through
+    const users = catalogUsers(item, null, refStores);
+    if (users.length) { await pcAlert({ tone: "warn", title: `"${item}" can't be deleted`, message: `It is used by ${users.length} document(s): ${namedList(users)}.` }); return; }
+    if (await pcConfirm({ tone: "danger", title: `Delete "${item}"?`, message: "It stays on record, struck through, and leaves every product list. Typing its name again brings it back.", confirmLabel: "Delete" })) {
+      setCatalog((c: any) => softDeleteCatalogItem(c || [], item, localTodayISO()));
+      recordAudit({ module: "Settings", docType: "Catalog", docNumber: item, action: "deleted", summary: `Catalog item "${item}" deleted — kept on record` });   // v7.17.4 (A-RV-12)
+    }
   };
 
   function parseLine(line: string): string[] {
@@ -445,7 +516,7 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
       {pcNode}
       <SectionTitle>PRODUCT CATALOG <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· Item / Variety used on PO &amp; SO lines</span></SectionTitle>
       <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-        The single list everyone picks products from, so the same item is named the same way everywhere. New products added from a PO/SO line land here too. Sizes are not part of this — size stays its own field on the line.
+        The single list everyone picks products from, so the same item is named the same way everywhere. New products added from a PO/SO line land here too. Each item also carries its calibres and colorations, which the order lines pick from.
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
         <input value={newItem} onChange={e => setNewItem(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addItem(); }} placeholder="New item (e.g. Pears)" style={{ ...inp, minWidth: 220 }} />
@@ -464,9 +535,9 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
           <div key={c.item} style={{ padding: "12px 14px", borderBottom: "1px solid #F5F5F5" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{c.item} <span style={{ fontSize: 11, fontWeight: 400, color: "#AAA" }}>· {c.varieties.length} {c.varieties.length === 1 ? "variety" : "varieties"}</span></div>
-              <input value={c.defaultCnCode || ""} onChange={e => setCatalog((cat: any) => setCatalogCnCode(cat || [], c.item, e.target.value))} placeholder="CN/HS" title="Default CN/HS customs code for this item — auto-fills new PO lines. v6.99.3: suggestions from the built-in produce table (chapter 07/08); you confirm." list="cn-suggest" style={{ ...inp, padding: "3px 8px", fontSize: 12, width: 90, marginRight: 8 }} />
+              <input value={(cnDraft || {})[c.item] ?? (c.defaultCnCode || "")} onChange={e => { const v = e.target.value; setCnDraft((d: any) => ({ ...(d || {}), [c.item]: v })); }} placeholder="CN/HS" title="Default CN/HS customs code for this item — auto-fills new PO lines. v6.99.3: suggestions from the built-in produce table (chapter 07/08); you confirm." list="cn-suggest" style={{ ...inp, padding: "3px 8px", fontSize: 12, width: 90, marginRight: 8 }} />
               <button onClick={() => renameItem(c.item)} title="Rename item (does not cascade into issued documents)" style={{ border: "1px solid #E5E7EB", color: "#374151", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600, marginRight: 6 }}>Rename</button>
-              <button onClick={() => rmItem(c.item)} title="Remove item" style={{ border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600 }}>Remove</button>
+              <button onClick={() => rmItem(c.item)} title="Delete item" style={{ border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600 }}>Delete</button>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
               {c.varieties.map((v: string) => (
@@ -474,11 +545,23 @@ function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any) {
                   {v}<button onClick={() => rmVar(c.item, v)} title="Remove variety" style={{ border: "none", background: "#E5E7EB", color: "#666", borderRadius: "50%", width: 16, height: 16, lineHeight: "14px", cursor: "pointer", fontSize: 11 }}>×</button>
                 </span>
               ))}
+              {(c.deletedVarieties || []).map((v: string) => <span key={"del-" + v} title="deleted" style={{ fontSize: 11.5, color: "#9CA3AF", textDecoration: "line-through", marginRight: 6 }}>{v}</span>)}{/* v7.17.1 (A-RV-07) */}
               <input value={vDraft[c.item] || ""} onChange={e => setVDraft(d => ({ ...d, [c.item]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addVar(c.item); }} placeholder="+ variety" style={{ ...inp, padding: "4px 8px", fontSize: 12, width: 130 }} />
             </div>
+            {(["calibres", "colorations"] as const).map(kind => { const vals: string[] = (c as any)[kind] || []; const dels: string[] = (c as any)[kind === "calibres" ? "deletedCalibres" : "deletedColorations"] || [];
+              const used = valuesInUse(c.item, kind, refStores as any).filter(u => !vals.some(v => lcS(v) === lcS(u.value)));   /* v7.18.3 (A-AU-5) */
+              return <div key={kind} data-catalog-list={kind} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", minWidth: 78 }}>{kind === "calibres" ? "Calibres" : "Colorations"}</span>
+                {vals.map(v => <span key={v} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#EEF2FF", borderRadius: 14, padding: "3px 6px 3px 11px", fontSize: 12 }}>{v}<button onClick={() => rmValue(c.item, kind, v)} title={kind === "calibres" ? "Delete calibre" : "Delete coloration"} style={{ border: "none", background: "#E0E7FF", color: "#666", borderRadius: "50%", width: 16, height: 16, lineHeight: "14px", cursor: "pointer", fontSize: 11 }}>×</button></span>)}
+                {dels.map(v => <span key={"del-" + v} title="deleted" style={{ fontSize: 11.5, color: "#9CA3AF", textDecoration: "line-through", marginRight: 6 }}>{v}</span>)}
+                <input value={valDraft[c.item + "|" + kind] || ""} onChange={e => setValDraft(d => ({ ...d, [c.item + "|" + kind]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addValue(c.item, kind); }} placeholder={kind === "calibres" ? "+ calibre" : "+ coloration"} style={{ ...inp, padding: "4px 8px", fontSize: 12, width: 120 }} />
+                {used.length > 0 && <span style={{ fontSize: 11, color: "#64748B" }}>on lines, not listed: {used.slice(0, 14).map(u => <button key={u.value} onClick={() => addValue(c.item, kind, u.value)} title={`${u.lines} line(s) — add it to the list`} style={{ border: "1px dashed #CBD5E1", background: "#fff", color: "#334155", borderRadius: 12, padding: "1px 8px", margin: "0 3px 3px 0", fontSize: 11, cursor: "pointer" }}>+ {u.value}</button>)}</span>}
+              </div>; })}
           </div>
         ))}
       </div>
+      {deletedItems.length > 0 && <div data-deleted-items="1" style={{ marginTop: 10, fontSize: 12, color: "#9CA3AF" }}>Deleted: {deletedItems.map((c: any) => <span key={c.item} style={{ textDecoration: "line-through", marginRight: 10 }}>{c.item}</span>)}</div>}{/* v7.17.1 (A-RV-07) */}
+      {cnBar}{/* v7.16.11 (A-RV-04): Save / Discard for the CN codes */}
     </Card>
   );
 }
@@ -518,7 +601,7 @@ function RolesPanel({ roles: savedRoles = [], setRoles: saveRoles = null, users 
           </div>}
         </div>
       ))}
-      <button onClick={() => { const name = window.prompt("Name of the new role:"); if (name && name.trim()) setDraft([...list, { id: `role-${Date.now().toString(36)}`, name: name.trim(), modules: { dashboard: true }, finance: {} }]); }} style={{ marginTop: 6, padding: "5px 12px", borderRadius: 7, border: "1px dashed #94A3B8", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add role</button>
+      <button onClick={() => { const name = window.prompt("Name of the new role:"); if (name && name.trim()) setDraft([...list, { id: `role-${mintId()}`, name: name.trim(), modules: { dashboard: true }, finance: {} }]); }} style={{ marginTop: 6, padding: "5px 12px", borderRadius: 7, border: "1px dashed #94A3B8", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add role</button>
       {bar}
     </div>
   );
@@ -589,13 +672,24 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
 
 // ── v6.99.0 (FN-7): REFERENCE FX RATES — the season's rates, set by the owner; documents still lock their own rate ──
 function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
+  // v7.13.0 / v7.13.4 (A-AU-2, owner 9 Oct): the rates are NBP's, read automatically — nothing typed. Documents take the NBP rate of the
+  // last working day before their own date. The one choice here is the safety buffer on ORDERS, saved with an explicit Save (A-SET-1).
+  const [buf, setBuf] = React.useState<string>(String(fxSettings?._bufferPct ?? fxSettings?._BUFFERPCT ?? ""));
   if (typeof setFxSettings !== "function") return null;
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 110 };
+  const saved = String(fxSettings?._bufferPct ?? fxSettings?._BUFFERPCT ?? "");
+  const n = parseNum(buf); const valid = buf === "" || (isFinite(n) && n >= 0 && n < 50);
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
-      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Reference FX rates (PLN per unit){fxSettings?._nbp ? <span style={{ fontSize: 11, fontWeight: 500, color: "#16A34A", marginLeft: 8 }}>NBP table A of {String(fxSettings._nbp).replace(/(\d{4})(\d{2})(\d{2})/, "$3/$2/$1")} loaded</span> : <span style={{ fontSize: 11, fontWeight: 500, color: "#B45309", marginLeft: 8 }}>NBP not reachable — built-in seed until you type a rate</span>}</div>
-      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Used only to PRE-FILL a new document's rate. Every document locks its own rate; the truck settlement uses its own. Blank = the built-in seed.</div>
-      <div style={{ display: "flex", gap: 14 }}>{["EUR", "USD", "GBP"].map(c => <label key={c} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{c}<input type="number" step="0.0001" value={fxSettings?.[c] ?? ""} onChange={e => setFxSettings((prev: any) => ({ ...(prev || {}), [c]: e.target.value }))} style={inp} /></label>)}</div>
+      <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Exchange rates — NBP{fxSettings?._nbp ? <span style={{ fontSize: 11, fontWeight: 500, color: "#16A34A", marginLeft: 8 }}>table A of {String(fxSettings._nbp).replace(/(\d{4})(\d{2})(\d{2})/, "$3/$2/$1")} read</span> : <span style={{ fontSize: 11, fontWeight: 500, color: "#92400E", marginLeft: 8 }}>NBP not reached yet</span>}</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Read from NBP automatically. Every invoice, payment and order takes the NBP rate of the last working day <b>before</b> its own date; these are today's, for reference.</div>
+      <div data-fx-reference="1" style={{ display: "flex", gap: 16, fontSize: 12.5, marginBottom: 12 }}>{["EUR", "USD", "GBP"].map(c => <span key={c}>{c} <b>{fxSettings?.[c] ? Number(fxSettings[c]).toFixed(4) : "—"}</b></span>)}</div>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Safety buffer on orders (%)</div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>A sale is priced at the NBP rate <b>less</b> this %, a purchase at the rate <b>plus</b> it — the margin you see already allows for a weaker euro at payment. Invoices and payments never take it.</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input data-fx-buffer="1" type="number" step="0.1" min="0" value={buf} onChange={e => setBuf(e.target.value)} placeholder="e.g. 2" style={{ border: `1px solid ${valid ? "#E5E7EB" : "#DC2626"}`, borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 90 }} />
+        <button disabled={!valid || buf === saved} onClick={() => setFxSettings((prev: any) => ({ ...(prev || {}), _bufferPct: buf === "" ? 0 : Math.round(n * 100) / 100 }))} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: !valid || buf === saved ? "#E5E7EB" : "#111", color: !valid || buf === saved ? "#9CA3AF" : "#fff", fontSize: 12, fontWeight: 700, cursor: !valid || buf === saved ? "default" : "pointer" }}>Save</button>
+        {buf !== saved && valid && <span style={{ fontSize: 11, color: "#92400E" }}>not saved yet</span>}
+      </div>
     </div>
   );
 }
@@ -637,6 +731,10 @@ function CompanyPanel({ company: savedCompany = {}, setCompany: saveCompany = nu
         <input placeholder="Phone" value={company.phone || ""} onChange={e => set("phone", e.target.value)} style={inp} />
         <input placeholder="Address" value={company.address || ""} onChange={e => set("address", e.target.value)} style={{ ...inp, gridColumn: "1 / 3" }} />
         <input placeholder="E-mail" value={company.email || ""} onChange={e => set("email", e.target.value)} style={inp} />
+        <select value={company.country || ""} onChange={e => set("country", e.target.value)} style={inp} title="v7.19.6 (A-TD-5): our country — the trade-direction rule reads it; it prints after the address when the address does not already name it">
+          <option value="">Country — {COMPANY_DEFAULTS.country} (built-in)</option>
+          {readCountries().slice().sort((a, b) => a.name.localeCompare(b.name)).map(c => <option key={c.iso + c.name} value={c.name}>{c.name}</option>)}
+        </select>
       </div>
       {/* v7.2.2 (A-SET-2, owner): "default bank account per currency" removed — nothing read it (the push uses the Invoices module's own default); this section is the company block printed on documents */}
       {bar}{/* v7.2.1 (A-SET-1) */}
@@ -681,6 +779,7 @@ export default function Settings({ roles = [], setRoles = null,
   setProductCatalog,
   packagingTypes = [],
   setPackagingTypes,
+  onLinkPackagingSpelling = null,   // v7.18.0 (A-AU-1)
   users = [],
   setUsers = null,
   fxSettings = {},
@@ -706,6 +805,7 @@ export default function Settings({ roles = [], setRoles = null,
   setProductCatalog?: (v: any) => void;
   packagingTypes?: any[];
   setPackagingTypes?: (v: any) => void;
+  onLinkPackagingSpelling?: any;   // v7.18.0 (A-AU-1)
   users?: any[];
   setUsers?: any;
   fxSettings?: any;
@@ -1002,7 +1102,7 @@ export default function Settings({ roles = [], setRoles = null,
         />
         {manage === "packaging" && (
           <FullScreenModal title="Packaging types" onClose={() => setManage(null)}>
-            <PackagingPanel types={packagingTypes} setTypes={setPackagingTypes} />
+            <PackagingPanel types={packagingTypes} setTypes={setPackagingTypes} refStores={refStores} onLinkSpelling={onLinkPackagingSpelling} />
           </FullScreenModal>
         )}
         {manage === "products" && (

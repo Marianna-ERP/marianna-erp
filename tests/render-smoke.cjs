@@ -379,6 +379,8 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 { try {
     const pf = FX.fixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json"); if (!pf) throw new Error("fixture missing");
     const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    // v7.18.6 (A-AU-12, owner 9 Oct): an open settlement takes the NBP rate of the day before today — checked here at a known NBP rate of 4.35 (the rate this file's record had typed)
+    { const tdy = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" }); const yst = new Date(Date.parse(tdy + "T12:00:00Z") - 86400000).toISOString().slice(0, 10); require(path.resolve("./src/fx")).__setNbpStore({ days: { [yst]: { EUR: 4.35 } }, covered: { [yst]: 1 } }); }
     const c9 = { ...common, contacts: d9.contacts, pos: d9.pos, orders: d9.orders, lots: d9.lots, shipments: d9.shipments, invoices: d9.invoices || [], poSettlements: d9.poSettlements, settlements: d9.poSettlements, inspections: d9.inspections || [] };
     const POm = require(path.resolve("./src/PurchaseOrders"));
     _where = "PO-2026-0043 settlement";
@@ -407,6 +409,8 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 { try {
     const pf = FX.fixture("marianna-erp_v6.99.82_schema-v2_2026-09-30T13-13-23.json"); if (!pf) throw new Error("fixture missing");
     const d9 = JSON.parse(fs.readFileSync(pf, "utf8")); const bad = []; const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/[\u00a0\u202f]/g, " ").replace(/\s+/g, " ");
+    // v7.18.6 (A-AU-12, owner 9 Oct): an open settlement takes the NBP rate of the day before today — checked here at a known NBP rate of 4.35 (the rate this file's record had typed)
+    { const tdy = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" }); const yst = new Date(Date.parse(tdy + "T12:00:00Z") - 86400000).toISOString().slice(0, 10); require(path.resolve("./src/fx")).__setNbpStore({ days: { [yst]: { EUR: 4.35 } }, covered: { [yst]: 1 } }); }
     const po = d9.pos.find(p => p.number === "PO-2026-0043");
     const provInv = { id: 7001, kind: "COST", number: "EUR258/2026", currency: "EUR", fxRate: 4.30, netAmount: 37000, grossAmount: 37000, paymentStatus: "Issued", counterparty: { id: po.supplier.id, name: po.supplier.name }, links: [{ type: "PO", number: "PO-2026-0043" }], payments: [], issueDate: "2026-06-05", dueDate: "2026-07-05" };
     const POm = require(path.resolve("./src/PurchaseOrders"));
@@ -507,7 +511,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const iCh = dt.indexOf("Operational checklist"), iDoc = dt.indexOf("Documents", iCh), iCost = dt.indexOf("Costs / billing"); if (!(iCh > 0 && iDoc > iCh && iCost > iDoc)) bad.push(`pairs order: checklist ${iCh}, documents ${iDoc}, costs ${iCost}`);
     const sh31 = M.healShipmentModel(d9.shipments.find(s => s.number === "SHP-2026-0031")).sh; const d31 = T(renderToStaticMarkup(React.createElement(Det, { shipment: sh31, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onEdit: () => {} })));
     if (!/TBX/.test(d31) || !/DCS TRAMACO/.test(d31)) bad.push("SHP-0031 after the heal: carrier / forwarder not shown");
-    if (!bad.length) { passed++; console.log("  \u2713 PO / SO views: solid red Delete + Withdraw; withdrawn reads Withdrawn; shipment view: checklist | documents, costs | notes; the leg row names the trucks' carriers and the booking's forwarder (SHP-0035, SHP-0031 after the heal)"); }
+    if (!bad.length) { passed++; console.log("  \u2713 PO / SO views: solid red Delete, no Withdraw (A-DEL-4; every other record view: tests/connections, A-RV-10); shipment view: checklist | documents, costs | notes; the leg row names the trucks' carriers and the booking's forwarder (SHP-0035, SHP-0031 after the heal)"); }
     else { failed++; console.log("  \u2717 delete / withdraw / pairs / carriers — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 delete / withdraw / pairs / carriers —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
@@ -527,7 +531,9 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     // the truck has no carrier yet in the owner's file — an order is printed for a carrier, so one is given here
     const carrier = d9.contacts.find(c => /Carrier/i.test(String(c.type || ""))) || d9.contacts[0]; const sh = { ...sh0, legs: sh0.legs.map((l, i) => i ? l : { ...l, vehicles: l.vehicles.map(u => ({ ...u, carrierId: carrier.id })) }) };
     const th = T(renderToStaticMarkup(React.createElement(SD.TransportOrderDocument, { shipment: sh, contacts: d9.contacts, providerId: carrier.id, legIds: ["1"], orders: d9.orders, pos: d9.pos, lots: d9.lots, packagingTypes: d9.packagingTypes || [] })));
-    ["Route stops / Punkty trasy", "Loading / Zaladunek", "14 265 kg", "Unloading / Rozladunek", "1650 kg · SO-2026-0027", "11 630 kg · SO-2026-0028", "985 kg · SO-2026-0029"].forEach(w => { if (!th.includes(w)) bad.push("transport order lacks " + JSON.stringify(w)); });
+    // v7.15.1 (A-LS-4, owner 9 Oct): the loading stop now says WHAT is collected (goods by kind, pallets, gross) instead of the bare total —
+    // 10 985 + 3 280 = the 14 265 kg it showed before
+    ["Route stops / Punkty trasy", "Loading / Zaladunek", "Capsicum California Red 80-110 10 985 kg", "Capsicum Kapia Red 45+ 3280 kg", "Unloading / Rozladunek", "1650 kg · SO-2026-0027", "11 630 kg · SO-2026-0028", "985 kg · SO-2026-0029"].forEach(w => { if (!th.includes(w)) bad.push("transport order lacks " + JSON.stringify(w)); });
     if (!bad.length) { passed++; console.log("  \u2713 window header Close drawn; SHP-2026-0039: the tour in the editor (load at AGRO-HURT 14 265 kg, 3 drops) and on its transport order with the cargo per drop"); }
     else { failed++; console.log("  \u2717 close / groupage — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 close / groupage —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }

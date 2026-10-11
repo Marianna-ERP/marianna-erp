@@ -207,7 +207,7 @@ T("BP-37 FLIPPED (Batch 5b): an outgoing credit note now REDUCES open receivable
 });
 
 // ── Batch 3a: shipment posting engine + decisions 1 & 2 ──
-const { postShipmentToLots, derivePurpose, responsibilityForPOShipment } = require("./build/shipments.domain.js");
+const { postShipmentToLots, derivePurpose } = require("./build/shipments.domain.js");   // v7.19.0: responsibilityForPOShipment retired
 let _id = 5000; const deps = { todayISO: () => "2026-07-05", nextId: () => ++_id };
 
 console.log("── shipments.domain: purpose + posting ──");
@@ -259,11 +259,10 @@ T("TRANSFER purpose moves stock without changing quantities", () => {
   assert.equal(lots[0].physicalKg, 1000); assert.equal(lots[0].locationId, 3);
   assert.equal(lots[0].movements[0].type, "TRANSFER");
 });
-T("responsibilityForPOShipment: DAP/DDP → Supplier (kills the hardcoded Marianna)", () => {
-  assert.equal(responsibilityForPOShipment({ buyIncoterm:"DDP" }, false), "Supplier");
-  assert.equal(responsibilityForPOShipment({ buyIncoterm:"DAP" }, false), "Supplier");
-  assert.equal(responsibilityForPOShipment({ buyIncoterm:"EXW" }, false), "Marianna");
-  assert.equal(responsibilityForPOShipment({ buyIncoterm:"EXW" }, true), "Supplier");
+T("who pays a PO truck's freight comes from its incoterm: DAP/DDP → the supplier, EXW → us (v7.19.0: legFreightPayers replaced responsibilityForPOShipment)", () => {
+  const IC = require("./build/incoterms.domain.js");
+  const pay = t => IC.legFreightPayers({ purpose: "INBOUND", poRefs: ["P"], legs: [{ mode: "Road", toLocationId: 9 }] }, { pos: [{ number: "P", buyIncoterm: t, destinationLocationId: 9 }] })[0].payer;
+  assert.equal(pay("DDP"), "supplier"); assert.equal(pay("DAP"), "supplier"); assert.equal(pay("EXW"), "us");
 });
 
 console.log("── decision 1: precise partial receipt ──");
@@ -695,7 +694,8 @@ T("v6.79.0 (W-2): the producer recovery note is built by claims.domain — THEIR
 });
 
 // ── Batch 6b: movement matrix + Phase B (BP-56 final / BP-57) ──
-const { movementFromEnds, isEUCountry, handoverSentence, namedPlacePoolForIncoterm, dispositionFromSO, poDirectFromSOs } = require("./build/tradeFlow.domain.js");
+const { movementFromEnds, handoverSentence, namedPlacePoolForIncoterm, dispositionFromSO, poDirectFromSOs } = require("./build/tradeFlow.domain.js");
+const { isEU: isEUCountry } = require("./build/counterparty.domain.js");   // v7.12.0 (A-TD-1): the one country table
 
 console.log("── 4-class movement matrix ──");
 T("matrix: all four cells", () => {
@@ -761,15 +761,11 @@ T("DAMAGE reduces physical stock and accumulates damagedKg", () => {
 const { shipmentTradeDirection, namedPlacePoolForIncoterm: pool29 } = require("./build/tradeFlow.domain.js");
 
 console.log("── shipment owns the direction ──");
-T("precedence: shipment explicit > PO provisional > legacy flow > Import", () => {
-  assert.equal(shipmentTradeDirection({ tradeDirection: "CROSS_TRADE" }, { tradeMovement: "IMPORT" }), "CROSS_TRADE");
-  assert.equal(shipmentTradeDirection({}, { tradeMovement: "EXPORT" }), "EXPORT");
-  assert.equal(shipmentTradeDirection(null, { flow: "EXP_CIF" }), "EXPORT");
-  assert.equal(shipmentTradeDirection(null, { flow: "IMP_CIF_WH" }), "IMPORT");
-  assert.equal(shipmentTradeDirection(null, {}), "IMPORT");
-});
-T("garbage direction values fall through safely", () => {
-  assert.equal(shipmentTradeDirection({ tradeDirection: "NONSENSE" }, { tradeMovement: "EXPORT" }), "EXPORT");
+// v7.12.0 (A-TD-1, owner 8 Oct): the v6.29 precedence (stored choice > PO provisional > legacy flow > "Import") is retired — it is
+// exactly what made trucks read "Import" with no sale. The rule now comes from the real ends; see the v7.12 block below.
+T("v7.12: no end known → no direction, never a default Import", () => {
+  assert.equal(shipmentTradeDirection({}, {}), "");
+  assert.equal(shipmentTradeDirection({ tradeDirection: "CROSS_TRADE" }, {}), "", "a stored value is not read (A-TD-2 / A-TD-3)");
 });
 console.log("── place labels per the agreed table (CFR → discharge) ──");
 T("CFR named place is the port of DISCHARGE (Incoterms-correct)", () => {
@@ -1156,37 +1152,39 @@ T("A3-5: legacy creditNotes fold into FinanceNote, idempotent, and ENTER the tot
 });
 
 // ── v6.34.0: shipment direction from real ends — the Koper case (BP-61) ──
-const { shipmentTradeDirection: stdV34, directionFromCountries, soDestinationCountry } = require("./build/tradeFlow.domain.js");
+const { shipmentTradeDirection: stdV34, shipmentTradeEnds } = require("./build/tradeFlow.domain.js");
 
-console.log("── shipment direction resolves per-truck from producer × SO destination ──");
-T("Koper split: ONE Egypt CIF PO fathers an EU-import truck AND a T1 cross-trade truck", () => {
-  const po = { number: "PO-K", supplier: { country: "Egypt" }, tradeMovement: "IMPORT" };
-  const soUA = { number: "SO-UA", sellIncoterm: "DAP", client: { country: "Ukraine" }, destinationLocationId: null, destinationText: "Ukraine" };
-  const soPL = { number: "SO-PL", sellIncoterm: "DDP", client: { country: "Poland" }, destinationText: "Poland" };
-  // each shipment resolves independently from its own governing SO
-  assert.equal(stdV34({}, po, soUA), "CROSS_TRADE"); // Egypt × Ukraine, T1
-  assert.equal(stdV34({}, po, soPL), "IMPORT");      // Egypt × EU (Poland)
+console.log("── v7.12 (A-TD-1): the trade direction from the real ends ──");
+const tdPos = [{ number: "PO-K", supplier: { country: "Egypt" } }, { number: "PO-PL", supplier: { country: "Poland" } }, { number: "PO-HU", supplier: { country: "Hungary" } }];
+const tdCountry = (id) => ({ 900: "Ukraine", 901: "Slovenia", 902: "Poland", 903: "Egypt" })[id] || "";
+const tdCtx = (orders = []) => ({ pos: tdPos, orders, countryOf: tdCountry });
+T("Koper split (BP-61 kept): ONE Egypt CIF PO fathers an EU-import truck AND a T1 cross-trade truck", () => {
+  const soUA = { number: "SO-UA", client: { country: "Ukraine" }, destinationText: "Kyiv, ul. Khreshchatyk 1" };
+  const soPL = { number: "SO-PL", client: { country: "Poland" }, destinationText: "ul. Świeradowska 47, 02-662 Warszawa" };
+  assert.equal(stdV34({ poRefs: ["PO-K"], governingSoRef: "SO-UA" }, tdCtx([soUA, soPL])), "CROSS_TRADE");
+  assert.equal(stdV34({ poRefs: ["PO-K"], governingSoRef: "SO-PL" }, tdCtx([soUA, soPL])), "IMPORT");
 });
-T("no governing SO → PO provisional (unsold portion to our warehouse)", () => {
-  const po = { number: "PO-K", supplier: { country: "Egypt" }, tradeMovement: "IMPORT" };
-  assert.equal(stdV34({}, po, null), "IMPORT");
+T("a TYPED destination is never read as a country: the client's country is used (SHP-0006 / 0007 read Cross-trade)", () => {
+  const so = { number: "SO-W", client: { country: "Poland" }, destinationText: "ul. Świeradowska 47, 02-662 Warszawa" };
+  const e = shipmentTradeEnds({ purpose: "OUTBOUND", poRefs: ["PO-K"], governingSoRef: "SO-W", originLocationId: 901 }, tdCtx([so]));
+  assert.equal(e.direction, "INTRA_EU"); assert.equal(e.origin.from, "starting place"); assert.equal(e.destination.from, "client's country");
 });
-T("SO destination via resolveCountry(locationId) beats the client's home country (ruling #2)", () => {
-  const po = { supplier: { country: "Egypt" } };
-  // client is Polish but the sale is CIF to a Ukrainian port → goods physically go to UA
-  const so = { sellIncoterm: "CIF", client: { country: "Poland" }, destinationLocationId: 900 };
-  const resolve = (id) => id === 900 ? "Ukraine" : "";
-  assert.equal(stdV34({}, po, so, resolve), "CROSS_TRADE");
+T("the sale's registered place beats the client's home country (ruling #2 kept)", () => {
+  const so = { number: "SO-C", client: { country: "Poland" }, destinationLocationId: 900 };
+  assert.equal(stdV34({ poRefs: ["PO-K"], governingSoRef: "SO-C" }, tdCtx([so])), "CROSS_TRADE");
 });
-T("manual override always wins over the derived answer", () => {
-  const po = { supplier: { country: "Egypt" } };
-  const so = { client: { country: "Poland" }, destinationText: "Poland" }; // would derive IMPORT
-  assert.equal(stdV34({ tradeDirection: "CROSS_TRADE" }, po, so), "CROSS_TRADE");
+T("no sale: the truck goes to the shipment's / PO's place, else to us — never a default Import", () => {
+  assert.equal(stdV34({ poRefs: ["PO-HU"], arrangedBy: "SUPPLIER" }, tdCtx()), "INTRA_EU", "Hungarian producer's own truck → us");
+  assert.equal(stdV34({ poRefs: ["PO-PL"], purpose: "OUTBOUND", originLocationId: 902, destinationLocationId: 903 }, tdCtx()), "EXPORT", "Poland → Egypt with no sale");
+  assert.equal(stdV34({ poRefs: ["PO-K"], purpose: "INBOUND" }, tdCtx()), "IMPORT", "Egypt → us");
 });
-T("intra-EU: Polish producer, German client", () => {
-  assert.equal(directionFromCountries("Poland", "Germany"), "INTRA_EU");
-  assert.equal(directionFromCountries("Egypt", "Saudi Arabia"), "CROSS_TRADE");
-  assert.equal(directionFromCountries("Egypt", ""), ""); // unknown end → no derivation
+T("an onward movement starts where the goods are; with no starting place, the producer", () => {
+  assert.equal(shipmentTradeEnds({ purpose: "OUTBOUND", poRefs: ["PO-K"], originLocationId: 901, destinationLocationId: 902 }, tdCtx()).direction, "INTRA_EU");
+  assert.equal(shipmentTradeEnds({ purpose: "OUTBOUND", poRefs: ["PO-K"], destinationLocationId: 902 }, tdCtx()).origin.from, "producer — no starting place set");
+});
+T("an unknown country gives no direction and says what to add", () => {
+  const e = shipmentTradeEnds({ poRefs: ["PO-X"] }, { pos: [{ number: "PO-X", supplier: { country: "Atlantis" } }], countryOf: tdCountry });
+  assert.equal(e.direction, ""); assert.ok(/Atlantis/.test(e.missing));
 });
 
 // ── v6.34.1: per-item CN/HS in the catalog (items 4) ──
@@ -3523,6 +3521,76 @@ T("LIST ORDER: documents newest first, reference data A-Z", () => {
   assert.deepEqual(MG.alphabetical(refs).map(r => r.name), ["Adam", "Łukasz", "Zielona"], "Polish collation puts Ł where a reader expects");
 });
 
-console.log("");
-console.log(`RESULT: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// ══ v7.13 (A-AU-2 / A-AU-11, owner 9 Oct): the NBP rate of the last working day BEFORE the document's date ══
+console.log("── v7.13: NBP rates of the day before ──");
+const FXN = require("./build/fx.js"); const FXF = require("./build/fxNbp.domain.js"); const PAYX = require("./build/payments.domain.js");
+const tbl = (d, eur) => ({ effectiveDate: d, rates: [{ code: "EUR", mid: eur }, { code: "USD", mid: eur - 0.6 }] });
+// Fri 25 Sept, Mon 28, Tue 29 (no table: a holiday for the test), Wed 30, Thu 1 Oct, Fri 2 Oct
+const nbpStore = FXN.addNbpTables({ days: {}, covered: {} }, [tbl("2026-09-18", 4.25), tbl("2026-09-22", 4.26), tbl("2026-09-23", 4.27), tbl("2026-09-25", 4.28), tbl("2026-09-28", 4.29), tbl("2026-09-30", 4.31), tbl("2026-10-01", 4.32), tbl("2026-10-02", 4.33)], "2026-09-10", "2026-10-04");
+T("strictly the day BEFORE: an invoice of Wed 30 Sept takes Mon 28 (Tue 29 had no table)", () => { assert.deepEqual(FXN.rateBefore(nbpStore, "EUR", "2026-09-30"), { rate: 4.29, tableDate: "2026-09-28" }); });
+T("a Monday takes the Friday before; a Sunday too", () => { assert.equal(FXN.rateBefore(nbpStore, "EUR", "2026-09-28").tableDate, "2026-09-25"); assert.equal(FXN.rateBefore(nbpStore, "EUR", "2026-09-27").tableDate, "2026-09-25"); });
+T("the same day's table is never used", () => { assert.equal(FXN.rateBefore(nbpStore, "EUR", "2026-10-02").tableDate, "2026-10-01"); });
+T("a day not yet read gives no rate (never a guess); PLN is 1", () => { assert.equal(FXN.rateBefore(nbpStore, "EUR", "2026-10-20"), null); assert.equal(FXN.rateBefore(nbpStore, "PLN", "2026-10-20").rate, 1); });
+T("orders: the safety buffer — a sale less, a purchase plus", () => { assert.equal(FXN.orderRateFrom(4.3, "SALE", 2), 4.214); assert.equal(FXN.orderRateFrom(4.3, "PURCHASE", 2), 4.386); assert.equal(FXN.orderRateFrom(4.3, "SALE", 0), 4.3); });
+T("A-AU-11: an imported EUR invoice of 24 Sept stamped 4.3228 takes NBP of 23 Sept, its PLN follows; its payment of Fri 2 Oct takes Thu 1 Oct", () => {
+  FXN.__setNbpStore(nbpStore);
+  const inv = { id: 1, number: "FVS/14/09/2026", kind: "COST", currency: "EUR", fxRate: 4.3228, issueDate: "2026-09-24", netAmount: 1000, vatRate: 0, grossAmount: 1000, payments: [{ id: 9, date: "2026-10-02", amount: 1000 }] };
+  const log = []; const out = FXF.fxFillInvoice(inv, () => false, log);
+  assert.equal(out.fxRate, 4.27); assert.equal(out.fxTableDate, "2026-09-23"); assert.equal(Math.round(out.grossPLN), 4270);
+  assert.equal(out.payments[0].settlementFxRate, 4.32); assert.equal(out.payments[0].fxTableDate, "2026-10-01"); assert.equal(log.length, 2);
+  assert.equal(FXF.fxFillInvoice(out, () => false, null), out, "a rated invoice is left alone");
+});
+T("A-AU-11: a closed month is never touched", () => {
+  const inv = { id: 2, number: "X", kind: "COST", currency: "EUR", fxRate: 4.3228, issueDate: "2026-09-24", grossAmount: 10 };
+  assert.equal(FXF.fxFillInvoice(inv, (d) => String(d).startsWith("2026-09"), null), inv);
+});
+T("v7.13.5: exchange differences per client — instalments each at their own rate, weighted", () => {
+  const inv = { kind: "SALES", currency: "EUR", fxRate: 4.27, counterparty: { name: "Al Baraka" }, payments: [{ id: 1, date: "2026-10-01", amount: 600, settlementFxRate: 4.30 }, { id: 2, date: "2026-10-05", amount: 400, settlementFxRate: 4.25 }] };
+  const [r] = PAYX.fxDifferencesByCounterparty([inv]);
+  assert.equal(r.paid, 1000); assert.equal(r.gainPLN, 10); assert.equal(r.avgInvoiceRate, 4.27); assert.equal(r.avgPaymentRate, 4.28); assert.equal(r.payments, 2);
+});
+// ══ v7.14.0 (A-RV-01, owner 9 Oct): a colleague saved first — merge record by record ══
+console.log("── v7.14: merging a colleague's save record by record ──");
+const SMG = require("./build/storeMerge.domain.js");
+const soR = (id, number, extra = {}) => ({ id, number, status: "Draft", ...extra });
+T("two people, two different sales orders: both kept — nothing set aside", () => {
+  const base = [soR(1, "SO-2026-0001")]; const mine = [soR(1, "SO-2026-0001", { status: "Confirmed" })]; const theirs = [soR(1, "SO-2026-0001"), soR(2, "SO-2026-0002")];
+  const r = SMG.mergeStore("orders", base, mine, theirs); assert.equal(r.clashes.length, 0); assert.equal(r.merged.length, 2); assert.equal(r.merged[0].status, "Confirmed"); assert.equal(r.mineApplied, 1);
+});
+T("the SAME order changed by both, differently: theirs stays, mine is named (a clash to choose)", () => {
+  const base = [soR(1, "SO-2026-0001")]; const r = SMG.mergeStore("orders", base, [soR(1, "SO-2026-0001", { notes: "mine" })], [soR(1, "SO-2026-0001", { notes: "theirs" })]);
+  assert.equal(r.merged[0].notes, "theirs"); assert.equal(r.clashes.length, 1); assert.equal(r.clashes[0].label, "SO-2026-0001"); assert.equal(r.clashes[0].mine.notes, "mine");
+});
+T("the same change on both sides is not a clash", () => { const r = SMG.mergeStore("orders", [soR(1, "A")], [soR(1, "A", { x: 1 })], [soR(1, "A", { x: 1 })]); assert.equal(r.clashes.length, 0); });
+T("two NEW orders with the same number: mine takes the next free one, said so", () => {
+  const r = SMG.mergeStore("orders", [soR(1, "SO-2026-0030")], [soR(1, "SO-2026-0030"), soR(7, "SO-2026-0031")], [soR(1, "SO-2026-0030"), soR(8, "SO-2026-0031")]);
+  assert.deepEqual(r.renumbered, [{ id: "7", from: "SO-2026-0031", to: "SO-2026-0032" }]); assert.deepEqual(r.merged.map(x => x.number), ["SO-2026-0030", "SO-2026-0031", "SO-2026-0032"]);
+});
+T("…but not when another store already points at the number: a clash instead, never a silent renumber", () => {
+  const r = SMG.mergeStore("pos", [], [soR(7, "PO-2026-0005")], [soR(8, "PO-2026-0005")], (n) => n === "PO-2026-0005");
+  assert.equal(r.renumbered.length, 0); assert.equal(r.clashes.length, 1);
+});
+T("the audit log (records with ids) merges as a union — nobody's lines are lost", () => {
+  const r = SMG.mergeStore("auditLog", [{ id: 1 }], [{ id: 1 }, { id: 2, s: "mine" }], [{ id: 1 }, { id: 3, s: "theirs" }]); assert.deepEqual(r.merged.map(x => x.id), [1, 3, 2]);
+});
+T("plain-object stores merge key by key (company, heals, FX settings)", () => {
+  const r = SMG.mergeStore("company", { name: "M", nip: "1" }, { name: "Marianna", nip: "1" }, { name: "M", nip: "2" }); assert.deepEqual(r.merged, { name: "Marianna", nip: "2" }); assert.equal(r.clashes.length, 0);
+});
+T("a list without ids is not merged (the old rule applies)", () => { assert.equal(SMG.mergeStore("countries", ["PL"], ["PL", "HU"], ["PL", "IT"]), null); });
+T("the next free number keeps its series and width", () => { assert.equal(SMG.nextFreeNumber("SHP-2026-0041", ["SHP-2026-0041", "SHP-2026-0043", "SHP-2025-0099"]), "SHP-2026-0044"); });
+
+(async () => {
+  // reading NBP: the dated range of table A, a 404 window counts as read (no table), nothing read twice
+  const calls = []; global.fetch = async (url) => { calls.push(url); return { ok: true, status: 200, json: async () => [tbl("2026-08-28", 4.21), tbl("2026-08-31", 4.22)] }; };
+  FXN.__setNbpStore({ days: {}, covered: {} });
+  try {
+    const r = await FXN.nbpRateBefore("EUR", "2026-09-01");
+    assert.ok(/api\.nbp\.pl\/api\/exchangerates\/tables\/A\/2026-08-18\/2026-08-31\/\?format=json/.test(calls[0]), "url: " + calls[0]);
+    assert.deepEqual(r, { rate: 4.22, tableDate: "2026-08-31" });
+    await FXN.nbpRateBefore("EUR", "2026-09-01"); assert.equal(calls.length, 1, "read once");
+    pass++; console.log("  ✓ reading NBP: table A for the 14 days before, kept, never read twice");
+  } catch (e) { fail++; console.log("  ✗ reading NBP — " + e.message); }
+  console.log("");
+  console.log(`RESULT: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

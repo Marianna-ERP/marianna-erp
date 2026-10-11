@@ -11,7 +11,7 @@ import { fmtNum } from "./format";
 import { issueReportNumber } from "./reportNumbers";
 import { localTodayISO, formatDMY } from "./dates";
 import { gradeSplit, inspectionTotals } from "./seasonOps.domain";
-import { INSPECTION_CONTEXTS, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel } from "./Inventory";
+import { INSPECTION_CONTEXTS, countryOfLot, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel } from "./Inventory";
 import { SeasonActions } from "./InventoryWindows";
 import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
 
@@ -254,7 +254,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
 
               {/* Customs overlay (v6.1d) — independent clearance events, editable */}
               {(() => {
-                const kinds = customsStagesForLot(lot, shipments);
+                const kinds = customsStagesForLot(lot, shipments, { pos, orders: liveSOs });   // v7.12.1 (A-TD-2)
                 if (kinds.length === 0) return null;
                 return (
                   <Card style={{ marginBottom: 16 }}>
@@ -390,7 +390,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                   const companyName = co.name || "MARIANNA";
                   const companyAddress = co.address || "";
                   const companyNip = co.nip || "";
-                  const t = buildTraceTree(lot, { contacts, pos: tracePOs, orders: liveSOs, shipments, invoices: traceInvoices }, localTodayISO());
+                  const t = buildTraceTree(lot, { contacts, pos: tracePOs, orders: liveSOs, shipments, invoices: traceInvoices, countryOf: countryOfLot }, localTodayISO());
                   const cell = { border: "1px solid #999", padding: "4px 6px", fontSize: 11 } as any;
                   const hd = { ...cell, background: "#F3F4F6", fontWeight: 700 } as any;
                   return (

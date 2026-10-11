@@ -226,9 +226,12 @@ function writeCustomLocations(list: Location[]): void {
 
 export function addCustomLocation(input: { name: string; country: string; type: LocationType; address?: string; addr?: any; ownerId?: any }): Location {
   const existing = readCustomLocations();
-  const nextId = Math.max(CUSTOM_LOCATION_ID_BASE, ...existing.map(l => Number(l.id) || 0)) + 1;
+  // v7.17.5 (A-RV-06): the id comes from the one counter (two people adding a place no longer take the same highest + 1);
+  // kept above the built-in places and never one already taken here
+  const taken = new Set(existing.map(l => Number(l.id) || 0)); let newId = nextId(); if (newId <= CUSTOM_LOCATION_ID_BASE) newId += CUSTOM_LOCATION_ID_BASE;
+  while (taken.has(newId)) newId += 1;
   const loc: Location = {
-    id: nextId,
+    id: newId,
     type: input.type,
     legacyType: legacyTypeFor(input.type),
     name: input.name.trim(),
@@ -714,4 +717,52 @@ export function placeForPrint(id: any, text: any, contacts: any[] = []): { name:
   }
   const t = String(text || "").trim();
   return { name: t, address: "", country: "", line: t };
+}
+
+
+// ══ v7.18.1 (A-AU-3, owner 9 Oct — P-8, 'lists instead of typing') ════════════════════════════════════════════════════════════
+// A sale's destination is one of the CLIENT'S SITES — its legal address when that is ticked as a place, or a location it owns —
+// or a place from the list; never an address typed (or copied) as text. The addresses typed on sales before are listed once in
+// Counterparties → Locations: each becomes the client's site (its legal address when it is the same address, else a new location
+// of the client), and its sales are linked to it.
+export const addressKey = (s: any) => String(s ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "");
+const liveDoc = (o: any) => !!o && !o.deleted && o.status !== "Cancelled";
+const hasPlaceId = (o: any) => o?.destinationLocationId != null && String(o.destinationLocationId) !== "";
+/** The client's sites: its legal address (when it is a place) and its other addresses, then the locations it owns. */
+export function clientSites(client: any, custom: any[]): Array<{ id: any; name: string; address: string; country: string; legal: boolean }> {
+  if (!client || client.id == null) return [];
+  const own = counterpartyLocations([client]).filter((l: any) => l.pickable !== false)
+    .map((l: any) => ({ id: l.id, name: String(l.name), address: String(l.address || ""), country: String(l.country || ""), legal: String(l.name) === String(client.name) }));
+  const owned = (custom || []).filter((l: any) => l && String(l.ownerId) === String(client.id) && !l.deleted && !l.hidden)
+    .map((l: any) => ({ id: l.id, name: String(l.name), address: String(l.address || ""), country: String(l.country || ""), legal: false }));
+  return [...own, ...owned];
+}
+export interface TypedDestination { key: string; text: string; clientId: any; clientName: string; country: string; orders: string[]; legalSiteId: any; }
+const destKey = (o: any) => `${o?.client?.id ?? "?"}|${addressKey(o?.destinationText)}`;
+/** Every live sale whose destination is text with no place, once per client and address. legalSiteId: the client's legal
+ *  address is that same address (and is a place) — the sales are linked to it; otherwise the address becomes a new site. */
+export function typedSaleDestinations(orders: any[], contacts: any[]): TypedDestination[] {
+  const map = new Map<string, TypedDestination>();
+  (orders || []).forEach((o: any) => {
+    const text = String(o?.destinationText || "").trim(); if (!liveDoc(o) || !text || hasPlaceId(o)) return;
+    const key = destKey(o); let e = map.get(key);
+    if (!e) {
+      const c = (contacts || []).find((x: any) => String(x.id) === String(o.client?.id)) || null;
+      const legal = c && c.isPlace !== false ? counterpartyLocations([c]).find((l: any) => String(l.name) === String(c.name)) : null;
+      const same = !!legal && [legal.address, c.address].some((a: any) => !!addressKey(a) && addressKey(a) === addressKey(text));
+      e = { key, text: text.replace(/\s+/g, " "), clientId: c ? c.id : (o.client?.id ?? null), clientName: String(c?.name || o.client?.name || "—").trim(), country: String(c?.country || o.client?.country || ""), orders: [], legalSiteId: same ? legal!.id : null };
+      map.set(key, e);
+    }
+    e.orders.push(String(o.number));
+  });
+  return Array.from(map.values()).sort((a, b) => a.clientName.localeCompare(b.clientName, "pl") || b.orders.length - a.orders.length);
+}
+/** The one-time link: every live sale typed with this client and address names the site (the place decides; its name is shown). */
+export function linkSaleDestinationOn(orders: any[], key: string, site: { id: any; name: string }): { orders: any[]; changed: string[] } {
+  const changed: string[] = [];
+  const next = (orders || []).map((o: any) => {
+    if (!liveDoc(o) || hasPlaceId(o) || !String(o?.destinationText || "").trim() || destKey(o) !== key) return o;
+    changed.push(String(o.number)); return { ...o, destinationLocationId: site.id, destinationText: site.name };
+  });
+  return { orders: next, changed };
 }

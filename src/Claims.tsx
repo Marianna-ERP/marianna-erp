@@ -1,5 +1,5 @@
 import { ModuleHeader } from "./ui";
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { recordAudit } from "./audit";
 import { inspectionCandidates, evidenceCandidates, attachEvidence, qcReportWarning, defectFromInspection, offsetNoteAgainstInvoice, claimMoneyLabel, saleDirectCostLines, noticeRuleFor } from "./claimsPlus.domain";   // v7.10.0–7.10.1 (A-RV-15): CL-5 + CL-8 connected
 import DateInput from "./DateInput";
@@ -17,8 +17,11 @@ import {
   reverseClaimPostings,
 } from "./claims.domain";
 import { localTodayISO } from "./dates";
+import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
+import { COST_TYPES } from "./Shipments";   // v7.18.5 (A-AU-10): the cost types a claim's cost line picks from
 import { nextId } from "./ids";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
+import { RISK_CAUSES, journeyStages, claimRouting, claimShipment } from "./incoterms.domain";   // v7.19.4 (A-INC-1, 5/5)
 
 // ─── v6.48.0  CLAIMS MODULE (Phase 1: the register) ──────────────────────────
 // Claims are now documents in their own right rather than rows hidden inside a
@@ -103,7 +106,25 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
   );
 }
 
-export default function Claims({ archive = null, claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], setInvoices = null, inspections = [], claimSeed = null, onClaimSeedConsumed = null }: any) {
+// v7.18.5 (A-AU-10, owner 9 Oct — P-8): a claim's cost line names its cost from a list — the shipment cost types for the costs a
+// party caused, the client's usual costs for what the client charged — never typed. "Other…" asks for a few words, kept as
+// "Other — …". A label written before stays, shown in amber as typed.
+const CAUSED_COST_LABELS: string[] = COST_TYPES.filter((t: any) => t.code !== "other").map((t: any) => t.label);
+function CostLabelPicker({ value, options = [], onChange }: any) {
+  const { prompt: clPrompt, dialogNode: clNode } = useConfirm();
+  const v = String(value ?? "").trim(); const listed = !v || options.includes(v); const other = /^Other — /.test(v);
+  return <>{clNode}<select data-cost-label="1" value={!v ? "" : listed ? v : "__typed__"} onChange={async e => { const x = e.target.value; if (x === "__typed__") return;
+      if (x === "__other__") { const w = String((await clPrompt({ title: "Other cost", message: "Say in a few words what it is:", placeholder: "e.g. a second waiting day at the border", confirmLabel: "Use" })) || "").trim(); if (w) onChange(`Other — ${w}`); return; }
+      onChange(x); }}
+    style={{ ...INP, padding: "6px 8px", ...(!listed && !other ? { borderColor: "#F59E0B", background: "#FFFBEB" } : {}) }}>
+    <option value="">— pick the cost —</option>
+    {!listed ? <option value="__typed__">{v}{other ? "" : " (typed)"}</option> : null}
+    {options.map((o: string) => <option key={o} value={o}>{o}</option>)}
+    <option value="__other__">Other…</option>
+  </select></>;
+}
+
+export default function Claims({ archive = null, claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], setInvoices = null, inspections = [], claimSeed = null, onClaimSeedConsumed = null, initialSelectedNumber = "" }: any) {   // v7.20.0 (A-INC-2): opened at a claim from its number
   // v6.54.0: "a cancelled document never happened, so there are no claims on it".
   const cancelledRefs = cancelledDocSet(shipments, orders, pos);
   // Resolve a claim subject ref to the actual document, whichever module owns it.
@@ -116,7 +137,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
   }, [shipments, orders, pos]);
   const staleClaims = useMemo(() => staleClaimWarnings(claims, lookupSubject), [claims, lookupSubject]);
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();
-  const [selectedId, setSelectedId] = useState<any>(null);
+  const [selectedId, setSelectedId] = useState<any>(() => { const c = initialSelectedNumber ? (claims || []).find((x: any) => String(x.number) === String(initialSelectedNumber)) : null; return c ? c.id : null; });   // v7.20.0 (A-INC-2)
   const [q, setQ] = useState("");
   const [dirFilter, setDirFilter] = useState("All");
   const [openOnly, setOpenOnly] = useState(false);
@@ -144,6 +165,31 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
 
   const patch = (id: any, changes: any) =>
     setClaims((prev: any[]) => (prev || []).map(c => String(c.id) === String(id) ? { ...c, ...changes } : c));
+  // v7.18.6 (A-AU-12, owner 9 Oct): a claim's rates are the NBP rates of the last working day BEFORE the claim's date — EUR→PLN
+  // (used when posting) and its own currency → PLN. Not typed. A claim whose money is posted (its credit note) or that is settled
+  // or closed keeps the rates it has.
+  const [claimFxNote, setClaimFxNote] = useState("");
+  useEffect(() => {
+    let off = false; const c: any = selected; if (!c) { setClaimFxNote(""); return; }
+    const kept = !!c.financeNoteId || ["Settled", "Closed"].includes(String(c.status));
+    const date = String(c.date || "").slice(0, 10);
+    if (kept) { setClaimFxNote(`kept — the claim is ${c.financeNoteId ? "posted" : String(c.status).toLowerCase()}${c.fxTableDate ? ` (NBP ${c.fxTableDate})` : ""}`); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { setClaimFxNote("set the claim's date — the rate follows it"); return; }
+    setClaimFxNote("reading NBP…");
+    const cur = String(c.currency || "EUR").toUpperCase();
+    Promise.all([nbpRateBefore("EUR", date), cur !== "EUR" && cur !== "PLN" ? nbpRateBefore(cur, date) : Promise.resolve(null)]).then(([eur, own]: any[]) => {
+      if (off) return; if (!eur) { setClaimFxNote("NBP not reachable — the rate is filled when it is"); return; }
+      setClaimFxNote(`NBP table A of ${eur.tableDate}, the last working day before ${date}`);
+      const fx = cur === "PLN" ? 1 : cur === "EUR" ? eur.rate : (own ? own.rate : null);
+      const p: any = {};
+      if (Math.abs(Number(c.plnPerEur || 0) - eur.rate) > 0.00005) p.plnPerEur = eur.rate;
+      if (fx != null && Math.abs(Number(c.fxToPLN || 0) - fx) > 0.00005) p.fxToPLN = fx;
+      if (c.fxTableDate !== eur.tableDate) p.fxTableDate = eur.tableDate;
+      if (Object.keys(p).length) patch(c.id, p);
+    });
+    return () => { off = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, selected?.date, selected?.currency, selected?.financeNoteId, selected?.status]);
 
   // v6.63.0 (D-13): arriving from another module with context — SO+SINV for a
   // client claim, shipment+transport invoice for a carrier claim, lot+PO+PINV
@@ -454,6 +500,19 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     <select value={selected.cause} onChange={e => patch(selected.id, { cause: e.target.value })} style={INP}>
                       {CLAIM_CAUSES.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
+                    {RISK_CAUSES.includes(String(selected.cause || "")) && (() => {   // v7.19.4 (A-INC-1, 5/5): where it happened → who carried the risk there
+                      const sh = claimShipment(selected, shipments || []); if (!sh) return <div style={{ marginTop: 6, fontSize: 11.5, color: "#64748B" }}>Link the shipment (or its lot / sale) to say where it happened — the terms then say who carried the risk.</div>;
+                      const rt = claimRouting(selected, sh, { pos, orders, contacts });
+                      const off = rt && rt.respondent && String(selected.respondent?.contactId ?? "") !== String(rt.respondent.contactId ?? "");
+                      return <div style={{ marginTop: 6 }}>
+                        <select value={selected.lossAt?.shipment === sh.number ? (selected.lossAt?.stage || "") : ""} onChange={e => { const stage = e.target.value; const next = { ...selected, lossAt: stage ? { shipment: sh.number, stage } : null }; const r2 = stage ? claimRouting(next, sh, { pos, orders, contacts }) : null; patch(selected.id, { lossAt: next.lossAt, ...(r2 && r2.respondent && String(selected.direction) === "RECOVERY" ? { respondent: r2.respondent } : {}) }); }} style={INP} title="v7.19.4: where the loss happened on the shipment">
+                          <option value="">Where did it happen on {sh.number}?</option>
+                          {journeyStages(sh).map(st => <option key={st.key} value={st.key}>{st.label}</option>)}
+                        </select>
+                        {rt && <div style={{ marginTop: 6, fontSize: 11.5, lineHeight: 1.45, padding: "6px 10px", borderRadius: 7, color: rt.warn ? "#92400E" : "#1E3A8A", background: rt.warn ? "#FFFBEB" : "#EFF6FF", border: `1px solid ${rt.warn ? "#FDE68A" : "#BFDBFE"}` }}>{rt.warn ? "⚠ " : ""}{rt.note}</div>}
+                        {off && <div style={{ marginTop: 4, fontSize: 11.5, color: "#92400E" }}>⚠ Under the terms this claim goes to {rt!.respondent!.name}, not {selected.respondent?.name || "the party named"}.</div>}
+                      </div>;
+                    })()}
                     {/^quality|defect/i.test(String(selected.cause || "")) && (<div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "1.2fr 0.6fr", gap: 6 }}>
                       {/* v6.81.0 (D-61): the defect itself — type, share, description */}
                       <input value={selected.defectType || ""} onChange={e => patch(selected.id, { defectType: e.target.value })} placeholder="Defect type (e.g. skin spots, soft fruit, rot)" style={INP} />
@@ -516,7 +575,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                         <Lbl>Costs this party caused</Lbl>
                         {(selected.causedCosts || []).map((cc: any, i: number) => (
                           <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 130px auto", gap: 8, marginBottom: 5 }}>
-                            <input value={cc.label || ""} onChange={e => patch(selected.id, { causedCosts: (selected.causedCosts || []).map((x: any, xi: number) => xi === i ? { ...x, label: e.target.value } : x) })} placeholder="Repalletising / demurrage / re-delivery" style={{ ...INP, padding: "6px 8px" }} />
+                            <CostLabelPicker value={cc.label} options={CAUSED_COST_LABELS} onChange={(v: string) => patch(selected.id, { causedCosts: (selected.causedCosts || []).map((x: any, xi: number) => xi === i ? { ...x, label: v } : x) })} />
                             <input type="number" value={cc.amountEUR ?? ""} onChange={e => patch(selected.id, { causedCosts: (selected.causedCosts || []).map((x: any, xi: number) => xi === i ? { ...x, amountEUR: e.target.value } : x) })} placeholder="EUR" style={{ ...INP, padding: "6px 8px" }} />
                             <SmallButton kind="red" onClick={() => patch(selected.id, { causedCosts: (selected.causedCosts || []).filter((_: any, xi: number) => xi !== i) })}>✕</SmallButton>
                           </div>
@@ -531,7 +590,8 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   )}
                   <div style={{ marginTop: 10 }}>
                     <Lbl>EUR → PLN rate used when posting</Lbl>
-                    <input type="number" value={selected.plnPerEur ?? ""} onChange={e => patch(selected.id, { plnPerEur: e.target.value })} placeholder="e.g. 4.30" style={{ ...INP, maxWidth: 180 }} />
+                    <div data-claim-rate="1" style={{ ...INP, maxWidth: 180, background: "#F8FAFC" }}>{Number(selected.plnPerEur) > 0 ? Number(selected.plnPerEur).toFixed(4) : "—"}</div>
+                    <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 3 }}>{claimFxNote}</div>{/* v7.18.6 (A-AU-12): not typed */}
                   </div>
                 </div>
 
@@ -700,7 +760,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", margin: "12px 0 5px" }}>The client&apos;s — he incurred them, he charged them to us</div>
                     {clientLines.map((l: any, i: number) => (
                       <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 120px 34px", gap: 7, marginBottom: 5 }}>
-                        <input value={l.label || ""} onChange={e => setClient(i, "label", e.target.value)} placeholder="What the client charged" style={{ ...INP, padding: "6px 8px" }} />
+                        <CostLabelPicker value={l.label} options={CLIENT_COST_PROMPTS} onChange={(v: string) => setClient(i, "label", v)} />
                         <input type="number" value={l.amountPLN ?? ""} onChange={e => setClient(i, "amountPLN", e.target.value)} placeholder="PLN" style={{ ...INP, padding: "6px 8px" }} />
                         <SmallButton kind="red" onClick={() => patch(selected.id, { clientCosts: clientLines.filter((_: any, xi: number) => xi !== i) })}>✕</SmallButton>
                       </div>

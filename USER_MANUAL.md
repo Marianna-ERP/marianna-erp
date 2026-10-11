@@ -196,6 +196,27 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.12 — the trade direction from the real ends (v7.12.0–7.12.3)
+
+- **One rule, worked out every time it is needed — nothing typed, nothing stored.**
+  *Where the goods start:* on their first trip (the producer's truck, the receipt of a PO) the
+  producer's country; on a later trip of goods already received, the shipment's starting place
+  (filled from where the lots are), else the producer.
+  *Where they end:* the sale's registered place, else the client's country — a typed address is
+  never read as a country; with no sale, the shipment's destination, then the PO's named place,
+  then Poland (our company).
+  Import, Export, Intra-EU or Cross-trade follows from whether each end is in the EU (the one
+  country list, the same as Counterparties → Countries).
+- **Shipment editor → Arrange → Trade direction** shows the answer and, under it, the two countries
+  it used and where each came from, e.g. "Slovenia (starting place) → Poland (client's country)".
+  When an end cannot be known it shows "—" and says which place to fill — it never guesses
+  "Import".
+- **Everyone reads the same answer:** the customs checks (an export asks for its declaration
+  reference as the proof for 0 % VAT), the lot's direction badge in Inventory (now with its two
+  countries), and the traceability report.
+- The directions typed in old versions were cleared once; the audit trail lists each
+  (HEAL-7.12.2). The direction is never set by hand — the places decide (owner, 8 Oct).
+
 ### Version 7.11 — warnings per line, all lot warnings, hand-set status shown (v7.11.0–7.11.5)
 
 - **"More than ordered", per line:** when you create a shipment from a PO and the kilos of one

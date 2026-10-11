@@ -7,6 +7,7 @@ import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { formatDMY } from "./dates";
 import { placeForPrint } from "./locations";
 import { BiLbl, COMPANY, CONTACTS_REF, PO_PACKAGING_TYPES, PrintLogo, destinationDisplay, netTotal } from "./PurchaseOrders";
+import { companyAddressLines } from "./useLocalStoredState";   // v7.19.6 (A-TD-5): the country printed when the address does not name it
 
 export function PODoc({ order }: any) {
   const total = netTotal(order.items);
@@ -67,7 +68,7 @@ export function PODoc({ order }: any) {
               <BiLbl en="Buyer" pl="Nabywca" />
               <div style={{ marginTop: 4, fontWeight: 700, fontSize: 12 }}>{COMPANY.name}</div>
               <div style={{ fontSize: 11 }}>{COMPANY.person}</div>
-              {COMPANY.address.split("\n").map((l, i) => <div key={i} style={{ fontSize: 11 }}>{l}</div>)}
+              {companyAddressLines(COMPANY).map((l, i) => <div key={i} style={{ fontSize: 11 }}>{l}</div>)}
               <div style={{ fontSize: 11, marginTop: 2 }}><span style={{ fontWeight: 600 }}>NIP:</span> {COMPANY.nip}</div>
             </td>
           </tr>

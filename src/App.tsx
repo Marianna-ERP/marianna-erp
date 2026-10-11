@@ -19,26 +19,29 @@ import { foldLegacyClaimFields } from "./claimsPlus.domain";
 import { normaliseInvoiceCategory } from "./invoicePlus.domain";
 import { normaliseCounterparty } from "./counterparty.domain";
 import { migrateAddressOn } from "./address.domain";
-import { healShipmentModel } from "./shipmentModel.domain";
+import { healShipmentModel, mapDocTypes } from "./shipmentModel.domain";   // v7.18.2: + mapDocTypes
 import { migrateSaleLinesToLots } from "./salesOrders.domain";   // v6.99.127
 import { useSingleTab } from "./useSingleTab";   // v6.99.114 (AUD-02)
 import { useSharedStore, SharedStoreStatus, EnvironmentStrip } from "./SharedStoreGate";   // v6.99.148–149
-import { setFxSettings as applyFxSettings, fetchNbpRates } from "./fx";
+import { setFxSettings as applyFxSettings, fetchNbpRates, ensureNbpRange } from "./fx";   // v7.13.x (A-AU-2)
 import { poDirectFromSOs } from "./tradeFlow.domain";
 import { healRound645, healRound651 } from "./heal.v645";
 import { migrateClaims } from "./claims.domain";
 import Claims from "./Claims";
 import { costTypeLabel, costInventoryType } from "./Shipments";
-import { localTodayISO } from "./dates";
+import { localTodayISO, addDaysISO } from "./dates";
 import { nextId as globalNextId, nextId } from "./ids";
 import { SHELL_SEED } from "./shell_seed";
-import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded, compactLocalBackups, setLocalSnapshots } from "./useLocalStoredState";
+import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded, compactLocalBackups, setLocalSnapshots, COMPANY_DEFAULTS } from "./useLocalStoredState";
+import { setOurCountry } from "./tradeFlow.domain";   // v7.19.6 (A-TD-5)
 import { startAutoBackup, setBackupAllowed } from "./autoBackup";   // v6.99.70 (A-BK-1) · v7.1.8
 import { BackupBanner } from "./BackupPanel";
 import { setAuditSink, recordAudit } from "./audit";
-import { appendAudit } from "./auditTrail.domain";
+import { appendAudit, splitAuditOverflow, archiveAudit } from "./auditTrail.domain";
 import AuditTrail from "./AuditTrail";
 import { convertSettledRefsToEvents } from "./payments.domain";
+import { fxDatesNeeded, fxFillInvoice } from "./fxNbp.domain";   // v7.13.1 / v7.13.3 (A-AU-11 / A-AU-2)
+import { periodGuard } from "./periodClose.domain";   // v7.13.1 (A-AU-11): closed months are not re-rated
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import { primeIdsFrom } from "./ids";
@@ -49,6 +52,9 @@ import { normaliseStoredSoStatus } from "./statusOwnership.domain";
 import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn, hasOwner } from "./permissions.domain";
 import { readSession, isSharedMode, logout } from "./remoteStore";   // v7.1.0 (A-USR-1)
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
+import { liveOnly, namedList } from "./masterData.domain";   // v7.17.1 (A-RV-07)
+import { linkSpellingOnDocs } from "./packaging.domain";   // v7.18.0 (A-AU-1)
+import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
 
@@ -246,9 +252,10 @@ export default function App() {
   // v6.99.31 (owner): the quality tolerances per product and category (Unacceptable is always 0).
   // v6.99.3 (SE-1/SE-3): company identity and numbering prefixes as settings.
   const [company, setCompany] = useLocalStoredState("company", {});
+  setOurCountry(String((company as any)?.country || "").trim() || COMPANY_DEFAULTS.country);   // v7.19.6 (A-TD-5): the trade-direction rule reads Settings → Company
   const [numbering, setNumbering] = useLocalStoredState("numbering", {});
   // FX auto (owner): NBP table A on load — sets the reference rates when reachable; manual values win when typed.
-  useEffect(() => { fetchNbpRates().then(r => { if (r) setFxSettings((prev: any) => ({ ...(r as any), ...(prev || {}), _nbp: (r as any)._date })); }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchNbpRates().then(r => { if (r) setFxSettings((prev: any) => ({ ...(prev || {}), ...(r as any), _nbp: (r as any)._date })); });   /* v7.13.0 (A-AU-2): today's NBP wins over old typed rates */ // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { applyFxSettings(fxSettings || {}); }, [fxSettings]);
 
@@ -329,7 +336,68 @@ export default function App() {
     } catch (e) { console.error("claims migration failed (left data untouched):", e); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // v7.12.2 (A-TD-3, owner 8 Oct): the trade directions typed before v6.99.6 are cleared ONCE per dataset — the places decide (A-TD-1),
+  // the readers ask the rule (A-TD-2). Each cleared value is named in the audit trail. Runs on the shared data too (this is new work).
+  React.useEffect(() => {
+    try {
+      const MARK = "marianna:heal:v7.12.2-trade-direction";
+      if (typeof window === "undefined" || healDone(MARK) || !(shipments || []).length) return;
+      const had = (shipments || []).filter((s: any) => s && s.tradeDirection);
+      markHeal(MARK);
+      if (!had.length) return;
+      setShipments((prev: any[]) => (prev || []).map((s: any) => { if (!s || !s.tradeDirection) return s; const { tradeDirection, ...rest } = s; return rest; }));
+      recordAudit({ module: "Shipments", docType: "Heal", docNumber: "HEAL-7.12.2", action: "healed", summary: `Stored trade directions cleared — the places decide (A-TD-3): ${had.map((s: any) => `${s.number} ${s.tradeDirection}`).join(", ")}` });
+    } catch (e) { console.error("heal v7.12.2 failed (left data untouched):", e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipments.length]);
+  // v7.18.2 (A-AU-4, owner 9 Oct): the shipment document types typed before the list are mapped to it ONCE per dataset — 'PL' →
+  // Packing list, 'Export declaration MRN' → Export declaration… anything unknown → Other, its words kept as the description.
+  // Each change is named in the audit trail. Deleted shipments are left as they are.
+  React.useEffect(() => {
+    try {
+      const MARK = "marianna:heal:v7.18.2-doc-types";
+      if (typeof window === "undefined" || healDone(MARK) || !(shipments || []).length) return;
+      const log: string[] = []; (shipments || []).forEach((s: any) => mapDocTypes(s, log));
+      markHeal(MARK);
+      if (!log.length) return;
+      setShipments((prev: any[]) => (prev || []).map((s: any) => mapDocTypes(s)));
+      recordAudit({ module: "Shipments", docType: "Heal", docNumber: "HEAL-7.18.2", action: "healed", summary: `Document types mapped to the one list (A-AU-4): ${log.join("; ")}` });
+    } catch (e) { console.error("heal v7.18.2 failed (left data untouched):", e); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipments.length]);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
+  // v7.13.1 (A-AU-11) + v7.13.3 (A-AU-2), owner 9 Oct: a foreign-currency invoice carries the NBP rate of the last working day BEFORE
+  // its issue date, and every payment the rate of the last working day before the day the money was received. Whatever is not yet
+  // rated from NBP is filled when NBP is reachable (fxTableDate marks a rated invoice / payment) — the invoices imported before
+  // v7.13 carried today's reference instead (4.3228 on all 34 EUR invoices of the 2 Oct file). Closed months are never changed;
+  // they are named once. Each change goes to the audit trail.
+  const fxClosed = (d: any) => !!periodGuard(d, closedPeriods || []);
+  const fxPendingKey = fxDatesNeeded(invoices || [], fxClosed).join(",");
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = invoices || [];
+        const MARK = "marianna:heal:v7.13.1-closed-months";
+        if (!healDone(MARK)) {   // once: name the foreign invoices of closed months, left as they are
+          const left = list.filter((i: any) => i && String(i.currency || "PLN").toUpperCase() !== "PLN" && !i.fxTableDate && i.issueDate && fxClosed(i.issueDate)).map((i: any) => i.number);
+          markHeal(MARK); if (left.length) recordAudit({ module: "Invoices", docType: "Heal", docNumber: "FX-NBP", action: "healed", summary: `Closed months keep their rates (A-AU-11): ${left.join(", ")}` });
+        }
+        const dates = fxDatesNeeded(list, fxClosed); if (!dates.length) return;
+        const back = (iso: string, n: number) => addDaysISO(iso, -n);   // dates.ts (AUD-07/09)
+        await ensureNbpRange(back(dates[0], 14), back(dates[dates.length - 1], 1));
+        if (cancelled) return;
+        const log: string[] = []; const after = list.map((i: any) => fxFillInvoice(i, fxClosed, log));
+        if (after.some((x: any, k: number) => x !== list[k])) {
+          setInvoices((prev: any[]) => (prev || []).map((i: any) => fxFillInvoice(i, fxClosed, null)));
+          if (log.length) recordAudit({ module: "Invoices", docType: "Heal", docNumber: "FX-NBP", action: "healed", summary: `NBP rates of the day before (A-AU-2 / A-AU-11): ${log.join("; ")}` });
+        }
+      } catch (e) { console.error("NBP rates: left untouched", e); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fxPendingKey]);
+
   // v6.99.12: logisticsPoints store retired from the UI (kept in DATA_KEYS for old backups only)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   // v7.7.1 (A-RET-1): the logistics-points store is retired
@@ -342,12 +410,38 @@ export default function App() {
   const healDone = (k: string) => !!(healsRef.current || {})[k] || (typeof window !== "undefined" && !!window.localStorage.getItem(k) && (markHeal(k), true));   // a browser-level marker from before is carried into the dataset once
   function markHeal(k: string) { const stamp = new Date().toISOString(); healsRef.current = { ...(healsRef.current || {}), [k]: stamp }; setHeals((prev: any) => ({ ...(prev || {}), [k]: stamp })); }
   const [auditLog, setAuditLog] = useLocalStoredState("auditLog", []);
+  // v7.17.1 (A-RV-07): a deleted packaging type or catalog item leaves every picker — the modules get the live ones; Settings all
+  const livePackaging = useMemo(() => liveOnly(packagingTypes as any[]), [packagingTypes]);
+  const liveCatalog = useMemo(() => liveOnly(productCatalog as any[]), [productCatalog]);
+  // v7.18.0 (A-AU-1, owner 9 Oct): a packaging spelling typed on order lines before the picker is linked to its type ONCE, from
+  // Settings → Packaging types — every live PO / SO line written that way then names the type (and prints its name). Audited.
+  const linkPackagingSpelling = (key: string, type: any) => {
+    const types = (packagingTypes as any[]) || [];
+    const a = linkSpellingOnDocs(pos || [], key, type, types), b = linkSpellingOnDocs(orders || [], key, type, types);
+    if (!a.lines && !b.lines) return;
+    if (a.lines) setPOs((prev: any[]) => linkSpellingOnDocs(prev || [], key, type, types).docs);
+    if (b.lines) setOrders((prev: any[]) => linkSpellingOnDocs(prev || [], key, type, types).docs);
+    recordAudit({ module: "Settings", docType: "Packaging", docNumber: String(type.label), action: "updated", summary: `Typed packaging "${key}" linked to ${type.label} — ${a.lines + b.lines} line(s) on ${namedList([...a.changed, ...b.changed])}` });
+  };
+  // v7.18.1 (A-AU-3, owner 9 Oct): an address typed as a sale's destination becomes the client's site ONCE (Counterparties → Locations)
+  const linkSaleDestination = (key: string, site: { id: any; name: string }) => {
+    const r = linkSaleDestinationOn(orders || [], key, site); if (!r.changed.length) return;
+    setOrders((prev: any[]) => linkSaleDestinationOn(prev || [], key, site).orders);
+    recordAudit({ module: "Counterparties", docType: "Location", docNumber: String(site.name), action: "updated", summary: `Typed sale destination linked to the client's site "${site.name}" — ${namedList(r.changed)}` });
+  };
   setAuditSink((e: any) => setAuditLog((prev: any[]) => appendAudit(prev || [], {
     id: nextId(), // v6.79.0 (W-7): central counter — burst writes collided under Date.now()
     ts: new Date().toISOString(),
     user: who || userName || "user",
     ...e,
-  })));
+  }, Number.MAX_SAFE_INTEGER)));   // v7.17.4 (A-RV-12): nothing is dropped here — past the cap the oldest move to the archive (below)
+  const [, setAuditArchive] = useLocalStoredState("auditArchive", []);   // v7.17.4: kept in every backup and export (DATA_KEYS)
+  useEffect(() => {
+    const { over } = splitAuditOverflow(auditLog as any[]); if (!over.length) return;
+    const ids = new Set(over.map((x: any) => String(x.id)));
+    setAuditArchive((a: any[]) => archiveAudit(a || [], over));
+    setAuditLog((l: any[]) => (l || []).filter((x: any) => !ids.has(String(x.id))));
+  }, [auditLog]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   function setContactsCascade(update: any) {
     _setContacts(update);
@@ -427,7 +521,7 @@ export default function App() {
 
   // v6.99.11: pickers may ask to open the Directory ("＋ Add it in the Directory…") — never free text.
   const navigateRef = useRef<(m: string) => void>(() => {});   // v6.99.58 (A-US-2)
-  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); } catch {} }; window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
+  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); } catch {} };   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
   // v6.99.9: shipments healed once — unit kg mirrors in step with the derived figure; stale zero-amount leg-freight lines removed.
   useEffect(() => { if (isSharedMode()) return;   /* v7.7.1 (A-RET-1): a pre-v7 one-time repair — the shared data has been through it */  setShipments((prev: any[]) => { let changed = false; const next = (prev || []).map((s: any) => { const r = healShipmentModel(s); if (r.changed) changed = true; (r.notes || []).forEach((n: string) => recordAudit({ module: "Shipments", docType: "Shipment", docNumber: String(s.number || ""), action: "updated", summary: `${n} (one source: v6.99.91)` })); return r.sh; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -541,7 +635,7 @@ export default function App() {
   const docModule = (num: string): string => {
     const n = String(num || "");
     const has = (list: any[]) => (list || []).some((x: any) => String(x?.number) === n);
-    if (has(pos)) return "pos"; if (has(orders)) return "orders"; if (has(shipments)) return "shipments"; if (has(lots)) return "lots"; if (has(invoices)) return "invoices";
+    if (has(pos)) return "pos"; if (has(orders)) return "orders"; if (has(shipments)) return "shipments"; if (has(lots)) return "lots"; if (has(invoices)) return "invoices"; if (has(claims)) return "claims";   // v7.20.0 (A-INC-2): a claim's number opens the claim
     return "";
   };
   const openDoc = (num: string, from = "") => {
@@ -561,11 +655,12 @@ export default function App() {
   const [openPO, setOpenPO] = useState<{ number: string; action: string }>({ number: "", action: "" });
   // v6.99.79 (A-NAV-1, owner 28 Sept): ONE route from a document number to its document — the two hand-offs above generalised
   const [openDocNum, setOpenDocNum] = useState<{ module: string; number: string; n: number }>({ module: "", number: "", n: 0 });
+  const [shipmentsFilter, setShipmentsFilter] = useState("");   // v7.20.0 (A-INC-2): the Dashboard's 'Terms to review' opens Shipments on that filter (used once)
   const [navBack, setNavBack] = useState<{ module: string; number: string } | null>(null);   // v6.99.56 (A-PL-5): shipment → the PO's packing list
   useEffect(() => { if (activeModule !== "pos" && openPO.number) setOpenPO({ number: "", action: "" }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v6.99.80 (owner 29 Sept): the shipment hand-off was never cleared, so after one link to a shipment EVERY later visit to
   // Shipments reopened it; the same held for the SO / lot / invoice hand-offs added in v6.99.79. A hand-off is used once.
-  useEffect(() => { if (activeModule !== "shipments" && openShipmentNumber) setOpenShipmentNumber(""); if (openDocNum.module && activeModule !== openDocNum.module) setOpenDocNum({ module: "", number: "", n: openDocNum.n }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (activeModule !== "shipments" && shipmentsFilter) setShipmentsFilter(""); if (activeModule !== "shipments" && openShipmentNumber) setOpenShipmentNumber(""); if (openDocNum.module && activeModule !== openDocNum.module) setOpenDocNum({ module: "", number: "", n: openDocNum.n }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v6.63.0 (D-13): ONE claims UI, many doors. The claim buttons in Sales Orders,
   // Shipments and Inventory no longer open their own mini-forms — they navigate
   // here with a pre-filled seed, so every claim is a numbered document in the
@@ -599,27 +694,27 @@ export default function App() {
     if (!mayOpen(activeModule)) return <div style={{ padding: 40, textAlign: "center", color: "#64748B", fontSize: 14 }}>You don't have access to this module. <button onClick={() => setActiveModule("dashboard")} style={{ marginLeft: 8, padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>Dashboard</button></div>;   // v7.1.11
     switch (activeModule) {
       case "dashboard":
-        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={who} integrityIssues={integrityIssuesForDashboard} />;
+        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate} onOpenFilter={(m: string, flt: string) => { setShipmentsFilter(flt); navigate(m); }}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={who} integrityIssues={integrityIssuesForDashboard} />;
       case "claims":
-        return <Claims archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
+        return <Claims key={"clm-" + (openDocNum.module === "claims" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "claims" ? openDocNum.number : ""} archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
         return <Finance focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
-        return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={who}  lots={lots} />;
+        return <Contacts onLinkSaleDestination={linkSaleDestination} contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={who}  lots={lots} />;
       case "pos":
-        return <PurchaseOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={() => navigate("finance")} key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} financeNotes={financeNotes} setInvoices={setInvoices}  users={users} userName={who}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
+        return <PurchaseOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={() => navigate("finance")} key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={liveCatalog} setProductCatalog={setProductCatalog}  packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} financeNotes={financeNotes} setInvoices={setInvoices}  users={users} userName={who}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
       case "lots":
-        return <Inventory key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
+        return <Inventory users={users} userName={who} key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
       case "orders":
-        return <SalesOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={(o: any) => { setResultFocus({ number: o?.number, n: Date.now() }); navigate("finance"); }} inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userName={who} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
+        return <SalesOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={(o: any) => { setResultFocus({ number: o?.number, n: Date.now() }); navigate("finance"); }} inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userName={who} productCatalog={liveCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
-        return <Shipments key={"shp-" + (openShipmentNumber || "list")} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={productCatalog} userName={who} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
+        return <Shipments key={"shp-" + (openShipmentNumber || shipmentsFilter || "list")} claims={claims} initialStatusFilter={shipmentsFilter} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={liveCatalog} userName={who} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={livePackaging} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
         return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} setLots={setLots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
       case "settings":
-        return <Settings roles={roles} setRoles={setRoles} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
+        return <Settings roles={roles} setRoles={setRoles} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} onLinkPackagingSpelling={linkPackagingSpelling} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
       default:
         return null;
     }
@@ -713,7 +808,7 @@ export default function App() {
           data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog }}
           onNavigate={navigate}
           onRepair={(kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
-            if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !window.confirm(`Remove ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock.`)) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).filter((l: any) => !ids.has(l.id))); recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) removed: ${ol.map((l: any) => l.number).join(", ")}` }); }
+            if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !window.confirm(`Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.`)) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
             if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n || !window.confirm(`Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?`)) return;
               const bad = new Map<string, Set<string>>(dl.invoices.map(x => [String(x.id), new Set<string>(x.links.map((l: any) => l.type + ":" + l.number))]));
               setInvoices((prev: any[]) => (prev || []).map((i: any) => bad.has(String(i.id)) ? { ...i, links: (i.links || []).filter((l: any) => !bad.get(String(i.id))!.has(l.type + ":" + l.number)) } : i));

@@ -210,9 +210,13 @@ export function planPackingResult(
     if (!salesOfPO.length) { soChanges.push(`${it.product} ${it.size || ""} ${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg — no sale linked to ${po.number}: stays in stock`); return; }
     if (!target) { questions.push({ key: `new:${id}`, label: `New size ${it.product} ${it.size || ""} (${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg) — which sale was it loaded for?`, options: salesOfPO }); return; }
     const o = orders.find((x: any) => String(x.number) === target); if (!o) return;
+    // v7.14.2 (A-RV-05, owner 9 Oct — A-ONE-1: every sale sells a LOT): the new size has its own expected lot (built in step 1);
+    // the sale line names that lot, never the PO
+    const lot = lots.find((l: any) => String(l.poRef) === String(po.number) && String(l.poLineId ?? "") === id && !/Cancelled|Deleted/.test(String(l.status || "")));
+    if (!lot) { soChanges.push(`${it.product} ${it.size || ""} ${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg — no lot yet for this size on ${po.number}: not added to ${target}`); return; }
     const price = num(prices[id]);
     o.items.push(recount({ id: deps.nextId ? deps.nextId() : `so-${ctx.todayISO}-${id}`, product: it.product, variety: it.variety || "", size: it.size || "", quality: it.quality || "I", grade: it.quality || "I", qty: num(it.qty),
-      pricingUnit: it.pricingUnit || "kg", packaging: it.packaging, packagingId: it.packagingId, cnCode: it.cnCode || "", origin: it.origin || "", sourceType: "PO", sourceRef: po.number, sourceLineId: it.id ?? i + 1,
+      pricingUnit: it.pricingUnit || "kg", packaging: it.packaging, packagingId: it.packagingId, cnCode: it.cnCode || "", origin: it.origin || "", sourceType: "STOCK", sourceRef: lot.number,
       unitPrice: price > 0 ? price : null, priceToAgree: !(price > 0), addedByPackingResult: true }));
     appendedFor.set(id, target);
     soChanges.push(`${target}: + ${it.product} ${it.size || ""} ${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg${price > 0 ? ` at ${price}` : " — price to agree"}`);

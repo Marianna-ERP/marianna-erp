@@ -4,6 +4,7 @@
 // retired. When the DDL drops a mirror column (freeze item F-1), the fallback is deleted HERE and nowhere else.
 // Mirrors and their sources:  paymentTermsDays → terms.paymentDays (v6.99.23/45)   ·   people[] → contacts[] (v6.99.45)
 //                             grade → quality (v6.99.27)   ·   unit.qtyKg → unit.load[] (v6.99.8)   ·   address text → addr (v6.99.40)
+//                             PO items[].currency → the PO header currency (v7.18.8, BP-51) — no reader at all; the DDL drops it
 // ─────────────────────────────────────────────────────────────────────────────
 const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
 

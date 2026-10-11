@@ -1,3 +1,4 @@
+import { shipmentTradeDirection } from "./tradeFlow.domain";   // v7.12.1 (A-TD-2)
 import { gradeStockNow } from "./seasonOps.domain";
 // ─────────────────────────────────────────────────────────────────────────────
 // trace.domain.ts — one-click lot traceability (Safeguards batch 7a)
@@ -20,7 +21,7 @@ export interface TraceTree {
   generatedAt: string;
 }
 
-export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; orders?: any[]; shipments?: any[]; invoices?: any[] }, todayISO: string): TraceTree {
+export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; orders?: any[]; shipments?: any[]; invoices?: any[]; countryOf?: (id: any) => string }, todayISO: string): TraceTree {
   const pos = arr(inp.pos), orders = arr(inp.orders), shipments = arr(inp.shipments), invoices = arr(inp.invoices);
   const po = pos.find(p => p.number === lot.poRef) || null;
 
@@ -53,7 +54,7 @@ export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; o
   };
   // v6.99.21 (A-R15-2): a CANCELLED shipment never carried the goods — it has no place in a recall report
   const ship = shipments.filter((s: any) => String(s?.status) !== "Cancelled").filter(carriesLot).map(s => ({
-    number: s.number, status: s.status, direction: s.tradeDirection || undefined,
+    number: s.number, status: s.status, direction: shipmentTradeDirection(s, { pos: inp.pos, orders: inp.orders, countryOf: inp.countryOf }) || undefined,   // v7.12.1 (A-TD-2)
     // v6.99.19 (A-R14-4): places, dates and carrier come from the UNITS (the leg values are legacy defaults)
     carrier: (() => { const ids = (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => u.carrierId ?? l.carrierId ?? l.forwarderId)).filter(Boolean); const names = Array.from(new Set(ids.map((id: any) => (inp.contacts || []).find((c: any) => String(c.id) === String(id))?.name).filter(Boolean))); return names.join(", ") || s.carrierName || undefined; })(),
     from: (s.legs || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => String(u.pickupText || "").trim())).find(Boolean) || s.originText || s.legs?.[0]?.fromCustom || undefined,

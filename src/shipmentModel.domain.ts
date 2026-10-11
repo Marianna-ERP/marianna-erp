@@ -11,7 +11,7 @@ import { S, r2, r0 } from "./format";
 //
 //   D1  one shipment = one movement under one purpose; variation on the UNIT
 //   D2  transport order per carrier            → transportOrdersByCarrier()
-//   D3  legs & cost responsibility from incoterms → legsFromIncoterms()
+//   D3  who pays each leg → incoterms.legFreightPayers() (v7.19.0)
 //   D4  Inventory owns the ledger (unchanged here)
 //   D5  BOOKING object (no., cut-off, ETD, ETA, POL/POD; vessel optional)
 //   D6  purpose-split at a transload: de-vanning report spawns onward shipments
@@ -244,25 +244,7 @@ export function derivedHeaderDates(sh: any): { firstLoaded: string; lastDelivere
   return { firstLoaded: sorted("loadedAt")[0] || "", lastDelivered: sorted("deliveredAt").slice(-1)[0] || sorted("dischargedAt").slice(-1)[0] || "" };
 }
 
-// ── D3 · LEGS FROM INCOTERMS ──────────────────────────────────────────────────
-export interface LegProposal { mode: string; kind: string; from: string; to: string; responsibility: "Marianna" | "Supplier" | "Client"; customs?: "export" | "import" | null; }
-export function legsFromIncoterms(buy: string, sell: string, ctx: { producer?: string; pol?: string; pod?: string; ourWarehouse?: string; client?: string; isSea?: boolean; direction?: string }): LegProposal[] {
-  const B = S(buy).toUpperCase(), Se = S(sell).toUpperCase();
-  const legs: LegProposal[] = [];
-  const exportCustoms = ctx.direction === "EXPORT" ? "export" : null;
-  const importCustoms = ctx.direction === "IMPORT" ? "import" : null;
-  // pre-carriage
-  if (["EXW", "FCA"].includes(B)) legs.push({ mode: "Road", kind: "road", from: ctx.producer || "producer", to: ctx.isSea ? (ctx.pol || "POL") : (ctx.client || ctx.ourWarehouse || "destination"), responsibility: "Marianna", customs: exportCustoms });
-  else if (["DAP", "DPU", "DDP"].includes(B)) legs.push({ mode: "Road", kind: "road", from: ctx.producer || "producer", to: ctx.ourWarehouse || "our warehouse", responsibility: "Supplier" });
-  // main carriage
-  if (ctx.isSea) {
-    const ours = !["CFR", "CIF", "CPT", "CIP", "DAP", "DPU", "DDP"].includes(B) && ["CFR", "CIF", "CPT", "CIP", "DAP", "DPU", "DDP"].includes(Se);
-    legs.push({ mode: "Sea", kind: "sea", from: ctx.pol || "POL", to: ctx.pod || "POD", responsibility: ours ? "Marianna" : (["CFR", "CIF", "CPT", "CIP"].includes(B) ? "Supplier" : "Client"), customs: importCustoms });
-  }
-  // on-carriage
-  if (["DAP", "DPU", "DDP"].includes(Se)) legs.push({ mode: "Road", kind: "road", from: ctx.isSea ? (ctx.pod || "POD") : (ctx.ourWarehouse || "our warehouse"), to: ctx.client || "client", responsibility: "Marianna" });
-  return legs;
-}
+// ── D3 · v7.19.0 (A-INC-1): legsFromIncoterms retired (called nowhere) — who pays each leg comes from incoterms.legFreightPayers ──
 
 // ── D11 · ONE DOCUMENT REGISTER (derived view over the three sources) ─────────
 export interface DocRow { kind: string; ref: string; status: "Expected" | "Sent" | "Returned" | "Have it" | "N/A"; date?: string; link?: string; unit?: string; }
@@ -273,7 +255,7 @@ export function documentRegister(sh: any, protocols: any[] = []): DocRow[] {
   (protocols || []).forEach((p: any) => rows.push({ kind: "Loading protocol", ref: S(p.number), status: p.status === "Returned" ? "Returned" : p.status === "Sent" ? "Sent" : "Expected", date: S(p.returnedAt || p.sentAt), unit: S(p.truckPlate || p.unitId) }));
   (sh?.documents || []).forEach((d: any) => {
     const st = S(d.status).toLowerCase();
-    rows.push({ kind: S(d.type || "Document"), ref: S(d.ref || d.number), status: st === "have it" ? "Have it" : st === "sent" ? "Sent" : st === "n/a" ? "N/A" : "Expected", date: S(d.date), link: S(d.link) });
+    rows.push({ kind: S(d.type) === "Other" && S(d.description) ? `Other — ${S(d.description)}` : S(d.type || "Document"), ref: S(d.ref || d.number), /* v7.18.2 (A-AU-4): Other shows its description */ status: st === "have it" ? "Have it" : st === "sent" ? "Sent" : st === "n/a" ? "N/A" : "Expected", date: S(d.date), link: S(d.link) });
   });
   return rows;
 }
@@ -356,16 +338,44 @@ export function jobsByCarrierLeg(sh: any): Array<{ key: string; carrierId: any; 
 /** Expected freight cost lines: one per carrier × leg (source LEGCAR:{leg}:{carrier}); replace-by-source. */
 let fxFallback: (cur: string) => number = () => 1;
 export function setFxFallback(fn: (cur: string) => number) { fxFallback = fn; }
-export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string = () => ""): any[] {
-  const keep = (sh?.costs || []).filter((c: any) => !String(c.source || "").startsWith("LEGCAR:") && !String(c.source || "").startsWith("LEG:") && !String(c.source || "").startsWith("leg-freight:"));   // v6.99.9: the legacy per-leg lines are replaced too
-  const lines = jobsByCarrierLeg(sh).filter(j => j.amount > 0).map(j => {
+// v7.19.7 (A-RV-36): A SAVE NEVER DOUBLES A FREIGHT LINE NOR FORGETS ITS INVOICE. Each carrier × leg line CONTINUES the line it was
+// last time (same source), or ADOPTS an old freight line of its leg and type written before unit prices (no source) — the old line
+// used to stay beside it, doubling the freight (13 shipments on the 2 Oct file). It keeps the line's id, invoice status and
+// reference (every save used to reset them to Expected); an INVOICED amount stays — the invoice is the fact, and the screen flags a
+// difference from the unit prices — while an expected one follows the units. An invoiced line no unit makes any more is kept as an
+// ordinary line, never dropped.
+const isInvoicedLine = (c: any) => !!c && !["", "Expected"].includes(String(c.invoiceStatus || "Expected"));
+export function costLinesByCarrierLeg(sh: any, resolveName: (id: any) => string = () => "", payers?: Array<{ payer: string }>): any[] {
+  const managed = (c: any) => /^(LEGCAR:|LEG:|leg-freight:)/.test(String(c?.source || ""));   // v6.99.9: the legacy per-leg lines are replaced too
+  const keep = (sh?.costs || []).filter((c: any) => !managed(c));
+  const before = (sh?.costs || []).filter((c: any) => String(c?.source || "").startsWith("LEGCAR:"));
+  const typeOf = (mode: string) => mode.toLowerCase() === "sea" ? "sea_freight" : mode.toLowerCase() === "air" ? "air_freight" : "road_freight";
+  const legOfOld = (c: any) => { const m = ({ road_freight: "Road", sea_freight: "Sea", air_freight: "Air", rail_freight: "Rail" } as Record<string, string>)[String(c?.type || "")]; return m ? (sh?.legs || []).findIndex((l: any) => String(l?.mode || "") === m) : -1; };
+  const adopted = new Set<any>(), continued = new Set<any>();
+  const lines = jobsByCarrierLeg(sh).filter(j => j.amount > 0 && (!payers || !payers[j.legIndex] || payers[j.legIndex].payer === "us")).map(j => {   // v7.19.0 (A-INC-1): a leg that is not ours makes no line
     const legFx = num((sh.legs[j.legIndex] || {}).costFxRate);
     const fx = (j.currency !== "PLN" && (!legFx || legFx === 1)) ? (num(fxFallback(j.currency)) || 1) : (legFx || 1);   // v6.99.14: a legacy leg at 1.0 uses the reference
-    return { id: `legcar-${j.legIndex}-${j.carrierId}`, type: j.mode.toLowerCase() === "sea" ? "sea_freight" : j.mode.toLowerCase() === "air" ? "air_freight" : "road_freight",
+    const base: any = { id: `legcar-${j.legIndex}-${j.carrierId}`, type: typeOf(j.mode),
       label: `${j.mode} freight — leg ${j.legIndex + 1} — ${j.carrierId ? (resolveName(j.carrierId) || "carrier") : "⚠ carrier not set on the unit"} (${j.units.length} unit${j.units.length > 1 ? "s" : ""})`,
       supplierId: j.carrierId || null, amount: r2(j.amount), currency: j.currency, fxRate: fx, amountPLN: r2(j.amount * fx), invoiceStatus: "Expected", responsibility: "Marianna", source: `LEGCAR:${j.legIndex}:${j.carrierId ?? "unassigned"}`, needsCarrier: !j.carrierId };
+    // the same carrier × leg as last time — by its source, or by its leg and supplier when the source still names an earlier carrier id
+    let prev: any = before.find((c: any) => !continued.has(c) && String(c.source) === base.source) || before.find((c: any) => !continued.has(c) && String(c.source).split(":")[1] === String(j.legIndex) && c.supplierId != null && String(c.supplierId) === String(j.carrierId ?? "")) || null;
+    if (prev) continued.add(prev);
+    else { const cand = keep.filter((c: any) => !adopted.has(c) && !String(c?.source || "") && !c?._customsAuto && c?.type === base.type && legOfOld(c) === j.legIndex);
+      prev = cand.find((c: any) => String(c.supplierId ?? "") === String(j.carrierId ?? "")) || cand[0] || null; if (prev) adopted.add(prev); }
+    if (!prev) return base;
+    const inv = isInvoicedLine(prev);
+    return { ...base, id: prev.id ?? base.id, invoiceStatus: prev.invoiceStatus || "Expected", ...(prev.invoiceRef ? { invoiceRef: prev.invoiceRef } : {}), ...(prev.allocationMethod ? { allocationMethod: prev.allocationMethod } : {}), ...(prev.notes ? { notes: prev.notes } : {}),
+      ...(inv ? { amount: num(prev.amount), currency: prev.currency || base.currency, fxRate: num(prev.fxRate) || base.fxRate, amountPLN: num(prev.amountPLN) || r2(num(prev.amount) * (num(prev.fxRate) || 1)) } : {}) };
   });
-  return [...keep, ...lines];
+  const released = before.filter((c: any) => !continued.has(c) && isInvoicedLine(c) && (num(c.amount) > 0 || num(c.amountPLN) > 0)).map((c: any) => { const { source, needsCarrier, ...rest } = c; return { ...rest, notes: c.notes || c.label || "Freight" }; });
+  return [...keep.filter((c: any) => !adopted.has(c)), ...released, ...lines];
+}
+/** v7.19.7 (A-RV-36): an invoiced carrier × leg line whose amount differs from its unit prices (the screen flags it). */
+export function invoicedVsUnits(sh: any, c: any): { invoiced: number; units: number } | null {
+  const m = String(c?.source || "").match(/^LEGCAR:(\d+):(.*)$/); if (!m || !isInvoicedLine(c)) return null;
+  const j = jobsByCarrierLeg(sh).find(x => x.legIndex === Number(m[1]) && String(x.carrierId ?? "unassigned") === m[2]); const units = j ? r2(j.amount) : 0;
+  return Math.abs(units - num(c.amount)) > 0.01 ? { invoiced: num(c.amount), units } : null;
 }
 
 
@@ -490,25 +500,50 @@ export function unitGaps(u: any): Array<"pickup place" | "delivery place" | "loa
 export interface LoadPlace { id: any; text: string; ref: string; date: string; deliveryId?: any; deliveryText?: string; }
 const SUPPLIER_DELIVERS = /^(DAP|DPU|DDP|CPT|CIP|CFR|CIF|DAT)$/;
 const samePlace = (aId: any, aText: any, bId: any, bText: any) => (aId != null && aId !== "" && bId != null && bId !== "") ? String(aId) === String(bId) : S(aText).toLowerCase() === S(bText).toLowerCase() && !!S(aText);
+/** Where ONE goods row is collected (the rules above, unchanged since v6.99.93). */
+export function placeOfGoods(g: any, pos: any[] = [], lots: any[] = []): LoadPlace | null {
+  const po = (pos || []).find((p: any) => String(p.number) === String(g?.poRef)) || null;
+  const lot = (lots || []).find((l: any) => String(l.number) === String(g?.lotRef)) || null;
+  // v6.99.93 (A-GR-1, owner 1 Oct — my regression from v6.99.83): goods ALREADY IN STOCK load where the lot is (the lot owns its
+  // location); the PO's terms only say where goods not yet received will be collected
+  if (lot && num(lot.physicalKg) > 0 && (lot.locationId != null || S(lot.locationText))) return { id: lot.locationId ?? null, text: S(lot.locationText), ref: S(lot.number), date: "" };
+  if (po && ["EXW", "FCA"].includes(S(po.buyIncoterm).toUpperCase()) && (po.destinationLocationId != null || S(po.destinationText))) return { id: po.destinationLocationId ?? null, text: S(po.destinationText || po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate) };
+  // v6.99.83 (A-UN-5, owner 30 Sept): on a supplier-delivered PO (DDP, DAP, CIF…) the truck loads at the SUPPLIER and delivers to
+  // the PO's destination — the lot's location (where it will arrive) is never the loading place; a lot's location counts only in stock
+  if (po && SUPPLIER_DELIVERS.test(S(po.buyIncoterm).toUpperCase()) && S(po.supplier?.name || po.supplier)) return { id: null, text: S(po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate), deliveryId: po.destinationLocationId ?? null, deliveryText: S(po.destinationText) };
+  return null;
+}
 export function truckLoadPlaces(sh: any, u: any, pos: any[] = [], lots: any[] = []): LoadPlace[] {
   const out: LoadPlace[] = [];
   (u?.load || []).filter((a: any) => num(a.qtyKg) > 0).forEach((a: any) => {
     const g = (sh?.goods || []).find((x: any) => String(x.id) === String(a.goodsLineId)); if (!g) return;
-    const po = (pos || []).find((p: any) => String(p.number) === String(g.poRef)) || null;
-    const lot = (lots || []).find((l: any) => String(l.number) === String(g.lotRef)) || null;
-    let p: LoadPlace | null = null;
-    // v6.99.93 (A-GR-1, owner 1 Oct — my regression from v6.99.83): goods ALREADY IN STOCK load where the lot is (the lot owns its
-    // location); the PO's terms only say where goods not yet received will be collected
-    if (lot && num(lot.physicalKg) > 0 && (lot.locationId != null || S(lot.locationText))) p = { id: lot.locationId ?? null, text: S(lot.locationText), ref: S(lot.number), date: "" };
-    else if (po && ["EXW", "FCA"].includes(S(po.buyIncoterm).toUpperCase()) && (po.destinationLocationId != null || S(po.destinationText))) p = { id: po.destinationLocationId ?? null, text: S(po.destinationText || po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate) };
-    // v6.99.83 (A-UN-5, owner 30 Sept): on a supplier-delivered PO (DDP, DAP, CIF…) the truck loads at the SUPPLIER and delivers to
-    // the PO's destination — the lot's location (where it will arrive) is never the loading place; a lot's location counts only in stock
-    else if (po && SUPPLIER_DELIVERS.test(S(po.buyIncoterm).toUpperCase()) && S(po.supplier?.name || po.supplier)) p = { id: null, text: S(po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate), deliveryId: po.destinationLocationId ?? null, deliveryText: S(po.destinationText) };
-    else if (lot && num(lot.physicalKg) > 0 && (lot.locationId != null || S(lot.locationText))) p = { id: lot.locationId ?? null, text: S(lot.locationText), ref: S(lot.number), date: "" };
+    const p = placeOfGoods(g, pos, lots);
     if (p && !out.some(q => samePlace(q.id, q.text, p!.id, p!.text))) out.push(p);
   });
   return out;
 }
+
+// ── v7.15.0 (A-LS-3, owner 9 Oct: "a single truck can collect from 2 different producers"): THE TRUCK'S LOADING STOPS ──
+// Derived from what the truck carries — never typed: each load line's goods row brings its place (placeOfGoods) and date; rows
+// from the same place make one stop; stops in date order. What is collected at each stop is listed (product, kilos).
+export interface LoadingStop { key: string; id: any; text: string; date: string; refs: string[]; goodsLineIds: string[]; kg: number; lines: Array<{ goodsLineId: string; product: string; variety: string; size: string; kg: number }>; }
+export const stopKeyOf = (p: { id: any; text: any }) => (p.id != null && p.id !== "" ? `id:${p.id}` : `t:${S(p.text).toLowerCase()}`);
+export function truckLoadingStops(sh: any, u: any, pos: any[] = [], lots: any[] = []): LoadingStop[] {
+  const out: LoadingStop[] = [];
+  (u?.load || []).filter((a: any) => num(a.qtyKg) > 0).forEach((a: any) => {
+    const g = (sh?.goods || []).find((x: any) => String(x.id) === String(a.goodsLineId)); if (!g) return;
+    const p = placeOfGoods(g, pos, lots); if (!p) return;
+    let s = out.find(q => samePlace(q.id, q.text, p.id, p.text));
+    if (!s) { s = { key: stopKeyOf(p), id: p.id, text: p.text, date: p.date, refs: [], goodsLineIds: [], kg: 0, lines: [] }; out.push(s); }
+    if (p.ref && !s.refs.includes(p.ref)) s.refs.push(p.ref);
+    if (!s.date && p.date) s.date = p.date;
+    s.goodsLineIds.push(String(g.id)); s.kg += num(a.qtyKg);
+    s.lines.push({ goodsLineId: String(g.id), product: S(g.product), variety: S(g.variety), size: S(g.size), kg: num(a.qtyKg) });
+  });
+  return out.sort((x, y) => (x.date || "9999-12-31").localeCompare(y.date || "9999-12-31") || x.text.localeCompare(y.text));
+}
+/** The truck limited to one stop's goods (for that producer's loading protocol). */
+export function unitForStop(u: any, stop: LoadingStop): any { return { ...u, load: (u?.load || []).filter((a: any) => stop.goodsLineIds.includes(String(a.goodsLineId))) }; }
 export interface TruckPlaceNote { places: LoadPlace[]; proposal: LoadPlace | null; mismatch: LoadPlace | null; twoPlaces: boolean; }
 export function truckPlaceNote(sh: any, u: any, pos: any[] = [], lots: any[] = []): TruckPlaceNote {
   const places = truckLoadPlaces(sh, u, pos, lots);
@@ -609,4 +644,41 @@ export function tourGaps(u: any, tour: Tour | null): string[] {
   if (!tour || !tour.isTour) return base;
   // the drops replace the one delivery place; the loading stops replace the one pickup place when there are any
   return base.filter(g => g === "delivery place" ? false : g === "pickup place" ? !tour.loads.length : true).concat(tour.missing.map(n => `destination of ${n}`));
+}
+
+
+// ══ v7.18.2 (A-AU-4, owner 9 Oct — P-8, 'lists instead of typing'): A SHIPMENT DOCUMENT'S TYPE COMES FROM ONE LIST ══════════════
+// The checklist and the register read these types, so a variant ('PL', 'Export declaration MRN') could leave a document
+// 'missing' that is there. "BL" stays the stored word (three readers use it), shown as B/L. AWB (air) and the four rows the
+// customs-file import writes are on the list too. Anything else is Other, with a description. The variants already stored are
+// mapped once per dataset (App, named in the audit trail).
+export const DOC_TYPES: { value: string; label: string; system?: boolean }[] = [
+  { value: "Invoice", label: "Invoice" }, { value: "Packing list", label: "Packing list" }, { value: "CMR", label: "CMR" },
+  { value: "BL", label: "B/L" }, { value: "AWB", label: "AWB (air waybill)" }, { value: "EUR.1", label: "EUR.1" },
+  { value: "Phytosanitary certificate", label: "Phytosanitary certificate" }, { value: "Certificate of origin", label: "Certificate of origin" }, { value: "Insurance certificate", label: "Insurance certificate" },   // v7.20.2 (A-INC-2): the certificate a CIF / CIP sale holds
+  { value: "Export declaration", label: "Export declaration" }, { value: "Import declaration", label: "Import declaration" },
+  { value: "Transport order", label: "Transport order" }, { value: "Loading protocol", label: "Loading protocol" },
+  { value: "Export declaration (EAD)", label: "Export declaration (EAD)", system: true }, { value: "Customs release (CC529C)", label: "Customs release (CC529C)", system: true },
+  { value: "Exit confirmation (CC599C)", label: "Exit confirmation (CC599C)", system: true }, { value: "Customs declaration copy (SAD)", label: "Customs declaration copy (SAD)", system: true },
+  { value: "Other", label: "Other" },
+];
+const DOC_ALIASES: Record<string, string> = { "export declaration mrn": "Export declaration", "pl": "Packing list", "loading protokol": "Loading protocol", "loading protokół": "Loading protocol", "coo": "Certificate of origin", "b/l": "BL", "bill of lading": "BL", "phytosanitary": "Phytosanitary certificate", "phyto": "Phytosanitary certificate", "eur1": "EUR.1", "eur 1": "EUR.1" };
+/** The list's value for a stored type — the type itself when it is on the list; a known variant mapped; anything else Other. */
+export function docTypeOf(typed: any): { type: string; description?: string } {
+  const s = S(typed); if (!s) return { type: "" };
+  const hit = DOC_TYPES.find(t => t.value.toLowerCase() === s.toLowerCase()); if (hit) return { type: hit.value };
+  const al = DOC_ALIASES[s.toLowerCase().replace(/\s+/g, " ")]; if (al) return { type: al };
+  return { type: "Other", description: s };
+}
+/** Once per dataset: a shipment's typed document types mapped to the list (the same object when nothing changes). */
+export function mapDocTypes(sh: any, log?: string[] | null): any {
+  if (!sh || sh.deleted) return sh;
+  let changed = false;
+  const documents = (sh.documents || []).map((d: any) => {
+    const t = S(d?.type); if (!t) return d;
+    const r = docTypeOf(t); if (r.type === t) return d;
+    changed = true; if (log) log.push(`${sh.number}: "${t}" → ${r.type}${r.description ? ` (${r.description})` : ""}`);
+    return { ...d, type: r.type, ...(r.description ? { description: r.description } : {}) };
+  });
+  return changed ? { ...sh, documents } : sh;
 }

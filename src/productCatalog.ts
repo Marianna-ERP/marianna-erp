@@ -106,3 +106,26 @@ export function catalogToRows(catalog: CatalogItem[]): { item: string; variety: 
   });
   return rows;
 }
+
+// ── v7.18.3 (A-AU-5, owner 9 Oct — P-8): each item carries its CALIBRE list and its COLORATION list, as it carries varieties.
+// Order lines pick from them; a new value is added to the catalog first (from the line's picker or in Settings → Catalog).
+export type CatalogListKind = "calibres" | "colorations";
+/** The item's calibres or colorations, in the catalog's order. */
+export function valuesForItem(catalog: CatalogItem[], item: string, kind: CatalogListKind): string[] {
+  const row: any = (catalog || []).find(c => lc(c.item) === lc(item));
+  return row && Array.isArray(row[kind]) ? row[kind].slice() : [];
+}
+/** Add a calibre or a coloration under an item (the item is created when missing); a deleted value of that name comes back. */
+export function addCatalogValue(catalog: CatalogItem[], item: string, kind: CatalogListKind, value: string): CatalogItem[] {
+  const name = norm(item); const v = norm(value); if (!name || !v) return catalog;
+  let out = catalog || [];
+  if (!out.some(c => lc(c.item) === lc(name))) out = addCatalogItem(out, name);
+  const delKey = kind === "calibres" ? "deletedCalibres" : "deletedColorations";
+  return out.map((c: any) => {
+    if (lc(c.item) !== lc(name)) return c;
+    const list: string[] = Array.isArray(c[kind]) ? c[kind] : [];
+    const del = (c[delKey] || []).filter((x: string) => lc(x) !== lc(v));
+    if (list.some(x => lc(x) === lc(v))) return del.length === (c[delKey] || []).length ? c : { ...c, [delKey]: del };
+    return { ...c, [kind]: [...list, v].sort((a, b) => a.localeCompare(b, "pl", { numeric: true })), [delKey]: del };
+  });
+}

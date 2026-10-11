@@ -330,6 +330,13 @@ export function migrateLegacyInvoices(opts: {
   return out;
 }
 
+/** v7.16.4 (AUD-17): the one summary line of an invoice that has no lines is named from what it is for — its linked
+ *  documents — never from the notes, which are free text and would become a line of a legal invoice. */
+export function fallbackLineName(inv: any): string {
+  const refs = arr<any>(inv?.links).map((l: any) => String(l?.number || "").trim()).filter(Boolean);
+  return refs.length ? `Sales invoice — ${refs.join(", ")}`.slice(0, 120) : "Sales invoice";
+}
+
 // ── FAKTUROWNIA PUSH PAYLOAD (verified contract, spec §10) ──
 // Builds the POST /invoices.json body for a SALES invoice. Auto-numbering (number:null).
 // gov_save_and_send defaults OFF — KSeF stays Fakturownia-managed for now.
@@ -355,9 +362,17 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
       total_price_gross: gross || (all.length === 1 ? r2(n(inv.grossAmount)) : 0),   // v6.99.116 (AUD-14): the invoice total is never spread over lines — an unpriced line stays 0 and blocks the push (pushBlockers)
     };
   }).filter(p => n(p.total_price_gross) > 0);
+  // v7.16.4 (AUD-17): rounding each line to the grosz can leave the lines 1–2 grosz off the invoice total; that remainder goes
+  // on the largest line, so the invoice Fakturownia issues equals our register. A larger gap is not rounding: it stays, and
+  // pushBlockers refuses the push (AUD-14 — the invoice total is never spread over lines).
+  { const g = r2(n(inv.grossAmount)); const diff = r2(g - r2(positions.reduce((a, p) => a + n(p.total_price_gross), 0)));
+    if (positions.length && g > 0 && diff !== 0 && Math.abs(diff) <= 0.02) {
+      let k = 0; positions.forEach((p, i) => { if (n(p.total_price_gross) > n(positions[k].total_price_gross)) k = i; });
+      positions[k] = { ...positions[k], total_price_gross: r2(n(positions[k].total_price_gross) + diff) };
+    } }
   // If no per-line positions exist (migrated invoices), fall back to one summary line.
   const safePositions = positions.length ? positions : [{
-    name: inv.notes?.slice(0, 80) || "Sales invoice", quantity: 1, quantity_unit: "szt.",
+    name: fallbackLineName(inv), quantity: 1, quantity_unit: "szt.",   // v7.16.4 (AUD-17): never named from the notes
     tax: n(inv.vatRate), total_price_gross: r2(n(inv.grossAmount)),
   }];
   const body: any = {

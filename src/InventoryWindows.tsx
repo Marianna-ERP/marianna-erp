@@ -372,7 +372,7 @@ export function SettlementModal({ lot, orders = [], contacts = [], pos = [], onC
                 <div key={e.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 160px 34px", gap: 8, marginBottom: 6 }}>
                   <input value={e.label} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, label: ev.target.value } : x))} placeholder="e.g. Phytosanitary certificate" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
                   <input type="number" value={e.pln} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, pln: ev.target.value } : x))} placeholder="PLN" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
-                  <ActionButton action="close" onClick={() => setExtra(prev => prev.filter((_, idx) => idx !== i))} />
+                  <ActionButton action="remove" onClick={() => setExtra(prev => prev.filter((_, idx) => idx !== i))} />
                 </div>
               ))}
               <button onClick={() => setExtra(prev => [...prev, { id: nextId(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
@@ -391,7 +391,7 @@ export function SettlementModal({ lot, orders = [], contacts = [], pos = [], onC
   );
 }
 
-export function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "", shipments: shipmentsRef = [] }: any) {
+export function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "", shipments: shipmentsRef = [], users = [] }: any) {   // v7.18.5: + users
   // v6.99.19 (A-R14-8): once a claim on this lot is finalised or its truck settlement is closed, the facts behind them are frozen.
   const frozenBy = (() => {
     const cl = (claims || []).find((c: any) => ["Settled", "Accepted", "Closed"].includes(String(c.status)) && ((c.subjects || []).some((s: any) => String(s.ref) === String(lot.number)) || String(c.rootDoc?.number) === String(lot.poRef)));
@@ -424,7 +424,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
     recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job of ${j.date} ${why} — its movements voided` });
   }
   function openInspection(existing?: any) {
-    setIns(existing ? { ...existing } : blankInspection(lot, { nextId, todayISO: localTodayISO, po, tolerances: tolerancesFromLast(inspections, lot.product) }));
+    setIns(existing ? { ...existing } : ((b: any) => ({ ...b, inspector: b.inspector || userName || "" }))(blankInspection(lot, { nextId, todayISO: localTodayISO, po, tolerances: tolerancesFromLast(inspections, lot.product) })));   // v7.18.5: the person signed in
     setWin("inspect");
   }
   function openSorting() {
@@ -505,7 +505,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
       </div>
 
       {win === "inspect" && ins && (
-        <InspectionWindow ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={(final0: any) => {
+        <InspectionWindow users={users} ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={(final0: any) => {
           const w = beforeReceiptWarning(lot, final0.date); if (w) { window.alert("⚠ " + w); return; }
           // v6.99.101 (A-QC-5, owner 2 Oct — one source): the report's number is issued when it is SAVED and stored on it; prints read it from there
           const final = { ...final0, number: final0.number || lastReportNumber("QR", String(final0.id)) || issueReportNumber("QR", `${lot.number} · inspection ${final0.date}`, userName, "Inventory") };
@@ -530,7 +530,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
         }} />
       )}
       {win === "count" && countF && (
-        <CountWindow f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={() => {
+        <CountWindow users={users} f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={() => {
           const w = beforeReceiptWarning(lot, countF.date); if (w) { window.alert("⚠ " + w); return; }
           const lines = countLinesForLot(lot).filter((r: any) => !r.informational).map((r: any) => { const e = { ...(countF.entries || {})[r.grade || "-"], kgPerBox: countF.kgPerBox }; const counted = countedKgOf(e as any);
             return { lotNumber: lot.number, grade: r.grade, countedKg: counted, systemKg: r.systemKg, diffKg: r0(counted - num(r.systemKg)), pallets: (e as any).pallets, boxesPerPallet: (e as any).boxesPerPallet, looseBoxes: (e as any).looseBoxes }; });

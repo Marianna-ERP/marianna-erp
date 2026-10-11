@@ -7,6 +7,7 @@
 // Every 20 seconds the app asks for new versions, so colleagues' work appears without a refresh.
 // Without the two settings the app behaves exactly as before, on this browser alone.
 import { DATA_KEYS, applyStoreFromRemote, readStoreValue, setStoreWrittenHook, createBackup } from "./useLocalStoredState";
+import { mergeStore } from "./storeMerge.domain";   // v7.14.0 (A-RV-01): record-by-record merge when a colleague saved first
 
 // v6.99.149 (owner 5 Oct): which copy this is — "TEST" on the preview address (a separate Supabase project), nothing on production
 declare const process: any;
@@ -52,7 +53,10 @@ async function rest(path: string, init: RequestInit = {}): Promise<Response> {
 }
 
 // ── the sync engine ────────────────────────────────────────────────────────────────────────────────────────────────────
-export type SyncState = { status: "off" | "login" | "pulling" | "synced" | "saving" | "offline" | "empty"; conflicts: string[]; lastPull?: string; by?: Record<string, string> };
+/** v7.14.0 (A-RV-01): what a merge has to tell the person — a record both changed (theirs kept, mine aside, "Use mine"), or a new
+ *  document of mine renumbered because a colleague took its number meanwhile. */
+export type SyncNotice = { key: string; kind: "clash" | "renumbered"; id: string; label: string; by?: string; at: string; to?: string };
+export type SyncState = { status: "off" | "login" | "pulling" | "synced" | "saving" | "offline" | "empty"; conflicts: string[]; lastPull?: string; by?: Record<string, string>; notices?: SyncNotice[] };
 type Known = { version: number; json: string };
 const known = new Map<string, Known>();   // what this tab last pulled or successfully pushed, per store
 const pending = new Map<string, { json: string; timer: any }>();
@@ -105,7 +109,7 @@ export function storesFromExport(text: string): { stores: Record<string, any>; s
   const summary = [["pos", "POs"], ["orders", "sales orders"], ["lots", "lots"], ["shipments", "shipments"], ["invoices", "invoices"], ["contacts", "companies"]].map(([k, l]) => `${n(k)} ${l}`).join(", ");
   return { stores, summary, meta: j._meta || {} };
 }
-async function pushNow(key: string, json: string, by: string): Promise<void> {
+async function pushNow(key: string, json: string, by: string, attempt = 0): Promise<void> {
   const k = known.get(key);
   if (k && k.json === json) return;   // an echo of what was pulled — nothing to push
   emit({ status: "saving" });
@@ -119,14 +123,52 @@ async function pushNow(key: string, json: string, by: string): Promise<void> {
   if (!res.ok) { emit({ status: "offline" }); return; }
   const rows: Row[] = await res.json();
   if (rows.length) { known.set(key, { version: rows[0].version, json }); emit({ status: "synced", conflicts: state.conflicts.filter(c => c !== key) }); return; }
-  // nobody matched the version: a colleague saved this store first — keep my copy aside, take theirs, say so
-  try { window.localStorage.setItem(`marianna:conflict:${key}:${now}`, json); } catch { /* best effort */ }
+  // nobody matched the version: a colleague saved this store first.
   const fresh = (await fetchRows()).find(r => r.key === key);
+  // v7.14.0 (A-RV-01, owner 9 Oct): merge record by record — my records go up beside theirs; only a record we BOTH changed stays theirs
+  // (mine kept aside, "Use mine" offered); a new document of mine whose number they took gets the next free one, said so.
+  const merge = fresh && attempt < 3 ? mergeStore(key, k ? JSON.parse(k.json) : undefined, data, fresh.data, (num: string) => referencedElsewhere(key, num)) : null;
+  if (fresh && merge) {
+    const who = fresh.updated_by || ""; const at = new Date().toISOString();
+    const notices: SyncNotice[] = [
+      ...merge.clashes.map(c => { try { window.localStorage.setItem(clashKey(key, c.id), JSON.stringify(c.mine)); } catch { /* best effort */ } return { key, kind: "clash" as const, id: c.id, label: c.label, by: who, at }; }),
+      ...merge.renumbered.map(r => ({ key, kind: "renumbered" as const, id: r.id, label: r.from, to: r.to, by: who, at })),
+    ];
+    const mergedJson = JSON.stringify(merge.merged);
+    known.set(key, { version: fresh.version, json: JSON.stringify(fresh.data) });
+    emit({ notices: [...(state.notices || []), ...notices], by: { ...(state.by || {}), [key]: who } });
+    if (mergedJson === JSON.stringify(fresh.data)) { applyStoreFromRemote(key, fresh.data); emit({ status: "synced" }); return; }
+    applyStoreFromRemote(key, merge.merged);   // the screen shows the merge at once; known still holds theirs, so it is pushed next
+    return pushNow(key, mergedJson, by, attempt + 1);   // pinned to their version; a third colleague in between merges again
+  }
+  // the old rule, for a store that is not records with ids (or after three tries): keep my copy aside, take theirs, say so
+  try { window.localStorage.setItem(`marianna:conflict:${key}:${now}`, json); } catch { /* best effort */ }
   if (fresh) { known.set(key, { version: fresh.version, json: JSON.stringify(fresh.data) }); applyStoreFromRemote(key, fresh.data); }
   emit({ status: "synced", conflicts: Array.from(new Set([...state.conflicts, key])), by: { ...(state.by || {}), [key]: fresh?.updated_by || "" } });
 }
+const clashKey = (key: string, id: string) => `marianna:clash:${key}:${id}`;
+/** Does any OTHER store already point at this document number? (then a new document is not silently renumbered) */
+function referencedElsewhere(key: string, num: string): boolean {
+  const needle = JSON.stringify(String(num));
+  return DATA_KEYS.some(k => { if (k === key || k === "auditLog") return false; try { return JSON.stringify(readStoreValue(k) ?? null).includes(needle); } catch { return false; } });
+}
+let lastBy = "";
+/** "Use mine" on a clash: my version of that record replaces theirs, and goes up like any save. */
+export async function keepMine(key: string, id: string): Promise<boolean> {
+  let mine: any = null; try { mine = JSON.parse(window.localStorage.getItem(clashKey(key, id)) || "null"); } catch { mine = null; }
+  const cur = readStoreValue(key); let next: any;
+  if (Array.isArray(cur)) { const i = cur.findIndex((r: any) => String(r?.id) === String(id)); next = mine === null ? cur.filter((r: any) => String(r?.id) !== String(id)) : i >= 0 ? cur.map((r: any, j: number) => (j === i ? mine : r)) : [...cur, mine]; }
+  else if (cur && typeof cur === "object") { next = { ...cur }; if (mine === null) delete next[id]; else next[id] = mine; }
+  else return false;
+  applyStoreFromRemote(key, next);
+  try { window.localStorage.removeItem(clashKey(key, id)); } catch { /* best effort */ }
+  emit({ notices: (state.notices || []).filter(n => !(n.key === key && n.id === id && n.kind === "clash")) });
+  await pushNow(key, JSON.stringify(next), lastBy); return true;
+}
+export function dismissNotice(key: string, id: string, kind: string) { emit({ notices: (state.notices || []).filter(n => !(n.key === key && n.id === id && n.kind === kind)) }); }
 /** Local writes follow to the shared copy, 1.5 s after the last keystroke per store. */
 export function startSync(by: string): () => void {
+  lastBy = by;   // v7.14.0: "Use mine" pushes as the person signed in
   setStoreWrittenHook((key, json) => {
     if (!DATA_KEYS.includes(key)) return;
     if (state.status === "empty") return;   // v6.99.152: before the first upload nothing goes up — no stray store from a test browser

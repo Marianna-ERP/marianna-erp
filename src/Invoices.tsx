@@ -14,7 +14,7 @@ import { useConfirm, notifySaved, SmallButton } from "./ui";
 import React, { useMemo, useState } from "react";
 import { normalizeInvoicePayments, applyPaymentEvent, removePaymentEvent, outstandingAmount, PAYMENT_METHODS } from "./payments.domain";
 import { nextId } from "./ids";
-import { resolveFxRate, defaultFxRate } from "./fx";
+import { resolveFxRate, defaultFxRate, nbpRateBefore } from "./fx";   // v7.13.2–7.13.3 (A-AU-2)
 import {
   Invoice, FinanceNote, InvoiceCategory, PaymentStatus,
   recomputeInvoiceMoney, isLocked, invoiceDirection,
@@ -53,12 +53,12 @@ const CATEGORY_META: Record<InvoiceCategory, { label: string; color: string; bg:
   BROKER: { label: "Broker/Customs", color: "#DC2626", bg: "#FEE2E2" },
   WAREHOUSE: { label: "Warehouse", color: "#DC2626", bg: "#FEE2E2" },
   TRANSPORT: { label: "Transport", color: "#DC2626", bg: "#FEE2E2" },
-  OTHER: { label: "Other cost", color: "#DC2626", bg: "#FEE2E2" },
+  OTHER: { label: "Other cost", color: "#475569", bg: "#F1F5F9" },
 };
 const STATUS_META: Record<PaymentStatus, { bg: string; color: string }> = {
   Draft: { bg: "#F3F4F6", color: "#6B7280" }, Issued: { bg: "#DBEAFE", color: "#2563EB" },
   Sent: { bg: "#E0F2FE", color: "#0284C7" }, "Partially paid": { bg: "#FEF3C7", color: "#D97706" },
-  Paid: { bg: "#DCFCE7", color: "#16A34A" }, Overdue: { bg: "#FEE2E2", color: "#DC2626" },
+  Paid: { bg: "#DCFCE7", color: "#16A34A" }, Overdue: { bg: "#FEF3C7", color: "#B45309" },
   Cancelled: { bg: "#FEE2E2", color: "#DC2626" }, // v6.83.0 (owner ruling): cancelled = red everywhere
 };
 function money(n: number, cur?: string) { if (n == null || isNaN(n)) return "—"; return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur ? " " + cur : ""}`; }
@@ -67,7 +67,7 @@ function daysUntil(d: string) { if (!d) return null; const t = new Date(localTod
 // v6.30.1: fall back to OTHER so an unknown/legacy category can never crash the render.
 function CatBadge({ cat }: { cat: InvoiceCategory }) { const m = CATEGORY_META[cat] || CATEGORY_META.OTHER; return <span style={{ background: m.bg, color: m.color, padding: "2px 8px", borderRadius: 6, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{cat}</span>; }
 function StatusBadge({ s }: { s: PaymentStatus }) { const m = STATUS_META[s] || STATUS_META.Draft; return <span style={{ background: m.bg, color: m.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{statusWord(s)}</span>; }
-function DirPill({ inv }: { inv: Invoice }) { const r = invoiceDirection(inv) === "receivable"; return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: r ? "#16A34A" : "#DC2626", fontWeight: 600 }}><span style={{ fontSize: 13 }}>{r ? "↑" : "↓"}</span>{r ? "Receivable" : "Payable"}</span>; }
+function DirPill({ inv }: { inv: Invoice }) { const r = invoiceDirection(inv) === "receivable"; return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: r ? "#16A34A" : "#475569", fontWeight: 600 }}><span style={{ fontSize: 13 }}>{r ? "↑" : "↓"}</span>{r ? "Receivable" : "Payable"}</span>; }
 
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -75,7 +75,15 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
   const remaining = outstandingAmount(inv);
   const [date, setDate] = useState(localTodayISO());
   const [amount, setAmount] = useState(String(remaining || ""));
-  const [settleRate, setSettleRate] = useState(""); // v6.68.0 (F-2)
+  const [settleRate, setSettleRate] = useState(""); // v6.68.0 (F-2) · v7.13.3: filled from NBP, never typed
+  const [payFxNote, setPayFxNote] = useState("");
+  React.useEffect(() => {
+    let off = false; const cur = String(inv?.currency || "PLN").toUpperCase(); if (cur === "PLN") return;
+    setSettleRate(""); setPayFxNote("reading NBP…");
+    nbpRateBefore(cur, date).then(r => { if (off) return; if (r) { setSettleRate(String(r.rate)); setPayFxNote(`NBP table A of ${r.tableDate}, the last working day before ${date}`); } else setPayFxNote("NBP not reachable — the rate is filled when it is"); });
+    return () => { off = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, inv?.currency]);
   const [method, setMethod] = useState("Bank transfer");
   const [note, setNote] = useState("");
   const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" } as any;
@@ -88,10 +96,9 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
         <DateInput value={date} onChange={e => setDate(e.target.value)} style={inp} />
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Amount ({inv.currency})</div>
         <input type="number" value={amount} onChange={e => setAmount(e.target.value)} style={inp} />
-        {String(inv.currency || "PLN").toUpperCase() !== "PLN" && (<>
-          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#888", margin: "8px 0 3px" }}>Bank settlement rate → PLN <span style={{ fontWeight: 400 }}>(optional — records the realized FX gain/loss vs the invoice's locked {inv.fxRate})</span></div>
-          <input type="number" step="0.0001" value={settleRate} onChange={e => setSettleRate(e.target.value)} placeholder={`e.g. ${inv.fxRate}`} style={inp} />
-        </>)}
+        {String(inv.currency || "PLN").toUpperCase() !== "PLN" && (   /* v7.13.3 (A-AU-2, owner 9 Oct): NBP of the last working day before the money arrived — not typed */
+          <div data-payment-rate="1" style={{ fontSize: 11, color: "#64748B", margin: "8px 0 2px" }}>Rate: {settleRate ? <b>{settleRate}</b> : "—"} <span style={{ fontWeight: 400 }}>{payFxNote} · the invoice's rate is {inv.fxRate}</span></div>
+        )}
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Method</div>
         <select value={method} onChange={e => setMethod(e.target.value)} style={inp}>
           {PAYMENT_METHODS.map((m: string) => <option key={m}>{m}</option>)}
@@ -289,7 +296,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     {r.tag === "WAREHOUSE" && (
                       <select style={{ ...inp, width: "100%" }} value={r.warehouseId || ""} onChange={(e: any) => upd(r.key, { warehouseId: e.target.value })}>
                         <option value="">— choose the warehouse —</option>{/* v6.99.59 (A-CB-2) */}
-                        {warehouses.filter((w: any) => !w.archived || String(w.id) === String(r.warehouseId)).map((w: any) => <option key={w.id} value={w.id}>{w.name}{archivedMark(w)}</option>)}
+                        {warehouses.filter((w: any) => (!w.archived && !w.deleted) || String(w.id) === String(r.warehouseId)).map((w: any) => <option key={w.id} value={w.id}>{w.name}{archivedMark(w)}</option>)}
                       </select>
                     )}
                     {r.tag === "OVERHEAD" && (
@@ -520,7 +527,7 @@ export default function Invoices(props: any) {
       const from = order.indexOf(String(inv.paymentStatus));
       const to = order.indexOf(status);
       if (from >= 0 && to <= from) {
-        await invAlert({ tone: "warn", title: "Forward only", message: `An invoice moves Draft → Issued → Sent and never back (ruling D1). To correct a ${inv.paymentStatus} invoice, cancel it or issue a credit/debit note.` });
+        await invAlert({ tone: "warn", title: "Forward only", message: `An invoice moves Draft → Issued → Sent and never back (ruling D1). To correct a ${inv.paymentStatus} invoice, delete it or issue a credit/debit note.` });
         return;
       }
       if (status === "Sent") {
@@ -529,9 +536,9 @@ export default function Invoices(props: any) {
       }
     }
     if (status === "Cancelled") {
-      if (inv.paymentStatus === "Paid") { await invAlert({ tone: "warn", title: "Paid invoice", message: "A paid invoice can't be cancelled — remove or reverse its payment events first." }); return; }
-      const extra = isLocked(inv) ? "\n\n⚠ This invoice was SENT/EXPORTED. Cancel it here only if it is also corrected or cancelled in Fakturownia/KSeF — the register must match the legal record." : "";
-      const ok = await invConfirm({ tone: "danger", title: `Cancel invoice ${inv.number || "(draft)"}?`, message: `It stays on record as Cancelled (excluded from the ledger).${extra}`, confirmLabel: "Cancel invoice", cancelLabel: "Keep" });
+      if (inv.paymentStatus === "Paid") { const ev = normalizeInvoicePayments(inv); await invAlert({ tone: "warn", title: `${inv.number || "This invoice"} can't be deleted`, message: `It is paid. Its payments must be removed first:\n\n${ev.map((p: any) => `• ${p.date || "—"} · ${Number(p.amount || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${inv.currency || "PLN"}${p.method ? " · " + p.method : ""}`).join("\n")}` }); return; }   // v7.17.2 (A-RV-10): Delete stays and names the blocker
+      const extra = isLocked(inv) ? "\n\n⚠ This invoice was SENT/EXPORTED. Delete it here only if it is also corrected or cancelled in Fakturownia/KSeF — the register must match the legal record." : "";
+      const ok = await invConfirm({ tone: "danger", title: `Delete invoice ${inv.number || "(draft)"}?`, message: `It stays on record as Cancelled (excluded from the ledger).${extra}`, confirmLabel: "Delete invoice", cancelLabel: "Keep" });
       if (!ok) return;
       // Revert the linked SO(s): Invoiced → Delivered, so re-invoicing is possible.
       if (inv.kind === "SALES" && typeof setOrders === "function") {
@@ -552,11 +559,14 @@ export default function Invoices(props: any) {
   function savePaymentEvent(evt: { date: string; amount: any; method: string; note: string }) {
     if (!paymentFor) return;
     setInvoices((prev: Invoice[]) => prev.map(p => p.id === paymentFor.id ? applyPaymentEvent(p, evt, nextId) : p));
+    recordAudit({ module: "Invoices", docType: "Invoice", docNumber: paymentFor.number || "(draft)", action: "payment", summary: `Payment recorded: ${evt.date} · ${evt.amount} ${paymentFor.currency || "PLN"}${evt.method ? " · " + evt.method : ""}` });   // v7.17.4 (A-RV-12)
     setPaymentFor(null);
   }
   async function deletePaymentEvent(inv: Invoice, evtId: any) {
     if (!(await invConfirm({ tone: "danger", title: "Remove payment event?", message: "The invoice's paid amount and status will be recalculated.", confirmLabel: "Remove" }))) return;
+    const ev = normalizeInvoicePayments(inv).find((p: any) => String(p.id) === String(evtId));
     setInvoices((prev: Invoice[]) => prev.map(p => p.id === inv.id ? removePaymentEvent(p, evtId) : p));
+    recordAudit({ module: "Invoices", docType: "Invoice", docNumber: inv.number || "(draft)", action: "payment", summary: `Payment removed: ${ev?.date || "—"} · ${ev?.amount ?? "?"} ${inv.currency || "PLN"}` });   // v7.17.4 (A-RV-12)
   }
   async function sendToFakturownia(inv: Invoice) {
     { const b = pushBlockers(inv); if (b.length) { await invAlert({ tone: "warn", title: `${inv.number} can't be pushed`, message: `Fakturownia would issue a legal invoice from these lines, so each must carry its own price and they must add up:\n\n${b.join("\n")}` }); return; } }   // v6.99.116 (AUD-14)
@@ -684,7 +694,7 @@ export default function Invoices(props: any) {
               from its Sales Order (Issue invoice on the SO), so the register can never
               hold a sales invoice with no order behind it. Cost invoices remain manual. */}
           <button onClick={() => exportRowsToXlsx(`invoices_${xlsStamp()}`, filtered, [{ key: "kind", label: "Kind" }, { key: "category", label: "Category" }, { key: "number", label: "Number" }, { key: "counterparty", label: "Counterparty", fmt: (v: any) => v?.name || "" }, { key: "issueDate", label: "Issued" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "netAmount", label: "Net" }, { key: "vatAmount", label: "VAT" }, { key: "grossAmount", label: "Gross" }, { key: "fxRate", label: "Rate" }, { key: "grossPLN", label: "Gross PLN" }, { key: "paidAmount", label: "Paid" }, { key: "paymentStatus", label: "Status" }, { key: "links", label: "Linked", fmt: (v: any) => (v || []).map((l: any) => l.number).join(", ") }, { key: "fakturownia", label: "KSeF", fmt: (v: any) => v?.ksefNo || "" }], "Invoices")} title="v6.99.0: exports the rows as filtered, columns as shown" style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Export file (Excel)</button>
-          <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#DC2626", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+          <button onClick={() => newInvoice("COST")} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#334155", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
           + Cost invoice</button>
           <button onClick={() => setShowImport(true)} title="Fetch received cost invoices from Fakturownia, tag them (goods / freight / customs / warehouse / overhead) and post them where they belong." style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⇩ Import from Fakturownia</button>
           {showImport && <ImportFakturowniaModal invoices={invoices} contacts={contacts} shipments={shipments} pos={pos} onClose={() => setShowImport(false)} onPost={handleImportPost} />}
@@ -696,9 +706,9 @@ export default function Invoices(props: any) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
           {[
             { l: "RECEIVABLE · OPEN", v: money(recvOpen, "PLN"), c: "#16A34A" },
-            { l: "PAYABLE · OPEN", v: money(payOpen, "PLN"), c: "#DC2626" },
+            { l: "PAYABLE · OPEN", v: money(payOpen, "PLN"), c: "#111" },
             { l: "NET POSITION", v: money(recvOpen - payOpen, "PLN"), c: recvOpen - payOpen >= 0 ? "#16A34A" : "#DC2626" },
-            { l: "OVERDUE", v: String(overdue), c: overdue > 0 ? "#DC2626" : "#111" },
+            { l: "OVERDUE", v: String(overdue), c: overdue > 0 ? "#B45309" : "#111" },
           ].map((k, i) => (
             <div key={i} style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "10px 14px" }}>
               <div style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.04em" }}>{k.l}</div>
@@ -730,7 +740,7 @@ export default function Invoices(props: any) {
                 <div><div style={{ fontSize: 12.5, fontWeight: 600, color: i.paymentStatus === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: i.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "ui-monospace, Menlo, monospace" }} title={i.paymentStatus === "Cancelled" ? "Cancelled — kept on record, excluded from the ledger" : undefined}>{i.number || "—"}</div>{i.isProforma && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", padding: "1px 5px", borderRadius: 4 }}>PRO-FORMA</span>}<DirPill inv={i} /></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{i.counterparty?.name || "—"}</div>{i.counterparty?.nip && <div style={{ fontSize: 11, color: "#AAA" }}>NIP {i.counterparty.nip}</div>}</div>
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(i.issueDate) || "—"}</div>
-                <div><div style={{ fontSize: 12, color: od ? "#DC2626" : "#555", fontWeight: od ? 600 : 400 }}>{formatDMY(i.dueDate) || "—"}</div>{od && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>
+                <div><div style={{ fontSize: 12, color: od ? "#B45309" : "#555", fontWeight: od ? 600 : 400 }}>{formatDMY(i.dueDate) || "—"}</div>{od && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>
                 <div><div style={{ fontSize: 13, fontWeight: 600 }}>{money(i.grossAmount, i.currency)}</div>{i.currency !== "PLN" && <div style={{ fontSize: 10, color: "#AAA" }}>{money(i.grossPLN, "PLN")}</div>}</div>
                 <div><StatusBadge s={i.paymentStatus} /></div>
                 <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.links[0]?.number || "—"}{i.links.length > 1 && <span style={{ color: "#AAA" }}> +{i.links.length - 1}</span>}{(i.creditNoteIds?.length > 0) && <span title="has credit/debit notes" style={{ color: "#7C3AED", marginLeft: 6 }}>↩</span>}</div>
@@ -778,7 +788,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {inv.paymentStatus === "Draft" && <button onClick={() => onMarkStatus("Issued")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #2563EB", color: "#2563EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Mark issued</button>}
           {inv.paymentStatus === "Issued" && <button onClick={() => onMarkStatus("Sent")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0284C7", color: "#0284C7", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Locks the invoice permanently">Mark sent 🔒</button>}
-          {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete invoice</button>}
+          {inv.paymentStatus !== "Cancelled" && <button onClick={() => onMarkStatus("Cancelled")} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Delete invoice</button>}
           {!locked && <button onClick={onEdit} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit</button>}
           {onAllocate && inv.paymentStatus !== "Cancelled" && <SmallButton kind="amber" onClick={onAllocate} title="v6.99.109 (A-ST-7): spread this warehouse invoice over the lots that were at the warehouse in its period, by kilo-days — the lots' warehouse cost lines feed the settlement">{allocatedLots.length ? `Allocated to ${allocatedLots.length} lot${allocatedLots.length === 1 ? "" : "s"} · change` : "Allocate to lots"}</SmallButton>}
           {inv.paymentStatus !== "Paid" && inv.paymentStatus !== "Cancelled" && <button onClick={onPayment} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #16A34A", color: "#16A34A", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>💰 Record payment</button>}
@@ -868,6 +878,22 @@ function Row({ k, v, bold }: any) { return <div style={{ display: "flex", justif
 // ════════════════ FORM ════════════════
 function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, shipments, lots }: any) {
   const sf = (k: string, v: any) => setForm((f: any) => recomputeInvoiceMoney({ ...f, [k]: v }));
+  // v7.13.2 (A-AU-2, owner 9 Oct): the invoice's rate is the NBP average of the last working day BEFORE its issue date — filled, not typed
+  const [fxNote, setFxNote] = React.useState("");
+  React.useEffect(() => {
+    let off = false; const cur = String(form?.currency || "PLN").toUpperCase();
+    if (cur === "PLN") { if (Number(form?.fxRate) !== 1) setForm((f: any) => recomputeInvoiceMoney({ ...f, fxRate: 1, fxTableDate: "" })); setFxNote(""); return; }
+    if (!form?.issueDate) { setFxNote("set the issue date — the rate follows it"); return; }
+    setFxNote("reading NBP…");
+    nbpRateBefore(cur, form.issueDate).then(r => {
+      if (off) return;
+      if (!r) { setFxNote("NBP not reachable — the rate is filled when it is"); return; }
+      setFxNote(`NBP table A of ${r.tableDate} (the last working day before the issue date)`);
+      if (Math.abs(r.rate - Number(form.fxRate || 0)) > 0.00005 || form.fxTableDate !== r.tableDate) setForm((f: any) => recomputeInvoiceMoney({ ...f, fxRate: r.rate, fxTableDate: r.tableDate }));
+    });
+    return () => { off = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form?.currency, form?.issueDate]);
   const isSales = form.kind === "SALES";
   const wanted = isSales ? ["Client"] : form.category === "FORWARDER" ? ["Forwarder"] : form.category === "BROKER" ? ["Broker"] : form.category === "WAREHOUSE" ? ["Warehouse"] : form.category === "TRANSPORT" ? ["Carrier"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
   const partyOptions = pickerParties(contacts, form.counterparty?.id).filter((c: any) => { const ts = [c.type, ...(c.additionalTypes || [])]; return ts.some((t: string) => wanted.includes(t)); });   // v7.10.2 (A-RV-15 · CP-4)
@@ -892,7 +918,10 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
     return out;
   }, [orders, pos, shipments, form, linkQuery]);
 
-  function setParty(id: string) { const c = partyOptions.find((x: any) => String(x.id) === String(id)); sf("counterparty", c ? { id: c.id, name: c.name, nip: c.nip || c.vatEuId } : null); }
+  function setParty(id: string) { const c = partyOptions.find((x: any) => String(x.id) === String(id)); sf("counterparty", c ? { id: c.id, name: c.name, nip: c.nip || c.vatEuId } : null);
+    // v7.18.7 (BP-46): the company's default VAT rate (Terms), when it has one, starts the draft — still changeable on the invoice
+    const live: any = c ? (contacts || []).find((x: any) => String(x.id) === String(c.id)) : null; const dv = live?.terms?.defaultVatRate;
+    if (dv !== undefined && dv !== null && dv !== "" && [0, 5, 8, 23].includes(Number(dv))) sf("vatRate", Number(dv)); }
   function toggleLink(d: any) {
     // v6.94.0 (PO-2, owner ruling): the purchase invoice's due date derives from the PO's payment days, counted from the issue date.
     if (d?.type === "SO" && form.kind === "SALES" && !form.dueDate) { const so = (orders || []).find((o: any) => String(o.number) === String(d.number)); const client = (contacts || []).find((c: any) => String(c.id) === String(so?.client?.id)); const due = soInvoiceDueDate(form.issueDate, so, client); if (due) sf("dueDate", due); }   // v6.95.0 (SO-4)
@@ -931,7 +960,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
           <Card style={{ marginBottom: 16 }}><SectionTitle>AMOUNTS & CURRENCY</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 14 }}>
               <div><Lbl>Currency</Lbl><Sel value={form.currency} onChange={(e: any) => { setForm((f: any) => recomputeInvoiceMoney({ ...f, currency: e.target.value, fxRate: defaultFxRate(e.target.value) })); }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
-              <div><Lbl>FX rate to PLN</Lbl><Inp type="number" value={form.fxRate} onChange={(e: any) => sf("fxRate", e.target.value)} /></div>
+              <div><Lbl>FX rate to PLN</Lbl><Inp type="number" value={form.fxRate} onChange={() => {}} disabled title="The NBP rate of the day before the issue date — filled automatically (A-AU-2)" />{fxNote && <div data-fx-note="1" style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{fxNote}</div>}</div>
               <div><Lbl>Net amount</Lbl><Inp type="number" value={form.netAmount} onChange={(e: any) => sf("netAmount", e.target.value)} /></div>
               <div><Lbl>VAT rate (%)</Lbl><Sel value={form.vatRate} onChange={(e: any) => sf("vatRate", e.target.value)}>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>
             </div>
@@ -974,7 +1003,7 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
 function NoteForm({ form, setForm, onSave, onCancel, contacts, invoices, orders, pos, shipments }: any) {
   const sf = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
   const wanted = form.direction === "outgoing" ? ["Client"] : ["Supplier", "Carrier", "Forwarder", "Broker", "Warehouse"];
-  const partyOptions = Array.from(new Set((contacts || []).filter((c: any) => (!c.archived || String(c.name) === String(form.partyName)) && [c.type, ...(c.additionalTypes || [])].some((t: string) => wanted.includes(t))).map((c: any) => c.name).filter(Boolean))).sort();   // v7.10.2 (A-RV-15 · CP-4): archived companies out; the one the note already names stays
+  const partyOptions = Array.from(new Set((contacts || []).filter((c: any) => ((!c.archived && !c.deleted) || String(c.name) === String(form.partyName)) && [c.type, ...(c.additionalTypes || [])].some((t: string) => wanted.includes(t))).map((c: any) => c.name).filter(Boolean))).sort();   // v7.10.2 (A-RV-15 · CP-4): archived companies out; the one the note already names stays
   const invoiceOptions = (invoices || []).filter((i: Invoice) => form.direction === "outgoing" ? i.kind === "SALES" : i.kind === "COST");
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>

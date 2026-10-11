@@ -47,6 +47,11 @@ export interface CatalogItem {
   varieties: string[];
   /** BP-8: default CN/HS per item/variety — added in the PO/SO batch. */
   defaultCnCode?: string;
+  /** v7.18.3 (A-AU-5): the item's calibres and colorations — order lines pick from them (deleted ones kept apart, struck through). */
+  calibres?: string[];
+  colorations?: string[];
+  deletedCalibres?: string[];
+  deletedColorations?: string[];
 }
 
 // ── Purchase Orders ──────────────────────────────────────────────────────────

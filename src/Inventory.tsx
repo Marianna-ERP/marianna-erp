@@ -14,7 +14,7 @@ import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
 import { unifiedLocations, locationById } from "./locations";
 import { localTodayISO, formatDMY, addDaysISO } from "./dates";
-import { shipmentTradeDirection, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
+import { shipmentTradeDirection, shipmentTradeEnds, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
@@ -322,12 +322,12 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
 // v6.35.2 (Phase C step 4): whether a lot has customs stages is now derived from its
 // real shipments — a shipment with customs applied, or one that crosses the EU boundary
 // (import/export direction) — not from the obsolete flow template.
-export function customsStagesForLot(lot: any, shipments: any[]): string[] {
+export function customsStagesForLot(lot: any, shipments: any[], ctx: { pos?: any[]; orders?: any[] } = {}): string[] {
   const shs = shipmentsForLot(lot, shipments || []);
   const out = new Set<string>();
   shs.forEach((sh: any) => {
     if (sh.customs && sh.customs.applies) {
-      const dir = String(sh.tradeDirection || "").toUpperCase();
+      const dir = shipmentTradeDirection(sh, { pos: ctx.pos, orders: ctx.orders, countryOf: countryOfLot });   // v7.12.1 (A-TD-2): the one rule, not a stored field
       // classify by trade direction; default to import for an inbound movement.
       if (dir === "EXPORT" || dir === "CROSS_TRADE") out.add("export");
       if (dir === "IMPORT" || dir === "CROSS_TRADE") out.add("import");
@@ -355,6 +355,7 @@ export const MOVEMENT_TYPES: Record<string, any> = {
 export const today = localTodayISO();
 
 export function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
+export const countryOfLot = (id: any): string => String((locById(id) || {}).country || "");   // v7.12.1 (A-TD-2): a place's country, for the trade-direction rule
 
 // ─── SO STUB ────────────────────────────────────────────────────────────────
 // Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically
@@ -518,39 +519,17 @@ export function LocationPill({ locationId, lot = null }: any) {
 // An EXW-purchase + CIF-sale lot no longer mislabels itself "IMP · EXWs → our WH".
 export function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], compact = false }: any) {
   const shs = shipmentsForLot(lot, shipments);
-  // Prefer an explicit shipment direction; else derive from the lot's PO + governing SO.
   let dir = "";
-  // v6.43.0 (test-round #5b): prefer an explicit direction on the shipment header,
-  // then on THIS lot's goods row (where direct-export deals record EXPORT), before
-  // any fallback — so a CIF/CFR export is never mislabelled "Import".
-  // v6.59.0: THIS LOT'S OWN GOODS ROW WINS over the shipment header. A header
-  // direction describes the shipment as a whole; on a mixed movement it can
-  // disagree with the row, and the row is the one that knows what this lot did.
-  // (SHP-2026-0002 in the test data: header EXPORT, goods rows IMPORT.)
-  // v6.62.0: a lot that has never moved has no location and no flow to show —
-  // it is Expected, not broken. A bare dash read as a failure.
   // v6.99.81 (A-IN-5, owner): a lot that has not moved yet still has a flow when its PO and its sale are known — derived
   // below from the two documents, exactly as for a moved lot; only a lot with neither shows nothing
   const hasDocs = !!(pos || []).find((p: any) => String(p.number) === String(lot.poRef)) && (orders || []).some((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
   if (!shs.length && !(lot.movements || []).length && !hasDocs) return null;
-  for (const sh of shs) {
-    // v6.99.67 (A-IN-1, owner): goods rows used to carry a COPY of the direction (written before the sale was known and never
-    // re-derived — LOT-0119 read "import" beside LOT-0120's "export" on the same PO and sale). Only a USER'S choice on the
-    // shipment header counts; everything else is derived below from the PO and the governing SO.
-    const d = sh?.tradeDirection;
-    if (d && MOVEMENT_LABELS[d]) { dir = d; break; }
-  }
-  if (!dir) {
-    // v6.84.0 (Round 7): derive from the REAL ends — the PO's producer country × the
-    // governing SO's destination. An EXW purchase in Poland sold CIF abroad is an EXPORT,
-    // whatever the inbound-looking shipment header says. Falls back to the shipment only
-    // when no sale governs the lot.
-    const po = (pos || []).find((p: any) => String(p.number) === String(lot.poRef)) || null;
-    const so = (orders || []).find((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) =>
-      (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef)))) || null;
-    if (so) dir = shipmentTradeDirection(shs[0] || {}, po, so);
-    else if (shs.length) dir = shipmentTradeDirection(shs[0], po);
-  }
+  // v7.12.1 (A-TD-2, owner 8 Oct): the LOT'S journey is its first movement — from its producer to where its sale finally takes it
+  // (or to us when unsold) — asked of the one rule (tradeFlow.shipmentTradeEnds). No stored direction is read any more.
+  const so = (orders || []).find((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) =>
+    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef)))) || null;
+  const ends = shipmentTradeEnds({ poRefs: lot.poRef ? [lot.poRef] : [], governingSoRef: so?.number || "", purpose: "INBOUND" }, { pos, orders, countryOf: countryOfLot });
+  dir = ends.direction;
   if (!dir) return null;
   const lbl = MOVEMENT_LABELS[dir];
   if (!lbl) return null;
@@ -560,7 +539,7 @@ export function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], 
   return (
     <span title={lbl.hint} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", background: "#fff", border: `1px solid ${lbl.color}33`, borderRadius: 8, fontSize: 11.5, fontWeight: 700, color: lbl.color }}>
       {lbl.label}
-      <span style={{ fontWeight: 400, color: "#94A3B8", fontSize: 10.5 }}>· {shs.length ? "from shipment" : "from the PO and the sale"}</span>
+      <span style={{ fontWeight: 400, color: "#94A3B8", fontSize: 10.5 }}>· {ends.origin.country} → {ends.destination.country}</span>{/* v7.12.1 (A-TD-2): the two ends the rule used */}
     </span>
   );
 }
@@ -889,12 +868,24 @@ function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save"
   );
 }
 const qhInp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+// v7.18.5 (A-AU-10, owner 9 Oct — P-8): a name is picked from its list — the inspector and the counter from Settings → Users, the
+// sorter from our team or a warehouse — never typed. A name written before stays, shown in amber as typed.
+export const userNames = (users: any[]): string[] => Array.from(new Set((users || []).filter((u: any) => u && !u.deleted && u.active !== false).map((u: any) => String(u.name || u.email || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pl"));
+function NamePicker({ value, options = [], onChange, placeholder = "— pick —" }: any) {
+  const v = String(value ?? "").trim(); const opts: string[] = Array.from(new Set((options || []).map((o: any) => String(o).trim()).filter(Boolean)));
+  const hit = opts.find(o => o.toLowerCase() === v.toLowerCase());
+  return <select data-name-picker="1" value={!v ? "" : (hit || "__typed__")} onChange={e => { if (e.target.value !== "__typed__") onChange(e.target.value); }} style={{ ...qhInp, background: "#fff", ...(v && !hit ? { borderColor: "#F59E0B", background: "#FFFBEB" } : {}) }}>
+    <option value="">{placeholder}</option>
+    {v && !hit ? <option value="__typed__">{v} (typed)</option> : null}
+    {opts.map(o => <option key={o} value={o}>{o}</option>)}
+  </select>;
+}
 function QhField({ label, hint, children }: any) {
   return <div><div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", marginBottom: 3 }}>{label}</div>{children}{hint ? <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{hint}</div> : null}</div>;
 }
 
 /** A-QH-3/4/7/8: the quality report as the producer's sheet — header · external quality · defects · conclusion. */
-export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any) {
+export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave, users = [] }: any) {   // v7.18.5: + users
   const set = (k: string, v: any) => setIns((x: any) => ({ ...x, [k]: v }));
   const v = inspectionVerdict(ins);
   const checks: any[] = ins.externalChecks || [];
@@ -908,7 +899,7 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
         <QhField label="Date of inspection" hint={beforeReceiptWarning(lot, ins.date) || undefined}><DateInput value={ins.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>
         <QhField label="Location of inspection"><Sel value={ins.stage} onChange={(e: any) => set("stage", e.target.value)}><option value="pre-unloading">On arrival / pre-unloading</option><option value="warehouse">In our warehouse</option><option value="client">At the client</option><option value="other">Other</option></Sel></QhField>
-        <QhField label="Inspector"><input value={ins.inspector || ""} onChange={e => set("inspector", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="Inspector"><NamePicker value={ins.inspector} options={userNames(users)} onChange={(v: string) => set("inspector", v)} placeholder="— who inspected —" /></QhField>
         <QhField label="Temperature (°C)"><input value={ins.temperature ?? ""} onChange={e => set("temperature", e.target.value)} style={qhInp} /></QhField>
         <QhField label={`Quantity delivered (${ins.unit || "kg"})`}><input type="number" value={ins.orderedQty ?? ""} onChange={e => set("orderedQty", e.target.value)} style={qhInp} />{(() => { const n = inspectionQtyNote(ins, lot); if (!n) return null; const k = (v: number) => Math.round(v).toLocaleString("pl-PL");
           return <div style={{ fontSize: 10.5, fontWeight: 700, color: "#B45309", marginTop: 3 }}>{n.kind === "receipt" ? `⚠ the receipt says ${k(n.lotKg)} kg — correct the receipt if this report is right` : `the lot will be re-posted from ${k(n.lotKg)} to ${k(n.reportKg)} kg — the client's report owns a direct lot`}</div>; })()}</QhField>
@@ -943,7 +934,7 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave }: any
           </Sel>
           <input type="number" step="0.01" placeholder="% found" value={d.pct ?? ""} onChange={e => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, pct: e.target.value } : x))} style={qhInp} />
           <div style={{ fontSize: 10.5, color: "#94A3B8", textAlign: "center" }}>tol. {parseFloat((ins.tolerances || {})[d.category]) || 0} %</div>
-          <ActionButton action="close" onClick={() => set("defects", ins.defects.filter((_: any, k: number) => k !== i))} />
+          <ActionButton action="remove" onClick={() => set("defects", ins.defects.filter((_: any, k: number) => k !== i))} />
         </div>
       ))}
       <button onClick={() => set("defects", [...(ins.defects || []), { category: "Major", name: "", pct: "" }])}
@@ -993,7 +984,7 @@ export function SortingWindow({ f, setF, lot, inspections = [], contacts = [], o
           </Sel>
         </QhField>
         <QhField label="Follows inspection"><Sel value={f.followsInspection || ""} onChange={(e: any) => set("followsInspection", e.target.value)}><option value="">— none —</option>{inspections.map((x: any) => <option key={String(x.id)} value={String(x.id)}>{x.date} · {x.verdict} · defects {inspectionVerdict(x).totalPct} %</option>)}</Sel></QhField>
-        <QhField label="Sorted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} placeholder="our team / warehouse" style={qhInp} list="qh-sorters" /><datalist id="qh-sorters">{activeParties(contacts).filter((c: any) => (c.roles || [c.type]).includes("Warehouse")).map((c: any) => <option key={String(c.id)} value={c.name} />)}</datalist></QhField>
+        <QhField label="Sorted by"><NamePicker value={f.by} options={["Our team", ...activeParties(contacts).filter((c: any) => (c.roles || [c.type]).includes("Warehouse") || (c.additionalTypes || []).includes("Warehouse")).map((c: any) => String(c.name).trim())]} onChange={(v: string) => set("by", v)} placeholder="— our team or a warehouse —" /></QhField>
         <QhField label="Hours"><input type="number" value={f.hours ?? ""} onChange={e => set("hours", e.target.value)} style={qhInp} /></QhField>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
@@ -1011,7 +1002,7 @@ export function SortingWindow({ f, setF, lot, inspections = [], contacts = [], o
 }
 
 /** A-QH-6: counted as the warehouse counts — pallets and boxes, per class. */
-export function CountWindow({ f, setF, lot, onClose, onSave }: any) {
+export function CountWindow({ f, setF, lot, onClose, onSave, users = [] }: any) {   // v7.18.5: + users
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const setRow = (grade: string, k: string, v: any) => set("entries", { ...(f.entries || {}), [grade || "-"]: { ...((f.entries || {})[grade || "-"] || {}), [k]: v } });
   return (
@@ -1019,7 +1010,7 @@ export function CountWindow({ f, setF, lot, onClose, onSave }: any) {
       confirmText="Save this count? Differences beyond 1 kg are posted as reasoned adjustments on their class.">
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
         <QhField label="Date counted" hint={beforeReceiptWarning(lot, f.date) || undefined}><DateInput value={f.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>
-        <QhField label="Counted by"><input value={f.by || ""} onChange={e => set("by", e.target.value)} style={qhInp} /></QhField>
+        <QhField label="Counted by"><NamePicker value={f.by} options={userNames(users)} onChange={(v: string) => set("by", v)} placeholder="— who counted —" /></QhField>
         <QhField label="Reason / note"><input value={f.reason || ""} onChange={e => set("reason", e.target.value)} placeholder="monthly count, spot check…" style={qhInp} /></QhField>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 0.9fr 0.8fr 0.8fr 1fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>
@@ -1108,7 +1099,7 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
 // v6.79.0 (W-2): the legacy lot-side Claim Request Form was retired — claims are
 // one document type with one numbering scheme in the Claims module (D-13).
 
-export default function Inventory({ archive = null, initialSelectedNumber = "", lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [] }: any = {}) {
+export default function Inventory({ archive = null, initialSelectedNumber = "", lots: extLots, setLots: extSetLots, allOrders: extOrders, contacts: extContacts = [], shipments: extShipments = [], setShipments: extSetShipments = null, pos: extPOs = [], invoices: extInvoices = [], setInvoices: extSetInvoices = null, financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, claims: extClaims = [], onStartClaim = null , inspections: extInspections = [], setInspections: extSetInspections = null, defectCatalogue: extDefectCatalogue = [], stockCounts: extStockCounts = [], setStockCounts: extSetStockCounts = null , poSettlements: extSettlements = [], users: extUsers = [], userName: extUserName = "" }: any = {}) {   // v7.18.5: + users, userName
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments); // v6.35.1: strike cancelled source refs
   const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode } = useConfirm(); // Batch 2 (P2-6) + v6.89.0 prompt
   // Integration mode: parent passes lots state and live SOs. Standalone: local seed + module-scope SOS.
@@ -1327,7 +1318,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
       await uiAlert({
         tone: "warn",
         title: `Lot ${lotNo} can't be deleted`,
-        message: `It's still referenced:\n\n${blockers.join("\n")}\n\nDeleting it would leave dangling references that distort COGS and reports. Cancel the dependent Sales Order(s)/Shipment(s) first, or void its movements, then an empty, unreferenced lot can be removed.`,
+        message: `It's still referenced:\n\n${blockers.join("\n")}\n\nDeleting it would leave dangling references that distort COGS and reports. Delete the dependent Sales Order(s)/Shipment(s) first, or void its movements; then an empty, unreferenced lot can be deleted.`,
       });
       return;
     }
@@ -1355,7 +1346,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
         {showReturn && selected && <ReturnModal lot={selected} contacts={extContacts} onCancel={() => setShowReturn(false)} onConfirm={returnToWarehouse} />}
         {showInspection && <InspectionModal lot={selected} onCancel={() => setShowInspection(false)} onConfirm={saveInspection} />}
         <LotDetail
-          season={{ lots, orders: liveSOs, shipments, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
+          season={{ lots, orders: liveSOs, shipments, setLots: extSetLots, inspections: extInspections, setInspections: extSetInspections, defectCatalogue: extDefectCatalogue, stockCounts: extStockCounts, setStockCounts: extSetStockCounts, claims: extClaims, settlements: extSettlements, claimsForLock: extClaims, settlementsForLock: extSettlements, users: extUsers, userName: extUserName, recompute: (l: any, mv: any[]) => recomputeLotFromMovements(l, mv) }}
           pos={extPOs}
           allLots={lots}
           lotClaims={claimsForLot(extClaims || [], selected?.number).filter((c: any) => c.direction === "RECOVERY")}

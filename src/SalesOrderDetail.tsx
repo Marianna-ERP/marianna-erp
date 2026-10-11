@@ -10,7 +10,9 @@ import { effectiveSoStatus, isShippedOrLater } from "./statusOwnership.domain";
 import { actualDeliveryDate, deliveryDelayDays, deliveryEventFor } from "./so.domain";
 import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, quantityLabel, documentTotals } from "./pricingUnit.domain";
 import { localTodayISO, formatDMY } from "./dates";
-import { Inp, LOCATION_TYPES, LifecycleBar, PACKAGING_TYPES_REF, QualityBadge, SHIPMENTS_REF, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, supplierNameForPO } from "./SalesOrders";
+import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
+import { settlementState } from "./invoicePlus.domain";   // v7.16.5 (A-RV-14): the SO view shows our payment state, not Fakturownia's flag
+import { Inp, LOCATION_TYPES, LifecycleBar, PACKAGING_TYPES_REF, QualityBadge, SHIPMENTS_REF, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, supplierNameForPO, CONTACTS_REF } from "./SalesOrders";
 
 // ─── INVOICE CREATION MODAL ───────────────────────────────────────────────
 // Triggered when an SO transitions to Shipped. Previews the Sales Invoice (SINV)
@@ -23,7 +25,7 @@ import { Inp, LOCATION_TYPES, LifecycleBar, PACKAGING_TYPES_REF, QualityBadge, S
 // record of the invoice that needs to be created in Fakturownia / the Invoices module.
 export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfirm }: any) {
   const today = localTodayISO();
-  const initial = buildInvoiceFromSO(order, nextSINVNumber(existingInvoiceNumbers || []), today);
+  const initial = buildInvoiceFromSO(order, nextSINVNumber(existingInvoiceNumbers || []), today, ((CONTACTS_REF || []).find((c: any) => String(c.id) === String(order?.client?.id)) as any)?.terms?.defaultVatRate);   // v7.18.7 (BP-46)
   const [invoice, setInvoice] = useState(initial);
 
   const sf = (k, v) => setInvoice(prev => {
@@ -143,7 +145,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
 }
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpenResult = false, onOpenResult = null, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
+export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpenResult = false, onOpenResult = null, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, termsFindings = [], fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userRole = "General Manager", userName = "" }: any) {
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
   const computedLinks = computedSOLinks(order, { shipments, invoices: (soInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), lots });
@@ -221,6 +223,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px", background: "#FAFAFA" }}>
         <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
+          {termsFindings.length ? <div style={{ marginBottom: 16 }}><TermsFindingsBox findings={termsFindings} here={order.number} /></div> : null}{/* v7.20.0 (A-INC-2): the terms to review under this sale's incoterm */}
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
             <div>
@@ -414,7 +417,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                   {soInvoices.some(inv => inv.paymentStatus !== "Cancelled" && (inv.fakturownia?.exported || inv.fakturownia?.fktId)) ? (
                     <div style={{ fontSize: 10.5, color: "#0C4A6E", marginTop: 8, lineHeight: 1.5, padding: "7px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6 }}>
                       {soInvoices.filter(inv => inv.paymentStatus !== "Cancelled" && (inv.fakturownia?.exported || inv.fakturownia?.fktId)).map((inv, i) => (
-                        <div key={i}>✓ Matched in Fakturownia{inv.fakturownia?.ksef ? <> · KSeF <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.fakturownia.ksef}</span></> : null} · <strong>{inv.fakturownia?.paid ? "PAID" : "unpaid"}</strong></div>
+                        <div key={i}>✓ Matched in Fakturownia{inv.fakturownia?.ksef ? <> · KSeF <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.fakturownia.ksef}</span></> : null} · <strong title="From our own payments — the bank (rule 11), never Fakturownia's paid flag">{settlementState(inv, localTodayISO())}</strong></div>
                       ))}
                     </div>
                   ) : (
