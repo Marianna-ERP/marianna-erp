@@ -91,13 +91,29 @@ Go to vercel.com → your project → Settings → Build & Development Settings:
 | Setting | Value |
 |---|---|
 | Framework Preset | **Create React App** |
-| Build Command | leave default (vercel.json overrides it to `CI=false npm run build`) |
+| Build Command | leave default (vercel.json overrides it to `CI=true npm run build` — since v7.21.3 a warning stops the deploy, exactly as it stops our checks) |
 | Output Directory | `build` |
 | Install Command | leave blank (auto `npm install`) |
 | **Root Directory** | leave BLANK if files are at repo root. If you insist on keeping them in a subfolder, type that folder's name here. |
 | Node.js Version | 24.x (also pinned in package.json) |
 
 Settings → General → Node.js Version | 24.x**.
+
+### Fakturownia — two hidden settings (once; since v7.21.1)
+
+The Fakturownia token is no longer typed into any browser. Vercel keeps it, hidden, and only the app's own server part uses it.
+
+1. **Copy the token in Fakturownia:** Settings → Account settings → Integration → *API authorisation code*
+   (in Polish: Ustawienia → Ustawienia konta → Integracja → Kod autoryzacyjny API).
+2. **Note your account name:** the first part of your Fakturownia address — for `https://yourcompany.fakturownia.pl` it is `yourcompany`.
+3. **Vercel → project marianna-erp → Settings → Environment Variables → Add New**, twice:
+   - Key `FAKTUROWNIA_API_TOKEN` — Value: the token — Environments: **Production** and **Preview** — tick *Sensitive* if offered — Save.
+   - Key `FAKTUROWNIA_SUBDOMAIN` — Value: the account name — the same two environments — Save.
+4. **Redeploy once** (new settings reach only new deployments): Deployments → the newest one → ⋯ → Redeploy.
+5. **Check:** in the app, Settings → Fakturownia says *Connected to yourcompany.fakturownia.pl*; press **Test connection**.
+
+On the TEST copy the server part reads from Fakturownia but never creates an invoice. A token an older version kept in a browser is
+removed from it the first time that browser opens the new version.
 
 ---
 

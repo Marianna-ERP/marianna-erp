@@ -21,7 +21,7 @@ import {
   buildFakturowniaPayload, noteSignedPLN, pushBlockers } from "./invoicing";
 import * as XLSX from "xlsx";
 import { readFakturowniaConfig, fetchInvoices, mapInvoice, createInvoice } from "./fakturownia";
-import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, warehouseInvoiceFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister } from "./fakturowniaImport.domain";
+import { IMPORT_TAGS, stagedRowFromMapped, isDuplicateCostInvoice, duplicateCostInvoiceInfo, contactForSeller, suggestForRow, buildCostInvoice, applyReceivedCostLine, operationalCostFromRow, poValuePLN, guessCostCategory, findCol, findInvoiceNoCol, FREIGHT_COST_TYPES, learnFromRegister } from "./fakturowniaImport.domain";
 import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
@@ -149,7 +149,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     setBusy(true); setError("");
     const r = await fetchInvoices(cfg, { income: 0, period });
     setBusy(false);
-    if (!r.ok) { setError(r.corsLikely ? "The browser couldn't reach Fakturownia directly (CORS) — use the file export instead." : (r.error || "Fetch failed.")); return; }
+    if (!r.ok) { setError(r.error || "Fetch failed."   /* v7.21.1 (AUD-49): the server part makes the call; its message says what to do */); return; }
     const got = (r.data || []).length;   // v7.1.7 (A-FI-4, owner 6 Oct): an empty answer looked like a broken import — now it says so
     const periodLabel = period === "this_month" ? "this month" : period === "last_month" ? "last month" : period === "this_year" ? "this year" : period;
     setFetchNote(got ? `Fakturownia returned ${got} received invoice${got === 1 ? "" : "s"} for ${periodLabel}.` : `Fakturownia returned no received invoice for ${periodLabel}. ${period === "this_month" ? "Try Last month or This year above." : "Try another period above — or check in Fakturownia that the invoices are registered as received (expenses)."}`);
@@ -201,7 +201,9 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
       const contact = contactForSeller(r, contacts);
       if (r.tag === "WAREHOUSE") {
         const wh = warehouses.find((w: any) => String(w.id) === String(r.warehouseId)) || contact;
-        whInvs.push(warehouseInvoiceFromRow(r, wh));
+        // v7.21.4 (A-ST-10): a warehouse invoice goes into the register like any cost invoice — no separate store
+        const ci = buildCostInvoice(r, "WAREHOUSE" as any, {}, wh || contact);
+        regs.push({ ...ci, category: "WAREHOUSE", costScope: "MONTHLY_SHARED", counterparty: { ...(ci.counterparty || {}), ...(wh ? { id: wh.id, name: wh.name || (ci.counterparty || {}).name } : {}) }, periodFrom: ci.periodFrom || (String(ci.issueDate || "").slice(0, 7) ? `${String(ci.issueDate).slice(0, 7)}-01` : undefined) });
         return;
       }
       if (r.tag === "OVERHEAD") {
@@ -397,7 +399,7 @@ export default function Invoices(props: any) {
   // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
   const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("invoice", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
   const { invoices = [], setInvoices, notes = [], setNotes, contacts = [], orders = [], pos = [], shipments = [], lots = [],
-    setShipments = null, setOperationalCosts = null, setWarehouseInvoices = null, setOrders = null, closedPeriods = [], setLots = null } = props;
+    setShipments = null, setOperationalCosts = null, setOrders = null, closedPeriods = [], setLots = null } = props;
   const [allocFor, setAllocFor] = useState<any>(null);   // v6.99.109 (A-ST-7): the warehouse invoice being allocated to lots
   const [showImport, setShowImport] = useState(false); // v6.39.0
   // v6.39.0: everything a posted import touches, in one place.
@@ -408,7 +410,6 @@ export default function Invoices(props: any) {
       return mine.reduce((acc: any, f: any) => applyReceivedCostLine(acc, f.costLineId, f.invoiceNumber), sh);
     }));
     if (opCosts.length && setOperationalCosts) setOperationalCosts((prev: any[]) => [...(prev || []), ...opCosts]);
-    if (whInvs.length && setWarehouseInvoices) setWarehouseInvoices((prev: any[]) => [...(prev || []), ...whInvs]);
     setShowImport(false);
     recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "imported", summary: `Import posted: ${regs.length} invoice(s)${flips.length ? `, ${flips.length} shipment cost line(s) -> Received` : ""}${opCosts.length ? `, ${opCosts.length} operational cost(s)` : ""}${whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : ""}` });
     await invAlert({ tone: "info", title: "Import posted", message: `Posted: ${regs.length} invoice(s) to the register` +
@@ -536,7 +537,7 @@ export default function Invoices(props: any) {
       }
     }
     if (status === "Cancelled") {
-      if (inv.paymentStatus === "Paid") { const ev = normalizeInvoicePayments(inv); await invAlert({ tone: "warn", title: `${inv.number || "This invoice"} can't be deleted`, message: `It is paid. Its payments must be removed first:\n\n${ev.map((p: any) => `• ${p.date || "—"} · ${Number(p.amount || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${inv.currency || "PLN"}${p.method ? " · " + p.method : ""}`).join("\n")}` }); return; }   // v7.17.2 (A-RV-10): Delete stays and names the blocker
+      { const ev = normalizeInvoicePayments(inv); if (ev.length) { await invAlert({ tone: "warn", title: `${inv.number || "This invoice"} can't be deleted`, message: `${inv.paymentStatus === "Paid" ? "It is paid" : `It has ${ev.length} payment${ev.length === 1 ? "" : "s"} on it`}. Its payments must be removed first:\n\n${ev.map((p: any) => `• ${p.date || "—"} · ${Number(p.amount || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${inv.currency || "PLN"}${p.method ? " · " + p.method : ""}`).join("\n")}` }); return; } }   // v7.17.2 (A-RV-10): Delete stays and names the blocker · v7.21.9 (A-RV-32): ANY payment on it blocks the delete, not only a full one
       const extra = isLocked(inv) ? "\n\n⚠ This invoice was SENT/EXPORTED. Delete it here only if it is also corrected or cancelled in Fakturownia/KSeF — the register must match the legal record." : "";
       const ok = await invConfirm({ tone: "danger", title: `Delete invoice ${inv.number || "(draft)"}?`, message: `It stays on record as Cancelled (excluded from the ledger).${extra}`, confirmLabel: "Delete invoice", cancelLabel: "Keep" });
       if (!ok) return;
@@ -572,7 +573,7 @@ export default function Invoices(props: any) {
     { const b = pushBlockers(inv); if (b.length) { await invAlert({ tone: "warn", title: `${inv.number} can't be pushed`, message: `Fakturownia would issue a legal invoice from these lines, so each must carry its own price and they must add up:\n\n${b.join("\n")}` }); return; } }   // v6.99.116 (AUD-14)
     if (inv.kind !== "SALES") { await invAlert({ tone: "warn", title: "Sales invoices only", message: "Only sales invoices are pushed to Fakturownia." }); return; }
     const cfg = readFakturowniaConfig();
-    if (!cfg) { await invAlert({ tone: "warn", title: "Not configured", message: "Fakturownia is not configured. Add the account name and API token in Settings first." }); return; }
+    // v7.21.1 (AUD-49): no token in the browser to check — the server part answers if Fakturownia is not connected
     // v6.18.4 (P0-1): live invoice creation is OFF by default. Until there's a
     // backend with a server-side token, roles and an audit trail, pushing a real
     // invoice from the browser is a legal/accounting action we don't enable silently.
@@ -609,7 +610,7 @@ export default function Invoices(props: any) {
       await invAlert({ tone: "warn", title: "Which bank account?", message: `${blocked}\n\nThe invoice is not sent. Wrong payment details on a document that has reached KSeF can only be corrected by issuing another one.` });
       return;
     }
-    const payload = buildFakturowniaPayload(inv, { apiToken: cfg.apiToken, sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false, departmentId: choice.department?.id });
+    const payload = buildFakturowniaPayload(inv, { sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false, departmentId: choice.department?.id });
     const res = await createInvoice(cfg, payload);
     if (res.ok) {
       const legal = res.data?.number || inv.number;
@@ -623,8 +624,7 @@ export default function Invoices(props: any) {
     }
   }
   async function copyPayload(inv: Invoice) {
-    const cfg = readFakturowniaConfig();
-    const payload = buildFakturowniaPayload(inv, { apiToken: cfg?.apiToken || "API_TOKEN", sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false });
+    const payload = buildFakturowniaPayload(inv, { sellerName: COMPANY.name, sellerTaxNo: COMPANY.nip, govSaveAndSend: false });
     const text = JSON.stringify(payload, null, 2);
     try { navigator.clipboard?.writeText(text); setPushState({ id: inv.id, msg: "Payload copied to clipboard.", tone: "#2563EB" }); }
     catch { await invPrompt({ title: "Copy this payload", message: "Copy the text below:", defaultValue: text, confirmLabel: "Done" }); }

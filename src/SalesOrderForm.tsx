@@ -494,7 +494,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "#991B1B" }}>Cannot save as {order.status} — {sourcing.unsourcedIndexes.length} line{sourcing.unsourcedIndexes.length === 1 ? " is" : "s are"} unsourced</div>
                 <div style={{ fontSize: 11, color: "#991B1B", marginTop: 4, lineHeight: 1.5 }}>
-                  Every line item must be sourced from either a stock lot or a purchase order (any status, including Draft) before this SO can move past Draft.
+                  Pick a lot for every line first (expected, in stock or direct), or save as Draft.{/* v7.21.8 (A-RV-31): the save message's words — since A-ONE-1 a line's one source is a lot */}
                   {sourcing.unsourcedIndexes.length > 0 && (
                     <span> Unsourced: line{sourcing.unsourcedIndexes.length === 1 ? "" : "s"} <strong>{sourcing.unsourcedIndexes.map(i => i + 1).join(", ")}</strong>.</span>
                   )}
@@ -910,7 +910,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     <div style={{ marginLeft: "auto", fontSize: 10.5, color: lineIsBlocking ? "#991B1B" : "#777" }}>
                       {lineIsBlocking
                         ? `Required to save as ${order.status}`
-                        : (!it.sourceType && "Pick a stock lot or PO this line will draw from")}
+                        : (!it.sourceType && "Pick the lot this line sells (expected, in stock or direct)" /* v7.21.8 (A-RV-31) */)}
                     </div>
                   </div>
 

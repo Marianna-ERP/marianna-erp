@@ -208,17 +208,6 @@ export function mergedLocations(contacts: any[]) {
   return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
 }
 
-const FALLBACK_PROVIDERS = [
-  { id: 1001, type: "Carrier", name: "Mikolaj Majewski", country: "Poland", nip: "6010091289", address: "Marysin 36, 26-414 Potworow", services: ["Road"], contact: "Mikolaj Majewski", phone: "", email: "" },
-  { id: 9, type: "Carrier", name: "Trans-Logistics PL", country: "Poland", nip: "5213456789", address: "ul. Transportowa 5, Warszawa", services: ["Road"], contact: "Tomasz Mazur", phone: "+48 22 555 8800", email: "dispatch@trans-logistics.pl" },
-  { id: 10, type: "Carrier", name: "EuroFreight GmbH", country: "Germany", nip: "DE876543210", address: "Hafenstrasse 12, Hamburg", services: ["Road"], contact: "Lukas Hoffmann", phone: "+49 40 876 5432", email: "ops@eurofreight.de" },
-  { id: 15, type: "Forwarder", name: "Raben Logistics PL", country: "Poland", nip: "7820210577", address: "ul. Zbozowa 1, Gadki", services: ["Road", "Sea", "Customs"], contact: "Joanna Krawczyk", phone: "+48 61 898 5200", email: "j.krawczyk@raben.pl" },
-  { id: 16, type: "Forwarder", name: "DSV Solutions Polska", country: "Poland", nip: "5252222333", address: "Raszyn", services: ["Road", "Sea", "Air", "Customs", "Warehousing"], contact: "Piotr Sobieski", phone: "+48 22 333 4400", email: "p.sobieski@dsv.pl" },
-  { id: 17, type: "Forwarder", name: "Pekaes SA", country: "Poland", nip: "5260250289", address: "Warszawa", services: ["Road", "Customs"], contact: "Robert Adamski", phone: "+48 22 460 3000", email: "r.adamski@pekaes.pl" },
-  { id: 18, type: "Carrier", name: "MSC Mediterranean Shipping", country: "Switzerland", nip: "", address: "Geneva", services: ["Sea"], contact: "MSC Poland Office", phone: "+48 58 765 4300", email: "bookings.pl@msc.com" },
-  { id: 11, type: "Broker", name: "CustomsPro Sp. z o.o.", country: "Poland", nip: "5252111222", address: "ul. Celna 4, Warszawa", services: ["Customs"], contact: "Customs desk", phone: "", email: "" },
-];
-
 // v6.32.0 (R7b-5): demo seed STANDALONE_POS moved out of the production bundle → dev/demoSeed.reference.ts
 
 // v6.32.0 (R7b-5): demo seed STANDALONE_SOS moved out of the production bundle → dev/demoSeed.reference.ts
@@ -561,11 +550,7 @@ export function logisticsProviders(contacts = [], service = "") {
       return (service === "Customs" && types.includes("Broker"));
     })
     .map(providerFromContact);
-  // v6.30.2 (clean system): FALLBACK_PROVIDERS are NO LONGER offered as options —
-  // pickers list Contacts only, so a reset system shows no demo carriers/forwarders.
-  // Legacy shipments that still reference a fallback id keep displaying correctly
-  // (providerById below resolves them, preferring a same-named live contact per T-25);
-  // on the next edit the user re-picks the provider from Contacts.
+  // v6.30.2 (clean system): pickers list Contacts only · v7.21.10 (A-RV-33): the fallback carriers are gone from the code
   const combined = [...fromContacts];
   const seen = new Set();
   return combined.filter(p => {
@@ -581,16 +566,8 @@ export function providerById(id, contacts = []) {
   const live = logisticsProviders(contacts);
   const fromContacts = live.find(p => String(p.id) === String(id));
   if (fromContacts) return fromContacts;
-  // Legacy fallback record (seed scaffolding). Real data lives in Contacts, so if a
-  // same-named counterparty exists there, prefer it — this is what lets a user FIX a
-  // missing carrier email in Contacts and have the transport order pick it up
-  // (previously a fallback id with email:"" could never be corrected).
-  const fb = FALLBACK_PROVIDERS.find(p => String(p.id) === String(id));
-  if (fb) {
-    const liveMatch = live.find(p => (p.name || "").trim().toLowerCase() === (fb.name || "").trim().toLowerCase());
-    if (liveMatch) return liveMatch;
-    return fb;
-  }
+  // v7.21.10 (A-RV-33, owner 11 Oct): no carrier written into the code any more — an id that is no company in Contacts names nobody
+  // (the integrity check lists a shipment still holding one of the retired ids 1001 / 9 / 10)
   return null;
 }
 
@@ -908,7 +885,7 @@ function buildManualShipment__raw(opts, shipments) {
   const id = nextId();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
-  const carrierId = opts.carrierId ? parseNum(opts.carrierId) : 1001;
+  const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;   // v7.21.10 (A-RV-33): no carrier until one is picked from the list — never the fixed 1001
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || "PLN";

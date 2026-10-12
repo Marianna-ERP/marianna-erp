@@ -1,4 +1,3 @@
-import { isSharedMode } from "./remoteStore";   // v7.1.15
 // ── USERS & PERMISSIONS (v6.79.0, F-5) ───────────────────────────────────────
 // Owner ruling (2 Sept 2026): each user sees only the modules ticked for them;
 // Finance P/L and client analysis are visible to the OWNER only.
@@ -70,7 +69,7 @@ export function signInNotLinkedYet(users: AppUser[]): boolean { return (users ||
  *  Defined users but no match: only the dashboard — visible and explainable. */
 // v7.1.15 (owner 6 Oct: "it should not have allowed an owner without a valid e-mail"): on the shared copy an owner entry COUNTS as an
 // owner only when it carries a sign-in e-mail — an e-mail-less owner is nobody, so Settings stays open until the owner is reachable.
-export function hasOwner(users: AppUser[]): boolean { return (users || []).some(x => x && x.isOwner && (!isSharedMode() || String((x as any).email || "").trim() !== "")); }
+export function hasOwner(users: AppUser[]): boolean { return (users || []).some(x => x && x.isOwner && String((x as any).email || "").trim() !== ""   /* v7.21.0 (A-RV-19): there is only the shared data, where the owner signs in with an e-mail */); }
 export function canOpenModule(users: AppUser[], userName: any, moduleKey: string): boolean {
   const u = currentUser(users, userName);
   if (u === null) return true;

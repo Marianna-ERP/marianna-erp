@@ -1,6 +1,6 @@
 // v6.99.148: the login and the sync status for the shared store — shown only when the two settings are present
 import React, { useEffect, useState } from "react";
-import { remoteConfigured, readSession, login, logout, pullAll, uploadAllLocal, uploadStores, storesFromExport, startSync, onSync, SyncState, clearConflict, localSummary, ENV_LABEL, keepMine, dismissNotice } from "./remoteStore";   // v7.14.0: + keepMine, dismissNotice
+import { remoteConfigured, readSession, login, logout, pullAll, uploadStores, storesFromExport, startSync, onSync, SyncState, clearConflict, ENV_LABEL, keepMine, dismissNotice } from "./remoteStore";   // v7.14.0: + keepMine, dismissNotice
 
 export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncState; node: React.ReactNode } {
   const configured = remoteConfigured();
@@ -18,7 +18,16 @@ export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncS
     })();
     return () => { alive = false; if (stop) stop(); };
   }, [configured, session, userLabel]);
-  if (!configured) return { ready: true, sync, node: null };
+  // v7.21.0 (A-RV-19, owner ruling B 8 Oct): there is no single-browser mode any more — a copy without the two shared-data settings
+  // does not run on its own browser's data; it says what is missing. An old backup is looked at by restoring it into TEST.
+  if (!configured) return { ready: false, sync, node: (
+    <div data-not-connected="1" style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F8FAFC", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
+      <div style={{ background: "#fff", borderRadius: 14, padding: "26px 30px", width: 420, boxShadow: "0 24px 60px rgba(0,0,0,0.12)" }}>
+        <div style={{ fontSize: 20, fontWeight: 800, color: "#111" }}>MARIANNA</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginTop: 12 }}>This copy isn't connected to the shared data.</div>
+        <div style={{ fontSize: 12.5, color: "#64748B", marginTop: 6, lineHeight: 1.55 }}>It needs the two shared-data settings in Vercel: REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY. The app no longer runs on one browser's own data — to look at an old backup, restore it into the TEST copy.</div>
+      </div>
+    </div>) };
   if (!session) {
     return { ready: false, sync, node: (
       <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F8FAFC", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
@@ -48,7 +57,6 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 700, color }} title={sync.lastPull ? `last pulled ${sync.lastPull.slice(11, 19)} UTC` : ""}>
       <span style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }} />{label}
       {sync.status === "empty" && <>
-        <button disabled={busy} onClick={async () => { if (!window.confirm(`Make THIS browser's data the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}?\n\nIt holds: ${localSummary()}.\n\nEveryone who signs in after this will see exactly this data, and their own browser's data will be replaced by it (each browser keeps a snapshot first). Do this once, from the browser whose data you trust.`)) return; setBusy(true); try { const n = await uploadAllLocal(userLabel); window.alert(`${n} stores uploaded — this browser's data is now the shared data.`); } catch (e: any) { window.alert(String(e?.message || e)); } setBusy(false); }} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #6366F1", background: "#EEF2FF", color: "#3730A3", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{busy ? "Uploading…" : "Upload this browser's data"}</button>
         {/* v6.99.152 (owner 6 Oct): the first shared data from an EXPORTED FILE — e.g. a colleague's browser copy — without importing it into this browser first */}
         <label style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#F5F3FF", color: "#6D28D9", fontSize: 11, fontWeight: 700, cursor: busy ? "default" : "pointer" }}>
           {busy ? "Uploading…" : "Upload a JSON export as the shared data"}

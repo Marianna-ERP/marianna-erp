@@ -721,7 +721,6 @@ export default function SalesOrders({ archive = null,
   operationalCosts: extOperationalCosts = [],
   invoices: extInvoices = null, setInvoices: extSetInvoices = null,
   financeNotes: extFinanceNotes = [], setFinanceNotes: extSetFinanceNotes = null, inspections: extInspections = [],
-  userRole = "General Manager",
   canOpenResult = false, onOpenResult = null,   // v7.1.3 (A-PL-1)
   userName = "",
   productCatalog = [],
@@ -755,7 +754,7 @@ export default function SalesOrders({ archive = null,
     setFktMatching(true); setFktMatchMsg(null);
     const r = await fetchInvoices(fktCfg, { income: 1, period: "this_year" });
     setFktMatching(false);
-    if (!r.ok) { setFktMatchMsg({ kind: "error", text: r.corsLikely ? "Browser can't reach Fakturownia (CORS) — matching will run from the Phase-2 backend." : (r.error || "Fetch failed.") }); return; }
+    if (!r.ok) { setFktMatchMsg({ kind: "error", text: r.error || "Fetch failed."   /* v7.21.1 (AUD-49) */ }); return; }
     const fktList = (r.data || []).map(mapInvoice);
     let matched = 0;
     // v6.33.0 (A3-6): the match result is written on the REGISTER invoices
@@ -868,7 +867,7 @@ export default function SalesOrders({ archive = null,
       id: null,
       number: nextSONumber(orders),
       status: "Draft",
-      createdBy: userName || userRole || "",
+      createdBy: userName || "",   // v7.21.5 (SE-4): the person signed in — never the old per-browser role ("General Manager")
       orderDate: localTodayISO(),
       deliveryDate: "",
       promisedDateMeans: "Delivery to client",
@@ -1242,7 +1241,6 @@ export default function SalesOrders({ archive = null,
           pos={extPOs || []}
           shipments={extShipments || []}
           operationalCosts={extOperationalCosts || []}
-          userRole={userRole}
           canOpenResult={canOpenResult} onOpenResult={onOpenResult}
           userName={userName}
           onBack={() => { setView("list"); setSelected(null); }}

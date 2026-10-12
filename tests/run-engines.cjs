@@ -650,7 +650,7 @@ console.log("── producer claim (BP-55b) ──");
 const FORM_LINES = [
   { label: "Product — Golden 65-70-80", invoiceNo: "351/12/2025", amount: 50064.30, currency: "PLN", rate: 4.2131 },
   { label: "Transport to port of loading", party: "Agromałek", invoiceNo: "FS I/106/2025", amount: 1800, currency: "EUR" },
-  { label: "Container cost", party: "Conbulk", invoiceNo: "3339-2025", amount: 1800, currency: "EUR" },
+  { label: "Container cost", party: "Nogelor", invoiceNo: "3339-2025", amount: 1800, currency: "EUR" },
   { label: "Customs + transport at destination", amount: 128659.00, currency: "EGP", rate: 55.625 },
   { label: "Sorting", amount: 0, currency: "EGP", rate: 55.625 },
 ];
@@ -1106,7 +1106,7 @@ T("checker: stale 'Cost allocated' flag caught; real allocation not", () => {
 });
 
 console.log("── v6.33.0: Invoices sole owner (A3-6) + legacy credit-notes fold (A3-5) ──");
-const { salesInvoiceFromSODraft, salesInvoiceSourceTag, stripPendingInvoices, migrateLegacyCreditNotes, migrateLegacyInvoices } = require("./build/invoicing.js");
+const { salesInvoiceFromSODraft, salesInvoiceSourceTag, stripPendingInvoices, migrateLegacyInvoices } = require("./build/invoicing.js");   // v7.21.0 (A-RV-19): the credit-note fold went with the repairs
 
 T("A3-6: SO draft → canonical register invoice (shape + source tag + SO link)", () => {
   const so = { number: "SO-9", currency: "EUR", client: { name: "Client X" }, items: [{ product: "Apples", qty: 1000 }] };
@@ -1138,18 +1138,6 @@ T("A3-6: stripPendingInvoices removes the legacy array; same reference when clea
   assert.equal(r2.changed, false);
   assert.ok(r2.orders === clean); // same ref → no React effect loop
 });
-T("A3-5: legacy creditNotes fold into FinanceNote, idempotent, and ENTER the totals", () => {
-  const legacy = [{ id: 7, direction: "outgoing", partyName: "Client X", category: "Goods / quality", amount: 500, currency: "PLN", fxRate: 1, status: "Issued", reason: "quality", date: "2026-06-01" }];
-  const once = migrateLegacyCreditNotes({ existing: [], creditNotes: legacy });
-  assert.equal(once.length, 1);
-  assert.equal(once[0].noteType, "CREDIT");
-  assert.equal(once[0].amountPLN, 500);
-  assert.equal(once[0].source, "legacyCN:7");
-  const twice = migrateLegacyCreditNotes({ existing: once, creditNotes: legacy });
-  assert.equal(twice.length, 1); // idempotent by source tag
-  const adj = notesTotalsAdjustment(twice);
-  assert.ok(adj.receivableAdjPLN < 0); // outgoing credit note reduces what clients owe us
-});
 
 // ── v6.34.0: shipment direction from real ends — the Koper case (BP-61) ──
 const { shipmentTradeDirection: stdV34, shipmentTradeEnds } = require("./build/tradeFlow.domain.js");
@@ -1160,12 +1148,12 @@ const tdCountry = (id) => ({ 900: "Ukraine", 901: "Slovenia", 902: "Poland", 903
 const tdCtx = (orders = []) => ({ pos: tdPos, orders, countryOf: tdCountry });
 T("Koper split (BP-61 kept): ONE Egypt CIF PO fathers an EU-import truck AND a T1 cross-trade truck", () => {
   const soUA = { number: "SO-UA", client: { country: "Ukraine" }, destinationText: "Kyiv, ul. Khreshchatyk 1" };
-  const soPL = { number: "SO-PL", client: { country: "Poland" }, destinationText: "ul. Świeradowska 47, 02-662 Warszawa" };
+  const soPL = { number: "SO-PL", client: { country: "Poland" }, destinationText: "ul. Momomod 65, 18-303 Warszawa" };
   assert.equal(stdV34({ poRefs: ["PO-K"], governingSoRef: "SO-UA" }, tdCtx([soUA, soPL])), "CROSS_TRADE");
   assert.equal(stdV34({ poRefs: ["PO-K"], governingSoRef: "SO-PL" }, tdCtx([soUA, soPL])), "IMPORT");
 });
 T("a TYPED destination is never read as a country: the client's country is used (SHP-0006 / 0007 read Cross-trade)", () => {
-  const so = { number: "SO-W", client: { country: "Poland" }, destinationText: "ul. Świeradowska 47, 02-662 Warszawa" };
+  const so = { number: "SO-W", client: { country: "Poland" }, destinationText: "ul. Momomod 65, 18-303 Warszawa" };
   const e = shipmentTradeEnds({ purpose: "OUTBOUND", poRefs: ["PO-K"], governingSoRef: "SO-W", originLocationId: 901 }, tdCtx([so]));
   assert.equal(e.direction, "INTRA_EU"); assert.equal(e.origin.from, "starting place"); assert.equal(e.destination.from, "client's country");
 });
@@ -1306,54 +1294,7 @@ T("post IN → void the shipment's movements → lot back to Expected/0", () => 
 });
 
 // ── v6.37.0: flow-cleanup migration (schema 2) ──
-const { migrateFlowCleanup } = require("./build/flowCleanup.migration.js");
 console.log("── flow-cleanup migration ──");
-T("legacy PO without incoterms is backfilled from its flow, then flow dropped", () => {
-  const all = migrateFlowCleanup({ pos: [{ number: "PO-1", flow: "IMP_CIF_WH" }], lots: [], shipments: [] });
-  const p = all.pos[0];
-  assert.equal(p.buyIncoterm, "CIF");
-  assert.equal(p.tradeMovement, "IMPORT");
-  assert.equal(p.directFlow, false);
-  assert.ok(!("flow" in p), "flow removed");
-});
-T("direct legacy flow backfills directFlow=true; existing incoterm never overwritten", () => {
-  const all = migrateFlowCleanup({ pos: [
-    { number: "PO-2", flow: "IMP_DDP_DIR" },
-    { number: "PO-3", flow: "IMP_CIF_WH", buyIncoterm: "EXW" },
-  ], lots: [], shipments: [] });
-  assert.equal(all.pos[0].buyIncoterm, "DDP");
-  assert.equal(all.pos[0].directFlow, true);
-  assert.equal(all.pos[1].buyIncoterm, "EXW", "user-entered incoterm wins");
-  assert.ok(!("flow" in all.pos[1]));
-});
-T("never-shipped legacy lot gets its template journey BAKED; buyIncoterm from PO", () => {
-  const all = migrateFlowCleanup({
-    pos: [{ number: "PO-4", flow: "IMP_CIF_WH" }],
-    lots: [{ number: "LOT-1", poRef: "PO-4", flow: "IMP_CIF_WH", loadingDate: "2026-07-01", arrivalDate: "2026-07-11" }],
-    shipments: [],
-  });
-  const l = all.lots[0];
-  assert.equal(l.buyIncoterm, "CIF");
-  assert.equal((l.journey || []).length, 6, "6 CIF-WH stages baked");
-  assert.equal(l.journey[0].ownership, "not_owned", "supplier stage before dest_port takeover");
-  assert.equal(l.journey.find(st => st.kind === "dest_port").ownership, "owned");
-  assert.equal(l.journey[0].plannedDate, "2026-07-01");
-  assert.equal(l.journey[5].plannedDate, "2026-07-11");
-  assert.ok(!("flow" in l));
-});
-T("lot WITH a shipment is not baked (shipments are its journey); idempotent re-run", () => {
-  const input = {
-    pos: [{ number: "PO-5", flow: "IMP_EXWS_WH" }],
-    lots: [{ number: "LOT-2", poRef: "PO-5", flow: "IMP_EXWS_WH" }],
-    shipments: [{ number: "SHP-1", lotRefs: ["LOT-2"] }],
-  };
-  const once = migrateFlowCleanup(input);
-  assert.ok(!once.lots[0].journey, "no baked journey — shipment-derived at render");
-  assert.ok(!("flow" in once.lots[0]));
-  const twice = migrateFlowCleanup(once);
-  assert.deepEqual(twice.pos, once.pos, "idempotent on pos");
-  assert.deepEqual(twice.lots, once.lots, "idempotent on lots");
-});
 
 // ── v6.37.1: Finance direct costs — mirror sync + accrual (the user's repro) ──
 const { syncLegFreightCostLines } = require("./build/shipments.domain.js");
@@ -1608,7 +1549,6 @@ T("onions in 25kg mesh bags", () => {
 });
 
 // ── v6.45.0: test-round root causes B, C, D ──
-const HEAL = require("./build/heal.v645.js");
 const SD = require("./build/shipments.domain.js");
 console.log("── v6.45.0: OUTBOUND pass-through, shipped-aware supply, heal ──");
 
@@ -1652,48 +1592,11 @@ T("D: partially shipped PO line offers exactly the unshipped remainder", () => {
   assert.equal(av[0].primaryAvailable, 6000, "10000 - 4000 shipped");
   assert.ok(!av[0].hasOverage);
 });
-T("HEAL: retags duplicated goods rows, voids the wrong movement, re-posts, re-allocates", () => {
-  const lots = [
-    { number: "L-1", poRef: "PO-H", poLineId: 11, product: "Apples", receivedKg: 0, physicalKg: 0, costs: [], movements: [
-      { id: 1, type: "SHIP_OUT", qtyKg: 8000, soRef: "SO-H", shipmentRef: "SHP-H" } ] },
-    { number: "L-2", poRef: "PO-H", poLineId: 12, product: "Apples", receivedKg: 0, physicalKg: 0, costs: [], movements: [] },
-  ];
-  const orders = [{ number: "SO-H", id: 1, status: "Shipped", items: [
-    { id: 101, sourceType: "PO", sourceRef: "PO-H", sourceLineId: 11, product: "Apples", qty: 4000 },
-    { id: 102, sourceType: "PO", sourceRef: "PO-H", sourceLineId: 12, product: "Apples", qty: 4000 } ] }];
-  const shipments = [{ number: "SHP-H", status: "Closed", purpose: "INBOUND", soRefs: ["SO-H"], legs: [{}],
-    costs: [{ id: 5, type: "road_freight", amountPLN: 1000 }],
-    goods: [
-      { lotRef: "L-1", soRef: "SO-H", soLineId: 101, qtyKg: 4000 },
-      { lotRef: "L-1", soRef: "SO-H", soLineId: 102, qtyKg: 4000 } ] }];
-  let i = 500;
-  const res = HEAL.healRound645({ shipments, lots, orders }, { todayISO: () => "2026-07-22", nextId: () => ++i,
-    costMapper: { inventoryType: () => "freight", label: c => c } });
-  assert.ok(res.changed);
-  const sh = res.shipments[0];
-  assert.equal(sh.goods[1].lotRef, "L-2", "second row retagged to its true lot");
-  const l1 = res.lots.find(l => l.number === "L-1"), l2 = res.lots.find(l => l.number === "L-2");
-  assert.ok((l1.movements||[]).some(m => m.voided), "wrong movement voided");
-  assert.equal(l1.receivedKg, 4000); assert.equal(l2.receivedKg, 4000);
-  const alloc = (l) => (l.costs||[]).filter(c => String(c.source||"").startsWith("SHP-H/")).reduce((a,c)=>a+(c.pln||0),0);
-  assert.equal(alloc(l1) + alloc(l2), 1000, "inbound costs re-allocated across BOTH lots");
-});
 T("v6.51.0: an OUTBOUND delivery never allocates into a lot's landed cost", () => {
   const lots = [{ number: "L-O", costs: [{ pln: 100, source: "po:X" }] }];
   const sh = { number: "SHP-O", purpose: "OUTBOUND", goods: [{ lotRef: "L-O", qtyKg: 1000 }], costs: [{ id: 1, type: "road_freight", amountPLN: 900 }] };
   const out = CA.allocateShipmentCostsToLots(sh, lots, { inventoryType: () => "freight", label: c => c });
   assert.equal(out[0].costs.length, 1, "the lot is untouched — delivery freight is a cost of the SALE");
-});
-T("HEAL: a healthy dataset passes through untouched", () => {
-  const lots = [{ number: "L-OK", poRef: "PO-OK", poLineId: 1, product: "Apples", receivedKg: 5000, physicalKg: 0, costs: [], movements: [
-    { type: "IN", qtyKg: 5000, shipmentRef: "SHP-OK" }, { type: "SHIP_OUT", qtyKg: 5000, soRef: "SO-OK", shipmentRef: "SHP-OK" } ] }];
-  const shipments = [{ number: "SHP-OK", status: "Closed", purpose: "OUTBOUND", soRefs: ["SO-OK"], legs: [{}], costs: [],
-    goods: [{ lotRef: "L-OK", soRef: "SO-OK", soLineId: 1, qtyKg: 5000 }] }];
-  const orders = [{ number: "SO-OK", id: 1, status: "Closed", items: [{ id: 1, sourceType: "PO", sourceRef: "PO-OK", sourceLineId: 1, product: "Apples", qty: 5000 }] }];
-  let i = 800;
-  const res = HEAL.healRound645({ shipments, lots, orders }, { todayISO: () => "2026-07-22", nextId: () => ++i,
-    costMapper: { inventoryType: () => "freight", label: c => c } });
-  assert.equal(res.changed, false, "no false-positive healing");
 });
 
 // ── v6.46.0: loading protocol (Karta załadunku) ──
@@ -1729,12 +1632,12 @@ T("22 full pallets: manual adjustment case derives 22 rows", () => {
 });
 T("build: pre-fills plates, driver, assortment; recorders stay EMPTY", () => {
   const sh = { number: "SHP-2026-0003", goods: [{ product: "Apples", qtyKg: 19422 }],
-    legs: [{ id: 1, mode: "Road", vehicles: [{ truckPlate: "WR025HP", trailerPlate: "WR0246Y", driverName: "Mikolaj Majewski" }] }] };
-  const p = LP.buildLoadingProtocol({ shipment: sh, supplier: { name: "Konkret", address: "Marysin 36" },
+    legs: [{ id: 1, mode: "Road", vehicles: [{ truckPlate: "UX885QX", trailerPlate: "EK4165E", driverName: "Patace Cekicero" }] }] };
+  const p = LP.buildLoadingProtocol({ shipment: sh, supplier: { name: "Konkret", address: "ul. Negenok 64" },
     receiverName: "MARIANNA HAZEM OSMAN", types: _seed, existingProtocols: [] },
     { todayISO: () => "2026-07-30", nextId: () => 1 });
   assert.equal(p.number, "LP-2026-0001", "house numbering convention");
-  assert.equal(p.truckPlate, "WR025HP"); assert.equal(p.trailerPlate, "WR0246Y");
+  assert.equal(p.truckPlate, "UX885QX"); assert.equal(p.trailerPlate, "EK4165E");
   assert.equal(p.assortment, "Apples");
   assert.equal(p.rows.length, 21);
   assert.equal(p.recorderNos.length, 0, "producer picks recorders at loading — blank when printed");
@@ -1825,54 +1728,10 @@ const CL = require("./build/claims.domain.js");
 const MC = require("./build/marginCalculations.js");
 console.log("── claims: store, numbering, migration ──");
 const _deps = () => { let i = 0; return { todayISO: () => "2026-07-30", nextId: () => ++i }; };
-
-T("D1 FIXED: a lot may now hold SEVERAL claims (the old save wiped them)", () => {
-  const lot = { number: "LOT-1", poRef: "PO-1", claims: [
-    { id: 1, number: "CLM-2026-0001", defectType: "Skin defects", requestedCreditEUR: 6179.93, status: "Issued" },
-    { id: 2, defectType: "Bruising", requestedCreditEUR: 800, status: "Draft" },
-  ], movements: [] };
-  const r = CL.migrateClaims({ lots: [lot], pos: [{ number: "PO-1", supplier: { name: "Konkret" } }] }, _deps());
-  assert.equal(r.claims.length, 2, "BOTH claims survive");
-  assert.equal(r.claims[0].number, "CLM-2026-0001", "existing number kept");
-  assert.equal(r.claims[1].number, "CLM-2026-0001".replace("0001", "0002"), "second gets the next house number");
-  assert.ok(r.claims.every(c => c.respondent.name === "Konkret" && c.direction === "RECOVERY"));
-});
 T("D2 FIXED: numbering reads the CLAIMS store, not a lots snapshot", () => {
   assert.equal(CL.nextClaimNumber([{ number: "CLM-2026-0003" }], 2026), "CLM-2026-0004");
   assert.equal(CL.nextClaimNumber([{ number: "CLM-2025-0009" }], 2026), "CLM-2026-0001", "year-scoped");
   assert.equal(CL.nextClaimNumber([], 2026), "CLM-2026-0001");
-});
-T("unnumbered CLIENT claims become real numbered documents", () => {
-  const lot = { number: "LOT-4", poRef: "PO-2", claims: [], movements: [
-    { id: 9, type: "CLAIM", qtyKg: 500, claimValue: 2400, claimCurrency: "PLN", soRef: "SO-2026-0002", date: "2026-06-01", note: "Client quality complaint" },
-    { id: 10, type: "CLAIM", qtyKg: 100, date: "2026-06-02", note: "producer claim marker" },   // no value → not a client claim
-    { id: 11, type: "CLAIM", qtyKg: 50, claimValue: 100, voided: true },                        // voided → ignored
-  ] };
-  const r = CL.migrateClaims({ lots: [lot], pos: [] }, _deps());
-  assert.equal(r.claims.length, 1, "only the valued, live movement becomes a claim");
-  const c = r.claims[0];
-  assert.equal(c.direction, "CONCESSION");
-  assert.equal(c.respondent.kind, "Client");
-  assert.equal(c.number, "CLM-2026-0001", "it finally HAS a number");
-  assert.equal(c.status, "Settled", "its credit note was already issued");
-  assert.equal(c.movementRef, 9, "still tied to the inventory movement");
-  assert.deepEqual(c.subjects.map(s => s.kind).sort(), ["LOT", "SO"]);
-});
-T("migration is idempotent — a second run adds nothing", () => {
-  const lots = [{ number: "LOT-1", poRef: "PO-1", claims: [{ id: 1, defectType: "x", requestedCreditEUR: 100 }],
-    movements: [{ id: 5, type: "CLAIM", qtyKg: 10, claimValue: 50, soRef: "SO-1" }] }];
-  const pos = [{ number: "PO-1", supplier: { name: "Konkret" } }];
-  const first = CL.migrateClaims({ lots, pos }, _deps());
-  assert.equal(first.claims.length, 2); assert.equal(first.changed, true);
-  const second = CL.migrateClaims({ lots, pos, existing: first.claims }, _deps());
-  assert.equal(second.claims.length, 2, "no duplicates");
-  assert.equal(second.changed, false);
-});
-T("originals are never destroyed by the migration", () => {
-  const lot = { number: "LOT-1", poRef: "PO-1", claims: [{ id: 1, requestedCreditEUR: 100 }], movements: [] };
-  const before = JSON.stringify(lot);
-  CL.migrateClaims({ lots: [lot], pos: [] }, _deps());
-  assert.equal(JSON.stringify(lot), before, "lot.claims left exactly as it was");
 });
 T("queries find claims by lot, SO and shipment", () => {
   const claims = [
@@ -3117,7 +2976,6 @@ console.log("");
 console.log("── v6.73.0: phantom receipts, false duplicates, countries, locations ──");
 
 const SHD2 = require("./build/shipments.domain.js");
-// heal.v645 already required above as HEAL
 const LOC = require("./build/locations.js");
 
 const postDeps = { todayISO: () => "2026-03-10", nextId: (() => { let i = 1; return () => i++; })() };
@@ -3144,42 +3002,6 @@ T("A LOT CANNOT BE RECEIVED TWICE — whichever leg posts first", () => {
   // The second leg still ships the goods out — it moves stock, it does not create it.
   assert.ok(a[0].movements.filter(m => m.type === "SHIP_OUT").length >= 1);
   assert.equal(a[0].physicalKg, 0, "pass-through nets to zero either way");
-});
-
-T("the heal removes phantom receipts but NEVER a genuine second delivery", () => {
-  // A 42 000 kg order delivered by two trucks of 21 000 is received twice,
-  // correctly. An earlier draft of this heal would have voided half of it —
-  // LOT-2026-0021 in the owner's data is exactly that shape.
-  const genuine = { number: "LOT-TWO-TRUCKS", expectedKg: 42000, receivedKg: 42000, physicalKg: 0, movements: [
-    { id: 1, type: "IN", qtyKg: 21000, date: "2026-02-01", shipmentRef: "SHP-A" },
-    { id: 2, type: "IN", qtyKg: 21000, date: "2026-02-05", shipmentRef: "SHP-B" },
-    { id: 3, type: "SHIP_OUT", qtyKg: 42000, date: "2026-02-10", shipmentRef: "SHP-C" },
-  ] };
-  const phantom = { number: "LOT-PHANTOM", expectedKg: 5382, receivedKg: 10764, physicalKg: 0, movements: [
-    { id: 4, type: "IN", qtyKg: 5382, date: "2026-03-02", shipmentRef: "SHP-ROAD" },
-    { id: 5, type: "SHIP_OUT", qtyKg: 5382, date: "2026-03-02", shipmentRef: "SHP-ROAD" },
-    { id: 6, type: "IN", qtyKg: 5382, date: "2026-03-07", shipmentRef: "SHP-SEA" },
-    { id: 7, type: "SHIP_OUT", qtyKg: 5382, date: "2026-03-07", shipmentRef: "SHP-SEA" },
-  ] };
-  const r = HEAL.healPhantomReceipts({ lots: [genuine, phantom] });
-  const g = r.lots.find(l => l.number === "LOT-TWO-TRUCKS");
-  const p = r.lots.find(l => l.number === "LOT-PHANTOM");
-  assert.equal(g.receivedKg, 42000, "two trucks against a 42 t order is not a duplicate");
-  assert.equal(p.receivedKg, 5382, "the re-post is voided");
-  assert.equal(p.movements.filter(m => m.voided).length, 2, "the phantom IN and its paired SHIP_OUT — dropping the IN alone leaves an unmatched issue");
-  assert.ok(p.movements.every(m => m.voidNote ? m.voidNote.includes("received twice") : true));
-  assert.ok(r.notes.some(n => n.includes("LOT-PHANTOM")));
-});
-
-T("the heal is idempotent", () => {
-  const lot = { number: "L", expectedKg: 1000, receivedKg: 2000, physicalKg: 0, movements: [
-    { id: 1, type: "IN", qtyKg: 1000, date: "2026-01-01", shipmentRef: "A" },
-    { id: 2, type: "IN", qtyKg: 1000, date: "2026-01-02", shipmentRef: "B" },
-  ] };
-  const once = HEAL.healPhantomReceipts({ lots: [lot] });
-  const twice = HEAL.healPhantomReceipts({ lots: once.lots });
-  assert.equal(twice.lots[0].receivedKg, 1000);
-  assert.equal(twice.changed, false, "a second run finds nothing left to do");
 });
 
 T("a misspelled country is caught, and the fix suggested", () => {
@@ -3517,8 +3339,8 @@ T("LIST ORDER: documents newest first, reference data A-Z", () => {
   const docs = [{ number: "PO-2026-0002" }, { number: "PO-2026-0010" }, { number: "PO-2026-0001" }];
   assert.deepEqual(MG.newestFirst(docs).map(d => d.number), ["PO-2026-0010", "PO-2026-0002", "PO-2026-0001"],
     "0010 sorts above 0002 — numeric, not lexical");
-  const refs = [{ name: "Zielona" }, { name: "Łukasz" }, { name: "Adam" }];
-  assert.deepEqual(MG.alphabetical(refs).map(r => r.name), ["Adam", "Łukasz", "Zielona"], "Polish collation puts Ł where a reader expects");
+  const refs = [{ name: "Zielona" }, { name: "Jani" }, { name: "Adam" }];
+  assert.deepEqual(MG.alphabetical(refs).map(r => r.name), ["Adam", "Jani", "Zielona"], "Polish collation puts Ł where a reader expects");
 });
 
 // ══ v7.13 (A-AU-2 / A-AU-11, owner 9 Oct): the NBP rate of the last working day BEFORE the document's date ══

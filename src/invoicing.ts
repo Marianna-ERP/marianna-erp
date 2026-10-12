@@ -172,35 +172,6 @@ export function stripPendingInvoices(orders: any[]): { orders: any[]; changed: b
   return { orders: changed ? out : orders, changed };
 }
 
-// ─── v6.33.0 (A3-5 residue): legacy Finance creditNotes → FinanceNote ────────
-// The old Finance "Credit Notes" tab kept its own array that never entered the
-// receivable/payable totals. Fold each record into the canonical notes model
-// (all legacy records are CREDIT notes — the tab had no debit concept),
-// idempotent by source tag; after this they DO adjust the ledger totals (BP-37).
-export function migrateLegacyCreditNotes(opts: { existing: FinanceNote[]; creditNotes: any[] }): FinanceNote[] {
-  const existing = arr<FinanceNote>(opts.existing);
-  const have = new Set(existing.map(nte => nte.source).filter(Boolean));
-  const out: FinanceNote[] = [...existing];
-  arr(opts.creditNotes).forEach((cn: any) => {
-    const src = `legacyCN:${cn.id}`;
-    if (have.has(src)) return;
-    const fx = resolveFxRate(cn.fxRate, cn.currency);
-    const amount = n(cn.amount);
-    out.push({
-      id: nextId(), noteType: "CREDIT",
-      direction: cn.direction === "incoming" ? "incoming" : "outgoing",
-      invoiceId: null, relatedRef: cn.relatedRef || "",
-      partyName: cn.partyName || "", category: cn.category || "Other",
-      amount, currency: cn.currency || "PLN", fxRate: fx,
-      amountPLN: r2(n(cn.amountPLN) || amount * fx),
-      status: cn.status || "Draft", reason: cn.reason || "", date: cn.date || "",
-      source: src,
-    });
-    have.add(src);
-  });
-  return out;
-}
-
 export function migrateLegacyInvoices(opts: {
   existing: Invoice[];
   orders: any[];
@@ -340,7 +311,7 @@ export function fallbackLineName(inv: any): string {
 // ── FAKTUROWNIA PUSH PAYLOAD (verified contract, spec §10) ──
 // Builds the POST /invoices.json body for a SALES invoice. Auto-numbering (number:null).
 // gov_save_and_send defaults OFF — KSeF stays Fakturownia-managed for now.
-export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean ; departmentId?: any}) {
+export function buildFakturowniaPayload(inv: Invoice, opts: { sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean ; departmentId?: any}) {
   // v6.65.0 (D-07b): Fakturownia requires total_price_gross per position and her
   // first live push proved a position can arrive without stored totals. The
   // payload now derives them in order of preference — stored gross → stored net
@@ -376,7 +347,6 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
     tax: n(inv.vatRate), total_price_gross: r2(n(inv.grossAmount)),
   }];
   const body: any = {
-    api_token: opts.apiToken,
     invoice: {
       kind: inv.isProforma ? "proforma" : "vat", // v6.68.1: pro-formas push as pro-formas
       number: null,                 // Fakturownia auto-numbers (Q3-a)
@@ -451,9 +421,42 @@ export function pushBlockers(inv: Invoice): string[] {
   const out: string[] = []; const ps = arr<InvoicePosition>(inv.positions);
   if (ps.length > 1) {
     ps.forEach((p, i) => { const priced = n((p as any).grossTotal) > 0 || n((p as any).netTotal) > 0 || (p as any).unitPrice != null || (p as any).netPrice != null; if (!priced) out.push(`line ${i + 1} (${String(p.name || "").trim() || "unnamed"}) has no price`); if (!(n(p.quantity) > 0)) out.push(`line ${i + 1} (${String(p.name || "").trim() || "unnamed"}) has no quantity`); });
-    const payload = buildFakturowniaPayload(inv, { apiToken: "x" } as any).invoice.positions;
+    const payload = buildFakturowniaPayload(inv, {} as any).invoice.positions;
     const sum = r2(payload.reduce((a: number, x: any) => a + n(x.total_price_gross), 0)); const g = r2(n(inv.grossAmount));
     if (g > 0 && Math.abs(sum - g) > 0.02) out.push(`the lines add up to ${sum.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} but the invoice says ${g.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}`);
   }
   return out;
+}
+
+
+// ── v7.21.4 (A-ST-10, owner 9 Oct batch): ONE PLACE FOR A WAREHOUSE INVOICE — THE REGISTER ─────────────────────────────────
+// The separate warehouse-invoices store held the same documents the register already holds (folded by migrateLegacyInvoices:
+// source migrated:warehouseInvoice:<id>, or a twin by number and party). This moves what only the store still knew — the
+// warehouse's id, the month, an allocation to lots — onto the register invoice, points the lots' cost lines (WHINV-<store id>)
+// at it (WHINV-<register id>), and empties the store. It waits while an entry has no register invoice yet (the fold runs first).
+// An empty store changes nothing; a second pass changes nothing.
+export function foldWarehouseInvoiceStore(input: { store: any[]; invoices: any[]; lots: any[] }): { store: any[]; invoices: any[]; lots: any[]; moved: string[]; waiting: string[] } {
+  const store = arr(input.store), reg = arr(input.invoices);
+  if (!store.length) return { store: [], invoices: reg, lots: arr(input.lots), moved: [], waiting: [] };
+  const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
+  const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
+  const homeOf = (w: any) => reg.find((i: any) => i && i.source === `migrated:warehouseInvoice:${w.id}`)
+    || reg.find((i: any) => i && i.kind === "COST" && i.paymentStatus !== "Cancelled" && normNo(i.number) === normNo(w.invoiceNo) && normParty(i.counterparty?.name) === normParty(w.warehouseName));
+  const waiting = store.filter((w: any) => !homeOf(w)).map((w: any) => String(w.invoiceNo || w.id));
+  if (waiting.length) return { store, invoices: reg, lots: arr(input.lots), moved: [], waiting };
+  const moveTo = new Map<string, string>(); let invoices = reg;
+  store.forEach((w: any) => {
+    const h: any = homeOf(w); moveTo.set(`WHINV-${w.id}`, `WHINV-${h.id}`);
+    const patch: any = {};
+    if (w.warehouseId != null && w.warehouseId !== "" && (h.counterparty || {}).id == null) patch.counterparty = { ...(h.counterparty || {}), id: w.warehouseId };
+    if (!h.periodFrom && w.period) patch.periodFrom = `${w.period}-01`;
+    if (!h.allocation && Array.isArray(w.allocatedLots) && w.allocatedLots.length) patch.allocation = { method: w.allocationMethod || "by_expected_charges", lots: w.allocatedLots };
+    if (Object.keys(patch).length) invoices = invoices.map((i: any) => i.id === h.id ? { ...i, ...patch } : i);
+  });
+  const lots = arr(input.lots).map((l: any) => {
+    let changed = false;
+    const costs = (l?.costs || []).map((c: any) => { const to = moveTo.get(String(c?.source || "")); if (!to) return c; changed = true; return { ...c, source: to }; });
+    return changed ? { ...l, costs } : l;
+  });
+  return { store: [], invoices, lots, moved: store.map((w: any) => String(w.invoiceNo || w.id)), waiting: [] };
 }

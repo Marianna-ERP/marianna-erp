@@ -174,7 +174,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     if (!missing.length) return;
     setDraft((prev: any) => ({ ...prev, costs: [...(prev.costs || []), ...missing.map((l: any, i: number) => ({
       id: nextId() + i, type: l.mode === "Sea" ? "sea_freight" : l.mode === "Air" ? "air_freight" : l.mode === "Rail" ? "rail_freight" : "road_freight", legId: l.id,
-      supplierId: l.carrierId || l.forwarderId || prev.carrierId || prev.forwarderId || 1001,
+      supplierId: l.carrierId || l.forwarderId || prev.carrierId || prev.forwarderId || null,   /* v7.21.10 (A-RV-33): no fixed 1001 */
       amount: 0, currency: l.costCurrency || "PLN", fxRate: resolveFxRate(null, l.costCurrency || "PLN"),
       amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg",
       notes: `Leg ${i + 1} · ${l.mode}`,
@@ -189,7 +189,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     // existing cost line, else the first leg) instead of always PLN, with the matching FX.
     setDraft(prev => {
       const baseCur = (prev.costs && prev.costs[0] && prev.costs[0].currency) || ((prev.legs || [])[0] || {}).costCurrency || "PLN";
-      return { ...prev, costs: [...(prev.costs || []), { id: nextId(), type: "other", supplierId: prev.carrierId || prev.forwarderId || 1001, amount: 0, currency: baseCur, fxRate: resolveFxRate(null, baseCur), amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] };
+      return { ...prev, costs: [...(prev.costs || []), { id: nextId(), type: "other", supplierId: prev.carrierId || prev.forwarderId || null,   /* v7.21.10 (A-RV-33) */ amount: 0, currency: baseCur, fxRate: resolveFxRate(null, baseCur), amountPLN: 0, invoiceStatus: "Expected", invoiceRef: "", allocationMethod: "by_kg", notes: "" }] };
     });
   }
   async function removeCost(idx) {

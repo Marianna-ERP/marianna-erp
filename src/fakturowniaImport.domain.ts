@@ -254,24 +254,6 @@ export function operationalCostFromRow(row: StagedRow, category: string): any {
   };
 }
 
-/** Warehouse-invoice record for a WAREHOUSE-tagged invoice (parity with the old import). */
-export function warehouseInvoiceFromRow(row: StagedRow, wh: any): any {
-  const amount = row.net || row.gross;
-  const fx = resolveFxRate(row.fxRate, row.currency);
-  return {
-    id: nextId(),
-    warehouseId: wh?.id ?? "",
-    warehouseName: wh?.name || row.seller,
-    period: String(row.date || localTodayISO()).slice(0, 7),
-    invoiceNo: row.number,
-    date: row.date || localTodayISO(),
-    amount, currency: row.currency, fxRate: fx,
-    amountPLN: Math.round(amount * fx * 100) / 100,
-    status: "Received",
-    notes: "Imported from Fakturownia (Invoices)",
-  };
-}
-
 // ── file-register parsing helpers (moved verbatim from Finance, v6.16/v6.18.20) ──
 export function guessCostCategory(text: string): string {
   const t = String(text || "").toLowerCase();

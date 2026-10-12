@@ -654,23 +654,6 @@ export function locationById(id: any, contacts: any[] = []): Location | null {
   if (id === null || id === undefined || id === "") return null;
   return unifiedLocations(contacts).find(l => String(l.id) === String(id)) || null;   // v7.7.1 (A-RET-1): no demo fallback — used demo ids became ordinary locations (v7.3.4)
 }
-/** Demo seeds that stored documents still point at become custom locations (once). */
-export function migrateReferencedSeeds(referencedIds: Iterable<any>): Location[] {
-  const wanted = new Set(Array.from(referencedIds).map(String));
-  const existing = new Set(readCustomLocations().map(l => String(l.id)));
-  const added: Location[] = [];
-  DEMO_SEEDS.forEach(seed => {
-    if (!wanted.has(String(seed.id)) || existing.has(String(seed.id))) return;
-    try {
-      const raw = window.localStorage.getItem(CUSTOM_LOCATIONS_KEY);
-      const list = raw ? JSON.parse(raw) : [];
-      list.push({ ...seed, source: "Custom", migratedFromSeed: true });
-      writeSharedStoreValue("customLocations", list);   /* v7.3.3 (A-SYNC-1) */
-      added.push(seed);
-    } catch { /* best effort */ }
-  });
-  return added;
-}
 
 // ── v6.99.29 (A-R19-4, owner 15 Sept): a migrated demo seed that no document points at any more is removed.
 // The v6.86 migration copies a seed into the user's custom places so an old document keeps its address; it never
@@ -687,15 +670,6 @@ export function migratePlaceAddresses(): number {
   });
   if (changed) writeCustomLocations(next);
   return changed;
-}
-
-export function pruneOrphanMigratedSeeds(referencedIds: Iterable<any>): Location[] {
-  const wanted = new Set(Array.from(referencedIds).map(String));
-  const list = readCustomLocations();
-  const keep = list.filter(l => !(l as any).migratedFromSeed || wanted.has(String(l.id)));
-  const dropped = list.filter(l => !keep.includes(l));
-  if (dropped.length) writeCustomLocations(keep);
-  return dropped;
 }
 
 // ── v6.99.39 (D-1, owner 18 Sept): ONE resolver for how a place is PRINTED ──

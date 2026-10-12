@@ -249,7 +249,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // ── 6. Allocations referencing a missing warehouse invoice ─────────────────
   // Cost lines tagged with a warehouse-invoice ref whose invoice no longer exists.
   // Finance tags allocated warehouse cost lines with source `WHINV-<id>` (hyphen).
-  const whInvoiceIds = new Set(warehouseInvoices.map((w: any) => `WHINV-${w.id}`));
+  const whInvoiceIds = new Set([...warehouseInvoices.map((w: any) => `WHINV-${w.id}`), ...arr(inp.invoices).map((i: any) => `WHINV-${i?.id}`)]);   // v7.21.4 (A-ST-10): the register's invoices
   lots.forEach((lot: any) => {
     arr(lot.costs).forEach((c: any) => {
       const src = String(c.source || "");
@@ -687,6 +687,15 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     const tagged = lots.some((l: any) => arr(l.costs).some((c: any) => String(c?.source || "").startsWith(`${sh.number}/`)));
     if (!tagged) add("warning", "STALE_BILLING_FLAG", "Shipments", sh.number || "(shipment)",
       `billingStatus is "Cost allocated" but no lot carries this shipment's cost allocation — the flag is stale (allocation never ran, was reverted, or the shipment was cancelled). Re-run the allocation or reset the status.`);
+  });
+
+  // v7.21.10 (A-RV-33, owner 11 Oct): a shipment naming a carrier that only existed in the code (the retired placeholders 1001, 9, 10)
+  // is listed — never changed: whoever opens it picks the carrier from the list
+  const RETIRED_PROVIDER_IDS = new Set(["1001", "9", "10"]); const companyIds = new Set(contacts.map((c: any) => String(c?.id)));
+  shipments.filter((s: any) => s && s.status !== "Cancelled" && !s.deleted).forEach((s: any) => {
+    const ids = new Set<string>(); const take = (v: any) => { if (v != null && v !== "" && RETIRED_PROVIDER_IDS.has(String(v)) && !companyIds.has(String(v))) ids.add(String(v)); };
+    take(s.carrierId); take(s.forwarderId); (s.legs || []).forEach((l: any) => { take(l.carrierId); take(l.forwarderId); (l.vehicles || []).forEach((v: any) => take(v.carrierId)); }); (s.costs || []).forEach((c: any) => take(c.supplierId));
+    if (ids.size) add("warning", "SHIPMENT_PROVIDER_RETIRED", "Shipments", String(s.number || "(shipment)"), `${s.number || "A shipment"}: names carrier id ${Array.from(ids).join(", ")}, which is no company — a placeholder the code used to write. Pick the carrier from the list.`);
   });
 
   const counts = {

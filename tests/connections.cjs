@@ -49,11 +49,11 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   });
   await act(async () => { root.unmount(); });
 
-  // ── CP-4: an archived carrier (Polkon) leaves the pickers; a shipment that already names it keeps it, marked ──
+  // ── CP-4: an archived carrier (Rotoze) leaves the pickers; a shipment that already names it keeps it, marked ──
   const { EditShipmentModal } = require(path.resolve("./src/ShipmentEditor"));
   const ed = sh => T(renderToStaticMarkup(React.createElement(EditShipmentModal, { shipment: d.shipments.find(s => s.number === sh), contacts: d.contacts, lots: d.lots, pos: d.pos, orders: d.orders, packagingTypes: d.packagingTypes || [], allShipmentsForCap: d.shipments, invoices: d.invoices || [], onSave: noop, onCancel: noop })));
-  await t("CP-4: SHP-2026-0031's carrier picker offers no archived company (Polkon)", async () => { const h = ed("SHP-2026-0031"); ok(/choose the carrier/.test(h) && /TBX/.test(h), "the carrier picker is not drawn"); ok(!/Polkon/.test(h), "Polkon is still offered"); });
-  await t("CP-4: SHP-2026-0033, which names Polkon, still shows it — marked (archived)", async () => { const h = ed("SHP-2026-0033"); ok(/Polkon[^<]{0,40}\(archived\)/.test(h), "Polkon not shown as archived"); });
+  await t("CP-4: SHP-2026-0031's carrier picker offers no archived company (Rotoze)", async () => { const h = ed("SHP-2026-0031"); ok(/choose the carrier/.test(h) && /TBX/.test(h), "the carrier picker is not drawn"); ok(!/Rotoze/.test(h), "Rotoze is still offered"); });
+  await t("CP-4: SHP-2026-0033, which names Rotoze, still shows it — marked (archived)", async () => { const h = ed("SHP-2026-0033"); ok(/Rotoze[^<]{0,40}\(archived\)/.test(h), "Rotoze not shown as archived"); });
 
   // ── Lot warnings (owner's two): on the Inventory list and on the lot ──
   const Inv = require(path.resolve("./src/Inventory")).default;
@@ -360,7 +360,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     for (const e of Array.from(host.querySelectorAll("*")).filter(e => Array.from(e.childNodes).some(n => n.nodeType === 3 && /CLM-TEST-0017/.test(n.textContent || "")))) { await act(async () => { e.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); }); if (/Respondent — who is on the other side/.test(host.textContent || "")) break; }
     if (!hasDel(host.innerHTML)) miss.push("claim"); await act(async () => { root.unmount(); });
     ok(!miss.length, "no Delete on: " + miss.join(" · "));
-    ok(/A paid invoice|It is paid\. Its payments must be removed first/.test(srcOf("Invoices.tsx")) && !/inv\.paymentStatus !== "Paid" && inv\.paymentStatus !== "Cancelled" && <button onClick=\{\(\) => onMarkStatus\("Cancelled"\)\}/.test(srcOf("Invoices.tsx")), "a paid invoice still hides Delete");
+    ok(/A paid invoice|Its payments must be removed first/.test(srcOf("Invoices.tsx"))   /* v7.21.9 (A-RV-32): the refusal now covers any payment */ && !/inv\.paymentStatus !== "Paid" && inv\.paymentStatus !== "Cancelled" && <button onClick=\{\(\) => onMarkStatus\("Cancelled"\)\}/.test(srcOf("Invoices.tsx")), "a paid invoice still hides Delete");
   });
   await t("A-RV-11: overdue is amber; money going out is neutral — red is kept for real risks", async () => {
     const h = renderToStaticMarkup(React.createElement(require(path.resolve("./src/Invoices")).default, base17));
@@ -397,7 +397,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     ok(calls.length === 1 && calls[0][0] === "13kg wooden boxes" && calls[0][1] === "wooden-box-13", "linked: " + JSON.stringify(calls)); await act(async () => { root.unmount(); });
   });
   await t("A-AU-3: a sale's destination is one of the client's sites; Counterparties → Locations lists the typed addresses once", async () => {
-    const { OrderForm } = require(path.resolve("./src/SalesOrderForm")); const so = d.orders.find(o => o.client && o.client.name === "BLACK FOX");
+    const { OrderForm } = require(path.resolve("./src/SalesOrderForm")); const so = d.orders.find(o => o.client && o.client.name === "TOLEBAVAT REBAL");
     const h = T(renderToStaticMarkup(React.createElement(OrderForm, { order: { ...so, status: "Draft", destinationMode: "client", destinationText: "", destinationLocationId: null }, setOrder: noop, allOrders: d.orders, contacts: d.contacts, onSave: noop, onCancel: noop })));
     ok(/Legal address/.test(h) && /Add a site for this client/.test(h), "the client's sites are not offered");
     const { PortsView } = require(path.resolve("./src/Contacts"));
@@ -523,7 +523,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     ok(/Respondent — who is on the other side/.test(h), "the claim did not open");
   });
   await t("A-INC-2 (1, v7.20.1): SO-2026-0001 (sold CFR to a typed address in Obour) says its named place must be the port of destination; SO-2026-0020 (CIF Damietta Port) does not", async () => {
-    ok(/Sold CFR: the named place must be the port of destination — it is (&quot;|")11 STR\. AHMED IBN TOLAN, OBOUR/.test(soView("SO-2026-0001")), "SO-0001 not flagged"); ok(!/named place must be the port/.test(soView("SO-2026-0020")), "SO-0020 flagged");
+    { const typed = String(d.orders.find(o => o.number === "SO-2026-0001").destinationText || "").split(",").slice(0, 2).join(",").trim(); ok(typed && new RegExp("Sold CFR: the named place must be the port of destination — it is (&quot;|\")" + typed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).test(soView("SO-2026-0001")), "SO-0001 not flagged"); }   // v7.21.2 (AUD-50): the typed address is read from the (anonymised) file ok(!/named place must be the port/.test(soView("SO-2026-0020")), "SO-0020 flagged");
   });
   await t("A-INC-2 (v7.20.0): SO-2026-0015's view lists what disagrees with its EXW term — on SHP-2026-0026 a shipment of ours, its sea freight, its forwarder", async () => {
     const h = soView("SO-2026-0015"); ok(/Terms to review \(3\)/.test(h) && /EXW SO-2026-0015 → SHP-2026-0026 shipment of ours, sold EXW/.test(h) && /freight on a leg not ours/.test(h) && /carrier on a leg not ours/.test(h), "SO-0015's view: " + (h.match(/Terms to review.{0,200}/) || ["(nothing)"])[0]);
@@ -538,8 +538,8 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     const raw = renderToStaticMarkup(React.createElement(EditShipmentModal, { shipment: s28, contacts: d.contacts, lots: d.lots, pos: d.pos, orders: d.orders, packagingTypes: d.packagingTypes || [], allShipmentsForCap: d.shipments, invoices: d.invoices || [], onSave: noop, onCancel: noop }));
     ok(/>Insurance certificate<\/option>/.test(raw), "the document list does not offer it"); ok(!/no insurance certificate/.test(edS({ ...s28, documents: [...(s28.documents || []), { id: 99, type: "Insurance certificate", status: "Have it" }] })), "a held certificate is still flagged");
   });
-  await t("A-INC-2 (5, v7.20.5): SHP-2026-0026's sea unit names DCS TRAMACO on a leg the client pays (sold EXW) — a transport order would go out", async () => {
-    ok(/Leg 1's freight is the client's \(sold EXW, SO-2026-0015\), yet DCS TRAMACO srl is named on this unit — a transport order would go out to them/.test(edS(shp("SHP-2026-0026", { status: "Booked" }))), "no flag by the unit");
+  await t("A-INC-2 (5, v7.20.5): SHP-2026-0026's sea unit names DCS NAKAPAL on a leg the client pays (sold EXW) — a transport order would go out", async () => {
+    ok(/Leg 1's freight is the client's \(sold EXW, SO-2026-0015\), yet DCS NAKAPAL srl is named on this unit — a transport order would go out to them/.test(edS(shp("SHP-2026-0026", { status: "Booked" }))), "no flag by the unit");
     ok(!/is named on this unit/.test(edS(shp("SHP-2026-0039", { status: "Booked" }))), "SHP-0039 (legs ours) flagged");
   });
   await t("A-INC-2 (3–4, v7.20.3–4): the editor flags a sea-only rule on a road journey, and a D-rule carriage ending elsewhere than its named place (SHP-2026-0039 with its sale's term changed)", async () => {
@@ -552,6 +552,46 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   await t("A-INC-2 (6, v7.20.6): on the 1 Oct 16:29 file SO-2026-0027 (sold DDP) says its shipment SHP-2026-0039 carries no freight of ours", async () => {
     const p1 = FX.fixture("marianna-erp_v6.99.87_schema-v2_2026-10-01T16-29-32.json"); if (!p1) { console.log("  ⤳ SKIPPED — fixture missing: the 1 Oct 16:29 file"); return; }
     ok(/Sold DDP: we pay the carriage to the named place — yet its shipment SHP-2026-0039 carries no freight of ours/.test(soView("SO-2026-0027", JSON.parse(fs.readFileSync(p1, "utf8")))), "SO-0027 not flagged");
+  });
+
+  // ══ v7.21.9 — A-RV-32: an invoice with any payment on it can't be deleted ══
+  await t("A-RV-32 (v7.21.9): Delete on a partly paid invoice is refused and names its payment — the invoice is not cancelled", async () => {
+    const Inv = require(path.resolve("./src/Invoices")).default; let invs = [{ id: 9101, kind: "SALES", category: "GOODS", number: "FV/T/1", counterparty: { name: "Client T" }, issueDate: "2026-09-01", dueDate: "2026-09-15", currency: "PLN", fxRate: 1, netAmount: 1000, vatRate: 0, vatAmount: 0, grossAmount: 1000, netPLN: 1000, grossPLN: 1000, positions: [], links: [], paymentStatus: "Sent", paidAmount: 100, payments: [{ id: 1, date: "2026-09-05", amount: 100, method: "Transfer" }], notes: "", attachment: null, fakturownia: { exported: false }, source: "manual" }];
+    let cancelled = false; const setInvoices = u => { const n = typeof u === "function" ? u(invs) : u; if (n.some(i => i.id === 9101 && i.paymentStatus === "Cancelled")) cancelled = true; invs = n; };
+    const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
+    await act(async () => { root.render(React.createElement(Inv, { invoices: invs, setInvoices, orders: [], setOrders: noop, contacts: [], lots: [], shipments: [], financeNotes: [], initialSelectedNumber: "FV/T/1" })); });
+    const del = Array.from(host.querySelectorAll("button")).find(b => /^\s*Delete invoice/.test(b.textContent || "")); ok(del, "no Delete on the invoice");
+    await act(async () => { del.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    const txt = T(host.innerHTML); ok(/can't be deleted/.test(txt) && /It has 1 payment on it/.test(txt) && /2026-09-05/.test(txt), "no refusal naming the payment: " + (txt.match(/FV\/T\/1.{0,120}/) || [""])[0]); ok(!cancelled, "the invoice was cancelled");
+    await act(async () => { root.unmount(); }); host.remove();
+  });
+
+  // ══ v7.21.6 — the CN suggestions reach the product catalogue ══
+  await t("CN (v7.21.6): Settings → Product catalogue offers Papryka its CN code (07096010) — one click fills the draft, nothing is saved until Save", async () => {
+    const { ProductCatalogPanel } = require(path.resolve("./src/Settings")); let cat = [{ item: "Papryka", varieties: ["Kapia"], defaultCnCode: "" }, { item: "Jabłko", varieties: ["Gala"], defaultCnCode: "08081080" }]; let writes = 0;
+    const setCatalog = u => { writes++; cat = typeof u === "function" ? u(cat) : u; };
+    const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
+    await act(async () => { root.render(React.createElement(ProductCatalogPanel, { catalog: cat, setCatalog, refStores: { pos: [], orders: [], lots: [] } })); });
+    const btns = Array.from(host.querySelectorAll("button[data-cn-suggest]")); ok(btns.length === 1 && btns[0].getAttribute("data-cn-suggest") === "07096010", "suggestions shown: " + btns.map(b => b.getAttribute("data-cn-suggest")).join());
+    await act(async () => { btns[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    ok(Array.from(host.querySelectorAll("input")).some(i => i.value === "07096010"), "the draft was not filled"); ok(writes === 0, "the catalogue was written before Save");
+    await act(async () => { root.unmount(); }); host.remove();
+  });
+
+  // ══ v7.21.1 — AUD-49 (owner 11 Oct): no token box — Settings shows what the server part holds ══
+  await t("AUD-49 (v7.21.1): Settings → Fakturownia asks for no token — it shows the server part's connection, the test, the live-push switch and the bank accounts", async () => {
+    const St = require(path.resolve("./src/Settings")).default;
+    const h = renderToStaticMarkup(React.createElement(St, { fxSettings: {}, setFxSettings: noop, contacts: d.contacts, users: [], setUsers: noop, userName: "x" })); const tx = T(h);
+    ok(!/paste API token|type="password"/.test(h), "a token box is still there"); ok(/data-fkt-server="1"/.test(h) && /Checking the connection/.test(tx), "no server status line");
+    ok(/never in a browser/.test(tx) && /Test connection/.test(tx) && /Read bank accounts from Fakturownia/.test(tx) && /Allow creating real invoices in Fakturownia from this browser/.test(tx), "a part of the panel is missing");
+  });
+
+  // ══ v7.21.0 — A-RV-19 (owner ruling B, 8 Oct): no single-browser mode ══
+  await t("A-RV-19 (v7.21.0): a copy without the two shared-data settings says it isn't connected — it never runs on its own browser's data", async () => {
+    const G = require(path.resolve("./src/SharedStoreGate"));
+    function W() { const s = G.useSharedStore("x"); return React.createElement("div", null, s.ready ? "THE APP RAN" : s.node); }
+    const h = T(renderToStaticMarkup(React.createElement(W)));
+    ok(/This copy isn't connected to the shared data/.test(h), h.slice(0, 160)); ok(!/THE APP RAN/.test(h), "the app ran on this browser's data"); ok(/restore it into the TEST copy/.test(h), "no word on old backups");
   });
 
   console.log(`CONNECTIONS: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);

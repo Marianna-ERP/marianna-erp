@@ -207,17 +207,15 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const hNo = renderToStaticMarkup(React.createElement(SettingsMod, common));
     if (!hNo.includes("AUTOMATIC BACKUP FOLDER") || !hNo.includes("can&#x27;t write to a folder")) bad.push("Settings without folder support");
     if (fs.readFileSync(path.resolve("./src/App.tsx"), "utf8").includes("backupReminderDismissed")) bad.push("the old reminder is still in App");
-    // Settings in a browser WITH the folder API — fresh module instances so the status is read again; one local snapshot seeded
+    // Settings in a browser WITH the folder API — fresh module instances so the status is read again (v7.21.0: no local snapshots any more)
     window.showDirectoryPicker = function () {};
     Object.keys(require.cache).filter(k => /src[\\/](Settings|BackupPanel|autoBackup)\.tsx?$/.test(k)).forEach(k => { delete require.cache[k]; });
-    localStorage.setItem("marianna-erp:backups", JSON.stringify([{ id: "1", label: "Auto — before import", createdAt: new Date().toISOString(), version: 2, sizeKB: 1 }]));
-    localStorage.setItem("marianna-erp:backup:1", "{}");
     const Settings2 = require(path.resolve("./src/Settings")).default;
     _where = "Settings · with folder support";
     const hYes = renderToStaticMarkup(React.createElement(Settings2, common));
     if (!hYes.includes("Choose folder…") || hYes.includes("can&#x27;t write to a folder")) bad.push("Settings with folder support");
-    if (!/title="Delete this backup"[^>]*>Delete</.test(hYes)) bad.push("local snapshot Delete is not the word Delete");
-    delete window.showDirectoryPicker; localStorage.removeItem("marianna-erp:backups"); localStorage.removeItem("marianna-erp:backup:1");
+    if (/LOCAL BACKUPS|Delete this backup/.test(hYes)) bad.push("v7.21.0 (A-RV-19): a local snapshot card is still shown");
+    delete window.showDirectoryPicker;
     if (!bad.length) { passed++; console.log("  \u2713 backups: the folder card in 6 states, the banner in 10 cases, Settings with and without folder support"); }
     else { failed++; console.log("  \u2717 backups — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 backups —", (e.message || "").slice(0, 160)); } }
@@ -225,19 +223,19 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
 // v6.99.72 (A-CU-3): the customs import — exact / confirm / not placed / done rows; the editor line with an exit; the invoice's CUSTOMS card
 { try {
     const CI = require(path.resolve("./src/customsImport.domain")); const C = require(path.resolve("./src/customsClearance.domain")); const CIM = require(path.resolve("./src/CustomsImportModal"));
-    const relX = fs.readFileSync(FX.fixture("CC529C_26PL445010003K5TB3_1.xml"), "utf8"), exitX = fs.readFileSync(FX.fixture("CC599C_26PL445010003K5TB3_1.xml"), "utf8"), sadX = fs.readFileSync(FX.fixture("SAD_25520.xml"), "utf8");
+    const relX = fs.readFileSync(FX.fixture("CC529C_26PL445010188G5KO3_1.xml"), "utf8"), exitX = fs.readFileSync(FX.fixture("CC599C_26PL445010188G5KO3_1.xml"), "utf8"), sadX = fs.readFileSync(FX.fixture("SAD_25520.xml"), "utf8");
     const bad = [];
     const mk = (over = {}) => ({ id: 7001, number: "SHP-2026-0040", status: "Loaded", tradeDirection: "EXPORT", governingSoRef: "SO-2026-0090", soRefs: ["SO-2026-0090"], clientName: "Al Baraka For Import & Export", goods: [{ id: 1, cnCode: "08081080", qtyKg: 19422 }], documents: [], customsUnits: [],
-      legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-05-04", vehicles: [{ id: 11, truckPlate: "WRA 5749J", trailerPlate: "WRA 5925F", load: [{ goodsLineId: 1, qtyKg: 19422 }] }] }], ...over });
+      legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-05-04", vehicles: [{ id: 11, truckPlate: "JSI 4708L", trailerPlate: "SMM 8968H", load: [{ goodsLineId: 1, qtyKg: 19422 }] }] }], ...over });
     const invoices = [{ id: 5001, number: "FV2026/05/1", kind: "SALES", paymentStatus: "Issued", currency: "EUR", fxRate: 4.24, netAmount: 17479.8, vatAmount: 0, grossAmount: 17479.8, netPLN: 74114, grossPLN: 74114, vatRate: 0, issueDate: "2026-05-05", dueDate: "2026-06-04", counterparty: { name: "Al Baraka For Import & Export" }, links: [{ type: "SO", number: "SO-2026-0090" }], payments: [] }];
     // 1. the import window: exact (release + exit in one batch), a proposal (plates on two shipments, no invoice), not placed, unknown, done
-    const two = [mk(), mk({ id: 7002, number: "SHP-2026-0041", governingSoRef: "SO-2026-0091", soRefs: ["SO-2026-0091"], legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-05-05", vehicles: [{ id: 21, truckPlate: "WRA5749J", trailerPlate: "WRA5925F" }] }] })];
-    const rows = CI.planImport([{ name: "CC529C.xml", text: relX }, { name: "CC599C.xml", text: exitX }, { name: "SAD.xml", text: sadX }, { name: "CC529C_other_invoice.xml", text: relX.replace(/FV2026\/05\/1/g, "FV2026/05/9").replace(/26PL445010003K5TB3/g, "26PL445010003K5TB9") }, { name: "other.xml", text: relX.replace(/WRA5749J\/WRA5925F/g, "ZZ00001/ZZ00002") }, { name: "note.pdf", text: "%PDF" }], two, invoices);
+    const two = [mk(), mk({ id: 7002, number: "SHP-2026-0041", governingSoRef: "SO-2026-0091", soRefs: ["SO-2026-0091"], legs: [{ id: 1, mode: "Road", plannedPickupDate: "2026-05-05", vehicles: [{ id: 21, truckPlate: "JSI4708L", trailerPlate: "SMM8968H" }] }] })];
+    const rows = CI.planImport([{ name: "CC529C.xml", text: relX }, { name: "CC599C.xml", text: exitX }, { name: "SAD.xml", text: sadX }, { name: "CC529C_other_invoice.xml", text: relX.replace(/FV2026\/05\/1/g, "FV2026/05/9").replace(/26PL445010188G5KO3/g, "26PL445010003K5TB9") }, { name: "other.xml", text: relX.replace(/JSI4708L\/SMM8968H/g, "ZZ00001/ZZ00002") }, { name: "note.pdf", text: "%PDF" }], two, invoices);
     if (!rows[0].search.exact || !rows[1].search.exact || rows[3].search.exact || rows[3].search.candidates.length < 2) bad.push("planning: expected exact, exact(batch), -, proposal; got " + rows.map(r => (r.search.exact ? "exact" : r.search.candidates.length + " cand")).join(", "));
-    rows[2].done = "SHP-2026-0040 · WRA 5749J";
+    rows[2].done = "SHP-2026-0040 · JSI 4708L";
     _where = "customs import";
     const html = renderToStaticMarkup(React.createElement(CIM.CustomsImportView, { rows, setRows: () => {}, onAttach: () => {}, onClose: () => {}, onFiles: () => {}, result: "" }));
-    const want = ["Import customs files", "Release for export (CC529C)", "Exit confirmation (CC599C)", "Declaration copy (SAD)", "Not a customs file", ">Confirm<", "leave this file out", "Not placed", "No shipment carries the plates", "✓ Attached to SHP-2026-0040", "left the EU <strong>2026-05-12</strong>", "MRN <strong>26PL445010003K5TB3</strong>", ">Close<"];
+    const want = ["Import customs files", "Release for export (CC529C)", "Exit confirmation (CC599C)", "Declaration copy (SAD)", "Not a customs file", ">Confirm<", "leave this file out", "Not placed", "No shipment carries the plates", "✓ Attached to SHP-2026-0040", "left the EU <strong>2026-05-12</strong>", "MRN <strong>26PL445010188G5KO3</strong>", ">Close<"];
     want.forEach(w => { if (!html.includes(w)) bad.push("import window lacks " + JSON.stringify(w)); });
     if (!/<button[^>]*#16A34A[^>]*>Attach \d+ files?<\/button>/.test(html)) bad.push("no green Attach button");
     // 2. the editor: an Exited line shows the exit and offers Detach; the status list has the fifth status
@@ -251,7 +249,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const Inv = require(path.resolve("./src/Invoices")).default;
     _where = "invoice detail · customs";
     const ih = renderToStaticMarkup(React.createElement(Inv, { ...common, invoices, shipments: [sh], initialSelectedNumber: "FV2026/05/1" }));
-    ["CUSTOMS", "SHP-2026-0040", "exit confirmed 2026-05-12", "MRN 26PL445010003K5TB3"].forEach(w => { if (!ih.includes(w)) bad.push("invoice detail lacks " + JSON.stringify(w)); });
+    ["CUSTOMS", "SHP-2026-0040", "exit confirmed 2026-05-12", "MRN 26PL445010188G5KO3"].forEach(w => { if (!ih.includes(w)) bad.push("invoice detail lacks " + JSON.stringify(w)); });
     const ih2 = renderToStaticMarkup(React.createElement(Inv, { ...common, invoices, shipments: [C.applyCustomsFile(mk(), 11, C.parseCustomsFile(relX), "CC529C.xml", () => 90003)], initialSelectedNumber: "FV2026/05/1" }));
     if (!ih2.includes("exit not confirmed yet")) bad.push("invoice detail: a release without exit must say so");
     if (!bad.length) { passed++; console.log("  \u2713 customs files: the import window in 5 states, the Exited line with Detach, the invoice's CUSTOMS card"); }
@@ -387,12 +385,12 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const po = d9.pos.find(p => p.number === "PO-2026-0043");
     const box = renderToStaticMarkup(React.createElement(POm.TruckSettlementCard, { order: po, lots: d9.lots, orders: d9.orders, invoices: d9.invoices || [], shipments: d9.shipments, claims: d9.claims || [], inspections: d9.inspections || [], contacts: d9.contacts, settlements: d9.poSettlements, setSettlements: () => {} }));
     const bt = T(box);
-    ["IN PLN", "Sales (excl. VAT) 171 600,00 PLN", "IN EUR · rate 4.35", "Sales after costs 39 448,28 EUR", "Our commission 6.5% 2564,14 EUR", "1 · Vega-Pro Kft. issues an EXTRA INVOICE 2448,28 EUR", "2 · we issue our COMMISSION INVOICE 2564,14 EUR", "3 · after compensation Vega-Pro Kft. owes us 115,86 EUR", "14 300 expected"].forEach(w => { if (!bt.includes(w)) bad.push("box lacks " + JSON.stringify(w)); });
+    ["IN PLN", "Sales (excl. VAT) 171 600,00 PLN", "IN EUR · rate 4.35", "Sales after costs 39 448,28 EUR", "Our commission 6.5% 2564,14 EUR", "1 · Legugeva Kft. issues an EXTRA INVOICE 2448,28 EUR", "2 · we issue our COMMISSION INVOICE 2564,14 EUR", "3 · after compensation Legugeva Kft. owes us 115,86 EUR", "14 300 expected"].forEach(w => { if (!bt.includes(w)) bad.push("box lacks " + JSON.stringify(w)); });
     if (/Transfer after compensation|Gross sales|Net sales /.test(bt)) bad.push("an old label survived");
     if (/ARRIVED<\/div>|SORTED INTO/.test(box)) bad.push("the label line is still there (A-PV-3)"); if (/−0,00|\+0,00/.test(bt)) bad.push("signed zero lines still shown (A-ST-8)");
     if (!/<option[^>]*>USD<\/option>/.test(box)) bad.push("provisional currency choice missing");
     const srep = (box.match(/id="sales-report-doc-[^"]+"[\s\S]*?(?=<div id="qc-report-)/) || [""])[0]; const st = T(srep);
-    ["Sales report", "Raport sprzedaży", "Producer", "Vega-Pro Kft.", "PO-2026-0043", "3 · After compensation — Vega-Pro Kft. owes us 115,86 EUR"].forEach(w => { if (!st.includes(w)) bad.push("sales report lacks " + JSON.stringify(w)); });
+    ["Sales report", "Raport sprzedaży", "Producer", "Legugeva Kft.", "PO-2026-0043", "3 · After compensation — Legugeva Kft. owes us 115,86 EUR"].forEach(w => { if (!st.includes(w)) bad.push("sales report lacks " + JSON.stringify(w)); });
     if (!/<img[^>]*src="data:image/.test(srep)) bad.push("sales report without the company logo");
     const qrep = (box.match(/id="qc-report-[^"]+"[\s\S]*$/) || [""])[0];
     if (/id="insp-print-[^"]+" style="position:absolute;left:-10000px/.test(qrep)) bad.push("quality report still parked off the page inside the print copy");
@@ -401,7 +399,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const lh = renderToStaticMarkup(React.createElement(POm.default, { ...c9 })); const lt = T(lh);
     if (!/>Consignment( \(\d+\))?<\/button>/.test(lh)) bad.push("no Consignment filter"); const iC = lh.search(/>Consignment( \(\d+\))?<\/button>/), iE = lh.indexOf("Estimated only"); if (iE >= 0 && iC > iE) bad.push("Consignment filter is not before Estimated only");
     if (!/PO-2026-0043<\/div>\s*<div style="display:flex;gap:4px;margin-top:2px"><span[^>]*>consignment<\/span>/.test(lh)) bad.push("PO-2026-0043 lacks its consignment line under the number");
-    if (!bad.length) { passed++; console.log("  \u2713 PO-2026-0043 settlement: PLN → EUR → the three steps (extra invoice 2 448,28 · commission 2 564,14 · Vega-Pro owes us 115,86), labels over their columns, 14 300 expected; sales report on the template with the logo; quality report in the page; PO list consignment line + filter"); }
+    if (!bad.length) { passed++; console.log("  \u2713 PO-2026-0043 settlement: PLN → EUR → the three steps (extra invoice 2 448,28 · commission 2 564,14 · Legugeva owes us 115,86), labels over their columns, 14 300 expected; sales report on the template with the logo; quality report in the page; PO list consignment line + filter"); }
     else { failed++; console.log("  \u2717 settlement / reports / PO list — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 settlement / reports / PO list —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
 
@@ -419,7 +417,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const box = renderToStaticMarkup(React.createElement(POm.TruckSettlementCard, { order: po, lots: d9.lots, orders: d9.orders, invoices: [provInv], shipments: d9.shipments, claims: [], inspections: d9.inspections || [], contacts: d9.contacts, settlements: [rec], setSettlements: () => {}, financeNotes: [] }));
     const bt = T(box);
     if (!/<option value="7001"[^>]*>EUR258\/2026 · 37[\s\u00a0\u202f]000,00 EUR net · Issued<\/option>/.test(box)) bad.push("the producer's invoice is not offered from the register");
-    if (!/provisional paid 0,00 EUR · still to transfer to Vega-Pro Kft. 36 884,14 EUR/.test(bt)) bad.push("still to transfer not shown: " + (bt.match(/provisional paid.{0,80}/) || [""])[0]);
+    if (!/provisional paid 0,00 EUR · still to transfer to Legugeva Kft. 36 884,14 EUR/.test(bt)) bad.push("still to transfer not shown: " + (bt.match(/provisional paid.{0,80}/) || [""])[0]);
     if (/assumed paid|register it as a cost invoice/.test(bt)) bad.push("the 'not in the register' hint shows although the invoice is picked");
     _where = "inventory — consignment lot";
     const Inv = require(path.resolve("./src/Inventory")).default;
@@ -436,7 +434,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const fh = renderToStaticMarkup(React.createElement(Fin, { ...c9, financeNotes: [], claims: [], userName: "Hazem Osman", users: [] })); const ft = T(fh);
     if (!/CONSIGNMENT POSITIONS/.test(ft)) bad.push("no consignment positions card");
     const fi = ft.indexOf("PO-2026-0043", ft.indexOf("CONSIGNMENT POSITIONS")); const frow = ft.slice(fi, fi + 500);   // v7.8.3: the positions card, not "our result" above it
-    ["Vega-Pro Kft.", "14 300", "171 600,00 PLN", "36 884,14 EUR", "37 000,00 EUR", "not in the register", "Vega-Pro Kft. owes us 115,86 EUR", "OPEN"].forEach(w => { if (!frow.includes(w)) bad.push("positions row lacks " + JSON.stringify(w)); });
+    ["Legugeva Kft.", "14 300", "171 600,00 PLN", "36 884,14 EUR", "37 000,00 EUR", "not in the register", "Legugeva Kft. owes us 115,86 EUR", "OPEN"].forEach(w => { if (!frow.includes(w)) bad.push("positions row lacks " + JSON.stringify(w)); });
     if (!bad.length) { passed++; console.log("  \u2713 consignment: the provisional picked from the register (still to transfer 36 884,14), LOT-0126 ≈ 11,26 PLN/kg provisional / priced at settlement, the Finance positions row"); }
     else { failed++; console.log("  \u2717 consignment — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 consignment —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
@@ -507,10 +505,8 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const cancelledPO = d9.pos.find(p => p.status === "Cancelled"); if (cancelledPO) { const cv = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: cancelledPO.number }))); if (!/Deleted — read-only/.test(cv)) bad.push("a deleted PO does not say so"); if (/\bCancelled\b/.test(cv.replace(/Cancelled at/g, ""))) bad.push("the word Cancelled still shows on a deleted PO"); }
     _where = "shipment view SHP-2026-0035"; const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const M = require(path.resolve("./src/shipmentModel.domain"));
     const sh35 = d9.shipments.find(s => s.number === "SHP-2026-0035"); const dh = renderToStaticMarkup(React.createElement(Det, { shipment: sh35, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onEdit: () => {} })); const dt = T(dh);
-    if (!/AGRO-HURT[^|]{0,40}\+ Mikolaj Majewski|Mikolaj Majewski[^|]{0,40}\+ AGRO-HURT/.test(dt)) bad.push("road leg: the trucks' carriers not named: " + (dt.match(/Route \/ legs.{0,160}/) || [""])[0]); if (!/DCS TRAMACO/.test(dt)) bad.push("sea leg: the booking's forwarder not named");
+    if (!/AGRO-HURT[^|]{0,40}\+ Patace Cekicero|Patace Cekicero[^|]{0,40}\+ AGRO-HURT/.test(dt)) bad.push("road leg: the trucks' carriers not named: " + (dt.match(/Route \/ legs.{0,160}/) || [""])[0]); if (!/DCS NAKAPAL/.test(dt)) bad.push("sea leg: the booking's forwarder not named");
     const iCh = dt.indexOf("Operational checklist"), iDoc = dt.indexOf("Documents", iCh), iCost = dt.indexOf("Costs / billing"); if (!(iCh > 0 && iDoc > iCh && iCost > iDoc)) bad.push(`pairs order: checklist ${iCh}, documents ${iDoc}, costs ${iCost}`);
-    const sh31 = M.healShipmentModel(d9.shipments.find(s => s.number === "SHP-2026-0031")).sh; const d31 = T(renderToStaticMarkup(React.createElement(Det, { shipment: sh31, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onEdit: () => {} })));
-    if (!/TBX/.test(d31) || !/DCS TRAMACO/.test(d31)) bad.push("SHP-0031 after the heal: carrier / forwarder not shown");
     if (!bad.length) { passed++; console.log("  \u2713 PO / SO views: solid red Delete, no Withdraw (A-DEL-4; every other record view: tests/connections, A-RV-10); shipment view: checklist | documents, costs | notes; the leg row names the trucks' carriers and the booking's forwarder (SHP-0035, SHP-0031 after the heal)"); }
     else { failed++; console.log("  \u2717 delete / withdraw / pairs / carriers — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 delete / withdraw / pairs / carriers —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
@@ -525,7 +521,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     if (!/>Close<\/button>/.test(ch)) bad.push("the create window's header Close is not drawn");
     _where = "SHP-2026-0039 editor tour"; const ShMod = require(path.resolve("./src/Shipments"));
     const et = T(renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialSelectedNumber: "SHP-2026-0039" })));
-    ["TOUR · 1 LOADING · 3 UNLOADING", "Load 1 · AGRO-HURT", "14 265 kg", "Unload 1 ·", "SO-2026-0027", "Unload 3 · MJ VEG Bronisze · SO-2026-0029"].forEach(w => { if (!et.includes(w)) bad.push("editor tour lacks " + JSON.stringify(w)); });
+    ["TOUR · 1 LOADING · 3 UNLOADING", "Load 1 · AGRO-HURT", "14 265 kg", "Unload 1 ·", "SO-2026-0027", "Unload 3 · TUMAGE TUGUF Bronisze · SO-2026-0029"].forEach(w => { if (!et.includes(w)) bad.push("editor tour lacks " + JSON.stringify(w)); });
     if (/its goods are PO-2026-0044's/.test(et)) bad.push("the truck is still told to load at the producer");
     _where = "SHP-2026-0039 transport order"; const SD = require(path.resolve("./src/ShipmentDocuments")); const sh0 = d9.shipments.find(s => s.number === "SHP-2026-0039");
     // the truck has no carrier yet in the owner's file — an order is printed for a carrier, so one is given here

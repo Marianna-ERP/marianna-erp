@@ -1,60 +1,58 @@
 // ─── v6.8: FAKTUROWNIA / INVOICEOCEAN API CLIENT ────────────────────────────
-// Thin client around the Fakturownia REST API (api_token auth, JSON).
-// IMPORTANT: the token is entered by the user in Settings and lives ONLY in
-// this browser's localStorage — never hard-coded, never exported with data.
-// Browser CORS may block direct calls on some accounts; every caller must
-// handle {ok:false, corsLikely:true} by falling back to the XLS/CSV import.
-
-
+// v7.21.1 (AUD-49, owner 11 Oct): THE TOKEN NEVER REACHES A BROWSER. It is a hidden Vercel setting read only by the app's server
+// part (api/fakturownia.js), which makes every Fakturownia call for a signed-in person — so the browser-blocked (CORS) failures go
+// too. Here the browser keeps one thing of its own: the live-push switch. A token an older build left in this browser is removed
+// the first time the configuration is read. Callers still handle {ok:false} by offering the file import.
+import { sessionToken } from "./remoteStore";
 
 export interface FakturowniaConfig {
-  subdomain: string;   // e.g. "marianna2"  → https://marianna2.fakturownia.pl
-  apiToken: string;
-  liveWriteEnabled?: boolean;  // v6.18.4: live invoice creation is OFF unless explicitly enabled
+  liveWriteEnabled?: boolean;  // v6.18.4: live invoice creation is OFF unless explicitly enabled (per browser)
 }
 
 const CONFIG_KEY = "marianna-erp:v1:fakturowniaConfig";
 
-export function readFakturowniaConfig(): FakturowniaConfig | null {
-  if (typeof window === "undefined" || !window.localStorage) return null;
+export function readFakturowniaConfig(): FakturowniaConfig {
+  if (typeof window === "undefined" || !window.localStorage) return { liveWriteEnabled: false };
   try {
     const raw = window.localStorage.getItem(CONFIG_KEY);
-    if (!raw) return null;
-    const c = JSON.parse(raw);
-    if (!c || !c.subdomain || !c.apiToken) return null;
-    return { subdomain: String(c.subdomain).trim(), apiToken: String(c.apiToken).trim(), liveWriteEnabled: c.liveWriteEnabled === true };
-  } catch { return null; }
+    if (!raw) return { liveWriteEnabled: false };
+    const c = JSON.parse(raw) || {};
+    const live = c.liveWriteEnabled === true;
+    if ("apiToken" in c || "subdomain" in c) window.localStorage.setItem(CONFIG_KEY, JSON.stringify({ liveWriteEnabled: live }));   // v7.21.1: the old token leaves this browser
+    return { liveWriteEnabled: live };
+  } catch { return { liveWriteEnabled: false }; }
 }
 
 export function writeFakturowniaConfig(c: FakturowniaConfig | null): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
     if (!c) window.localStorage.removeItem(CONFIG_KEY);
-    else window.localStorage.setItem(CONFIG_KEY, JSON.stringify({ subdomain: c.subdomain.trim(), apiToken: c.apiToken.trim(), liveWriteEnabled: c.liveWriteEnabled === true }));
+    else window.localStorage.setItem(CONFIG_KEY, JSON.stringify({ liveWriteEnabled: c.liveWriteEnabled === true }));
   } catch { /* ignore */ }
-}
-
-export function fakturowniaBase(c: FakturowniaConfig): string {
-  const sub = c.subdomain.replace(/^https?:\/\//, "").replace(/\.fakturownia\.pl.*$/, "").replace(/\/.*$/, "");
-  return `https://${sub}.fakturownia.pl`;
 }
 
 export interface FktResult<T> { ok: boolean; data?: T; status?: number; error?: string; corsLikely?: boolean }
 
-async function fktGet(c: FakturowniaConfig, path: string, params: Record<string, any>): Promise<FktResult<any>> {
-  const url = new URL(fakturowniaBase(c) + path);
-  Object.entries(params || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v)); });
-  url.searchParams.set("api_token", c.apiToken);
+/** One call to the app's server part. `corsLikely` keeps its old meaning for the callers: the call could not be made at all. */
+async function fktCall(op: string, params: Record<string, any> = {}, body?: any): Promise<FktResult<any>> {
+  const token = await sessionToken();
+  if (!token) return { ok: false, error: "Sign in to MARIANNA first." };
+  const qs = new URLSearchParams({ op });
+  Object.entries(params || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") qs.set(k, String(v)); });
   try {
-    const res = await fetch(url.toString(), { method: "GET", headers: { Accept: "application/json" } });
-    if (!res.ok) {
-      return { ok: false, status: res.status, error: res.status === 401 ? "Unauthorized — check the API token." : `Fakturownia answered HTTP ${res.status}.` };
-    }
-    return { ok: true, data: await res.json(), status: res.status };
+    const res = await fetch(`/api/fakturownia?${qs.toString()}`, { method: body ? "POST" : "GET", headers: { Accept: "application/json", Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    let j: any = null; try { j = await res.json(); } catch { j = null; }
+    if (!res.ok) return { ok: false, status: res.status, error: (j && j.error) || `The server part answered HTTP ${res.status}.` };
+    return { ok: true, data: j, status: res.status };
   } catch (err: any) {
-    // fetch() throws TypeError on network failure AND on CORS blocks — indistinguishable.
-    return { ok: false, error: String(err?.message || err), corsLikely: true };
+    return { ok: false, error: "The app's server part could not be reached — use the file import.", corsLikely: true };
   }
+}
+
+/** Whether the server part holds a Fakturownia connection (and which account); null when it cannot be asked. */
+export async function fakturowniaStatus(): Promise<{ configured: boolean; account: string; testCopy: boolean } | null> {
+  const r = await fktCall("status");
+  return r.ok && r.data ? { configured: !!r.data.configured, account: String(r.data.account || ""), testCopy: !!r.data.testCopy } : null;
 }
 
 // ── Invoice fetching ─────────────────────────────────────────────────────────
@@ -69,12 +67,12 @@ export interface FetchInvoicesOptions {
   maxPages?: number;
 }
 
-export async function fetchInvoices(c: FakturowniaConfig, opts: FetchInvoicesOptions = {}): Promise<FktResult<any[]>> {
+export async function fetchInvoices(_c: FakturowniaConfig, opts: FetchInvoicesOptions = {}): Promise<FktResult<any[]>> {
   const all: any[] = [];
   const perPage = opts.perPage || 100;
   const maxPages = opts.maxPages || 10;
   for (let page = 1; page <= maxPages; page++) {
-    const r = await fktGet(c, "/invoices.json", {
+    const r = await fktCall("invoices", {
       page, per_page: perPage,
       period: opts.period || (opts.dateFrom ? "more" : "this_month"),
       date_from: opts.dateFrom, date_to: opts.dateTo,
@@ -92,49 +90,22 @@ export async function fetchInvoices(c: FakturowniaConfig, opts: FetchInvoicesOpt
 /** v6.75.0: the account's departments — each one holds a bank account in a
  *  currency. Read-only; the ERP never creates a department (Fakturownia blocks
  *  that for good reason), it only chooses among those that exist. */
-export async function fetchDepartments(c: FakturowniaConfig): Promise<FktResult<any[]>> {
-  const r = await fktGet(c, "/departments.json", { page: 1, per_page: 100 });
+export async function fetchDepartments(_c: FakturowniaConfig): Promise<FktResult<any[]>> {
+  const r = await fktCall("departments", { page: 1, per_page: 100 });
   if (!r.ok) return r as FktResult<any[]>;
   return { ok: true, data: Array.isArray(r.data) ? r.data : [] };
 }
 
-export async function testConnection(c: FakturowniaConfig): Promise<FktResult<{ count: number }>> {
-  const r = await fktGet(c, "/invoices.json", { page: 1, per_page: 1, period: "this_month" });
-  if (!r.ok) return r as any;
-  return { ok: true, data: { count: Array.isArray(r.data) ? r.data.length : 0 } };
+export async function testConnection(_c: FakturowniaConfig): Promise<FktResult<{ count: number; account?: string }>> {
+  return fktCall("test");
 }
 
 // ── Invoice creation (push) ──────────────────────────────────────────────────
-// POST /invoices.json. `body` is the full payload object built by
-// invoicing.buildFakturowniaPayload (it already contains api_token + invoice).
-// Mirrors fktGet's CORS-tolerant error handling: a browser POST may be blocked by
-// CORS exactly like reads, in which case corsLikely is true and the caller should
-// fall back to the copy-payload / backend path.
-export async function createInvoice(c: FakturowniaConfig, body: any): Promise<FktResult<any>> {
-  const url = new URL(fakturowniaBase(c) + "/invoices.json");
-  try {
-    const res = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ ...body, api_token: c.apiToken }),
-    });
-    if (!res.ok) {
-      // v6.63.0 (D-07): Fakturownia's error body NAMES the offending fields —
-      // discarding it made every 422 undiagnosable ("check required fields").
-      let detail = "";
-      try {
-        const body = await res.json();
-        detail = typeof body === "string" ? body : JSON.stringify(body?.message ?? body?.errors ?? body).slice(0, 400);
-      } catch { try { detail = (await res.text()).slice(0, 400); } catch {} }
-      const base = res.status === 401 ? "Unauthorized — the API token may be read-only or invalid."
-        : res.status === 422 ? "Fakturownia rejected the invoice data (HTTP 422)."
-        : `Fakturownia answered HTTP ${res.status}.`;
-      return { ok: false, status: res.status, error: detail ? `${base} Details: ${detail}` : base };
-    }
-    return { ok: true, data: await res.json(), status: res.status };
-  } catch (err: any) {
-    return { ok: false, error: String(err?.message || err), corsLikely: true };
-  }
+// `body` is the payload built by invoicing.buildFakturowniaPayload (the invoice, no token — the server part adds its own).
+// The TEST copy's server refuses it. The caller keeps the live-push switch and the "Copy payload" fallback.
+export async function createInvoice(_c: FakturowniaConfig, body: any): Promise<FktResult<any>> {
+  const payload = { ...(body || {}) }; delete payload.api_token;
+  return fktCall("create", {}, payload);
 }
 
 // ── Tolerant mapping of a Fakturownia invoice JSON to the shapes the ERP uses ─

@@ -1,8 +1,8 @@
 // v7.4.2 (A-REC-1, owner 6–7 Oct): "Recover from a backup" — compare, tick, bring back with what each record needs; nothing removed.
 import React, { useEffect, useState } from "react";
 import { compareBackup, planRecovery, applyRecovery, labelOf, StoreDiff } from "./recovery.domain";
-import { listSnapshots, readSnapshot, readSharedNow, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, isSharedMode } from "./remoteStore";
-import { readStoreValue, writeSharedStoreValue, STORAGE_VERSION } from "./useLocalStoredState";
+import { listSnapshots, readSnapshot, readSharedNow, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession } from "./remoteStore";
+import { STORAGE_VERSION } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { recordAudit } from "./audit";
 import { localTodayISO } from "./dates";
@@ -15,11 +15,11 @@ export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
   const [source, setSource] = useState<{ label: string; stores: Record<string, any> } | null>(null);
   const [current, setCurrent] = useState<Record<string, any>>({}); const [diffs, setDiffs] = useState<StoreDiff[]>([]);
   const [ticked, setTicked] = useState<Record<string, boolean>>({}); const [open, setOpen] = useState<Record<string, boolean>>({});
-  useEffect(() => { if (isSharedMode()) listSnapshots().then(setSnaps); }, []);
+  useEffect(() => { listSnapshots().then(setSnaps); }, []);   // v7.21.0 (A-RV-19)
   async function load(label: string, stores: Record<string, any>) {
     setBusy("Comparing…"); setErr("");
     try {
-      const now = isSharedMode() ? await readSharedNow() : Object.fromEntries(Object.keys(stores).map(k => [k, readStoreValue(k)]));
+      const now = await readSharedNow();   // v7.21.0 (A-RV-19): the shared data is the only data
       setCurrent(now); setSource({ label, stores }); setDiffs(compareBackup(now, stores)); setTicked({});
     } catch (e: any) { setErr(String(e?.message || e)); }
     setBusy("");
@@ -31,14 +31,14 @@ export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
     const plan = planRecovery(current, source.stores, chosen);
     const extra = plan.take.filter(t => t.why !== "chosen");
     const lines = plan.take.map(t => `${t.why === "chosen" ? "•" : "  ↳"} ${t.key}: ${labelOf(t.rec)}${t.why === "chosen" ? "" : ` (${t.why})`}`);
-    if (!window.confirm(`Bring back ${chosen.length} record(s) from ${source.label}${extra.length ? `, with ${extra.length} record(s) they need` : ""}?\n\n${lines.slice(0, 40).join("\n")}${lines.length > 40 ? `\n… +${lines.length - 40} more` : ""}\n\nNothing that exists now is removed.${isSharedMode() ? " The shared data as it is now is downloaded first." : ""}`)) return;
+    if (!window.confirm(`Bring back ${chosen.length} record(s) from ${source.label}${extra.length ? `, with ${extra.length} record(s) they need` : ""}?\n\n${lines.slice(0, 40).join("\n")}${lines.length > 40 ? `\n… +${lines.length - 40} more` : ""}\n\nNothing that exists now is removed. The shared data as it is now is downloaded first.`)) return;
     setBusy("Recovering…");
     try {
       const next = applyRecovery(current, plan);
-      if (isSharedMode()) {
+      {   // v7.21.0 (A-RV-19): recovery writes into the shared data — there is no other
         const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION); const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `marianna-shared-copy-before-recovery-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
         await replaceSharedStores(next, readSession()?.email || "");
-      } else Object.entries(next).forEach(([k, v]) => writeSharedStoreValue(k, v));
+      }
       recordAudit({ module: "System", docType: "Recovery", docNumber: source.label, action: "updated", summary: `recovered ${plan.take.length} record(s): ${plan.take.map(t => labelOf(t.rec)).join(", ").slice(0, 700)}` });
       window.alert(`${plan.take.length} record(s) brought back. The page reloads to show them.`); window.location.reload();
     } catch (e: any) { setErr(`Recovery failed: ${String(e?.message || e)}`); setBusy(""); }
@@ -53,7 +53,7 @@ export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
         <div style={{ padding: 22 }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
             <label style={{ ...btn, display: "inline-block" }}>Choose a backup file…<input type="file" accept=".json,application/json" style={{ display: "none" }} onChange={async e => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (!f) return; try { const p = storesFromExport(await f.text()); await load(`${f.name}`, p.stores); } catch (x: any) { setErr(String(x?.message || x)); } }} /></label>
-            {isSharedMode() && <select value="" onChange={async e => { const t = e.target.value; if (!t) return; setBusy("Reading the snapshot…"); try { await load(`the snapshot of ${fmtWhen(t)}`, await readSnapshot(t)); } catch (x: any) { setErr(String(x?.message || x)); setBusy(""); } }} style={{ ...btn, fontWeight: 600 }}>
+            {<select value="" onChange={async e => { const t = e.target.value; if (!t) return; setBusy("Reading the snapshot…"); try { await load(`the snapshot of ${fmtWhen(t)}`, await readSnapshot(t)); } catch (x: any) { setErr(String(x?.message || x)); setBusy(""); } }} style={{ ...btn, fontWeight: 600 }}>
               <option value="">{snaps.length ? "…or a Supabase snapshot" : "no Supabase snapshot yet (guide step 6)"}</option>
               {snaps.map(s => <option key={s} value={s}>{fmtWhen(s)}</option>)}
             </select>}

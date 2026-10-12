@@ -1,4 +1,3 @@
-import { migrateFlowCleanup } from "./flowCleanup.migration";
 // ─── Local-storage-backed React state hook ──────────────────────────────────
 //
 // Drop-in replacement for useState. Reads initial value from localStorage if
@@ -18,12 +17,20 @@ import { migrateFlowCleanup } from "./flowCleanup.migration";
 
 import { useState, useEffect } from "react";
 import { APP_VERSION } from "./version";
-import { planRingPrune, isQuotaError } from "./autoBackup.domain";
 import { addressWithCountry } from "./counterparty.domain";   // v7.19.6 (A-TD-5)
 
 export const STORAGE_VERSION = 2; // v6.37.0: flow-model retirement (migration 2)
 // v6.99.70 (A-BK-3): the planning budget of the browser store, in characters — the same conservative figure the Settings
 // gauge always used (5 MB at 2 bytes per character). The local ring is sized against it, so the two can never disagree.
+/** v7.21.0 (A-RV-19, owner ruling B 8 Oct): the single-browser mode and its local snapshot ring are gone — the snapshots an
+ *  older build left in this browser are removed once, so they stop taking the room the shared data's cache needs. */
+export function dropLegacySnapshots(): number {
+  if (typeof window === "undefined" || !window.localStorage) return 0;
+  const ls = window.localStorage; const gone: string[] = [];
+  for (let i = 0; i < ls.length; i++) { const k = ls.key(i) || ""; if (k === `${NAMESPACE}:backups` || k.startsWith(`${NAMESPACE}:backup:`)) gone.push(k); }
+  gone.forEach(k => { try { ls.removeItem(k); } catch { /* best effort */ } });
+  return gone.length;
+}
 export const STORAGE_BUDGET_CHARS = 5 * 1024 * 1024 / 2;
 const NAMESPACE = "marianna-erp";
 
@@ -77,18 +84,9 @@ function writeToStorage<T>(name: string, value: T): void {
   if (typeof window === "undefined" || !window.localStorage) return;
   let json: string;
   try { json = JSON.stringify(value); } catch (err: any) { markWriteFailing(name, err); return; }
-  // v6.99.70 (A-BK-3, owner): THE DATA ALWAYS WINS. When the browser store is full, the oldest local snapshot gives way
-  // and the save is tried again; the save fails (and the red banner says so) only when no snapshot is left to give way.
-  // Before, a full store failed the save while every old snapshot stayed.
-  let dropped = 0;
-  for (;;) {
-    try { window.localStorage.setItem(storageKey(name), json); break; }
-    catch (err: any) {
-      if (isQuotaError(err) && dropOldestBackup()) { dropped++; continue; }
-      markWriteFailing(name, err); return;
-    }
-  }
-  if (dropped) console.info(`[storage] ${dropped} local snapshot(s) gave way so "${name}" could be saved.`);
+  // v7.21.0 (A-RV-19): no local snapshots any more, so nothing gives way — a save that does not fit fails and the red banner says so
+  try { window.localStorage.setItem(storageKey(name), json); }
+  catch (err: any) { markWriteFailing(name, err); return; }
   if (storageHealth.failing) { storageHealth.failing = false; storageHealth.lastError = ""; notifyHealth(); }
 }
 
@@ -122,43 +120,6 @@ export function storageUsage(): { perKey: Array<{ key: string; kb: number }>; to
   return { perKey, totalKB: total, budgetKB, pct: Math.min(100, Math.round((total / budgetKB) * 100)) };
 }
 
-// ── Migration runner (skeleton — Batch 5) ────────────────────────────────────
-// The old strategy on STORAGE_VERSION bump was "ignore old keys, fresh seed",
-// which silently ABANDONS user data. From now on a bump runs migrations:
-// each entry upgrades all stores from version N-1 to N. On app load, if the
-// current-version keys are absent but an older version's exist, we migrate
-// forward and keep the old keys untouched as a safety copy.
-export const MIGRATIONS: Record<number, (all: Record<string, any>) => Record<string, any>> = {
-  // v6.37.0: retire the legacy flow model from stored data (backfill incoterms,
-  // bake template journeys for never-shipped legacy lots, drop the flow key).
-  2: migrateFlowCleanup,
-};
-
-export function runMigrationsIfNeeded(): { migrated: boolean; from?: number } {
-  if (typeof window === "undefined" || !window.localStorage) return { migrated: false };
-  try {
-    const probe = window.localStorage.getItem(storageKey(DATA_KEYS[0]));
-    if (probe !== null) return { migrated: false }; // current version already populated
-    for (let v = STORAGE_VERSION - 1; v >= 1; v--) {
-      const oldKey = `${NAMESPACE}:v${v}:${DATA_KEYS[0]}`;
-      if (window.localStorage.getItem(oldKey) === null) continue;
-      let all: Record<string, any> = {};
-      DATA_KEYS.forEach(k => {
-        const raw = window.localStorage.getItem(`${NAMESPACE}:v${v}:${k}`);
-        if (raw !== null) { try { all[k] = JSON.parse(raw); } catch {} }
-      });
-      for (let step = v + 1; step <= STORAGE_VERSION; step++) {
-        const fn = MIGRATIONS[step];
-        if (fn) all = fn(all);
-      }
-      Object.entries(all).forEach(([k, val]) => writeToStorage(k, val));
-      console.info(`[storage] Migrated data v${v} → v${STORAGE_VERSION} (old keys kept as safety copy).`);
-      return { migrated: true, from: v };
-    }
-  } catch (err) { console.warn("[storage] Migration check failed:", err); }
-  return { migrated: false };
-}
-
 // v6.99.148 (AUD-01/03, the shared store): the hook keeps working on this browser's storage exactly as before; two small doors
 // let the shared store in — applyStoreFromRemote(name, value) sets a store from the shared copy, and onStoreWritten is told of
 // every local write so the shared copy can follow. Without the shared store configured, neither is ever used.
@@ -179,7 +140,7 @@ export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T
 // ─── Bulk helpers — used by the Settings module ─────────────────────────────
 
 // Single source of truth for which stores are real DATA (shared via export/import
-// and wiped by reset). Per-user preferences (userRole, userName, dismissed
+// and wiped by reset). Per-user preferences (userName, dismissed
 // banners) are deliberately NOT here — sharing a file shouldn't overwrite a
 // colleague's name/role. v6.17: creditNotes + logisticsPoints were missing, so
 // shared files silently dropped them — now included.
@@ -239,165 +200,6 @@ export function exportAllData(pretty: boolean = true): string {
   return pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
 }
 
-// ─── Local backup ring (v6.17) ──────────────────────────────────────────────
-// A rolling set of full snapshots kept in localStorage so an overwriting import,
-// a reset, or a bad edit is recoverable. Backup keys are NOT version-namespaced,
-// so they survive a future STORAGE_VERSION bump. Best-effort: if storage is full
-// we prune oldest and retry, and every path is wrapped so a backup failure never
-// blocks the user's action.
-
-export interface BackupMeta { id: string; label: string; createdAt: string; version: number; sizeKB: number; }
-
-const BACKUP_INDEX_KEY = `${NAMESPACE}:backups`;
-const backupSnapKey = (id: string) => `${NAMESPACE}:backup:${id}`;
-// v6.99.70 (A-BK-3, owner): the ring is limited by SPACE, not by a count of 8. On the 25 Sept file one snapshot was 1.2 million
-// characters — so "the last 8" were really 1 to 3, sharing the store with the live data. Snapshots are now stored compact and
-// kept while the whole store stays under 70 % of its budget (planRingPrune); the newest is always kept.
-function snapshotChars(id: string): number { try { return (window.localStorage.getItem(backupSnapKey(id)) || "").length; } catch { return 0; } }
-/** Characters used by everything of ours EXCEPT the snapshots — the live data, preferences, counters. */
-function liveChars(): number {
-  let total = 0;
-  try {
-    for (let i = 0; i < window.localStorage.length; i++) {
-      const k = window.localStorage.key(i);
-      if (!k || !k.startsWith(NAMESPACE + ":") || k.startsWith(`${NAMESPACE}:backup:`) || k === BACKUP_INDEX_KEY) continue;
-      total += k.length + (window.localStorage.getItem(k) || "").length;
-    }
-  } catch { /* best effort */ }
-  return total;
-}
-/** Drop the oldest snapshot (used when the live data needs the space). False when there is none left. */
-function dropOldestBackup(): boolean {
-  const index = readBackupIndex();
-  if (!index.length) return false;
-  const oldest = index.shift()!;
-  try { window.localStorage.removeItem(backupSnapKey(oldest.id)); } catch {}
-  writeBackupIndex(index);
-  return true;
-}
-
-function readBackupIndex(): BackupMeta[] {
-  if (typeof window === "undefined" || !window.localStorage) return [];
-  try { const raw = window.localStorage.getItem(BACKUP_INDEX_KEY); return raw ? (JSON.parse(raw) as BackupMeta[]) : []; }
-  catch { return []; }
-}
-function writeBackupIndex(list: BackupMeta[]): void {
-  try { window.localStorage.setItem(BACKUP_INDEX_KEY, JSON.stringify(list)); }
-  catch (err) { console.warn("[backup] index write failed:", err); }
-}
-
-// v7.2.5 (A-SET-5, owner 6 Oct): on the shared data the browser takes NO local snapshots — the folder backup and the restore's own
-// download keep the copies, and the browser's room is kept for the data. App switches this off when the shared data is on.
-let snapshotsOn = true;
-export function setLocalSnapshots(on: boolean) { snapshotsOn = !!on; }
-export function snapshotsEnabled(): boolean { return snapshotsOn; }
-export function createBackup(label: string): BackupMeta | null {
-  if (!snapshotsOn) return null;
-  if (typeof window === "undefined" || !window.localStorage) return null;
-  try {
-    const json = exportAllData(false);   // v6.99.70 (A-BK-3): compact — same content, about a third smaller
-    const id = String(Date.now());
-    const index = readBackupIndex();
-    const tryWrite = () => window.localStorage.setItem(backupSnapKey(id), json);
-    try { tryWrite(); }
-    catch (err) {
-      // Quota — drop oldest snapshots and retry until it fits or none remain.
-      let wrote = false;
-      while (index.length) {
-        const oldest = index.shift()!;
-        try { window.localStorage.removeItem(backupSnapKey(oldest.id)); } catch {}
-        try { tryWrite(); wrote = true; break; } catch {}
-      }
-      if (!wrote) { writeBackupIndex(index); return null; }
-    }
-    const meta: BackupMeta = { id, label: label || "Backup", createdAt: new Date().toISOString(), version: STORAGE_VERSION, sizeKB: Math.max(1, Math.round(json.length / 1024)) };
-    index.push(meta);
-    const drop = planRingPrune(index.map(b => ({ id: b.id, chars: snapshotChars(b.id) })), liveChars(), STORAGE_BUDGET_CHARS);
-    drop.forEach(oldId => { try { window.localStorage.removeItem(backupSnapKey(oldId)); } catch {} });
-    writeBackupIndex(index.filter(b => !drop.includes(b.id)));
-    return meta;
-  } catch (err) {
-    console.warn("[backup] createBackup failed:", err);
-    return null;
-  }
-}
-
-/** v6.99.70 (A-BK-3): snapshots written by earlier builds were pretty-printed; rewrite them compact once, on opening.
- *  Nothing is dropped here — the space limit applies when the next snapshot is taken. Returns how many were rewritten. */
-export function compactLocalBackups(): number {
-  if (typeof window === "undefined" || !window.localStorage) return 0;
-  const index = readBackupIndex(); let n = 0;
-  index.forEach(b => {
-    try {
-      const raw = window.localStorage.getItem(backupSnapKey(b.id));
-      if (!raw || raw.indexOf("\n") < 0) return;   // compact JSON never holds a raw line break
-      const compact = JSON.stringify(JSON.parse(raw));
-      window.localStorage.setItem(backupSnapKey(b.id), compact);
-      b.sizeKB = Math.max(1, Math.round(compact.length / 1024)); n++;
-    } catch { /* leave it as it was */ }
-  });
-  if (n) writeBackupIndex(index);
-  return n;
-}
-
-export function listBackups(): BackupMeta[] {
-  return readBackupIndex().slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export function getBackupJSON(id: string): string | null {
-  if (typeof window === "undefined" || !window.localStorage) return null;
-  try { return window.localStorage.getItem(backupSnapKey(id)); }
-  catch { return null; }
-}
-
-export function deleteBackup(id: string): void {
-  try { window.localStorage.removeItem(backupSnapKey(id)); } catch {}
-  writeBackupIndex(readBackupIndex().filter(b => b.id !== id));
-}
-
-export function restoreBackup(id: string): { ok: boolean; error?: string; loaded?: string[]; backup?: BackupMeta | null } {
-  const json = getBackupJSON(id);
-  if (!json) return { ok: false, error: "Backup snapshot not found." };
-  // Snapshot the present state first, then restore without double-backing-up.
-  createBackup("Auto — before restore");
-  return importAllData(json, { autoBackup: false });
-}
-
-export function importAllData(jsonString: string, opts: { autoBackup?: boolean } = {}): { ok: boolean; error?: string; loaded?: string[]; cleared?: string[]; backup?: BackupMeta | null } {
-  let parsed: any;
-  try {
-    parsed = JSON.parse(jsonString);
-  } catch (err) {
-    return { ok: false, error: "File is not valid JSON. " + (err instanceof Error ? err.message : String(err)) };
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return { ok: false, error: "File does not contain an object." };
-  }
-  if (!parsed._meta || parsed._meta.app !== "marianna-erp") {
-    return { ok: false, error: "File is not a MARIANNA ERP export (missing _meta.app marker)." };
-  }
-  if (parsed._meta.version !== STORAGE_VERSION) {
-    return { ok: false, error: `This file was made on schema v${parsed._meta.version}, but this app uses v${STORAGE_VERSION}. Everyone must be on the same app build to share files — update to the same version, then try again.` };
-  }
-  // Safety net: snapshot current data BEFORE overwriting it.
-  let backup: BackupMeta | null = null;
-  if (opts.autoBackup !== false) backup = createBackup("Auto — before import");
-  const loaded: string[] = [];
-  const cleared: string[] = [];
-  for (const key of DATA_KEYS) {
-    if (parsed[key] !== undefined && parsed[key] !== null) {
-      writeToStorage(key, parsed[key]);
-      loaded.push(key);
-    } else if (TRANSACTIONAL_KEYS.includes(key)) {
-      // v6.99.51 (A-FS-3, owner): a file is a WHOLE snapshot. A transactional store absent from the file used to be LEFT AS IT WAS,
-      // silently mixing two generations of data — lots from one export pointing at POs from another (the 40 orphan lots).
-      // Now the absent store is cleared with the import; master stores (contacts, places, catalogue…) are kept and reported.
-      try { const had = window.localStorage.getItem(storageKey(key)); if (had) { window.localStorage.removeItem(storageKey(key)); cleared.push(key); } } catch {}
-    }
-  }
-  return { ok: true, loaded, cleared, backup };
-}
-
 // ── v6.99.51 (A-FS-1, owner 23 Sept): START A FRESH SEASON — the master data stays, everything transactional goes TOGETHER ──
 // The only wipe was "clear ALL data" (contacts included), so the season was reset by deleting documents one by one,
 // which left lots, invoices and claims pointing at documents that no longer existed. One action, one moment, nothing dependent survives.
@@ -407,19 +209,16 @@ export function transactionalCounts(): Array<{ key: string; count: number }> {
   if (typeof window === "undefined" || !window.localStorage) return [];
   return TRANSACTIONAL_KEYS.map(key => { let count = 0; try { const raw = window.localStorage.getItem(storageKey(key)); const v = raw ? JSON.parse(raw) : null; count = Array.isArray(v) ? v.length : (v && typeof v === "object" ? Object.keys(v).length : 0); } catch { count = 0; } return { key, count }; }).filter(x => x.count > 0);
 }
-export function startFreshSeason(opts: { autoBackup?: boolean; resetNumbering?: boolean } = {}): BackupMeta | null {
-  if (typeof window === "undefined" || !window.localStorage) return null;
-  const backup = opts.autoBackup !== false ? createBackup("Auto — before starting a fresh season") : null;
+export function startFreshSeason(opts: { resetNumbering?: boolean } = {}): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
   for (const key of TRANSACTIONAL_KEYS) { try { window.localStorage.removeItem(storageKey(key)); } catch (err) { console.warn(`[localStorage] Could not clear "${key}":`, err); } }
   // the report register and the audit log are transactional too, but they live under their own keys
   for (const extra of ["reportRegister", "traceRegister"]) { try { window.localStorage.removeItem(storageKey(extra)); } catch {} }
   if (opts.resetNumbering) { try { window.localStorage.removeItem(storageKey("numbering")); } catch {} }
-  return backup;
 }
 
-export function clearAllData(opts: { autoBackup?: boolean } = {}): BackupMeta | null {
-  if (typeof window === "undefined" || !window.localStorage) return null;
-  const backup = opts.autoBackup !== false ? createBackup("Auto — before reset") : null;
+export function clearAllData(): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
   for (const key of DATA_KEYS) {
     try {
       window.localStorage.removeItem(storageKey(key));
@@ -427,7 +226,6 @@ export function clearAllData(opts: { autoBackup?: boolean } = {}): BackupMeta | 
       console.warn(`[localStorage] Could not clear "${key}":`, err);
     }
   }
-  return backup;
 }
 
 // ── v6.99.67 (A-AUD-1, owner): ONE company profile. Five documents carried their own literal company block — a copy of

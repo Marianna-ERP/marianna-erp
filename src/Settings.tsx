@@ -2,21 +2,21 @@ import { ModulePage } from "./ui";
 import { useConfirm, SmallButton } from "./ui";
 import { PAGE_MAX } from "./ui";
 import React, { useRef, useState, useEffect } from "react";
-import { COMPANY_DEFAULTS, importAllData, clearAllData, STORAGE_VERSION, createBackup, listBackups, restoreBackup, deleteBackup, BackupMeta, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue, DATA_KEYS } from "./useLocalStoredState";
+import { COMPANY_DEFAULTS, clearAllData, STORAGE_VERSION, storageUsage, startFreshSeason, transactionalCounts, MASTER_KEYS, readStoreValue, writeStoreValue, DATA_KEYS } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import RecoveryPanel from "./RecoveryPanel";   // v7.4.2 (A-REC-1)
 import { useUnsavedGuard } from "./unsaved";   // v7.2.0
-import { isSharedMode, isTestCopy, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, ENV_LABEL } from "./remoteStore";   // v7.0.0 (A-SH-1)
+import { isTestCopy, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, ENV_LABEL } from "./remoteStore";   // v7.0.0 (A-SH-1)
 import { userBySignIn, usersDiff, usersSaveProblems, rolesOrDefault, materializeUser, rightsSummary } from "./permissions.domain";   // v7.1.0 (A-USR-1) · v7.2.0 (A-SET-1)
 import { AutoBackupCard } from "./BackupPanel";   // v6.99.70 (A-BK-1)
 import { downloadAllData, flushFolderBackup } from "./autoBackup";
 import { fetchDepartments } from "./fakturownia";
 import { mapDepartments } from "./fakturowniaDepartments.domain";
-import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, FakturowniaConfig } from "./fakturownia";
+import { readFakturowniaConfig, writeFakturowniaConfig, testConnection, fakturowniaStatus } from "./fakturownia";   // v7.21.1 (AUD-49): the token lives in the server part
 import { addCatalogItem, addCatalogVariety, mergeCatalogRows, catalogToRows, setCatalogCnCode, addCatalogValue } from "./productCatalog";   // v7.18.3: + addCatalogValue   // v7.17.1: removals are soft deletes (masterData.domain)
 import { referencesToLocation } from "./referenceGuards";
 import { MODULE_KEYS, FINANCE_KEYS, usersGaps } from "./permissions.domain";
-import { CN_CODES } from "./cnCodes";
+import { CN_CODES, suggestCN } from "./cnCodes";   // v7.21.6: + suggestCN, shown in the product catalogue
 import { nextId as mintId } from "./ids";
 import { renameCatalogItem } from "./productCatalog";
 import { allLocations, addCustomLocation, updateCustomLocation, removeCustomLocation, CUSTOM_LOCATION_TYPE_OPTIONS, readLocationOverrides, writeLocationOverride, clearLocationOverride, CUSTOM_LOCATION_ID_BASE, LOGISTICS_POINT_BASE } from "./locations";
@@ -104,13 +104,10 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
     const ok = await stConfirm({ tone: "danger", title: `Remove season ${season} from this browser?`, message: "Only after you have EXPORTED it and kept the file. The archived documents of that season leave this browser (a backup is saved first); lots with kilos stay. Import the archive file to read them again.", confirmLabel: "Remove from this browser", cancelLabel: "Keep" });
     if (!ok) return;
     await flushFolderBackup();   // v6.99.70 (A-BK): the folder gets the state before the overwrite
-    createBackup(`Auto — before removing season ${season}`);
     const all: any = {}; Object.keys(STORE_KIND).forEach(k => { all[k] = readStoreValue(k); }); all.pos = readStoreValue("pos");
     const r = removeSeason(all, season, st);
     Object.entries(r.data).forEach(([k, v]) => { if (Object.keys(STORE_KIND).includes(k)) writeStoreValue(k, v); });
-    if (isSharedMode()) { try { const note = await pushStoresToShared(Object.keys(r.data).filter(k => Object.keys(STORE_KIND).includes(k)), `archiving ${season}`); setMessage({ kind: "info", text: `Season ${season} archived in the shared data — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: `Archiving in the shared data failed: ${String(x?.message || x)}` }); return; } }   // v7.0.0 (A-SH-1)
-    recordAudit({ module: "System", docType: "Season", docNumber: season, action: "deleted", summary: `Season ${season} removed from this browser after export: ${Object.entries(r.removed).map(([k, n]) => `${k} ${n}`).join(", ")}` });
-    setMessage({ kind: "info", text: `Season ${season} removed from this browser. Reloading…` }); setTimeout(() => window.location.reload(), 900);
+    try { const note = await pushStoresToShared(Object.keys(r.data).filter(k => Object.keys(STORE_KIND).includes(k)), `archiving ${season}`); setMessage({ kind: "info", text: `Season ${season} archived in the shared data — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: `Archiving in the shared data failed: ${String(x?.message || x)}` }); return; }   // v7.0.0 (A-SH-1)
   }
   function importArchive(f: any) { if (!f) return; const rd = new FileReader(); rd.onload = async () => {
     let parsed: any; try { parsed = JSON.parse(String(rd.result || "")); } catch { setMessage({ kind: "error", text: "Not a valid file." }); return; }
@@ -120,7 +117,6 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
     const ok = await stConfirm({ tone: "info", title: `Import archive ${r.seasons.join(", ") || ""}?`, message: `Appended (hidden as archived): ${Object.entries(r.added).map(([k, n]) => `${k} ${n}`).join(", ") || "nothing new"}${r.skipped ? ` · ${r.skipped} already here` : ""}. Nothing live is changed.`, confirmLabel: "Import", cancelLabel: "Cancel" });
     if (!ok) return;
     await flushFolderBackup();   // v6.99.70 (A-BK)
-    createBackup("Auto — before importing an archive");
     Object.entries(r.data).forEach(([k, v]) => { if (Object.keys(STORE_KIND).includes(k)) writeStoreValue(k, v); });
     setArchivedSeasons(() => r.data.archivedSeasons || archivedSeasons);
     recordAudit({ module: "System", docType: "Season", docNumber: r.seasons.join(",") || f.name, action: "created", summary: `Archive imported: ${Object.entries(r.added).map(([k, n]) => `${k} ${n}`).join(", ")}` });
@@ -536,6 +532,8 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111" }}>{c.item} <span style={{ fontSize: 11, fontWeight: 400, color: "#AAA" }}>· {c.varieties.length} {c.varieties.length === 1 ? "variety" : "varieties"}</span></div>
               <input value={(cnDraft || {})[c.item] ?? (c.defaultCnCode || "")} onChange={e => { const v = e.target.value; setCnDraft((d: any) => ({ ...(d || {}), [c.item]: v })); }} placeholder="CN/HS" title="Default CN/HS customs code for this item — auto-fills new PO lines. v6.99.3: suggestions from the built-in produce table (chapter 07/08); you confirm." list="cn-suggest" style={{ ...inp, padding: "3px 8px", fontSize: 12, width: 90, marginRight: 8 }} />
+              {/* v7.21.6 (owner ruling A-RV-15: connect what is built and tested): an item with no CN code is offered the built-in table's suggestion — one click fills the draft, Save keeps it */}
+              {!String((cnDraft || {})[c.item] ?? (c.defaultCnCode || "")).trim() && (() => { const s = suggestCN(c.item, (c.varieties || [])[0])[0]; return s ? <button data-cn-suggest={s.code} onClick={() => setCnDraft((d: any) => ({ ...(d || {}), [c.item]: s.code }))} title={`${s.description} — a suggestion from the built-in table: check it, then Save`} style={{ border: "1px dashed #93C5FD", color: "#1D4ED8", background: "#EFF6FF", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600, marginRight: 6, fontFamily: "inherit" }}>Suggested: {s.code}</button> : null; })()}
               <button onClick={() => renameItem(c.item)} title="Rename item (does not cascade into issued documents)" style={{ border: "1px solid #E5E7EB", color: "#374151", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600, marginRight: 6 }}>Rename</button>
               <button onClick={() => rmItem(c.item)} title="Delete item" style={{ border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, fontSize: 11, padding: "3px 9px", cursor: "pointer", fontWeight: 600 }}>Delete</button>
             </div>
@@ -617,12 +615,12 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
   useEffect(() => { if (!dirtyRef.current) setUsers(savedUsers || []); }, [savedJson]);   // eslint-disable-line react-hooks/exhaustive-deps
   useUnsavedGuard({ id: "settings-users", label: "Settings → Users & permissions", draft: users, resetKey: savedJson, save: () => saveDraft() });
   // (v7.5.1: removed with the old per-user tick grid)
-  const shared = isSharedMode(); const signInEmail = shared ? (readSession()?.email || "") : "";
+  const shared = true; const signInEmail = readSession()?.email || "";   // v7.21.0 (A-RV-19): there is only the shared data — the sign-in always decides
   const problems = dirty ? usersSaveProblems(users, { shared, signInEmail }) : [];
   function saveDraft(): boolean {
     const p = usersSaveProblems(users, { shared, signInEmail }); if (p.length) { window.alert(`The users can't be saved yet:\n\n• ${p.join("\n• ")}`); return false; }
     const d = usersDiff(savedUsers || [], users); if (!d.length) return true;
-    if (!window.confirm(`Save these changes to the users${shared ? " — for everyone" : ""}?\n\n${d.join("\n")}`)) return false;
+    if (!window.confirm(`Save these changes to the users — for everyone?\n\n${d.join("\n")}`)) return false;
     saveUsers(users); recordAudit({ module: "Settings", docType: "Users", docNumber: "users", action: "updated", summary: d.join(" · ").slice(0, 900) }); return true;
   }
   if (typeof saveUsers !== "function") return null;
@@ -703,7 +701,7 @@ function useSectionDraft(saved: any, save: ((v: any) => void) | null, id: string
   const dirty = JSON.stringify(draft) !== savedJson; const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   useEffect(() => { if (!dirtyRef.current) setDraft(saved ?? {}); }, [savedJson]);   // eslint-disable-line react-hooks/exhaustive-deps
   const doSave = () => { if (!dirty || typeof save !== "function") return true; const keys = Array.from(new Set([...Object.keys(saved || {}), ...Object.keys(draft || {})])).filter(k => JSON.stringify((saved || {})[k]) !== JSON.stringify((draft || {})[k]));
-    if (!window.confirm(`Save ${label}${isSharedMode() ? " — for everyone" : ""}?\n\n${keys.map(k => `${k}: ${JSON.stringify((saved || {})[k] ?? "")} → ${JSON.stringify((draft || {})[k] ?? "")}`).join("\n")}`)) return false;
+    if (!window.confirm(`Save ${label} — for everyone?\n\n${keys.map(k => `${k}: ${JSON.stringify((saved || {})[k] ?? "")} → ${JSON.stringify((draft || {})[k] ?? "")}`).join("\n")}`)) return false;
     save(draft); recordAudit({ module: "Settings", docType: label, docNumber: id, action: "updated", summary: keys.join(", ") }); return true; };
   useUnsavedGuard({ id: `settings-${id}`, label: `Settings → ${label}`, draft, resetKey: savedJson, save: doSave });
   const bar = (
@@ -770,8 +768,6 @@ async function pushStoresToShared(keys: string[], what: string): Promise<string>
 export default function Settings({ roles = [], setRoles = null,
   reloadFromStorage,
   refStores = {},
-  repairInventory = () => null,
-  userRole,
   setUserRole,
   userName,
   setUserName,
@@ -796,8 +792,6 @@ export default function Settings({ roles = [], setRoles = null,
   roles?: any[]; setRoles?: any;   // v7.5.0
   reloadFromStorage: () => void;
   refStores?: any;
-  repairInventory?: () => any;
-  userRole?: string;
   setUserRole?: (r: string) => void;
   userName?: string;
   setUserName?: (n: string) => void;
@@ -829,11 +823,12 @@ export default function Settings({ roles = [], setRoles = null,
   // warehouse addresses come from the counterparty record. Any locations added here in
   // older versions still resolve on existing documents (readCustomLocations in locations.ts).
 
-  // v6.8: Fakturownia read-only connection (token kept browser-local, never exported)
-  const existingFkt = readFakturowniaConfig();
-  const [fktSub, setFktSub] = useState(existingFkt?.subdomain || "");
-  const [fktToken, setFktToken] = useState(existingFkt?.apiToken || "");
-  const [fktLiveWrite, setFktLiveWrite] = useState(existingFkt?.liveWriteEnabled === true);
+  // v6.8: Fakturownia connection · v7.21.1 (AUD-49, owner 11 Oct): the token is a hidden Vercel setting read only by the app's
+  // server part — this panel shows whether that part is connected, and keeps this browser's live-push switch. No browser holds the token.
+  const existingFkt = readFakturowniaConfig();   // also removes a token an older build left in this browser
+  const [fktLiveWrite, setFktLiveWrite] = useState(existingFkt.liveWriteEnabled === true);
+  const [fktServer, setFktServer] = useState<{ configured: boolean; account: string; testCopy: boolean } | null | undefined>(undefined);   // undefined: still asking
+  useEffect(() => { let off = false; fakturowniaStatus().then(s => { if (!off) setFktServer(s); }); return () => { off = true; }; }, []);
   const [fktDepts, setFktDepts] = useState<any[]>(() => {
     try { return JSON.parse(window.localStorage.getItem("marianna-erp:fktDepartments") || "[]"); } catch { return []; }
   });
@@ -841,12 +836,10 @@ export default function Settings({ roles = [], setRoles = null,
     try { return JSON.parse(window.localStorage.getItem("marianna-erp:fktDepartmentDefaults") || "{}"); } catch { return {}; }
   });
   async function handleFktDepartments() {
-    const cfg = readFakturowniaConfig();
-    if (!cfg) { setFktMsg({ kind: "error", text: "Save the account and token first." }); return; }
     setFktBusy(true);
-    const r = await fetchDepartments(cfg);
+    const r = await fetchDepartments(readFakturowniaConfig());
     setFktBusy(false);
-    if (!r.ok) { setFktMsg({ kind: "error", text: r.corsLikely ? "The browser blocked the call. This needs the backend." : (r.error || "Fakturownia did not answer.") }); return; }
+    if (!r.ok) { setFktMsg({ kind: "error", text: r.error || "Fakturownia did not answer." }); return; }
     const mapped = mapDepartments(r.data || []);
     setFktDepts(mapped);
     try { window.localStorage.setItem("marianna-erp:fktDepartments", JSON.stringify(mapped)); } catch {}
@@ -857,28 +850,18 @@ export default function Settings({ roles = [], setRoles = null,
 
   async function handleFktTest() {
     setFktBusy(true); setFktMsg(null);
-    const cfg: FakturowniaConfig = { subdomain: fktSub.trim(), apiToken: fktToken.trim() };
-    const r = await testConnection(cfg);
+    const r = await testConnection(readFakturowniaConfig());
     setFktBusy(false);
-    if (r.ok) setFktMsg({ kind: "success", text: "Connection works — Fakturownia responded. You can now sync cost invoices from Finance → Operational Costs." });
-    else if (r.corsLikely) setFktMsg({ kind: "error", text: "The browser couldn't reach Fakturownia (likely a CORS restriction on direct browser access). The file import still works; live sync will run from the Phase-2 backend." });
+    if (r.ok) setFktMsg({ kind: "success", text: `Connection works — ${r.data?.account || "Fakturownia"} answered through the app's server part.` });
     else setFktMsg({ kind: "error", text: r.error || "Connection failed." });
   }
 
   function handleFktSave() {
-    if (!fktSub.trim() || !fktToken.trim()) { setFktMsg({ kind: "error", text: "Enter both the account name and the API token." }); return; }
-    writeFakturowniaConfig({ subdomain: fktSub.trim(), apiToken: fktToken.trim(), liveWriteEnabled: fktLiveWrite });
-    setFktMsg({ kind: "success", text: `Saved in this browser only (token never exported). Live invoice creation is ${fktLiveWrite ? "ENABLED" : "off"}.` });
+    writeFakturowniaConfig({ liveWriteEnabled: fktLiveWrite });
+    setFktMsg({ kind: "success", text: `Saved for this browser. Live invoice creation is ${fktLiveWrite ? "ENABLED" : "off"}.` });
   }
 
-  function handleFktDisconnect() {
-    writeFakturowniaConfig(null);
-    setFktSub(""); setFktToken(""); setFktLiveWrite(false);
-    setFktMsg({ kind: "info", text: "Disconnected — the token has been removed from this browser." });
-  }
 
-  const [backups, setBackups] = useState<BackupMeta[]>(() => listBackups());
-  const refreshBackups = () => setBackups(listBackups());
   const [showRecovery, setShowRecovery] = useState(false);   // v7.4.2 (A-REC-1)
 
   function handleExport() {
@@ -907,7 +890,7 @@ export default function Settings({ roles = [], setRoles = null,
       }
       // v6.18.4 (P0-2): the export now stamps appVersion in _meta. Warn loudly if
       // the file was made on a different build (same schema can still differ in
-      // fields). Schema-version mismatch stays a hard block inside importAllData.
+      // fields). v7.21.0 (A-RV-19): the restore reads the file with storesFromExport, which refuses one it cannot read.
       let versionWarn = "";
       try {
         const meta = JSON.parse(result)?._meta;
@@ -917,17 +900,17 @@ export default function Settings({ roles = [], setRoles = null,
         } else if (!fileApp) {
           versionWarn = `\n\n⚠ This file has no app-version stamp (older export). Import only if you know it matches v${APP_VERSION}.`;
         }
-      } catch { /* importAllData will report invalid JSON */ }
+      } catch { /* storesFromExport reports invalid JSON */ }
       const proceed = await stConfirm({
         tone: "danger",
         title: "Replace all data?",
-        message: "Import will REPLACE all data currently in this browser with the contents of this file.\n\nThere is no merge — anything here that isn't in the file will be gone.\n\nA backup of your current data will be saved automatically first, so you can undo it from Settings → Local backups." + versionWarn,
+        message: "The file will REPLACE the shared data — for everyone — with its contents.\n\nThere is no merge: anything not in the file will be gone. The current shared data is downloaded first, as a file." + versionWarn,   // v7.21.0 (A-RV-19)
         confirmLabel: "Replace & import", cancelLabel: "Cancel",
       });
       if (!proceed) { setMessage({ kind: "info", text: "Import cancelled — nothing was changed." }); return; }
       await flushFolderBackup();   // v6.99.70 (A-BK): the folder gets the state before the overwrite
       // v7.0.0 (A-SH-1): in shared mode a backup is restored INTO the shared copy, for everyone — counted, typed, the old copy downloaded first
-      if (isSharedMode()) {
+      {   // v7.21.0 (A-RV-19): a backup is only ever restored into the shared data — there is no browser of its own to import into
         { const meU = userBySignIn(users || [], readSession()?.email); if (!meU || !meU.isOwner) { setMessage({ kind: "error", text: "Only the owner can restore a backup into the shared data." }); return; } }   // v7.2.4 (A-SET-4)
         let parsed: any; try { parsed = storesFromExport(result); } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; }
         const word = window.prompt(`RESTORE this file into the SHARED data${ENV_LABEL ? ` (${ENV_LABEL})` : ""} — for everyone?\n\nFile: ${file.name}\nExported: ${String(parsed.meta?.exportedAt || "?").replace("T", " ").slice(0, 16)}, app ${parsed.meta?.appVersion || "?"}\nIt holds: ${parsed.summary}\n\nEvery colleague's screen will show this data. The shared copy as it is now will be downloaded first.\n\nType RESTORE to go ahead:`);
@@ -939,41 +922,9 @@ export default function Settings({ roles = [], setRoles = null,
         } catch (x: any) { setMessage({ kind: "error", text: `Restore failed: ${String(x?.message || x)}` }); }
         return;
       }
-      const outcome = importAllData(result);
-      if (!outcome.ok) {
-        setMessage({ kind: "error", text: outcome.error || "Import failed." });
-        return;
-      }
-      refreshBackups();
-      const loadedDesc = (outcome.loaded || []).join(", ") || "no recognized data";
-      const clearedNote = (outcome.cleared || []).length ? ` Stores absent from the file were cleared so no stale documents survive: ${(outcome.cleared || []).join(", ")}.` : "";
-      const backupNote = outcome.backup ? " A backup of your previous data was saved (Settings → Local backups)." : "";
-      setMessage({ kind: "success", text: `Imported: ${loadedDesc}.${clearedNote}${backupNote} Reloading…` });
-      setTimeout(() => { window.location.reload(); }, 1400);
     };
     reader.onerror = () => setMessage({ kind: "error", text: "Could not read the file." });
     reader.readAsText(file);
-  }
-
-  function handleBackupNow() {
-    const meta = createBackup("Manual backup");
-    refreshBackups();
-    setMessage(meta ? { kind: "success", text: "Backup saved locally." } : { kind: "error", text: "Could not save a backup (storage may be full)." });
-  }
-
-  async function handleRestore(b: BackupMeta) {
-    if (!(await stConfirm({ tone: "danger", title: "Restore this backup?", message: `From ${new Date(b.createdAt).toLocaleString()}.\n\nThis REPLACES current data. Your current data will itself be backed up first, so this is reversible.`, confirmLabel: "Restore" }))) return;
-    await flushFolderBackup();   // v6.99.70 (A-BK)
-    const outcome = restoreBackup(b.id);
-    if (!outcome.ok) { setMessage({ kind: "error", text: outcome.error || "Restore failed." }); return; }
-    setMessage({ kind: "success", text: "Backup restored. Reloading…" });
-    setTimeout(() => window.location.reload(), 1200);
-  }
-
-  async function handleDeleteBackup(b: BackupMeta) {
-    if (!(await stConfirm({ tone: "danger", title: "Delete backup?", message: "Delete this backup permanently?", confirmLabel: "Delete" }))) return;
-    deleteBackup(b.id);
-    refreshBackups();
   }
 
 
@@ -983,33 +934,27 @@ export default function Settings({ roles = [], setRoles = null,
     const counts = transactionalCounts();
     const list = counts.map(c => `${c.key}: ${c.count}`).join(" · ") || "nothing to clear";
     const confirmed = await stConfirm({ tone: "danger", title: "Wipe every document, keep the master data?",
-      message: `KEEPS: counterparties, places, countries, packaging, product catalogue, users, company, FX settings, bank accounts.\nCLEARS, all together: ${list}.\nA backup is saved first.`,
+      message: `KEEPS: counterparties, places, countries, packaging, product catalogue, users, company, FX settings, bank accounts.\nCLEARS, all together: ${list}.\nThe backup folder gets a copy first, when one is chosen.`,
       confirmLabel: "Wipe the documents", cancelLabel: "Keep everything" });
     if (!confirmed) return;
     const resetNo = await stConfirm({ tone: "info", title: "Reset the numbering?", message: "Start PO / SO / SHP / LOT numbers again from 0001 for the new season? (Choose No to continue the sequence.)", confirmLabel: "Yes, restart at 0001", cancelLabel: "No, continue" });
     await flushFolderBackup();   // v6.99.70 (A-BK)
-    if (isSharedMode() && !isTestCopy()) return;   // v7.0.0: never on the real shared copy (the button is not shown there)
-    const backup = startFreshSeason({ resetNumbering: !!resetNo });
-    if (isSharedMode() && isTestCopy()) { try { const note = await pushStoresToShared(DATA_KEYS.slice(), "fresh-season"); setMessage({ kind: "info", text: `TEST data wiped (master data kept) — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; } }
-    refreshBackups();
-    setMessage({ kind: "info", text: `Fresh season started${backup ? " (a backup was saved first)" : ""} — master data kept. Reloading…` });
-    setTimeout(() => window.location.reload(), 1000);
+    if (!isTestCopy()) return;   // v7.0.0: never on the real shared copy (the button is not shown there) · v7.21.0 (A-RV-19): the TEST copy is the only one ever wiped
+    startFreshSeason({ resetNumbering: !!resetNo });
+    try { const note = await pushStoresToShared(DATA_KEYS.slice(), "fresh-season"); setMessage({ kind: "info", text: `TEST data wiped (master data kept) — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; }
   }
   async function handleReset() {
     const confirmed = await stConfirm({
       tone: "danger",
       title: "Start fresh — clear ALL data?",
-      message: "This wipes contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points, returning the system to a completely empty state.\n\nA backup will be saved automatically first, so you can undo this from Settings → Local backups.",
+      message: "This wipes contacts, POs, lots, sales orders, shipments, operational costs, credit notes and logistics points, returning the system to a completely empty state.\n\nThe backup folder gets a copy first, when one is chosen.",
       confirmLabel: "Clear all data", cancelLabel: "Keep my data",
     });
     if (!confirmed) return;
     await flushFolderBackup();   // v6.99.70 (A-BK)
-    if (isSharedMode() && !isTestCopy()) return;   // v7.0.0: never on the real shared copy (the button is not shown there)
-    const backup = clearAllData();
-    if (isSharedMode() && isTestCopy()) { try { const note = await pushStoresToShared(DATA_KEYS.slice(), "start-fresh"); setMessage({ kind: "info", text: `TEST data erased — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; } }
-    refreshBackups();
-    setMessage({ kind: "info", text: `All data cleared${backup ? " (a backup was saved first)" : ""}. Reloading to an empty system…` });
-    setTimeout(() => window.location.reload(), 1000);
+    if (!isTestCopy()) return;   // v7.0.0: never on the real shared copy (the button is not shown there) · v7.21.0 (A-RV-19): the TEST copy is the only one ever wiped
+    clearAllData();
+    try { const note = await pushStoresToShared(DATA_KEYS.slice(), "start-fresh"); setMessage({ kind: "info", text: `TEST data erased — ${note}. Reloading…` }); setTimeout(() => window.location.reload(), 1400); return; } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; }
   }
 
   return (
@@ -1050,33 +995,7 @@ export default function Settings({ roles = [], setRoles = null,
           </div>
         )}
 
-        {!isSharedMode() && (   /* v7.5.2 (A-ROLE-1): on the shared data who you are = your sign-in, what you may do = your role — no per-browser user & role */
-        <Card style={{ marginBottom: 16 }}>
-          <SectionTitle>CURRENT USER &amp; ROLE</SectionTitle>
-          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Your role controls who can see Sales Order profitability (P/L). Assistant and Operations don't see P/L at all; Sales sees P/L only for orders they created; Financial Director and General Manager see all P/L. (No login yet — this is a simple switch for testing.)
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            {/* v7.7.1 (A-RET-1): the per-browser role is retired — what a person may do comes from their role in Users */}
-            {isSharedMode() ? (
-              <div>{/* v7.1.0 (A-USR-1): on the shared data the sign-in decides — nothing to type */}
-                <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>You are signed in as</label>
-                <div style={{ fontSize: 13 }}>{readSession()?.email || "—"}{(() => { const u = userBySignIn(users || [], readSession()?.email); return u ? ` → ${u.name}${u.isOwner ? " (owner)" : ""}` : " — not in the Users list yet: add this e-mail to your entry below"; })()}</div>
-              </div>
-            ) : (
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Your name (used to tag SOs you create)</label>
-              <input
-                value={userName || ""}
-                onChange={e => setUserName && setUserName(e.target.value)}
-                placeholder="e.g. Anna (sales)"
-                style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff" }}
-              />
-            </div>
-            )}
-          </div>
-        </Card>
-        )}
+        
 
         {/* v6.99.14 (owner): CONFIGURATION lives on the main page — nothing hidden inside another editor */}
         <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", margin: "18px 0 10px" }}>CONFIGURATION</div>
@@ -1119,24 +1038,16 @@ export default function Settings({ roles = [], setRoles = null,
         <Card style={{ marginBottom: 16 }}>
           <SectionTitle>FAKTUROWNIA CONNECTION <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· invoice sync</span></SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Connect your Fakturownia account to pull cost invoices (issued to you via KSeF) straight into Operational Costs — no file export needed.
-            By default this connection is used for <strong>reading and matching</strong> only. Creating real invoices in Fakturownia from the
-            Invoices module is a separate action that stays <strong>turned off</strong> unless you enable it below. Your API token is stored
-            <strong> only in this browser</strong> and is deliberately <strong>excluded from the data export</strong>, so it never travels in a shared file.
+            Pull cost invoices (issued to you via KSeF) straight into the app — no file export needed. By default the connection is used
+            for <strong>reading and matching</strong> only; creating real invoices in Fakturownia stays <strong>turned off</strong> unless
+            you enable it below. The API token is kept in Vercel's settings and used only by the app's server part — <strong>never in a browser</strong>.
           </div>
-          <div style={{ background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400E", marginBottom: 14 }}>
-            Get the token in Fakturownia → Settings → API. Treat it like a password — if it has ever been shared, rotate it there first.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12, marginBottom: 12 }}>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Account name</label>
-              <input value={fktSub} onChange={e => setFktSub(e.target.value)} placeholder="e.g. marianna2" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-              <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 3 }}>the part before .fakturownia.pl</div>
-            </div>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>API token</label>
-              <input type="password" value={fktToken} onChange={e => setFktToken(e.target.value)} placeholder="paste API token" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "ui-monospace, Menlo, monospace" }} />
-            </div>
+          {/* v7.21.1 (AUD-49, owner 11 Oct): what the server part holds — the token itself is never shown */}
+          <div data-fkt-server="1" style={{ background: fktServer && fktServer.configured ? "#ECFDF5" : "#FFFBEB", border: `1px solid ${fktServer && fktServer.configured ? "#A7F3D0" : "#FCD34D"}`, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: fktServer && fktServer.configured ? "#065F46" : "#92400E", marginBottom: 14, lineHeight: 1.5 }}>
+            {fktServer === undefined ? "Checking the connection…"
+              : fktServer === null ? "The app's server part could not be asked — sign in again, or use the file import."
+              : fktServer.configured ? <>Connected to <strong>{fktServer.account}</strong>{fktServer.testCopy ? " — this is the TEST copy: invoices are never created from here." : "."}</>
+              : <>Not connected yet. In Vercel, open this project → Settings → Environment Variables and add <strong>FAKTUROWNIA_API_TOKEN</strong> (the token from Fakturownia → Settings → API) and <strong>FAKTUROWNIA_SUBDOMAIN</strong> (the part of your Fakturownia address before .fakturownia.pl), then redeploy. Until then, use the file import.</>}
           </div>
           {fktMsg && (
             <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 7, fontSize: 12.5,
@@ -1204,9 +1115,8 @@ export default function Settings({ roles = [], setRoles = null,
           </div>
 
           <div style={{ display: "flex", gap: 10 }}>
-            <Button onClick={handleFktSave} variant="primary">Save connection</Button>
-            <Button onClick={handleFktTest} disabled={fktBusy || !fktSub.trim() || !fktToken.trim()}>{fktBusy ? "Testing…" : "Test connection"}</Button>
-            {existingFkt && <Button onClick={handleFktDisconnect} variant="danger">Disconnect</Button>}
+            <Button onClick={handleFktSave} variant="primary">Save</Button>
+            <Button onClick={handleFktTest} disabled={fktBusy}>{fktBusy ? "Testing…" : "Test connection"}</Button>
           </div>
         </Card>
 
@@ -1219,12 +1129,12 @@ export default function Settings({ roles = [], setRoles = null,
         </Card>
 
         {/* v7.2.4 (A-SET-4, owner): on the shared data this RESTORES a backup into the shared data for everyone — the owner only */}
-        {isSharedMode() && !(() => { const me = userBySignIn(users || [], readSession()?.email); return !!(me && me.isOwner); })() ? (
+        {!(() => { const me = userBySignIn(users || [], readSession()?.email); return !!(me && me.isOwner); })() ? (
           <Card style={{ marginBottom: 16 }}>
             <SectionTitle>RESTORE A BACKUP INTO THE SHARED DATA</SectionTitle>
             <div style={{ fontSize: 13, color: "#64748B", lineHeight: 1.55 }}>Only the owner can restore a backup — it replaces the shared data for everyone.</div>
           </Card>
-        ) : isSharedMode() ? (<>
+        ) : (<>
           {/* v7.4.2 (A-REC-1): record-by-record recovery first — the full replace stays below for a real disaster */}
           <Card style={{ marginBottom: 16, borderLeft: "3px solid #16A34A" }}>
             <SectionTitle>RECOVER FROM A BACKUP</SectionTitle>
@@ -1241,67 +1151,30 @@ export default function Settings({ roles = [], setRoles = null,
             <Button onClick={handleImportClick}>📤 Choose the backup file…</Button>
           </Card>
         </>
-        ) : (
-        <Card style={{ marginBottom: 16 }}>
-          <SectionTitle>IMPORT</SectionTitle>
-          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Load a colleague's exported JSON file. <strong>This replaces all your current data — there is no merge.</strong> A backup of your current data is saved automatically first, so you can undo it from Local backups below. The file must come from the same app version (v{APP_VERSION}).
-          </div>
-          <input ref={fileInputRef} type="file" accept=".json,application/json" onChange={handleFileSelected} style={{ display: "none" }} />
-          <Button onClick={handleImportClick}>📤 Choose JSON file to import...</Button>
-        </Card>
         )}
 
         <AutoBackupCard />
 
-        {/* v7.2.5 (A-SET-5, owner): on the shared data no local snapshots are taken — only the old ones can be deleted, after checking the folder backup */}
-        {/* v7.3.1 (A-SET-6, owner 7 Oct): no snapshots card on the shared data — each browser deletes its old snapshots by itself after a folder backup */}
-        {isSharedMode() ? null : (
-        <Card style={{ marginBottom: 16 }}>
-          <SectionTitle>LOCAL BACKUPS</SectionTitle>
-          <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Snapshots taken before each import, restore or wipe, kept in this browser as long as there is room — they may use up to 70 % of the browser storage together with your data, and when the data needs the space the oldest snapshot gives way first. Use one to undo an overwrite. They stay on this computer; the backup folder above is the copy that leaves it.
-          </div>
-          <div style={{ marginBottom: 12 }}><Button onClick={handleBackupNow} variant="primary">＋ Create backup now</Button></div>
-          {backups.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: "#888" }}>No backups yet. One will be created automatically the next time you import or reset.</div>
-          ) : (
-            <div style={{ border: "1px solid #EDEDED", borderRadius: 8, overflow: "hidden" }}>
-              {backups.map((b: BackupMeta) => (
-                <div key={b.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 10, alignItems: "center", padding: "9px 12px", borderBottom: "1px solid #F5F5F5" }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, color: "#111", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{b.label}</div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{new Date(b.createdAt).toLocaleString()} · {b.sizeKB} KB · schema v{b.version}</div>
-                  </div>
-                  <button onClick={() => handleRestore(b)} title="Replace current data with this backup" style={{ border: "1px solid #BFDBFE", background: "#fff", color: "#2563EB", borderRadius: 6, padding: "5px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Restore</button>
-                  <SmallButton kind="delete" title="Delete this backup" onClick={() => handleDeleteBackup(b)}>Delete</SmallButton>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-        )}
+        
+        
+        
 
-        {/* v6.51.1: a manual repair, so a data fix is never at the mercy of an
-            automatic trigger firing at the right moment. Safe to press at any time —
-            the repair only changes records that are genuinely wrong, and pressing it
-            twice changes nothing the second time. */}
-        {/* v6.86.0 (owner ruling): "Repair inventory records" retired — a one-time August repair, already applied and
-            covered by tests. The routine (healRound651) stays in the migration toolkit for the Supabase import. */}
+        
+        
 
         <SeasonsPanel refStores={refStores} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} stConfirm={stConfirm} setMessage={setMessage} />
         {/* v7.0.0 (A-SH-1, owner 6 Oct): on the REAL shared copy nobody can erase the business's data from a button; on the TEST copy the
-            two buttons act on the shared test data for everyone testing; in single-browser mode they work as before */}
-        {isSharedMode() && !isTestCopy() ? (
+            two buttons act on the shared test data for everyone testing · v7.21.0 (A-RV-19): there is no single-browser mode */}
+        {!isTestCopy() ? (
           <Card style={{ marginBottom: 16, borderLeft: "3px solid #94A3B8" }}>
             <SectionTitle>RESET</SectionTitle>
             <div style={{ fontSize: 13, color: "#475569", lineHeight: 1.5 }}>Erasing is not available on the shared data — everyone works on it. To go back to an earlier state, <b>Import</b> a backup above: it is restored into the shared data after a typed confirmation, and the shared copy as it was is downloaded first. To try things out, use the TEST copy.</div>
           </Card>
         ) : (
         <Card style={{ marginBottom: 16, borderLeft: "3px solid #DC2626" }}>
-          <SectionTitle>RESET{isSharedMode() && isTestCopy() ? " — acts on the shared TEST data, for everyone testing" : ""}</SectionTitle>
+          <SectionTitle>RESET — acts on the shared TEST data, for everyone testing</SectionTitle>
           <div style={{ fontSize: 13, color: "#444", marginBottom: 14, lineHeight: 1.55 }}>
-            Erase everything you've entered and return the system to a completely empty state. Use this if you've made test data unusable and want to start fresh. A backup is saved automatically first (see Local backups).
+            Erase everything you've entered and return the system to a completely empty state. Use this if you've made test data unusable and want to start fresh. The backup folder gets a copy first, when one is chosen.
           </div>
           <Button onClick={handleFreshSeason} variant="danger" title="v6.99.51: keeps the master data, clears every document of the season together">⚠ Emergency: wipe all documents (keep master data)</Button>
           <Button onClick={handleReset} variant="danger">⚠ Start fresh — erase ALL data</Button>
@@ -1309,7 +1182,7 @@ export default function Settings({ roles = [], setRoles = null,
         )}
 
         <div style={{ marginTop: 24, padding: "14px 16px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
-          {isSharedMode() ? <><strong>About the shared data:</strong> The data lives in the shared copy{ENV_LABEL ? ` (${ENV_LABEL})` : ""} on Supabase (Frankfurt) — everyone signed in reads and writes the same records; colleagues' saves appear within 20 seconds. This browser keeps a working copy and its local snapshots; Export all data saves what this browser holds, which is the shared copy once synced. Signing out (the pill in the top bar) leaves the shared copy untouched.</> : <><strong>About local storage:</strong> Data lives in your browser only. Different browsers, devices, or private windows have separate copies. Clearing your browser data will wipe MARIANNA ERP data. There is no server: a copy leaves this computer only through the backup folder or an export.</>}{/* v7.0.0 (A-SH-2) */}</div>
+          <><strong>About the shared data:</strong> The data lives in the shared copy{ENV_LABEL ? ` (${ENV_LABEL})` : ""} on Supabase (Frankfurt) — everyone signed in reads and writes the same records; colleagues' saves appear within 20 seconds. This browser keeps a working copy and its local snapshots; Export all data saves what this browser holds, which is the shared copy once synced. Signing out (the pill in the top bar) leaves the shared copy untouched.</>{/* v7.0.0 (A-SH-2) · v7.21.0 (A-RV-19): the single-browser text is gone with the mode */}</div>
 
         {/* v7.0.0 (A-SH-2): the "Phase 2" footer is gone — the shared data, login and audit trail are here */}
       </div>

@@ -495,7 +495,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
   );
 }
 
-function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
+function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], operationalCosts = [], settledRefs = [], setSettledRefs = null, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
   const { alert: lvAlert, dialogNode: lvNode } = useConfirm(); // P2-6
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
@@ -601,7 +601,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
 }
 
 // ─── v6.5: WAREHOUSE CHARGES — expected vs invoiced, per warehouse per month ─
-function WarehouseChargesView({ lots = [], setLots = null, contacts = [], warehouseInvoices = [], setWarehouseInvoices = null }: any) {
+function WarehouseChargesView({ lots = [], setLots = null, contacts = [], invoices = [], setInvoices = null, packagingTypes = [] }: any) {   // v7.21.4 (A-ST-10): the register, not a store of its own
   const { confirm: wcConfirm, alert: wcAlert, dialogNode: wcNode } = useConfirm(); // P2-6
   const warehouses = (contacts || []).filter((c: any) => tariffHasRates(c.warehouseTariff));
   const [whId, setWhId] = useState<any>(warehouses[0]?.id ?? "");
@@ -616,25 +616,33 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
     nbpRateBefore(c, inv.date).then(r => { if (off) return; if (!r) { setWhFx({ note: "NBP not reachable", tableDate: "" }); return; } setInv((x: any) => ({ ...x, fxRate: r.rate })); setWhFx({ note: `NBP ${r.tableDate}`, tableDate: r.tableDate }); });
     return () => { off = true; }; }, [inv.currency, inv.date]);   // eslint-disable-line react-hooks/exhaustive-deps
   const today = localTodayISO();
-  const result = whId ? warehouseMonthCharges(lots, contacts, whId, period, today) : { rows: [], total: 0, totalPLN: 0, currency: "PLN" };
-  const periodInvoices = (warehouseInvoices || []).filter((i: any) => String(i.warehouseId) === String(whId) && i.period === period);
+  const result = whId ? warehouseMonthCharges(lots, contacts, whId, period, today, packagingTypes) : { rows: [], total: 0, totalPLN: 0, currency: "PLN" };   // v7.21.12: + the packaging types
+  const wh = warehouses.find((w: any) => String(w.id) === String(whId));
+  // v7.21.4 (A-ST-10): the month's warehouse invoices are the register's — the warehouse's cost invoices of that month (by its id, else its name)
+  const sameParty = (i: any) => (i?.counterparty?.id != null && String(i.counterparty.id) === String(whId)) || (!!wh && String(i?.counterparty?.name || "").trim().toLowerCase() === String(wh.name || "").trim().toLowerCase());
+  const periodInvoices = (invoices || []).filter((i: any) => i && i.kind === "COST" && i.category === "WAREHOUSE" && i.paymentStatus !== "Cancelled" && !i.deleted && sameParty(i) && String(i.periodFrom || i.issueDate || "").slice(0, 7) === period)
+    .map((i: any) => ({ ...i, invoiceNo: i.number, date: i.issueDate, amount: Number(i.netAmount) || 0, amountPLN: Number(i.netPLN) || 0, allocated: !!(i.allocation && (i.allocation.lots || []).length) }));
   const invoicedPLN = periodInvoices.reduce((s: number, i: any) => s + (parseFloat(i.amountPLN) || 0), 0);
   const variancePLN = Math.round((invoicedPLN - result.totalPLN) * 100) / 100;
-  const wh = warehouses.find((w: any) => String(w.id) === String(whId));
 
   function addInvoice() {
-    if (!setWarehouseInvoices || !whId) return;
+    if (!setInvoices || !whId) return;
     const amount = parseFloat(inv.amount) || 0;
     if (amount <= 0 || !inv.invoiceNo.trim()) return;
     if (String(inv.currency || "PLN").toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0)) return;   // v7.18.6 (A-AU-12): no NBP rate yet — never at 1.0
     const fx = parseFloat(inv.fxRate) || 1;
-    const rec = { id: nextId(), warehouseId: whId, warehouseName: wh?.name || "", period, invoiceNo: inv.invoiceNo.trim(), date: inv.date, amount, currency: inv.currency, fxRate: fx, amountPLN: Math.round(amount * fx * 100) / 100, status: "Received", notes: inv.notes };
-    setWarehouseInvoices((prev: any[]) => [...(prev || []), rec]);
+    const pln = Math.round(amount * fx * 100) / 100;
+    // v7.21.4 (A-ST-10): a cost invoice in the register — open until the bank clears it (rule 11), like every received invoice
+    const rec = { id: nextId(), kind: "COST", category: "WAREHOUSE", costScope: "MONTHLY_SHARED", number: inv.invoiceNo.trim(), counterparty: { id: whId, name: wh?.name || "" },
+      issueDate: inv.date, saleDate: inv.date, dueDate: "", paymentMethod: "Transfer", currency: inv.currency, fxRate: fx, netAmount: amount, vatRate: 0, vatAmount: 0, grossAmount: amount,
+      netPLN: pln, grossPLN: pln, periodFrom: `${period}-01`, positions: [], links: [], paymentStatus: "Issued", paidAmount: 0, notes: inv.notes || "", attachment: null, allocation: null,
+      fakturownia: { exported: false }, source: "warehouse-charges", createdAt: localTodayISO() };
+    setInvoices((prev: any[]) => [...(prev || []), rec]);
     setInv({ invoiceNo: "", amount: "", currency: inv.currency, fxRate: inv.fxRate, date: today, notes: "" });
   }
 
   async function approveInvoice(invoice: any) {
-    if (!setWarehouseInvoices) return;
+    if (!setInvoices) return;
     if (!result.rows.length) { await wcAlert({ tone: "warn", title: "Nothing to allocate", message: "No expected charges computed for this warehouse/month — nothing to allocate against." }); return; }
     if (!(await wcConfirm({ tone: "warn", title: `Approve invoice ${invoice.invoiceNo}?`, message: `${invoice.amountPLN.toLocaleString("pl-PL")} PLN allocated into the ${result.rows.length} lot(s) of ${period}.\n\nThe amount is split across lots proportionally to their expected charges and becomes part of each lot's landed cost (visible in SO P/L).`, confirmLabel: "Approve & allocate" }))) return;
     const totalExpectedPLN = result.totalPLN || 1;
@@ -647,18 +655,15 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
       allocations.forEach((a: any) => { byLot[String(a.lotNumber)] = a.amountPLN; });
       setLots((prev: any[]) => allocateInvoiceCostsToLots(prev || [], {
         source, byLot, type: "Warehousing",
-        label: `${invoice.warehouseName || "Warehouse"} ${period} · invoice ${invoice.invoiceNo || ""}`.trim(),
+        label: `${invoice.counterparty?.name || wh?.name || "Warehouse"} ${period} · invoice ${invoice.invoiceNo || ""}`.trim(),
         date: invoice.issueDate || invoice.date || "", nextId,
       }).lots);
     }
-    setWarehouseInvoices((prev: any[]) => prev.map((i: any) => i.id === invoice.id ? { ...i, status: "Approved", allocatedLots: allocations } : i));
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => i.id === invoice.id ? { ...i, allocation: { method: "by_expected_charges", lots: allocations } } : i));   // v7.21.4: the allocation is the register invoice's
   }
 
-  async function deleteInvoice(invoice: any) {
-    if (invoice.status === "Approved") { await wcAlert({ tone: "warn", title: "Can't delete", message: "This invoice is approved and already allocated into lot costs — it can't be deleted from here." }); return; }
-    if (!(await wcConfirm({ tone: "danger", title: `Delete invoice ${invoice.invoiceNo}?`, confirmLabel: "Delete" }))) return;
-    setWarehouseInvoices && setWarehouseInvoices((prev: any[]) => prev.filter((i: any) => i.id !== invoice.id));
-  }
+  // v7.21.4 (A-ST-10 · A-RV-30): no Close that deletes — a warehouse invoice is deleted in Invoices, like every invoice (soft, dependents named)
+
 
   const box: any = { background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 14 };
   if (!warehouses.length) return (
@@ -736,9 +741,9 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
               {i.notes && <div style={{ fontSize: 11, color: "#999" }}>{i.notes}</div>}
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 6, background: i.status === "Approved" ? "#DCFCE7" : "#FEF3C7", color: i.status === "Approved" ? "#15803D" : "#92400E" }}>{i.status}</span>
-              {i.status !== "Approved" && <button onClick={() => approveInvoice(i)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Approve &amp; allocate to lots</button>}
-              {i.status !== "Approved" && <ActionButton action="close" onClick={() => deleteInvoice(i)} />}
+              <span style={{ fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 6, background: i.allocated ? "#DCFCE7" : "#FEF3C7", color: i.allocated ? "#15803D" : "#92400E" }}>{i.allocated ? "Allocated" : "To allocate"}</span>
+              {!i.allocated && <button onClick={() => approveInvoice(i)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Approve &amp; allocate to lots</button>}
+              <span data-wh-register="1" style={{ fontSize: 10.5, color: "#94A3B8" }}>kept in Invoices</span>
             </div>
           </div>
         ))}
@@ -769,14 +774,14 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
 // folded into the canonical FinanceNote model (Invoices module owns notes) and
 // now enter the receivable/payable totals (BP-37).
 
-export default function Finance({ focusResultOf = null,
+export default function Finance({
+  packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from its packaging */
+  focusResultOf = null,
   claims = [],
   orders = [],
   lots = [],
   setLots = null,
   contacts = [],
-  warehouseInvoices = [],
-  setWarehouseInvoices = null,
   settledRefs = [],
   setSettledRefs = null,
   pos = [],
@@ -798,13 +803,12 @@ export default function Finance({ focusResultOf = null,
   setClosedPeriods = null,
   poSettlements = [],
 }: {
-  focusResultOf?: any;   // v7.1.3 (A-PL-1)
+  focusResultOf?: any;
+  packagingTypes?: any[];   // v7.1.3 (A-PL-1)
   orders?: any[];
   lots?: any[];
   setLots?: any;
   contacts?: any[];
-  warehouseInvoices?: any[];
-  setWarehouseInvoices?: any;
   settledRefs?: string[];
   setSettledRefs?: any;
   pos?: any[];
@@ -834,6 +838,15 @@ export default function Finance({ focusResultOf = null,
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
+  // v7.21.11 (A-RV-34, owner 11 Oct): a cost in EUR / USD takes the NBP rate of the last working day before its date — shown, not typed
+  // (as warehouse invoices since v7.18.6); its PLN amount follows the rate
+  const [opFx, setOpFx] = useState<any>({ note: "", tableDate: "" });
+  useEffect(() => { let off = false; const c = String(form.currency || "PLN").toUpperCase();
+    if (c === "PLN") { if (Number(form.fxRate) !== 1) setForm((x: any) => ({ ...x, fxRate: 1, amountPLN: safe(x.amount) })); setOpFx({ note: "", tableDate: "" }); return; }
+    if (!form.date) { setOpFx({ note: "set the date — the rate follows it", tableDate: "" }); return; }
+    setOpFx({ note: "reading NBP…", tableDate: "" }); setForm((x: any) => ({ ...x, fxRate: 0, amountPLN: 0 }));
+    nbpRateBefore(c, form.date).then(r => { if (off) return; if (!r) { setOpFx({ note: "NBP not reachable", tableDate: "" }); return; } setForm((x: any) => ({ ...x, fxRate: r.rate, amountPLN: Math.round(safe(x.amount) * r.rate * 100) / 100 })); setOpFx({ note: `NBP ${r.tableDate}`, tableDate: r.tableDate }); });
+    return () => { off = true; }; }, [form.currency, form.date]);   // eslint-disable-line react-hooks/exhaustive-deps
   useUnsavedGuard({ id: "cost-form", label: form?.description ? `Cost entry "${form.description}"` : "the operational cost entry", draft: form, active: tab === "costs", save: () => saveCost(), resetKey: (operationalCosts || []).length });   // v6.99.58 (A-US)
   // v6.10: filters + hover-preview for the Operational Cost Entries register.
   const [costPeriodFilter, setCostPeriodFilter] = useState<string>("all");
@@ -888,12 +901,13 @@ export default function Finance({ focusResultOf = null,
 
   async function saveCost() {
     if (!setOperationalCosts) return;
-    const amountPLN = safe(form.amountPLN) || safe(form.amount) * (safe(form.fxRate) || 1);
+    if (String(form.currency || "PLN").toUpperCase() !== "PLN" && !(safe(form.fxRate) > 0)) { await finAlert({ tone: "warn", title: "No NBP rate yet", message: "The rate of the last working day before the cost's date has not been read — check the date, or try again when NBP can be reached." }); return; }   // v7.21.11 (A-RV-34): never at 1.0
+    const amountPLN = Math.round(safe(form.amount) * (String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate)) * 100) / 100;   // v7.21.11: follows the rate, never typed
     if (!form.period || !form.description || amountPLN <= 0) {
       await finAlert({ tone: "warn", title: "Missing fields", message: "Please enter period, description and a positive amount." });
       return;
     }
-    const cost: OperationalCost = { ...form, amount: safe(form.amount), fxRate: safe(form.fxRate) || 1, amountPLN };
+    const cost: OperationalCost = { ...form, amount: safe(form.amount), fxRate: String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate), amountPLN };
     setOperationalCosts((prev: OperationalCost[]) => {
       const exists = (prev || []).some(c => c.id === cost.id);
       return exists ? prev.map(c => c.id === cost.id ? cost : c) : [...(prev || []), cost];
@@ -957,7 +971,7 @@ export default function Finance({ focusResultOf = null,
         {tab === "ledger" ? (
           <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
         ) : tab === "warehouse" ? (
-          <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />
+          <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} invoices={invoices} setInvoices={setInvoices} packagingTypes={packagingTypes} />
         ) : tab === "pl" ? (
           <>
             <Card style={{ marginBottom: 16 }}>
@@ -1145,10 +1159,10 @@ export default function Finance({ focusResultOf = null,
                   <Field label="Description"><Inp value={form.description} onChange={(e: any) => setForm({ ...form, description: e.target.value })} placeholder="Office rent - May" /></Field>
                   <Field label="Supplier / payee"><Inp value={form.supplierName || ""} onChange={(e: any) => setForm({ ...form, supplierName: e.target.value })} placeholder="Landlord / employee / accountant" /></Field>
                   <Field label="Invoice no. (received)"><Inp value={(form as any).invoiceNo || ""} onChange={(e: any) => setForm({ ...form, invoiceNo: e.target.value } as any)} placeholder="FV/2026/06/123 — from Fakturownia/KSeF" /></Field>
-                  <Field label="Amount"><Inp type="number" value={form.amount} onChange={(e: any) => setForm({ ...form, amount: safe(e.target.value), amountPLN: safe(e.target.value) * (safe(form.fxRate) || 1) })} /></Field>
+                  <Field label="Amount"><Inp type="number" value={form.amount} onChange={(e: any) => setForm({ ...form, amount: safe(e.target.value), amountPLN: Math.round(safe(e.target.value) * (String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate)) * 100) / 100 })} /></Field>
                   <Field label="Currency"><Sel value={form.currency} onChange={(e: any) => setForm({ ...form, currency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c} value={c}>{c}</option>)}</Sel></Field>
-                  <Field label="FX rate to PLN"><Inp type="number" value={form.fxRate} onChange={(e: any) => setForm({ ...form, fxRate: safe(e.target.value) || 1, amountPLN: safe(form.amount) * (safe(e.target.value) || 1) })} /></Field>
-                  <Field label="Amount PLN"><Inp type="number" value={form.amountPLN} onChange={(e: any) => setForm({ ...form, amountPLN: safe(e.target.value) })} /></Field>
+                  <Field label="FX → PLN (NBP)"><div data-op-rate="1" title={opFx.note} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{String(form.currency || "PLN").toUpperCase() === "PLN" ? "1" : (safe(form.fxRate) > 0 ? String(form.fxRate) : "—")}<span style={{ fontSize: 10.5, color: "#94A3B8", marginLeft: 6 }}>{opFx.note}</span></div></Field>{/* v7.21.11 (A-RV-34): shown, not typed */}
+                  <Field label="Amount PLN"><div data-op-pln="1" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{safe(form.amountPLN) ? safe(form.amountPLN).toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "—"}</div></Field>{/* v7.21.11: the amount × the rate */}
                   <Field label="Allocation method"><Sel value={form.allocationMethod} onChange={(e: any) => setForm({ ...form, allocationMethod: e.target.value as any })}>{ALLOCATION_METHODS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}</Sel></Field>
                   <Field label="Status"><Sel value={form.status} onChange={(e: any) => setForm({ ...form, status: e.target.value as any })}>{["Budget", "Expected", "Received", "Posted", "Paid"].map(s => <option key={s} value={s}>{s}</option>)}</Sel></Field>
                   <Field label="Cost invoice no. (actual)"><Inp value={(form as any).invoiceRef || ""} onChange={(e: any) => setForm({ ...form, invoiceRef: e.target.value } as any)} placeholder="e.g. FS 106/2026 — links this line to the real invoice" /></Field>

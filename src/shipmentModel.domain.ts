@@ -388,49 +388,6 @@ export function syncUnitKgMirrors(sh: any): any {
   }) }));
   return { ...sh, legs };
 }
-/** v6.99.9: one-time heal on load — mirrors in step; stale zero-amount leg-freight lines removed once carrier×leg lines exist. */
-/** v6.99.91 (A-SD-5, owner ruling 1 Oct — one source): the trucks own the carrier, the booking owns the forwarder. Older
- *  shipments carried them on the leg; they are written ONCE onto the owners that have none (each change reported for the
- *  audit log). The leg fields are left as they were and no screen reads them for this any more. */
-export function healProviderOwners(sh: any): { sh: any; notes: string[] } {
-  const notes: string[] = []; if (!sh || !Array.isArray(sh.legs)) return { sh, notes };
-  let bookings = Array.isArray(sh.bookings) ? sh.bookings.slice() : [];
-  const legs = sh.legs.map((l: any, li: number) => {
-    const mode = S(l?.mode).toLowerCase();
-    if (mode === "road" && l.carrierId != null && l.carrierId !== "") {
-      const vs = (l.vehicles || []).map((u: any) => { if (u && (u.carrierId == null || u.carrierId === "")) { notes.push(`${sh.number}: leg ${li + 1} carrier written onto truck ${u.truckPlate || u.id}`); return { ...u, carrierId: l.carrierId }; } return u; });
-      return { ...l, vehicles: vs };
-    }
-    if (["sea", "air", "rail"].includes(mode) && l.forwarderId != null && l.forwarderId !== "") {
-      if (!bookings.length) { bookings = [{ id: (num(sh.id) || 0) * 1000 + 801, number: "", forwarderId: l.forwarderId }]; notes.push(`${sh.number}: leg ${li + 1} forwarder written onto a new booking`); }
-      else if (bookings[0].forwarderId == null || bookings[0].forwarderId === "") { bookings[0] = { ...bookings[0], forwarderId: l.forwarderId }; notes.push(`${sh.number}: leg ${li + 1} forwarder written onto booking ${bookings[0].number || bookings[0].id}`); }
-    }
-    return l;
-  });
-  return notes.length ? { sh: { ...sh, legs, bookings }, notes } : { sh, notes };
-}
-export function healShipmentModel(sh: any): { sh: any; changed: boolean; notes?: string[] } {
-  // v6.99.67 (A-IN-1, owner): goods rows carried a COPY of the trade direction from old versions; it is derived now — drop it
-  let healedDir = false;
-  if (sh && Array.isArray(sh.goods) && sh.goods.some((g: any) => g && g.tradeDirection !== undefined)) {
-    sh = { ...sh, goods: sh.goods.map((g: any) => { if (!g || g.tradeDirection === undefined) return g; const { tradeDirection, ...rest } = g; return rest; }) };
-    healedDir = true;
-  }
-  let next = syncUnitKgMirrors(sh); let changed = next !== sh && JSON.stringify(next.legs) !== JSON.stringify(sh.legs);
-  const costs = sh?.costs || [];
-  if (costs.some((c: any) => String(c.source || "").startsWith("LEGCAR:"))) {
-    // v6.99.16: a MANUAL line equal (supplier, amount, currency) to a derived carrier×leg line is the workaround typed while the auto line was missing → drop it
-    const legcar = costs.filter((c: any) => String(c.source || "").startsWith("LEGCAR:"));
-    const dedup = costs.filter((c: any) => { if (String(c.source || "")) return true; return !legcar.some((x: any) => String(x.supplierId ?? "") === String(c.supplierId ?? "") && Math.abs(num(x.amount) - num(c.amount)) < 0.005 && String(x.currency || "PLN").toUpperCase() === String(c.currency || "PLN").toUpperCase()); });
-    if (dedup.length !== costs.length) { next = { ...next, costs: dedup }; changed = true; }
-    const costs2 = next.costs || [];
-    const cleaned = costs2.filter((c: any) => { const src = String(c.source || ""); const legacy = src.startsWith("leg-freight:") || src.startsWith("LEG:"); if (!legacy) return true; const legNo = src.split(":")[1]; const covered = costs.some((x: any) => String(x.source || "").startsWith("LEGCAR:") && String(x.source).split(":")[1] === String(Number(legNo) - 1)); return num(c.amount) > 0 && !covered; });
-    if (cleaned.length !== costs.length) { next = { ...next, costs: cleaned }; changed = true; }
-  }
-  if (healedDir) changed = true;
-  const own = healProviderOwners(next); if (own.notes.length) { next = own.sh; changed = true; }   // v6.99.91 (A-SD-5)
-  return { sh: next, changed, notes: own.notes };
-}
 
 
 /** v6.99.14 (A-R10-3): a container's recorder is its feeder trucks' recorder(s) — live, not a copy. */

@@ -6,7 +6,7 @@
 // pulled in and a notice names the store (the person's own last change is kept in a local "conflict copy" they can export).
 // Every 20 seconds the app asks for new versions, so colleagues' work appears without a refresh.
 // Without the two settings the app behaves exactly as before, on this browser alone.
-import { DATA_KEYS, applyStoreFromRemote, readStoreValue, setStoreWrittenHook, createBackup } from "./useLocalStoredState";
+import { DATA_KEYS, applyStoreFromRemote, readStoreValue, setStoreWrittenHook } from "./useLocalStoredState";
 import { mergeStore } from "./storeMerge.domain";   // v7.14.0 (A-RV-01): record-by-record merge when a colleague saved first
 
 // v6.99.149 (owner 5 Oct): which copy this is — "TEST" on the preview address (a separate Supabase project), nothing on production
@@ -47,6 +47,8 @@ async function freshToken(): Promise<string | null> {
   try { const j = await authCall("token?grant_type=refresh_token", { refresh_token: s.refresh_token }); const n: Session = { ...s, access_token: j.access_token, refresh_token: j.refresh_token || s.refresh_token, expires_at: Date.now() + (Number(j.expires_in) || 3600) * 1000 }; saveSession(n); return n.access_token; }
   catch { saveSession(null); return null; }
 }
+/** v7.21.1 (AUD-49): the signed-in person's session token — what the server part checks before it calls Fakturownia. */
+export async function sessionToken(): Promise<string | null> { try { return await freshToken(); } catch { return null; } }
 async function rest(path: string, init: RequestInit = {}): Promise<Response> {
   const token = await freshToken(); if (!token) throw new Error("not logged in");
   return fetch(`${REMOTE_URL}/rest/v1/${path}`, { ...init, headers: { apikey: REMOTE_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers || {}) } });
@@ -69,19 +71,10 @@ type Row = { key: string; data: any; version: number; updated_at?: string; updat
 async function fetchRows(select = "key,data,version,updated_at,updated_by"): Promise<Row[]> {
   const res = await rest(`stores?select=${select}`); if (!res.ok) throw new Error(`pull failed (${res.status})`); return res.json();
 }
-/** What this browser holds, counted — shown before the upload so nobody pushes the wrong data by accident. */
-export function localSummary(): string {
-  const n = (k: string) => { const v = readStoreValue(k); return Array.isArray(v) ? v.length : 0; };
-  return [["pos", "POs"], ["orders", "sales orders"], ["lots", "lots"], ["shipments", "shipments"], ["invoices", "invoices"], ["contacts", "companies"]].map(([k, l]) => `${n(k)} ${l}`).join(", ");
-}
-const FIRST_PULL_MARK = "marianna:shared:firstPullSnapshot";
 export async function pullAll(): Promise<{ empty: boolean }> {
   emit({ status: "pulling" });
   const rows = await fetchRows();
-  // v6.99.149 (owner 5 Oct): the FIRST time the shared copy replaces this browser's data, this browser's data is kept as a local snapshot first
-  if (rows.length && !window.localStorage.getItem(FIRST_PULL_MARK)) {
-    try { createBackup(`Auto — before the shared data replaced this browser's (${localSummary()})`); window.localStorage.setItem(FIRST_PULL_MARK, new Date().toISOString()); } catch { /* the snapshot is best effort; the pull goes on */ }
-  }
+
   const by: Record<string, string> = {};
   rows.forEach(r => { const json = JSON.stringify(r.data); known.set(r.key, { version: r.version, json }); by[r.key] = r.updated_by || ""; if (DATA_KEYS.includes(r.key)) applyStoreFromRemote(r.key, r.data); });
   emit({ status: rows.length ? "synced" : "empty", lastPull: new Date().toISOString(), by });
@@ -99,7 +92,6 @@ export async function uploadStores(source: Record<string, any>, by: string): Pro
   if (!res.ok) throw new Error(`upload failed (${res.status})`);
   await pullAll(); return body.length;
 }
-export async function uploadAllLocal(by: string): Promise<number> { const src: Record<string, any> = {}; DATA_KEYS.forEach(k => { src[k] = readStoreValue(k); }); return uploadStores(src, by); }
 /** An exported Marianna JSON file (Settings → Export all data) read as stores — what it holds, counted, for the confirmation. */
 export function storesFromExport(text: string): { stores: Record<string, any>; summary: string; meta: any } {
   const j = JSON.parse(text); const src = j && typeof j === "object" ? (j.data && typeof j.data === "object" && !Array.isArray(j.data) ? j.data : j) : {};
@@ -194,7 +186,6 @@ export function clearConflict(key: string) { emit({ conflicts: state.conflicts.f
 // Restore a backup into the shared copy, archive a season in it, or (TEST copy only) wipe it. Each replaces the named stores
 // with NEW versions, so every signed-in tab takes them on its next poll; colleagues' unsaved edits to those stores lose the race
 // and are told so (the usual conflict notice).
-export const isSharedMode = () => remoteConfigured() && !!readSession();
 export const isTestCopy = () => /^test$/i.test(ENV_LABEL);
 export async function replaceSharedStores(stores: Record<string, any>, by: string): Promise<number> {
   const current = await fetchRows("key,version"); const ver = new Map(current.map(r => [r.key, r.version]));

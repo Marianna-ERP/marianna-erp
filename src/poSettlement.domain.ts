@@ -76,6 +76,8 @@ export function settlementRate(po: any, rec: any, todayISO: string = localTodayI
   return { rate: r ? r.rate : 0, tableDate: r ? r.tableDate : "", kept: false };
 }
 
+/** v7.21.7 (AUD-29): the lot cost types the producer's statement counts as the warehouse's — by code, not by text. */
+export const WAREHOUSE_LOT_COST_TYPES = new Set(["storage", "warehouse", "warehousing", "sorting"]);
 export function computePOSettlement(input: {
   po: any; lots: any[]; orders: any[]; invoices?: any[]; shipments?: any[]; claims?: any[];
   ratePLNperEUR: any; provisionalEUR?: any; commissionPct: any; provisionalCurrency?: any; provisionalRate?: any; provisionalInvoiceNo?: any; financeNotes?: any[];
@@ -165,8 +167,10 @@ export function computePOSettlement(input: {
       if (kind === "Supplier") producerRecoveriesPLN += Math.abs(pln); else thirdPartyRecoveriesPLN += Math.abs(pln);   // G6
       return;
     }
-    const t = String(c.type || c.label || "").toLowerCase();
-    if (/warehouse|storage|handling|sorting|service/.test(t)) warehousePLN += pln; else additionalPLN += pln;
+    // v7.21.7 (AUD-29): sorted by the cost line's TYPE — the code picked from the list — never by words in its label. The warehouse's
+    // own work (storage, its handling, sorting) and every allocation of a warehouse invoice (WHINV-…) are warehouse; port handling,
+    // freight, customs, insurance and the rest are additional. Before, "Warehousing" lines fell outside and "handling" at a port fell in.
+    if (WAREHOUSE_LOT_COST_TYPES.has(String(c.type || "").trim().toLowerCase()) || src.startsWith("WHINV-")) warehousePLN += pln; else additionalPLN += pln;
   }));
   // G5: direct costs of the sales sourced from the truck (outbound shipments), by this truck's kg share
   (input.shipments || []).forEach((sh: any) => {
