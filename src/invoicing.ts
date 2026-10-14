@@ -14,6 +14,7 @@
 
 import { nextId } from "./ids";
 import { resolveFxRate } from "./fx";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 export type InvoiceKind = "SALES" | "COST";
 export type CostScope = "SHIPMENT" | "MONTHLY_SHARED" | "OVERHEAD";
@@ -24,7 +25,18 @@ export type InvoiceCategory = "SINV" | "COMMISSION" | "PURCHASE" | "FORWARDER" |
 export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled";
 
 export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: string; }
-export interface InvoicePosition { name: string; quantity: number; unit?: string; vatRate: number; netPrice?: number; grossTotal?: number; }
+export interface InvoicePosition { name: string; quantity: number; unit?: string; vatRate: number; netPrice?: number; grossTotal?: number; 
+  cnCode?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  netTotal?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  origin?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  packaging?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  pallets?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  product?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  quality?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  size?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  unitPrice?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  variety?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+}
 
 export interface Invoice {
   /** v6.68.1 (owner ruling): a pro-forma is the document an advance answers —
@@ -66,10 +78,11 @@ export interface Invoice {
   createdAt: string;
   createdBy?: string;
   locked?: boolean;                 // true once Sent / pushed — edits restricted
+  payments?: Record<string, any>[] | any[];   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 // ── helpers ──
-function n(v: any): number { const x = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(x) ? x : 0; }
+function n(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function r2(x: number): number { return Math.round(x * 100) / 100; }
 function arr<T = any>(v: any): T[] { return Array.isArray(v) ? v : []; }
 
@@ -177,7 +190,6 @@ export function migrateLegacyInvoices(opts: {
   orders: any[];
   warehouseInvoices: any[];
   operationalCosts: any[];
-  pos?: any[];
 }): Invoice[] {
   const existing = arr<Invoice>(opts.existing);
   const haveSource = new Set(existing.map(i => i.source).filter(Boolean));
@@ -270,33 +282,9 @@ export function migrateLegacyInvoices(opts: {
     });
   });
 
-  // 4. COST (PURCHASE) from firm-price POs once the goods have ARRIVED. The supplier's
-  //    commercial invoice becomes payable on receipt; consignment POs are excluded
-  //    (they settle as producer payouts, not purchase invoices). #5 / v6.18.9.
-  arr(opts.pos).forEach((po: any) => {
-    if ((po.pricingMode || "firm") === "consignment") return;
-    if (!["Arrived", "Received", "Closed"].includes(po.status)) return; // only after goods received
-    const total = arr(po.items).reduce((s: number, it: any) => s + n(it.qty) * n(it.unitPrice), 0);
-    if (total <= 0) return;
-    const src = `migrated:po:${po.id}`;
-    pushIf(src, () => {
-      const fx = resolveFxRate(po.fxRate, po.currency);
-      const grossPLN = r2(total * fx);
-      return {
-        id: nextId(), kind: "COST", category: "PURCHASE", costScope: "SHIPMENT",
-        number: po.supplierInvoiceNo || "", counterparty: po.supplier || { name: po.supplier?.name || "Supplier" },
-        issueDate: po.arrivalDate || po.expectedDeliveryDate || po.orderDate || "", saleDate: po.arrivalDate || po.orderDate || "", dueDate: po.paymentDueDate || "",
-        paymentMethod: "Transfer", currency: po.currency || "PLN", fxRate: fx,
-        netAmount: r2(total), vatRate: 0, vatAmount: 0, grossAmount: r2(total),
-        netPLN: grossPLN, grossPLN,
-        positions: [], links: [{ type: "PO", number: po.number }],
-        paymentStatus: "Issued", paidAmount: 0,
-        notes: po.supplierInvoiceNo ? "" : "Awaiting the supplier's invoice number — add it here when received.",
-        attachment: null, creditNoteIds: [], allocation: null, fakturownia: { exported: false },
-        source: src, createdAt: po.arrivalDate || po.orderDate || "",
-      } as Invoice;
-    });
-  });
+  // 4. (retired v7.22.1 — FZ-12, Batch F) A firm PO in Arrived / Received / Closed used to become an invented PURCHASE invoice
+  //    ("Awaiting the supplier's invoice number"). Those statuses are retired by normalisePO, so it could only fire on an old
+  //    backup restored into TEST — and a purchase invoice is never invented from an order: it comes from Fakturownia or is entered.
 
   return out;
 }

@@ -1,7 +1,7 @@
 // ShipmentCreate.tsx — v6.99.68 (A-AUD-2, owner): moved out of Shipments.tsx unchanged; the module's shared helpers are imported from it.
 import React, { useState } from "react";
 import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
-import { SmallButton, ActionButton } from "./ui";
+import { SmallButton, ActionButton, useConfirm } from "./ui";
 import { isCancelled } from "./cancellation.domain";
 import { formatDMY, localTodayISO } from "./dates";
 import { nextId } from "./ids";
@@ -13,7 +13,8 @@ import { catalogItems } from "./productCatalog";   // v7.18.4 (A-AU-9)
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
 import { overReceiptCheck, receiptWarningText } from "./receipts.domain";   // v7.11.0 (A-RV-23)
 
-export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel, onCreate, productCatalog = [] }: any) {   // v7.18.4: + productCatalog
+export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel, onCreate, productCatalog = [] }: any) {
+  const { alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's   // v7.18.4: + productCatalog
   const [sourceType, setSourceType] = useState("PO");
   const [governingSoPrompt, setGoverningSoPrompt] = useState(null); // v6.34.0: {po, sos} when a multi-SO PO needs a pick
   const [ref, setRef] = useState(""); // v6.18.14 (#4): no PO pre-selected — force a choice
@@ -169,11 +170,11 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     const rows = (srcItems || []).map((it: any, idx: number) => { const id = String(it.id ?? idx + 1); const rem = lineRemaining(it, idx); if (rem <= 0) return null; const on = selectedItemIds.length === 0 || selectedItemIds.includes(id); if (!on) return null; const v = lineQtys[id] === undefined ? rem : parseNum(lineQtys[id]); return `${it.product}${it.variety ? " " + it.variety : ""} ${fmtNum(v)} kg`; }).filter(Boolean);
     return rows.length ? rows.join(", ") : "nothing left to load";
   }
-  function create(governingSoRef = "") {
+  async function create(governingSoRef = "") {
     // v6.99.43 (M-3, owner): a line can never ship more than what is left of it — the field is red, and Create refuses.
     if (sourceType !== "Manual") {
       const overs = (srcItems || []).map((it: any, idx: number) => { const id = String(it.id ?? idx + 1); const rem = lineRemaining(it, idx); const v = lineQtys[id] === undefined ? rem : parseNum(lineQtys[id]); return v > rem + 1 ? `${it.product || "line " + id}: ${fmtNum(v)} kg entered, ${fmtNum(rem)} kg left` : null; }).filter(Boolean);
-      if (overs.length) { window.alert("Over the remainder:\n" + overs.join("\n")); return; }
+      if (overs.length) { (await uiAlert({ message: "Over the remainder:\n" + overs.join("\n") })); return; }
     }
     let sh;
     if (sourceType === "PO" && selectedPO) {
@@ -206,7 +207,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     }
     onCreate(sh);
   }
-  return <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+  return <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>{dialogNode}
     <div style={{ width: 880, maxHeight: "90vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.22)", border: "1px solid #E5E7EB" }}>
       <div style={{ padding: "18px 22px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><div style={{ fontSize: 18, fontWeight: 800 }}>Create shipment</div><div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Build from PO, SO or a manual transport order.</div></div>

@@ -4,7 +4,8 @@
 // period, by kilo-days (the time each lot's kilos spent there), and the allocation writes the lots' "warehouse" cost lines
 // — the lines the settlement, the lot value and the P/L already read. Re-allocating replaces the same invoice's lines.
 import { S, r2 } from "./format";
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const dayNum = (iso: string) => Math.floor(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000);
 
 /** Kilo-days a lot spent at the given sites between from and to (inclusive), from its own movements. */

@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // dashboard.domain.ts — v6.99.4: THE DASHBOARD'S QUESTIONS (owner decisions DA-1…DA-8)
 // Pure tile queries. Every tile = exceptions / today's events only; "none" when empty.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const addDays = (iso: string, d: number) => { const m = S(iso).match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return ""; const x = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
 
 export interface Tile { key: string; title: string; count: number; detail: string; tone: "ok" | "warn" | "bad"; module: string; filter?: string; }   // v7.20.0: filter = the list the tile opens on

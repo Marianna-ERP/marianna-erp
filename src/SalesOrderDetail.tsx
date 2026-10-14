@@ -12,7 +12,8 @@ import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, quantityLabel, 
 import { localTodayISO, formatDMY } from "./dates";
 import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { settlementState } from "./invoicePlus.domain";   // v7.16.5 (A-RV-14): the SO view shows our payment state, not Fakturownia's flag
-import { Inp, LOCATION_TYPES, LifecycleBar, PACKAGING_TYPES_REF, QualityBadge, SHIPMENTS_REF, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, supplierNameForPO, CONTACTS_REF } from "./SalesOrders";
+import { Inp, LOCATION_TYPES, LifecycleBar, QualityBadge, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, supplierNameForPO, useSalesData } from "./SalesOrders";
+import { ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 // ─── INVOICE CREATION MODAL ───────────────────────────────────────────────
 // Triggered when an SO transitions to Shipped. Previews the Sales Invoice (SINV)
@@ -24,8 +25,9 @@ import { Inp, LOCATION_TYPES, LifecycleBar, PACKAGING_TYPES_REF, QualityBadge, S
 // (sole owner); the SO keeps only the number in `linkedInvoices`.
 // record of the invoice that needs to be created in Fakturownia / the Invoices module.
 export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, onConfirm }: any) {
+  const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const today = localTodayISO();
-  const initial = buildInvoiceFromSO(order, nextSINVNumber(existingInvoiceNumbers || []), today, ((CONTACTS_REF || []).find((c: any) => String(c.id) === String(order?.client?.id)) as any)?.terms?.defaultVatRate);   // v7.18.7 (BP-46)
+  const initial = buildInvoiceFromSO(order, nextSINVNumber(existingInvoiceNumbers || []), today, ((sd.contacts || []).find((c: any) => String(c.id) === String(order?.client?.id)) as any)?.terms?.defaultVatRate, sd);   // v7.18.7 (BP-46)
   const [invoice, setInvoice] = useState(initial);
 
   const sf = (k, v) => setInvoice(prev => {
@@ -115,7 +117,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
               </thead>
               <tbody>
                 {order.items.map((it, i) => {
-                  const lt = lineTotalPU(it, PACKAGING_TYPES_REF); // v6.79.0: box-aware
+                  const lt = lineTotalPU(it, sd.packagingTypes); // v6.79.0: box-aware
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                       <td style={{ padding: "6px 8px" }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</td>
@@ -123,13 +125,13 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
                           boxes and the per-box price — with the kilos alongside,
                           because the kilos are what physically move and what a
                           customs declaration or a claim will refer to. */}
-                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{quantityLabel(it, PACKAGING_TYPES_REF)}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{quantityLabel(it, sd.packagingTypes)}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtMoney(it.unitPrice, order.currency)}{pricingUnitOf(it) === "box" ? "/box" : "/kg"}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 600 }}>{fmtMoney(lt, order.currency)}</td>
                     </tr>
                   );
                 })}
-                <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10.5 }}>{(() => { const t = documentTotals(order.items, PACKAGING_TYPES_REF, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
+                <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10.5 }}>{(() => { const t = documentTotals(order.items, sd.packagingTypes, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
               </tbody>
             </table>
           </Card>
@@ -145,7 +147,8 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
 }
 
 // ─── ORDER DETAIL ─────────────────────────────────────────────────────────
-export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpenResult = false, onOpenResult = null, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, termsFindings = [], fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userName = "" }: any) {   // v7.21.5 (SE-4): no per-browser role
+export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpenResult = false, onOpenResult = null, onBack, onEdit, onPrint, onEmail, onDelete, onIssueInvoice, onRecordCollection = null, onRecordClientClaim = null, termsFindings = [], fktConfigured = false, onMatchInvoices = () => {}, fktMatching = false, fktMatchMsg = null, allOrders = [], lots = [], pos = [], shipments = [], operationalCosts = [], userName = "" }: any) {
+  const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy   // v7.21.5 (SE-4): no per-browser role
   // BP-49: linked records are COMPUTED from the documents that reference this SO,
   // not read from stored arrays (which drift).
   const computedLinks = computedSOLinks(order, { shipments, invoices: (soInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), lots });
@@ -153,10 +156,10 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
   //  - Assistant & Operations: never see P/L
   //  - Sales: see P/L only for SOs they created (createdBy === their name)
   //  - Financial Director & General Manager: see all P/L
-  const total = netTotal(order.items);
+  const total = netTotal(order.items, sd);
   const destination = locById(order.destinationLocationId);
   const destinationLabel = destinationDisplay(order);
-  const availability = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(order, SHIPMENTS_REF || []))) ? [] : computeLineAvailability(order.items, allOrders, order.id);   // v6.99.15 (A-R11-9)
+  const availability = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(order, sd.shipments || []))) ? [] : computeLineAvailability(order.items, allOrders, order.id, sd);   // v6.99.15 (A-R11-9)
   const overageCount = availability.filter(a => a.hasOverage).length;
 
   return (
@@ -206,7 +209,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
               </button>
             );
           })()}
-          {order.sellIncoterm === "EXW" && !["Cancelled", "Draft"].includes(order.status) && onRecordCollection && (
+          {ruleOf(order.sellIncoterm)?.namedPlace === "seller-premises" && !["Cancelled", "Draft"].includes(order.status) && onRecordCollection && (
             <button onClick={onRecordCollection} title="EXW: the client collects — records the pickup and creates a minimal collection shipment (no transport order, no freight on our side)."
               style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #0369A1", background: "#F0F9FF", color: "#0369A1", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🚚 Record client collection</button>
           )}
@@ -287,11 +290,11 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                   </thead>
                   <tbody>
                     {order.items.map((it, i) => {
-                      const lt = lineTotalPU(it, PACKAGING_TYPES_REF); // v6.79.0: box-aware
+                      const lt = lineTotalPU(it, sd.packagingTypes); // v6.79.0: box-aware
                       const av = availability[i] || {};
                       return (
                         <tr key={i} style={{ borderBottom: "1px solid #F9FAFB", background: av.hasOverage ? "#FFFBEB" : undefined }}>
-                          <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef) : ""} /></td>
+                          <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef, sd) : ""} /></td>
                           <td style={{ padding: "10px 6px" }}>
                             <div style={{ fontWeight: 600 }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</div>
                             {(it.size || it.coloration) && <div style={{ fontSize: 10.5, color: "#AAA" }}>{[it.size, it.coloration].filter(Boolean).join(" · ")}</div>}
@@ -299,7 +302,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                           <td style={{ padding: "10px 6px", color: "#555" }}>{it.origin || "—"}</td>
                           <td style={{ padding: "10px 6px", textAlign: "center" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px 6px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
-                          <td style={{ padding: "10px 6px", textAlign: "right", color: "#555" }}>{(() => { const bx = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PACKAGING_TYPES_REF || []).boxes; return bx ? fmtNum(bx) : "—"; })()}</td>
+                          <td style={{ padding: "10px 6px", textAlign: "right", color: "#555" }}>{(() => { const bx = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return bx ? fmtNum(bx) : "—"; })()}</td>
                           <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 600 }}>
                             {fmtNum(it.qty)} kg
                             {av.hasOverage && (
@@ -323,7 +326,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                     {/* v6.99.76 (A-SV-1, owner): the PO's total row — boxes, kg and value under their own columns */}
                     <tr style={{ background: "#F9FAFB" }}>
                       <td colSpan={5} style={{ padding: "10px 6px", fontWeight: 700, color: "#111" }}>Total</td>
-                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PACKAGING_TYPES_REF || []).boxes) || 0), 0)) || "—"}</td>
+                      <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes) || 0), 0)) || "—"}</td>
                       <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s2: number, it: any) => s2 + (parseFloat(it.qty) || 0), 0))} kg</td>
                       <td></td>
                       <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>

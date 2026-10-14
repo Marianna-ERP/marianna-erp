@@ -27,34 +27,9 @@ export function isCancelled(recordOrStatus: any): boolean {
   return CANCELLED.has(String(s || "").trim());
 }
 
-/** Does this record count toward operational figures, exceptions and KPIs?
- *  A cancelled record never happened, so it never counts — no missing documents
- *  to chase, no costs to allocate, no invoice to wait for. */
-export function countsOperationally(record: any): boolean {
-  return !isCancelled(record);
-}
-
 /** Filter helper: the live members of a list. */
 export function liveOnly<T>(records: T[]): T[] {
   return (records || []).filter(r => !isCancelled(r));
-}
-
-/** Split a set of linked documents into live and cancelled.
- *  Used wherever a PO/SO lists its shipments: a PO showing "3 shipments" when
- *  only 1 counts is what sends people hunting for something to delete. */
-export function splitByCancelled<T>(records: T[]): { live: T[]; cancelled: T[] } {
-  const live: T[] = [], cancelled: T[] = [];
-  (records || []).forEach(r => (isCancelled(r) ? cancelled : live).push(r));
-  return { live, cancelled };
-}
-
-/** Presentation rule (user ruling): cancelled linked documents are struck
- *  through and red. Returned as a style object so every module renders them
- *  identically — a list, a chip and a table cell should not disagree. */
-export function cancelledTextStyle(cancelled: boolean): Record<string, any> {
-  return cancelled
-    ? { textDecoration: "line-through", color: "#DC2626" }
-    : {};
 }
 
 // ── Claims ──────────────────────────────────────────────────────────────────

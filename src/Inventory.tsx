@@ -12,9 +12,9 @@ import { recomputeLotFromMovements as domainRecomputeLot } from "./inventory.dom
 import { lotReservationsForStock, productsMatch as domainProductsMatch, soClientName } from "./salesOrders.domain";
 import { nextId } from "./ids";
 import { defaultFxRate } from "./fx";
-import { unifiedLocations, locationById } from "./locations";
+import { unifiedLocations, locationById , isPortType } from "./locations";
 import { localTodayISO, formatDMY, addDaysISO } from "./dates";
-import { shipmentTradeDirection, shipmentTradeEnds, MOVEMENT_LABELS, ownershipAtPoint } from "./tradeFlow.domain";
+import { shipmentTradeDirection, shipmentTradeEnds, MOVEMENT_LABELS } from "./tradeFlow.domain";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
@@ -23,6 +23,7 @@ import { LotDetail } from "./InventoryLot";
 import { MovementModal } from "./InventoryWindows";
 import { activeParties } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
+import { ownershipAtPoint } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 // ─── REFERENCE DATA ─────────────────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ export function locType(t: string) {
 // pickers see a counterparty added this session without a browser refresh.
 export function mergedLocations(contacts: any[]) {
   // v6.86.0 (owner ruling): ONE source — unifiedLocations() — no module-level merge, no demo seeds.
-  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
+  return unifiedLocations(contacts || []).map((l: any) => ({ ...l, placeType: l.type, type: l.legacyType }));   // v7.21.14: the real type kept as placeType
 }
 
 // Lot status lifecycle — PHYSICAL states only.
@@ -230,7 +231,7 @@ function applyProgressToJourney(journey: any[], lot: any, shipments: any[] = [],
   const firstInMove = movements.find((m: any) => m.type === "IN");
   const shipOutMove = movements.find((m: any) => m.type === "SHIP_OUT");
   const ownMove = [...movements].reverse().find((m: any) => { const lc = locById(m.toId); return lc?.type === "OWN"; });
-  const portMove = [...movements].reverse().find((m: any) => { const lc = locById(m.toId); return lc?.type === "PORT"; });
+  const portMove = [...movements].reverse().find((m: any) => isPortType(locById(m.toId), { airports: true }));   // v7.21.14 (A-RV-37)
 
   // Track which road leg each transit_road stage uses (first road = pre-carriage,
   // a later transit_road = on-carriage → last road leg).
@@ -822,7 +823,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
 // Three acts, in the order they happen in the building: inspect → sort → count. Each opens its own WINDOW
 // (the old toggles unfolded a form under the buttons and read as a wall of text). Ownership is unchanged:
 // the inspection judges, the sorting re-classes, the count corrects — none of them does another's job.
-export const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+export const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 // v6.99.33 (owner): the row actions are unmistakable - edit in the same blue as Claims, delete in red.
 const qhBtn: any = { padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" };
 export const qhEdit: any = { ...qhBtn, border: "1px solid #2563EB", background: "#EFF6FF", color: "#1D4ED8" };
@@ -1039,7 +1040,7 @@ export function CountWindow({ f, setF, lot, onClose, onSave, users = [] }: any) 
 // ── v6.91.0: THE LOT WORKBENCH — one screen per lot, composed from the owning modules, storing nothing ──
 export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [], orders = [], settlements = [], contacts = [], pos = [] }: any) {
   const S = (v: any) => String(v ?? "").trim();
-  const num = (v: any) => { const n = parseFloat(String(v ?? "")); return isFinite(n) ? n : 0; };
+  const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
   // Arrival: the supplier-delivery (or any inbound) shipment that carried this lot
   const arrival = (shipments || []).find((s: any) => String(s.purpose || "").toUpperCase() === "INBOUND" && ((s.lotRefs || []).map(String).includes(String(lot.number)) || (s.goods || []).some((g: any) => String(g.lotRef) === String(lot.number) || (lot.poRef && String(g.poRef) === String(lot.poRef)))));
   const unit = arrival ? ((arrival.legs || [])[0]?.vehicles || [])[0] : null;
@@ -1133,7 +1134,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
   const inStock = lots.filter(l => l.status === "In Stock");
   const totalKgInStock = inStock.reduce((s, l) => s + (l.physicalKg || 0), 0);
   const totalValueInStock = inStock.reduce((s, l) => s + valueInStock(l), 0);
-  const lotsAtPort = lots.filter(l => locById(l.locationId)?.type === "PORT" && l.status !== "Shipped Out").length;
+  const lotsAtPort = lots.filter(l => isPortType(locById(l.locationId), { airports: true }) && l.status !== "Shipped Out").length;   // v7.21.14 (A-RV-37)
   const lotsWithVariance = lots.filter(l => l.expectedKg > 0 && l.receivedKg > 0 && Math.abs(l.receivedKg - l.expectedKg) / l.expectedKg > 0.01).length;
   const totalDamagedKg = lots.reduce((s, l) => s + (l.damagedKg || 0), 0);
 

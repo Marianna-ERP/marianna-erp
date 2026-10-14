@@ -22,6 +22,7 @@ import { COST_TYPES } from "./Shipments";   // v7.18.5 (A-AU-10): the cost types
 import { nextId } from "./ids";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { RISK_CAUSES, journeyStages, claimRouting, claimShipment } from "./incoterms.domain";   // v7.19.4 (A-INC-1, 5/5)
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 // ─── v6.48.0  CLAIMS MODULE (Phase 1: the register) ──────────────────────────
 // Claims are now documents in their own right rather than rows hidden inside a
@@ -33,7 +34,7 @@ import { RISK_CAUSES, journeyStages, claimRouting, claimShipment } from "./incot
 // amount into the P/L). The record already carries the fields for those, so
 // Phase 2 is wiring rather than another migration.
 
-const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const eur = (v: any) => `€${num(v).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const INP: any = { width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff", fontFamily: "inherit" };
 
@@ -59,6 +60,7 @@ function Pill({ bg, fg, children, title }: any) {
 
 // ── v6.97.0 (CL-2/3/4/6): EVIDENCE & SETTLEMENT — references, not copies; a warning, never a block; offset in one click ──
 function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lots = [], contacts = [], financeNotes = [], invoices = [], setInvoices = null, setFinanceNotes = null }: any) {
+  const { alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const insCands = inspectionCandidates(claim, inspections);
   const cands = evidenceCandidates(claim, { inspections, shipments });
   const lot = (lots || []).find((l: any) => (claim.subjects || []).some((s: any) => String(s.kind).toUpperCase() === "LOT" && String(s.ref) === String(l.number))) || null;
@@ -70,7 +72,7 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
   const openInv = note ? (invoices || []).filter((i: any) => i.paymentStatus !== "Cancelled" && !i.isProforma && String(i.currency || "PLN").toUpperCase() === String(note.currency || "PLN").toUpperCase() && String(i.counterparty?.name || "").toLowerCase() === cpName && (Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0) > 0.005 && ((note.direction === "outgoing" && i.kind === "SALES") || (note.direction === "incoming" && i.kind === "COST"))) : [];
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "12px 16px", marginTop: 12 }}>
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "12px 16px", marginTop: 12 }}>{dialogNode}
       <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>EVIDENCE & SETTLEMENT · {claimMoneyLabel(claim)}</div>
       {warn && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 8 }}>⚠ {warn}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -97,7 +99,7 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
         <div style={{ marginTop: 10, borderTop: "1px solid #F1F5F9", paddingTop: 8 }}>
           <Lbl>Settle by offset (CL-6) — {note.noteType} note {note.number || note.id} · {Number(note.amount).toLocaleString("pl-PL")} {note.currency}{Number(note.appliedAmount) ? ` · applied ${Number(note.appliedAmount).toLocaleString("pl-PL")}` : ""}</Lbl>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {openInv.map((i: any) => <button key={String(i.id)} onClick={() => { const r = offsetNoteAgainstInvoice(note, i, { nextId, todayISO: localTodayISO }); if (r.error) { window.alert(r.error); return; } setInvoices((prev: any[]) => (prev || []).map((x: any) => x.id === i.id ? r.invoice : x)); setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => n.id === note.id ? r.note : n)); recordAudit({ module: "Claims", docType: "Claim", docNumber: claim.number, action: "claim", summary: `Note ${note.number || note.id} offset ${r.appliedAmount.toLocaleString("pl-PL")} ${note.currency} against ${i.number}` }); }} style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontWeight: 700, cursor: "pointer" }}>⇄ Offset against {i.number} (open {((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)).toLocaleString("pl-PL")} {i.currency})</button>)}
+            {openInv.map((i: any) => <button key={String(i.id)} onClick={async () => { const r = offsetNoteAgainstInvoice(note, i, { nextId, todayISO: localTodayISO }); if (r.error) { (await uiAlert({ message: r.error })); return; } setInvoices((prev: any[]) => (prev || []).map((x: any) => x.id === i.id ? r.invoice : x)); setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => n.id === note.id ? r.note : n)); recordAudit({ module: "Claims", docType: "Claim", docNumber: claim.number, action: "claim", summary: `Note ${note.number || note.id} offset ${r.appliedAmount.toLocaleString("pl-PL")} ${note.currency} against ${i.number}` }); }} style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontWeight: 700, cursor: "pointer" }}>⇄ Offset against {i.number} (open {((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)).toLocaleString("pl-PL")} {i.currency})</button>)}
             {!openInv.length && <span style={{ fontSize: 11, color: "#94A3B8" }}>no open invoice of {claim?.respondent?.name} in {note.currency} — the note settles by bank transfer (matched by the bank import)</span>}
           </div>
         </div>

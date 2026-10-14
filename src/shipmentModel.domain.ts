@@ -1,5 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { sellerPaysCarriage, takenAtSeller } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 // shipmentModel.domain.ts — v6.85.0: THE REDESIGNED SHIPMENT MODEL (additive layer)
 //
 // Twelve owner rulings (SHIPMENTS_REDESIGN.md §8, 5 Sept 2026). Implemented as a
@@ -23,7 +25,7 @@ import { S, r2, r0 } from "./format";
 //   D12 load plan derived from feeder links     → containerMap()
 // ─────────────────────────────────────────────────────────────────────────────
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── D5 · BOOKING ──────────────────────────────────────────────────────────────
 export interface Booking {
@@ -211,17 +213,6 @@ export function spawnFromDevanning(sh: any, rows: DevanningRow[], deps: { nextId
   }));
 }
 
-// ── D2 · TRANSPORT ORDERS PER CARRIER ─────────────────────────────────────────
-export function transportOrdersByCarrier(sh: any): Array<{ carrierId: any; units: any[]; kg: number }> {
-  const groups: Record<string, any> = {};
-  allUnits(sh).forEach(({ unit, leg }) => {
-    const cid = unit.carrierId ?? leg.carrierId ?? leg.forwarderId ?? sh.carrierId ?? sh.forwarderId ?? "";
-    const g = groups[String(cid)] || (groups[String(cid)] = { carrierId: cid, units: [], kg: 0 });
-    g.units.push(unit); g.kg += unitKg(unit, sh);
-  });
-  return Object.values(groups);
-}
-
 // ── D10 · ONE DATE, ENTERED AT THE EVENT ──────────────────────────────────────
 export type EventKind = "loaded" | "unloaded" | "stuffed" | "shipped" | "discharged" | "cleared" | "delivered";
 const FIELD: Record<EventKind, string> = { loaded: "loadedAt", unloaded: "unloadedAt", stuffed: "stuffedAt", shipped: "shippedAt", discharged: "dischargedAt", cleared: "clearedAt", delivered: "deliveredAt" };
@@ -237,11 +228,6 @@ export function stampEvent(sh: any, unitId: any | null, kind: EventKind, dateISO
   if (kind === "loaded") next.actualLoadingDate = min("loadedAt") || next.actualLoadingDate;
   if (kind === "delivered" || kind === "discharged") next.actualDeliveryDate = max(f) || next.actualDeliveryDate;
   return next;
-}
-export function derivedHeaderDates(sh: any): { firstLoaded: string; lastDelivered: string } {
-  const all = allUnits(sh).map(x => x.unit);
-  const sorted = (k: string) => all.map(u => S(u[k])).filter(Boolean).sort();
-  return { firstLoaded: sorted("loadedAt")[0] || "", lastDelivered: sorted("deliveredAt").slice(-1)[0] || sorted("dischargedAt").slice(-1)[0] || "" };
 }
 
 // ── D3 · v7.19.0 (A-INC-1): legsFromIncoterms retired (called nowhere) — who pays each leg comes from incoterms.legFreightPayers ──
@@ -455,7 +441,7 @@ export function unitGaps(u: any): Array<"pickup place" | "delivery place" | "loa
 // on EXW / FCA the PO's named place is the producer's site and the PO's loading date is the day. Goods from stock load
 // at the lot's location. A truck whose goods come from two places is named, never silently given one of them.
 export interface LoadPlace { id: any; text: string; ref: string; date: string; deliveryId?: any; deliveryText?: string; }
-const SUPPLIER_DELIVERS = /^(DAP|DPU|DDP|CPT|CIP|CFR|CIF|DAT)$/;
+// v7.22.3 (FZ-21): "the supplier delivers" = the seller pays the main carriage — read from the one table (sellerPaysCarriage)
 const samePlace = (aId: any, aText: any, bId: any, bText: any) => (aId != null && aId !== "" && bId != null && bId !== "") ? String(aId) === String(bId) : S(aText).toLowerCase() === S(bText).toLowerCase() && !!S(aText);
 /** Where ONE goods row is collected (the rules above, unchanged since v6.99.93). */
 export function placeOfGoods(g: any, pos: any[] = [], lots: any[] = []): LoadPlace | null {
@@ -464,10 +450,10 @@ export function placeOfGoods(g: any, pos: any[] = [], lots: any[] = []): LoadPla
   // v6.99.93 (A-GR-1, owner 1 Oct — my regression from v6.99.83): goods ALREADY IN STOCK load where the lot is (the lot owns its
   // location); the PO's terms only say where goods not yet received will be collected
   if (lot && num(lot.physicalKg) > 0 && (lot.locationId != null || S(lot.locationText))) return { id: lot.locationId ?? null, text: S(lot.locationText), ref: S(lot.number), date: "" };
-  if (po && ["EXW", "FCA"].includes(S(po.buyIncoterm).toUpperCase()) && (po.destinationLocationId != null || S(po.destinationText))) return { id: po.destinationLocationId ?? null, text: S(po.destinationText || po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate) };
+  if (po && takenAtSeller(po.buyIncoterm) && (po.destinationLocationId != null || S(po.destinationText))) return { id: po.destinationLocationId ?? null, text: S(po.destinationText || po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate) };
   // v6.99.83 (A-UN-5, owner 30 Sept): on a supplier-delivered PO (DDP, DAP, CIF…) the truck loads at the SUPPLIER and delivers to
   // the PO's destination — the lot's location (where it will arrive) is never the loading place; a lot's location counts only in stock
-  if (po && SUPPLIER_DELIVERS.test(S(po.buyIncoterm).toUpperCase()) && S(po.supplier?.name || po.supplier)) return { id: null, text: S(po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate), deliveryId: po.destinationLocationId ?? null, deliveryText: S(po.destinationText) };
+  if (po && sellerPaysCarriage(po.buyIncoterm) && S(po.supplier?.name || po.supplier)) return { id: null, text: S(po.supplier?.name || po.supplier), ref: S(po.number), date: S(po.loadingDate), deliveryId: po.destinationLocationId ?? null, deliveryText: S(po.destinationText) };
   return null;
 }
 export function truckLoadPlaces(sh: any, u: any, pos: any[] = [], lots: any[] = []): LoadPlace[] {

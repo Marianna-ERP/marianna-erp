@@ -17,21 +17,23 @@ import { nextId } from "./ids";
 import { paymentBasisOf, PAYMENT_BASES } from "./po.domain";
 import { readCountries } from "./Contacts";
 import { useUnsavedGuard } from "./unsaved";
-import { CLIENTS, CURRENCIES, INCOTERMS_SELL, Inp, LOTS, PACKAGING_TYPES_REF, PO_REFS, QUALITY_GRADES, QualityBadge, RAW_LOTS, SHIPMENTS_REF, Sel, SourceBadge, computeLineAvailability, fmtMoney, fmtNum, lotReservations, netTotal, poLineReservations, sameSoDuplicateSources, supplierNameForPO, validatePOReadinessForSO, validateSourcing } from "./SalesOrders";
+import { CLIENTS, CURRENCIES, Inp, QUALITY_GRADES, QualityBadge, Sel, SourceBadge, computeLineAvailability, fmtMoney, fmtNum, lotReservations, netTotal, poLineReservations, sameSoDuplicateSources, supplierNameForPO, validatePOReadinessForSO, validateSourcing, useSalesData } from "./SalesOrders";
 import { nbpRateBefore, orderBufferPct, orderRateFrom } from "./fx";   // v7.13.4 (A-AU-2)
 import { parseNum } from "./numbers";
+import { INCOTERM_CODES, isIncoterm2020, incotermLabel, incotermLine, namedPlaceGuide, ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 // ─── SOURCE PICKER MODAL ──────────────────────────────────────────────────
 // Lets the user pick where a SO line's goods will come from: a stock lot, or a PO.
 // Filters intelligently by product (case-insensitive substring match).
 export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], currentOrderId = null, onCancel, onPick }: any) {
+  const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const [tab] = useState("STOCK");   // v7.7.2: one source (lots) — the tab state stays only to keep the list mounted
   const [filter, setFilter] = useState(lineItem.product || "");
 
   const productMatch = (p) => !filter || (p || "").toLowerCase().includes(filter.toLowerCase());
 
   const byNumDesc = (a: any, b: any) => String(b?.number || "").localeCompare(String(a?.number || ""), undefined, { numeric: true });
-  const matchingLots = LOTS.filter(l => productMatch(l.product)).sort(byNumDesc); // v6.81.0 (D-58): newest first
+  const matchingLots = sd.lots.filter(l => productMatch(l.product)).sort(byNumDesc); // v6.81.0 (D-58): newest first
   // v7.7.2 (A-SO-PK-1, owner 8 Oct): lots that can be sold come first (in stock → expected → direct); the rest fold away
   const [showNA, setShowNA] = useState(false);
   const canSell = (l: any) => Number(l.availableKg) > 0 && !(l as any).rejected && !/Shipped|Delivered|Cancelled|Closed/i.test(String(l.status || ""));
@@ -39,7 +41,7 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
   const availLots = matchingLots.filter(canSell).sort((a: any, b: any) => stateRank(a) - stateRank(b) || byNumDesc(a, b));
   const naLots = matchingLots.filter((l: any) => !canSell(l));
   // PO lines: flatten POs to their items, filter on product
-  const matchingPOLines = [...PO_REFS].sort(byNumDesc).flatMap(po =>
+  const matchingPOLines = [...sd.poRefs].sort(byNumDesc).flatMap(po =>
     po.items.map(it => ({ ...it, _po: po }))
   ).filter(x => productMatch(x.product)); // v6.81.0 (D-58): newest PO first
 
@@ -74,7 +76,7 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
       pallets: poLine.pallets ?? "",  // v6.99.6 (A-R9-4): pallets follow the PO line (user adjusts)
       // v6.92.0 (A-R8-6, owner ruling): pre-fill the AVAILABLE quantity — the PO line minus what other
       // non-cancelled SOs already reserve from it — never the full line when part of it is sold elsewhere.
-      qty: (() => { const r = poLineReservations(poLine._po, poLine, allOrders, currentOrderId); const base = (poLine.available ?? poLine.qty); const avail = Math.max(0, Math.round((parseFloat(String(base)) || 0) - (r?.totalReserved || 0))); return avail > 0 ? avail : ""; })(),
+      qty: (() => { const r = poLineReservations(poLine._po, poLine, allOrders, currentOrderId, sd); const base = (poLine.available ?? poLine.qty); const avail = Math.max(0, Math.round((parseFloat(String(base)) || 0) - (r?.totalReserved || 0))); return avail > 0 ? avail : ""; })(),
       _poExpectedDelivery: poLine._po.expectedDelivery, // signal up to the form for the delivery date warning
     });
   }
@@ -104,11 +106,11 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
               <div style={{ textAlign: "center", color: "#64748B", padding: 30, fontSize: 13 }}>No matching lots in stock.</div>
             ) : (
               [...availLots, ...(showNA ? naLots : [])].map(lot => {
-                const live = lotReservations(lot, allOrders, currentOrderId);
+                const live = lotReservations(lot, allOrders, currentOrderId, sd);
                 // v6.99.38 (A-R26-3, owner): a class I line may only be offered what class I holds. The lot's raw
                 // stock would show class II fruit as if it could serve a class I sale — which is how a sorted lot
                 // appeared to have more first class than it had.
-                const rawLot = (RAW_LOTS || []).find((l: any) => String(l.number) === String(lot.number)) || null;
+                const rawLot = (sd.rawLots || []).find((l: any) => String(l.number) === String(lot.number)) || null;
                 const lineClass = String(lineItem?.grade || lineItem?.quality || "I").toUpperCase() === "II" ? "II" : "I";
                 const byGrade = rawLot ? gradeAvailabilityOf(rawLot, allOrders, currentOrderId) : null;
                 const classAvailable = byGrade ? (lineClass === "II" ? byGrade.II : byGrade.I) : live.liveAvailable;
@@ -136,7 +138,7 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
                         that has not arrived anywhere yet. */}
                     <div style={{ fontSize: 11, color: "#475569" }}>{lot.size} · {lot.origin} · {lot.packaging}</div>
                     <div style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>
-                      Supplier: {(() => { const po = PO_REFS.find((x: any) => x.number === lot.poRef); return po?.supplierName || po?.supplier?.name || "—"; })()}
+                      Supplier: {(() => { const po = sd.poRefs.find((x: any) => x.number === lot.poRef); return po?.supplierName || po?.supplier?.name || "—"; })()}
                       {(lot as any).lotState === "expected" ? ((lot as any).arrivalDate ? ` · expected ${formatDMY((lot as any).arrivalDate)}` : " · expected") : (lot as any).arrivalDate ? ` · arrived ${formatDMY((lot as any).arrivalDate)}` : " · arrival not recorded"}
                       {(lot as any).lotState === "expected" ? " · at the producer" : (lot as any).lotState === "direct" ? " · producer → client" : (lot as any).locationName ? ` · at ${(lot as any).locationName}` : ""}{/* v7.8.1 (A-SO-PK-2): where the goods are now */}
                     </div>
@@ -165,7 +167,7 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
               <div style={{ textAlign: "center", color: "#AAA", padding: 30, fontSize: 13 }}>No matching POs.</div>
             ) : (
               matchingPOLines.map((line, idx) => {
-                const live = poLineReservations(line._po, line, allOrders, currentOrderId);
+                const live = poLineReservations(line._po, line, allOrders, currentOrderId, sd);
                 const isEmpty = live.liveAvailable <= 0;
                 return (
                 <div key={`${line._po.number}-${line.id}`} onClick={() => pickPO(line)}
@@ -215,11 +217,12 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
 }
 
 export function OrderForm({ order, setOrder, productSuggestions = [], allOrders = [], clients = CLIENTS, contacts = [], productCatalog = [], setProductCatalog, setPackagingTypes = null, onSave, onCancel, onPrint, onEmail , allInvoices = [] }: any) {
+  const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const { confirm: ofConfirm, alert: ofAlert, prompt: ofPrompt, dialogNode: ofNode } = useConfirm(); // v6.44.0 (#6 warning) + v6.63.0 (D-10 forward-only alert)
   // v6.99.15: the destination is a LocationPicker over unifiedLocations() — no module-level list any more.
   const sf = (k, v) => setOrder(o => ({ ...o, [k]: v }));
   // v6.79.0 (W-1): locks read the EFFECTIVE status — a typed label cannot unlock what the shipments locked, or lock what never moved.
-  const soFullyLocked = (_st: any, o?: any) => isShippedOrLater(o || order, SHIPMENTS_REF);
+  const soFullyLocked = (_st: any, o?: any) => isShippedOrLater(o || order, sd.shipments);
   const si = (i, k, v) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.map((it, idx) => idx === i ? { ...it, [k]: v } : it) }));
   const addItem = () => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: [...o.items, { id: nextId(), product: "", variety: "", cnCode: "", origin: "", size: "", quality: "I", unit: "Kg", qty: "", pallets: "", unitPrice: "", sourceType: null, sourceRef: "", sourceLineId: null, packaging: "" }] }));
   const removeItem = (i) => setOrder(o => soFullyLocked(o.status, o) ? o : ({ ...o, items: o.items.filter((_, idx) => idx !== i) }));
@@ -261,14 +264,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
     else setOrder(o => ({ ...o, destinationMode: "other", destinationLocationId: null, destinationText: "" }));
   };
   // v6.11 (#7): destination guidance must match the chosen Incoterm.
-  const incotermDestinationHint = (() => {
-    const ic = String(order.sellIncoterm || "").toUpperCase();
-    if (ic === "EXW") return "EXW — we don't deliver: the client collects from the supplier or our warehouse, so no destination is required.";
-    if (ic === "FCA" || ic === "FOB") return `${ic} — destination is the relay point or the port of departure where we hand the goods over.`;
-    if (ic === "CIF" || ic === "CFR") return `${ic} — destination is the port of arrival.`;
-    if (ic === "DAP" || ic === "DDP") return `${ic} — destination is the client's address, or another address the client indicates.`;
-    return "Select the Sell Incoterm above for destination guidance.";
-  })();
+  const incotermDestinationHint = order.sellIncoterm ? namedPlaceGuide(order.sellIncoterm, "sell").hint : "Select the Sell Incoterm above for destination guidance.";   // v7.22.3 (FZ-21)
 
   // v6.3.0: live duplicate check for import-document numbers. Import permits and
   // ACID numbers are single-use — flag immediately if another SO already carries them.
@@ -312,7 +308,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
 
   // Status lock: once Confirmed+, currency/fx and pricing fields lock to prevent accidental edits
   const lockedStatuses = new Set(["Confirmed", "Loading", "Shipped", "Delivered", "Invoiced", "Closed"]);
-  const isLocked = lockedStatuses.has(effectiveSoStatus(order, SHIPMENTS_REF)); // v6.79.0 (W-1)
+  const isLocked = lockedStatuses.has(effectiveSoStatus(order, sd.shipments)); // v6.79.0 (W-1)
   // v7.13.4 (A-AU-2, owner 9 Oct): the order's rate = NBP of the last working day before the order date, less the safety buffer
   // (Settings → Exchange rates). Not typed; an agreed contract rate only with its reason. Locked on confirmation as before.
   const [fxNoteO, setFxNoteO] = React.useState("");
@@ -344,7 +340,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   // (the goods are on their way; the commercial deal is fixed). A warning is shown
   // before this lock takes effect (see the banner below).
   const FULLY_LOCKED_STATUSES = new Set(["Shipped", "Delivered", "Invoiced", "Closed"]);
-  const fullyLocked = FULLY_LOCKED_STATUSES.has(effectiveSoStatus(order, SHIPMENTS_REF)); // v6.79.0 (W-1)
+  const fullyLocked = FULLY_LOCKED_STATUSES.has(effectiveSoStatus(order, sd.shipments)); // v6.79.0 (W-1)
 
   // Sourcing rule: every line must be sourced (stock lot OR PO in any status) before
   // the SO can move past Draft. This is a hard business rule — we can't promise goods
@@ -353,7 +349,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   const nonDraftStatuses = Object.keys(SO_STATUSES).filter(s => s !== "Draft" && s !== "Cancelled");
   // Is the user currently trying to be in a non-Draft, non-Cancelled status while unsourced?
   const sourcingBlock = !sourcing.allSourced && nonDraftStatuses.includes(order.status);
-  const poReadinessIssues = validatePOReadinessForSO(order.items);
+  const poReadinessIssues = validatePOReadinessForSO(order.items, sd);
   const poReadinessBlock = poReadinessIssues.length > 0 && nonDraftStatuses.includes(order.status);
 
   // Per-line availability check — does each line have enough stock/PO supply to fulfill it?
@@ -364,9 +360,9 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   const availability = useMemo(() => {
     // v6.99.15 (A-R11-9): an order already loaded / shipped / delivered is history, not a promise — its kilos left the lot as SHIP_OUT, so
     // checking them against what remains would always "exceed". The check applies to orders still to be fulfilled.
-    const eff = effectiveSoStatus(order, SHIPMENTS_REF || []);
+    const eff = effectiveSoStatus(order, sd.shipments || []);
     if (["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(eff))) return [];
-    return computeLineAvailability(order.items, allOrders, order.id);
+    return computeLineAvailability(order.items, allOrders, order.id, sd);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order.items, allOrders, order.id, order.status, order.statusOverride]);
   const overageCount = availability.filter(a => a.hasOverage).length;
@@ -399,7 +395,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   const deliveryWarnings = [];
   order.items.forEach((it, idx) => {
     if (it.sourceType === "PO" && it.sourceRef) {
-      const po = PO_REFS.find(p => p.number === it.sourceRef);
+      const po = sd.poRefs.find(p => p.number === it.sourceRef);
       // v6.4.1 fix: field is expectedDeliveryDate — the old name (expectedDelivery)
       // never existed, so this warning could never fire.
       const poETA = po && ((po as any).expectedDeliveryDate || (po as any).expectedDelivery);
@@ -518,7 +514,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
           {/* v6.61.0: a line priced per box with no box weight cannot be
               converted, and inventing one would put a wrong number on an
               invoice. Say so before that happens. */}
-          {(() => { const bad = unresolvedBoxLines(order.items, PACKAGING_TYPES_REF);
+          {(() => { const bad = unresolvedBoxLines(order.items, sd.packagingTypes);
             return bad.length ? (
               <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
                 <strong>Priced per box, but no box weight is set</strong> for {Array.from(new Set(bad)).join(", ")}. Set the packaging on the line so boxes can convert to kilos.
@@ -581,7 +577,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     ships only when ALL of its goods have moved, and an override
                     is allowed but must say so. */}
                 {(() => {
-                  const d = deriveSoStatus(order, SHIPMENTS_REF);
+                  const d = deriveSoStatus(order, sd.shipments);
                   if (!d.derived && !d.overridden) return null;
                   return <div style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, fontSize: 11.5,
                     background: d.overridden ? "#FFFBEB" : "#F0F9FF",
@@ -594,7 +590,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                 <Sel value={order.status || "Draft"} onChange={async e => {
                   const nv = e.target.value;
                   // v6.79.0 (W-1): the lock reads the EFFECTIVE status — what the shipments say.
-                  const effNow = effectiveSoStatus(order, SHIPMENTS_REF);
+                  const effNow = effectiveSoStatus(order, sd.shipments);
                   const wasLocked = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(effNow);
                   const willLock = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(nv));
                   // v6.63.0 (D-10, ruling D4): a locked SO moves FORWARD only.
@@ -612,7 +608,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                   // proceeding records it as a deliberate override so it never
                   // looks like a derived fact.
                   if (isPhysicalStatus(nv)) {
-                    const clash = statusContradiction({ ...order, status: nv, statusOverride: "" }, SHIPMENTS_REF);
+                    const clash = statusContradiction({ ...order, status: nv, statusOverride: "" }, sd.shipments);
                     if (clash) {
                       const go = await ofConfirm({ tone: "warn", title: `Set ${nv} by hand?`,
                         message: `${clash}\n\nSetting it here records an override, so the screen will show it was set by hand rather than taken from the shipments.`,
@@ -739,11 +735,12 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                 <Lbl>Sell Incoterm</Lbl>
                 <Sel value={order.sellIncoterm || ""} onChange={e => sf("sellIncoterm", e.target.value)} disabled={isLocked}>
                   <option value="">— select —</option>
-                  {INCOTERMS_SELL.map(i => <option key={i.code} value={i.code}>{i.code}</option>)}
+                  {order.sellIncoterm && !isIncoterm2020(order.sellIncoterm) && <option value={order.sellIncoterm} disabled>{order.sellIncoterm} — not an Incoterms 2020 rule: choose again</option>}
+                  {INCOTERM_CODES.map(c => <option key={c} value={c}>{incotermLabel(c)}</option>)}
                 </Sel>
                 {order.sellIncoterm && (
                   <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
-                    {INCOTERMS_SELL.find(i => i.code === order.sellIncoterm)?.label}
+                    {incotermLine(order.sellIncoterm, "sell")}
                   </div>
                 )}
               </div>
@@ -754,9 +751,10 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                   // FB-11: the destination options adapt to the sell incoterm — the term decides
                   // where WE deliver, so we surface the right place type first.
                   const ic = String(order.sellIncoterm || "").toUpperCase();
-                  const portLed = ["CIF", "CFR", "FOB", "FCA"].includes(ic);
-                  const clientLed = ["DAP", "DDP"].includes(ic);
-                  const whLed = ic === "EXW";
+                  const np = ruleOf(ic)?.namedPlace || "";   // v7.22.3 (FZ-21): what the named place is, from the one table
+                  const portLed = ["origin-place", "origin-port", "destination-port"].includes(np);
+                  const clientLed = np === "destination-place";
+                  const whLed = np === "seller-premises";
                   return (
                 <Sel value={destMode} onChange={e => setDestMode(e.target.value)}>
                   <option value="client">Client's site{clientLed ? " (recommended)" : ""}</option>
@@ -855,7 +853,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               {productSuggestions.map(p => <option key={p} value={p} />)}
             </datalist>
             {order.items.map((it, i) => {
-              const lineTotal = lineTotalPU(it, PACKAGING_TYPES_REF);
+              const lineTotal = lineTotalPU(it, sd.packagingTypes);
               const lineNeedsSource = !it.sourceType || !it.sourceRef;
               const lineIsBlocking = lineNeedsSource && nonDraftStatuses.includes(order.status);
               const avail = availability[i] || {};
@@ -863,7 +861,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               const lineOverageBlocks = avail.hasOverage && nonDraftStatuses.includes(order.status);
               // v6.99.22 (G-4/G-5, owner approval): sorting turned part of the lot into class II — the line promises a class we no longer have.
               const gradeShort = avail.grade && avail.gradeShort > 0.5 ? avail.gradeShort : 0;
-              const canAdjust = gradeShort > 0 && !soFullyLocked(order.status, order) && !["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(order, SHIPMENTS_REF || [])));
+              const canAdjust = gradeShort > 0 && !soFullyLocked(order.status, order) && !["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(order, sd.shipments || [])));
               return (
                 <div key={i} style={{
                   marginBottom: 12, padding: 12, borderRadius: 8,
@@ -894,7 +892,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     <span style={{ fontSize: 11, fontWeight: 700, color: lineIsBlocking ? "#991B1B" : "#444" }}>
                       {lineIsBlocking ? "⚠ Source required:" : "Source:"}
                     </span>
-                    <SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef) : ""} />
+                    <SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef, sd) : ""} />
                     <button onClick={() => setSourceFor(i)} style={{
                       padding: "3px 10px", borderRadius: 5,
                       border: lineIsBlocking ? "1px solid #991B1B" : "1px solid #E5E7EB",
@@ -1000,14 +998,14 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     {pricingUnitOf(it) === "box" ? (
                       <div><Lbl>Qty (boxes)</Lbl><Inp type="number" value={it.boxes ?? ""} onChange={e => {
                         const b = Math.round(parseFloat(e.target.value) || 0);
-                        const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
+                        const kgPerBox = kgPerBoxForLine(it, sd.packagingTypes);
                         setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? { ...x, boxes: Math.max(0, Math.round(parseNum(b))), qty: kgPerBox > 0 ? Math.round(Math.max(0, Math.round(parseNum(b))) * kgPerBox * 1000) / 1000 : x.qty } : x) }));
                       }} placeholder="e.g. 400" disabled={fullyLocked} /></div>
                     ) : (
                       <div><Lbl>Qty (kg)</Lbl><Inp type="number" value={it.qty} onChange={e => si(i, "qty", e.target.value)} placeholder="e.g. 8000" disabled={fullyLocked} /></div>
                     )}
                     <div><Lbl>Priced per</Lbl><Sel value={pricingUnitOf(it)} disabled={fullyLocked}
-                      onChange={e => setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? convertLineUnit(x, e.target.value, PACKAGING_TYPES_REF) : x) }))}>
+                      onChange={e => setOrder(o => ({ ...o, items: o.items.map((x, ix) => ix === i ? convertLineUnit(x, e.target.value, sd.packagingTypes) : x) }))}>
                       <option value="kg">kg</option>
                       <option value="box">box</option>
                     </Sel></div>
@@ -1017,10 +1015,10 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     <div><Lbl>Coloration</Lbl><CatalogValuePicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product} kind="colorations" value={it.coloration} onChange={(v: string) => si(i, "coloration", v)} disabled={fullyLocked} /></div>
                     <div>
                       <Lbl>Packaging</Lbl>
-                      <PackagingPicker types={PACKAGING_TYPES_REF || []} setTypes={setPackagingTypes} packaging={it.packaging} packagingId={it.packagingId} onPick={(pk: any) => { si(i, "packaging", pk ? pk.label : ""); si(i, "packagingId", pk ? pk.id : null); }} />{/* v7.18.0 (A-AU-1): picked, never typed */}
+                      <PackagingPicker types={sd.packagingTypes || []} setTypes={setPackagingTypes} packaging={it.packaging} packagingId={it.packagingId} onPick={(pk: any) => { si(i, "packaging", pk ? pk.label : ""); si(i, "packagingId", pk ? pk.id : null); }} />{/* v7.18.0 (A-AU-1): picked, never typed */}
                     </div>
                     {/* v6.99.46 (A-PO-11, owner): the same rule as the PO — counts from the line's packaging, manual override marked and reversible */}
-                    {(() => { const ec = effectiveCounts(it, PACKAGING_TYPES_REF || []); const isBoxUnit = pricingUnitOf(it) !== "kg"; return <>
+                    {(() => { const ec = effectiveCounts(it, sd.packagingTypes || []); const isBoxUnit = pricingUnitOf(it) !== "kg"; return <>
                     <div><Lbl>Boxes{isBoxUnit ? "" : (ec.boxesManual ? <span style={{ color: "#B45309" }}> (manual) <button onClick={() => si(i, "boxesManual", null)} title="back to the derived figure" style={{ border: "none", background: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, padding: 0 }}>↺</button></span> : (ec.derived.hasPackaging ? " (derived)" : ""))}</Lbl>
                       {isBoxUnit
                         ? <Inp type="number" value={it.boxes ?? ""} onChange={e => si(i, "boxes", e.target.value)} disabled={fullyLocked} />
@@ -1040,10 +1038,10 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
             <div style={{ marginTop: 14, padding: 14, background: "#F9FAFB", borderRadius: 8, display: "flex", justifyContent: "flex-end", gap: 24 }}>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 10, color: "#888" }}>NET TOTAL</div>
-                <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtMoney(netTotal(order.items), order.currency)}</div>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtMoney(netTotal(order.items, sd), order.currency)}</div>
               </div>
             </div>
-            <div style={{ marginTop: 12, padding: "6px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#166534" }} title="v6.99.6 (A-R9-2): totals of the lines — check before Confirm">Σ {totalsLine(documentTotals(order.items, PACKAGING_TYPES_REF, order.fxRate), order.currency)}</div>
+            <div style={{ marginTop: 12, padding: "6px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#166534" }} title="v6.99.6 (A-R9-2): totals of the lines — check before Confirm">Σ {totalsLine(documentTotals(order.items, sd.packagingTypes, order.fxRate), order.currency)}</div>
           </Card>
 
           {/* Notes */}

@@ -1,6 +1,6 @@
 import { nextId } from "./ids";
 import { dataKey, writeSharedStoreValue } from "./useLocalStoredState";
-import { formatAddress as _fmtAddr, parseAddress as _parseAddr } from "./address.domain";
+import { formatAddress as _fmtAddr } from "./address.domain";
 const formatAddressOneLine = (a: any) => _fmtAddr(a, { oneLine: true });
 // ─── SHARED LOCATIONS (v5.8 trunk, Option B consolidation) ──────────────────
 //
@@ -109,13 +109,13 @@ const BUILTIN_ALL: Location[] = [
   // ── Airports (NEW — for the air-export flow, e.g. blueberries) ──
   L(201, "Airport", "PORT", "Warsaw Chopin Airport — Cargo", "Poland"),
   L(202, "Airport", "PORT", "Frankfurt Cargo Airport", "Germany"),
-];
-export const DEMO_SEEDS: Location[] = BUILTIN_ALL.filter(l => l.legacyType !== "PORT" && !l.aliasOf);
-export const LOCATIONS_ALL_BUILTIN: Location[] = BUILTIN_ALL;   // v6.99.45 (PL-3): the hidden view needs the whole list
+];   // v6.99.45 (PL-3): the hidden view needs the whole list
 // v7.3.4 (A-LOC-2, owner 7 Oct: "no built-in locations — real data only"): the list written in the code is no longer offered anywhere.
 // It survives ONLY as a translation table: a built-in id still used by a real document is copied once into the ordinary
 // locations (same id, the browser's renames applied) by ensureUsedBuiltinsAreOrdinary(), and from then on it is an ordinary,
 // editable location. Unused built-ins simply disappear.
+/** The whole built-in list, hidden places included — read by the suites to resolve any place a fixture names (kept as their seam, v7.22.0). */
+export const LOCATIONS_ALL_BUILTIN: Location[] = BUILTIN_ALL;
 export const LOCATIONS: Location[] = [];
 /** Copy into the ordinary locations every built-in id the documents still use (idempotent; returns how many were added). */
 export function ensureUsedBuiltinsAreOrdinary(usedIds: Set<string>): number {
@@ -375,17 +375,6 @@ export function locText(id: any, fallback = ""): string {
   return l.address ? `${l.name}, ${l.address}` : l.name;
 }
 
-
-
-export function restoreBuiltInLocation(id: number): void {
-  const all = readLocationOverrides() as any;
-  const o = all[String(id)];
-  if (!o) return;
-  delete o.hidden;
-  if (!Object.keys(o).length) clearLocationOverride(id);
-  else writeLocationOverride(id, o);
-}
-
 /** Pure form, for tests: apply an override map to a location list. */
 export function applyLocationOverrides(list: Location[], overrides: Record<string, any>): Location[] {
   return (list || [])
@@ -497,31 +486,6 @@ export function warehouseAddressLocations(contacts: any[]): Location[] {
   return out;
 }
 
-// Candidate "operated" locations for a warehouse tariff: the built-in/custom
-// warehouse-type locations PLUS the warehouse counterparties' own addresses.
-export function warehouseLocationOptions(contacts: any[]): Location[] {
-  const builtins = LOCATIONS.filter(l =>
-    !l.aliasOf &&
-    Number(l.id) < WAREHOUSE_CP_LOC_BASE &&
-    (l.type === "RentedWarehouse" || l.type === "OwnWarehouse" || l.type === "PortWarehouse" || l.type === "BondedWarehouse")
-  );
-  const cp = warehouseAddressLocations(contacts);
-  const seen = new Set<string>();
-  return [...builtins, ...cp].filter(l => { const k = String(l.id); if (seen.has(k)) return false; seen.add(k); return true; });
-}
-
-// Flat list of warehouse destinations (counterparty × address) for destination
-// dropdowns. Each option stores a stable location id and shows company + address.
-export function warehouseDestinationOptions(contacts: any[]): { id: number; contactId: any; name: string; address: string }[] {
-  const out: { id: number; contactId: any; name: string; address: string }[] = [];
-  (contacts || []).filter(isWarehouseContact).forEach((c: any) => {
-    contactAddresses(c).forEach(({ address, index, siteId }) => {
-      out.push({ id: siteId ?? warehouseCpLocId(c.id, index), contactId: c.id, name: c.name, address });   // v6.99.97 (A-ID-1)
-    });
-  });
-  return out;
-}
-
 // ─── COUNTERPARTY ADDRESSES AS LOCATIONS (v6.15, #6) ────────────────────────
 // From / To / Destination must offer the supplier, client and warehouse
 // addresses entered in the Counterparties module — not a separate list. We
@@ -592,58 +556,20 @@ function readContactsFromStorage(): any[] {
 registerCounterpartyLocations(readContactsFromStorage());
 
 
-// ─── v6.73.0: COUNTRY IS A PICKLIST, NOT FREE TEXT ──────────────────────────
-// A supplier's country was typed by hand and one record read "Poalnd". The EU
-// membership lookup failed on the misspelling, so a Polish producer selling to
-// Egypt classified as CROSS_TRADE instead of EXPORT — a wrong customs
-// classification produced silently by a single transposed letter.
-//
-// The list carries every EU state (which is what the movement matrix tests) plus
-// the countries this business actually trades with. Free text is still accepted
-// for anywhere unusual, but the field offers the list first and the integrity
-// checker flags a country it does not recognise.
-export const COUNTRY_LIST: string[] = [
-  // EU-27 — these decide import/export/intra-EU classification
-  "Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark", "Estonia",
-  "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia",
-  "Lithuania", "Luxembourg", "Malta", "Netherlands", "Poland", "Portugal", "Romania",
-  "Slovakia", "Slovenia", "Spain", "Sweden",
-  // Trading partners outside the EU
-  "Albania", "Belarus", "Bosnia and Herzegovina", "Egypt", "Georgia", "Iraq", "Israel",
-  "Jordan", "Kuwait", "Lebanon", "Libya", "Moldova", "Montenegro", "Morocco", "North Macedonia",
-  "Norway", "Oman", "Qatar", "Saudi Arabia", "Serbia", "Switzerland", "Tunisia", "Türkiye",
-  "Ukraine", "United Arab Emirates", "United Kingdom",
-  // Further afield, seen in the data
-  "Cambodia", "Chile", "Colombia", "India", "Kenya", "South Africa", "United States",
-];
-
-const COUNTRY_SET = new Set(COUNTRY_LIST.map(c => c.toLowerCase()));
-
-/** Is this a country the system recognises? Blank is not an error — unknown is. */
-export function isKnownCountry(v: any): boolean {
-  const s = String(v ?? "").trim().toLowerCase();
-  return !s || COUNTRY_SET.has(s);
-}
-
-/** Closest known country to a misspelling, or "" — so a warning can suggest the
- *  fix rather than only reporting the fault. One transposition away is enough. */
-export function suggestCountry(v: any): string {
-  const s = String(v ?? "").trim().toLowerCase();
-  if (!s || COUNTRY_SET.has(s)) return "";
-  const sorted = (x: string) => x.split("").sort().join("");
-  const target = sorted(s);
-  const hit = COUNTRY_LIST.find(c => {
-    const l = c.toLowerCase();
-    return Math.abs(l.length - s.length) <= 1 && sorted(l) === target;
-  });
-  return hit || "";
-}
-
-
 // ── v6.86.0: ONE SOURCE FOR EVERY LOCATION PICKER ─────────────────────────────
 // ports (reference) + the user's custom locations (Settings) + every counterparty
 // site derived from its addresses (warehouse / supplier / client / broker). No
 // module builds its own merge any more; no demo seed appears anywhere.
+/** v7.21.14 (A-RV-37 · FZ-05, owner 12 Oct): what a place IS comes from its TYPE — never from the old one-word code, which
+ *  also calls a place of type Other "PORT". A port is a Port or a Port warehouse; an airport counts only where the list means
+ *  airports (and for "Customs"). A place known only by the old word (no type at all) keeps it. `placeType` is the real type
+ *  where a screen has replaced `type` with the old word (Inventory). */
+export const PORT_TYPES = ["Port", "PortWarehouse"];
+export function placeTypeOf(l: any): string { return String(l?.placeType ?? l?.type ?? ""); }
+export function isPortType(l: any, opts: { airports?: boolean } = {}): boolean {
+  if (!l) return false; const t = placeTypeOf(l);
+  return PORT_TYPES.includes(t) || t === "PORT" || (!!opts.airports && t === "Airport");
+}
 export function unifiedLocations(contacts: any[] = []): Location[] {
   const byId = new Map<string, Location>();
   [...allLocations(), ...counterpartyLocations(contacts || [])].forEach(l => { if (l && !byId.has(String(l.id))) byId.set(String(l.id), l); });
@@ -653,23 +579,6 @@ export function unifiedLocations(contacts: any[] = []): Location[] {
 export function locationById(id: any, contacts: any[] = []): Location | null {
   if (id === null || id === undefined || id === "") return null;
   return unifiedLocations(contacts).find(l => String(l.id) === String(id)) || null;   // v7.7.1 (A-RET-1): no demo fallback — used demo ids became ordinary locations (v7.3.4)
-}
-
-// ── v6.99.29 (A-R19-4, owner 15 Sept): a migrated demo seed that no document points at any more is removed.
-// The v6.86 migration copies a seed into the user's custom places so an old document keeps its address; it never
-// cleaned up afterwards, so a deleted document left its place behind for ever (this is why WH-01 Poznań survived).
-/** v6.99.41 (ADDR-3): split the one-line address of every custom place, once. Idempotent; the text stays. */
-export function migratePlaceAddresses(): number {
-  const list = readCustomLocations();
-  let changed = 0;
-  const next = list.map((p: any) => {
-    if (p?.addr && (p.addr.street || p.addr.city || p.addr.postcode)) return p;
-    if (!String(p?.address || "").trim()) return p;
-    const a = _parseAddr(p.address, p.country); changed++;
-    return { ...p, addr: { street: a.street, postcode: a.postcode, city: a.city, country: a.country || p.country }, addressNeedsCheck: a.needsCheck || undefined };
-  });
-  if (changed) writeCustomLocations(next);
-  return changed;
 }
 
 // ── v6.99.39 (D-1, owner 18 Sept): ONE resolver for how a place is PRINTED ──

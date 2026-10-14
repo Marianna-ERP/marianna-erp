@@ -1,11 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // statement.domain.ts — v6.98.1: STATEMENT OF ACCOUNT per client / supplier
 // A derived view over the Invoices register (invoices, credit/debit notes, payment
 // events incl. bank, advance and offset). One statement per counterparty per
 // currency; opening balance = everything before the period. Finance reads; nothing stored.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export interface StatementLine { date: string; type: "Invoice" | "Credit note" | "Debit note" | "Payment" | "Offset" | "Advance"; ref: string; dueDate?: string; debit: number; credit: number; balance: number; note?: string; overdueDays?: number; }
 export interface Statement { counterparty: string; side: "client" | "supplier"; currency: string; from: string; to: string; opening: number; lines: StatementLine[]; closing: number; overdue: number; aging: { current: number; d30: number; d60: number; d90: number; older: number }; }

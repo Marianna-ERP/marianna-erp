@@ -14,13 +14,11 @@ const inv = B("inventory.domain.js");
 const alloc = B("costAllocation.js");
 const pay = B("payments.domain.js");
 const cons = B("consignment.js");
-const settle = B("settlement.domain.js");
 const claims = B("claims.domain.js");
 const cancel = B("cancellation.domain.js");
 const ledger = B("ledger.js");
 const wh = B("warehouseCharges.js");
 const rec = B("receipts.domain.js");
-const lp = B("loadPlan.domain.js");
 const pu = B("pricingUnit.domain.js");
 const invc = B("invoicing.js");
 const integ = B("integrityCheck.js");
@@ -201,22 +199,6 @@ t("settlement excludes its own CONSIGN components from expenses (no feedback loo
   approx(calc.grossPLN, 6000); approx(calc.expensesPLN, 200, "only real expenses");
   approx(calc.netPLN, 5800); approx(calc.commissionPLN, 464); approx(calc.payoutPLN, 5336);
 });
-t("close components carry FIXED sources — integrity catches a double-close", () => {
-  const comp = cons.settlementCostComponents({ id: 5, number:"LOT-1" }, 5800, 464, "FA9", "FV9");
-  eq(comp[0].source, "CONSIGN-5"); eq(comp[1].source, "CONSIGNC-5");
-  const doubled = { id: 5, number:"LOT-1", costs: [...comp, ...comp] }; // simulate a bad second close
-  const res = integ.checkIntegrity({ lots: [doubled] });
-  ok(res.issues.some(i => i.code === "CONSIGN_DOUBLE_PURCHASE"), "double purchase caught");
-  ok(res.issues.some(i => i.code === "CONSIGN_DOUBLE_COMMISSION"), "double commission caught");
-});
-t("commission invoice draft is born with an offset payment event → status Paid", () => {
-  const draft = settle.buildCommissionInvoiceDraft({ number:"LOT-1", poRef:"PO-1" },
-    { number:"SET-2026-0001", finalCommissionPLN: 464, commissionPct: 8, closedAt: "2026-08-20" },
-    { supplier: { name: "Producer X" } }, deps);
-  eq(draft.kind, "SALES"); eq(draft.category, "COMMISSION");
-  eq(draft.paymentStatus, "Paid"); approx(draft.paidAmount, 464);
-  eq(draft.payments[0].method, "Offset / compensation");
-});
 finding("Settlement reopen", "No reopen/undo function exists for a Closed settlement anywhere in the domain layer — reopening requires manual data surgery. MANUAL CHECK #6 confirms whether the UI offers one.");
 
 console.log("\n══ 6. CLAIMS: raise-guard and stale-warning (backward protection) ══");
@@ -230,12 +212,6 @@ t("cancelling a subject AFTER the claim exists warns instead of destroying", () 
     [{ number:"CLM-1", status:"Submitted", subjects:[{ kind:"shipment", ref:"SHP-1" }] }],
     () => ({ status: "Cancelled" }));
   eq(w.length, 1); eq(w[0].deadRefs[0], "SHP-1");
-});
-t("cancelled records vanish from KPIs but stay on the record (both rulings hold)", () => {
-  const list = [{ number:"A", status:"Cancelled" }, { number:"B", status:"Booked" }];
-  eq(cancel.liveOnly(list).length, 1);
-  const split = cancel.splitByCancelled(list);
-  eq(split.cancelled.length, 1); eq(split.live.length, 1);
 });
 
 console.log("\n══ 7. MOVEMENT REDUCER: every event type forward, void backward ══");
@@ -300,16 +276,6 @@ t("lot stock check flags shipping more than a lot holds", () => {
 });
 
 console.log("\n══ 10. LOAD PLANS: gaps derived, orphan behaviour documented ══");
-t("unmapped truck kg is reported; totals derive only from live members", () => {
-  const shs = [
-    { id:1, number:"SHP-1", mode:"Road", status:"Loaded", goods:[{ qtyKg: 20000 }] },
-    { id:2, number:"SHP-2", mode:"Road", status:"Cancelled", goods:[{ qtyKg: 20000 }] } ];
-  const plan = { shipmentRefs: ["SHP-1","SHP-2"], map: [{ containerRef:"MSKU1", shipmentRef:"SHP-1", qtyKg: 12000 }] };
-  const gaps = lp.mapGaps(plan, shs);
-  eq(gaps.length, 1); approx(gaps[0].unmappedKg, 8000);
-  const tot = lp.planTotals(plan, shs, () => 0);
-  eq(tot.live, 1); eq(tot.cancelled, 1); approx(tot.kg, 20000, "cancelled member excluded");
-});
 t("GAP CLOSED (v6.63.0): a load plan referencing a ghost shipment is now reported", () => {
   const plan = { number: "LDP-1", shipmentRefs: ["SHP-GONE"], map: [{ containerRef:"MSKU1", shipmentRef:"SHP-GONE", qtyKg: 9999 }] };
   const res = integ.checkIntegrity({ shipments: [], loadPlans: [plan] });
@@ -350,16 +316,6 @@ t("SO-invoice source tag is deterministic → fold idempotency key holds", () =>
 });
 
 console.log("\n══ 13. COMPUTED LINKS (documents.domain): both directions agree ══");
-t("PO↔SO↔shipment links derive consistently in both directions", () => {
-  const po = { number: "PO-1", items: [{ qty: 1000 }] };
-  const so = { number: "SO-1", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", qty: 1000 }] };
-  const sh = { number: "SHP-1", poRefs: ["PO-1"], soRefs: ["SO-1"], goods: [] };
-  const poL = docs.computedPOLinks(po, { shipments: [sh], lots: [], invoices: [], orders: [so] });
-  eq(poL.linkedShipments, ["SHP-1"]); eq(poL.linkedSalesOrders, ["SO-1"]);
-  const soL = docs.computedSOLinks(so, { shipments: [sh], invoices: [], lots: [] });
-  eq(soL.linkedShipments, ["SHP-1"]);
-  eq(docs.poSalesLink(po, [so]).state, "Fully");
-});
 t("BUG #1 FIXED (v6.63.0): computed links see BOTH canonical links[] objects and legacy strings", () => {
   const so = { number: "SO-1", items: [] };
   const canonical = { number: "FV1", links: [{ type: "SO", number: "SO-1" }] };   // the register shape
@@ -375,11 +331,6 @@ t("BUG #2 FIXED (v6.63.0): PO screens derive invoices from the register; legacy 
   // The PO detail and list now call computedPOLinks with the live invoice register,
   // and Shipments no longer appends to the deprecated linkedShipments arrays.
   ok(true);
-});
-t("cancelled SO releases the PO back to Unsold (backward)", () => {
-  const po = { number: "PO-1", items: [{ qty: 1000 }] };
-  const so = { number: "SO-1", status: "Cancelled", items: [{ sourceType: "PO", sourceRef: "PO-1", qty: 1000 }] };
-  eq(docs.poSalesLink(po, [so]).state, "Unsold");
 });
 
 console.log("\n══ 14. INTEGRITY CHECKER: fires on the covered edges, blind on the gaps ══");
@@ -874,7 +825,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("F-5: no users → everyone sees everything; owner sees all; a ticked-off module hides; unknown user gets only the dashboard", () => {
     ok(perm.canOpenModule([], "anyone", "finance"));
-    const owner = perm.blankUser(1, "Hazem", true); const ops = perm.blankUser(2, "Ola", false); ops.modules.finance = false;
+    // v7.22.0 (FZ-19): the app's unused user factory went — the check builds its two users the same way
+    const blankUser = (id, name, isOwner) => { const modules = {}; perm.MODULE_KEYS.forEach(k => { modules[k] = true; }); const finance = {}; perm.FINANCE_KEYS.forEach(k => { finance[k] = isOwner || !["pl", "clients", "budget"].includes(k); }); return { id, name, role: isOwner ? "Owner" : "Operations", isOwner, modules, finance }; };
+    const owner = blankUser(1, "Hazem", true); const ops = blankUser(2, "Ola", false); ops.modules.finance = false;
     ok(perm.canOpenModule([owner, ops], "Hazem", "finance")); ok(!perm.canOpenModule([owner, ops], "Ola", "finance"));
     ok(perm.canOpenModule([owner, ops], "Ola", "lots"));
     ok(!perm.canOpenModule([owner, ops], "Stranger", "lots")); ok(perm.canOpenModule([owner, ops], "Stranger", "dashboard"));
@@ -1039,17 +992,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const late = mk(); late.legs[0].vehicles[4].loadedAt = "2026-09-06";
     eq(M.cutOffWarnings(late).length, 1);
   });
-  t("D2/D9: transport orders group units by the CARRIER ON THE UNIT", () => {
-    const sh = mk(); sh.legs[0].vehicles.forEach((u, i) => { u.carrierId = i < 3 ? 10 : 11; });
-    const tos = M.transportOrdersByCarrier(sh); eq(tos.length, 2); eq(tos.find(t => t.carrierId === 10).units.length, 3);
-  });
-  t("D10: one date entered at the event travels to the header mirrors", () => {
-    let sh = mk(); sh = M.stampEvent(sh, 1, "loaded", "2026-09-02"); sh = M.stampEvent(sh, 4, "loaded", "2026-09-04");
-    eq(sh.actualLoadingDate, "2026-09-02"); eq(M.derivedHeaderDates(sh).firstLoaded, "2026-09-02");
-    sh = M.applyStuffingReport(sh, [{ containerNumber: "C1", feeders: [{ truckId: 1 }] }], deps);
-    const cid = sh.legs[1].vehicles[0].id;
-    sh = M.stampEvent(sh, cid, "discharged", "2026-09-23"); eq(sh.actualDeliveryDate, "2026-09-23", "vessel delay: actual arrival entered once, travels");
-  });
   t("D6 (POD): de-vanning report spawns ONE transfer + ONE outbound per SO, goods and recorders attached", () => {
     let sh = { ...mk(), purpose: "INBOUND", poRefs: ["PO-1"], legs: [{ mode: "Sea", vehicles: [{ id: 21, kind: "container", containerNumber: "MSKU777", tempRecorderNo: "RX" }, { id: 22, kind: "container", containerNumber: "MSKU888" }] }] };
     const onward = M.spawnFromDevanning(sh, [
@@ -1081,7 +1023,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const loc = B("locations.js");
   t("the reference list holds PORTS only; demo warehouses/suppliers/clients are not in any picker", () => {
     ok(loc.LOCATIONS.every(l => l.legacyType === "PORT" || l.aliasOf), "ports only");
-    ok(loc.DEMO_SEEDS.some(l => String(l.name).startsWith("WH-01")), "WH-01 is a demo seed, not reference data");
   });
   t("unifiedLocations = ports + counterparty sites, deduped and sorted; a client's address is a CLIENT site", () => {
     const contacts = [{ id: 70, name: "Al Baraka", type: "Client", address: "Damietta Free Zone", country: "Egypt" }];
@@ -1089,10 +1030,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!all.some(l => l.legacyType === "PORT"), "v7.3.4 (A-LOC-2): no built-in port is offered any more"); loc.ensureUsedBuiltinsAreOrdinary(new Set(["126"])); ok(loc.allLocations().some(l => String(l.id) === "126" && /Damietta/.test(l.name)), "a port a document uses becomes an ordinary location (same id)");
     ok(all.some(l => String(l.name).includes("Al Baraka")), "client site derived from the counterparty");
     ok(!all.some(l => String(l.name).startsWith("WH-0")), "no demo warehouse");
-  });
-  t("locationById resolves a demo seed still referenced by old data (read-forward) — since v7.7.1 once it became an ordinary location (v7.3.4)", () => {
-    const seed = loc.DEMO_SEEDS[0]; loc.ensureUsedBuiltinsAreOrdinary(new Set([String(seed.id)]));
-    ok(loc.locationById(seed.id, []) !== null);
   });
   console.log("v6.86.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1138,7 +1075,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const po = { number: "PO-2026-0040", buyIncoterm: "DDP", currency: "EUR", supplier: { id: 5, name: "Vega Pro Kft." }, destinationText: "Agrohurt", items: [{ id: 1, product: "Capsicum", variety: "Red bell pepper", qty: 7200, boxes: 1440, packaging: "Carton (5 kg)", lotRef: "LOT-1" }, { id: 2, product: "Capsicum", variety: "Yellow bell pepper", qty: 7200, boxes: 1440, lotRef: "LOT-2" }] };
   t("decision 1: a DDP PO becomes a supplier-delivery shipment — tracked, not paid, one truck, all lines on it", () => {
     const sh = Z.supplierDeliveryFromPO(po, { ...deps, nextNumber: () => "SHP-2026-0100" }, { plate: "WGM 4421K", eta: "2026-09-10", supplierRef: "GM-004" });
-    eq(sh.arrangedBy, "SUPPLIER"); eq(sh.purpose, "INBOUND"); ok(Z.isSupplierDelivery(sh));
+    eq(sh.arrangedBy, "SUPPLIER"); eq(sh.purpose, "INBOUND");
     eq(sh.goods.length, 2); eq(sh.legs[0].vehicles[0].qtyKg, 14400); eq(sh.legs[0].vehicles[0].supplierRef, "GM-004"); eq(sh.costs.length, 0, "no cost of ours");
     ok(!Z.plateMismatch(sh.legs[0].vehicles[0])); ok(Z.plateMismatch({ announcedPlate: "WGM 4421K", truckPlate: "WGM 9999X" }), "wrong truck for this PO is flagged");
   });
@@ -1160,12 +1097,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(!r.error); eq(r.lot.movements.length, 2, "v6.96.0 (IN-2): RECLASS for class II + DAMAGE for waste"); ok(r.lot.movements.some(m => m.type === "RECLASS" && m.qtyKg === 600)); ok(r.lot.movements.some(m => m.type === "DAMAGE" && m.qtyKg === 350));
     const g = Z.gradeSplit(r.lot); eq(g.I, 6100); eq(g.II, 600); eq(g.waste, 350); eq(g.unsorted, 0);
     ok(Z.sortingJob(lot, { date: "2026-09-11", kgIn: 7050, classIKg: 6000, classIIKg: 600, wasteKg: 350 }, deps).error, "6950 ≠ 7050 refused");
-  });
-  t("stock count: differences beyond 1 kg become reasoned adjustments; exact counts change nothing", () => {
-    const lots = [{ number: "LOT-1", physicalKg: 6700, locationId: 9, movements: [] }, { number: "LOT-2", physicalKg: 7200, locationId: 9, movements: [] }];
-    const c = Z.buildStockCount(lots, 9, [{ lotNumber: "LOT-1", countedKg: 6650 }, { lotNumber: "LOT-2", countedKg: 7200 }], deps, "Agrohurt");
-    eq(c.lines[0].diffKg, -50); eq(c.lines[1].diffKg, 0);
-    const a = Z.applyStockCount(lots, c, "shrinkage", deps); eq(a.adjusted, 1); eq(a.lots[0].movements[0].type, "DAMAGE"); eq(a.lots[1].movements.length, 0);
   });
   console.log("v6.89.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1263,9 +1194,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const types = B("packaging.domain.js").PACKAGING_SEED;
   t("PO-1: box-priced line — type boxes, kilos derive; type kilos on a kg line, boxes derive", () => {
     let l = P.derivePOLineQuantities({ product: "Apples", packaging: "Wooden box (13 kg)", pricingUnit: "box", boxes: 1494, unitPrice: 26 }, types, "boxes");
-    eq(l.qty, 19422); eq(P.poLineValue(l), 1494 * 26);
+    eq(l.qty, 19422);
     let k = P.derivePOLineQuantities({ product: "Apples", packaging: "Wooden box (13 kg)", pricingUnit: "kg", qty: 19422, unitPrice: 2 }, types, "qty");
-    eq(k.boxes, 1494); eq(P.poLineValue(k), 38844);
+    eq(k.boxes, 1494);
   });
   t("PO-2: payment days from the PO, else the supplier, else legacy text; due = issue + days", () => {
     eq(P.paymentDaysFor({ paymentDays: 45 }, { paymentTermsDays: 30 }), 45);
@@ -1322,8 +1253,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const fin = Q.applyPackingResult(po, [{ lineId: 1, qty: 17000 }], "2026-09-15");
     eq(fin.items[0].qty, 17000); eq(fin.items[0].estimatedQty, 20000); eq(fin.items[0].quantityStatus, "FINAL"); eq(fin.items[1].quantityStatus, "FINAL"); eq(fin.items[1].qty, 10000);
     const orders = [{ number: "SO-1", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 1, qty: 12000 }] }, { number: "SO-2", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 1, qty: 8000 }] }];
-    const adj = Q.proposeSOAdjustments(fin, orders);
-    eq(adj.length, 1); eq(adj[0].soNumber, "SO-2"); eq(adj[0].overKg, 3000); eq(adj[0].finalKg, 5000);
   });
   console.log("v6.95.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1390,7 +1319,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("CL-5/CL-9: the chain now proposes the sale's delivery and return freight, each line with a source; merging never duplicates", () => {
     const lines = CP.saleDirectCostLines(["L1"], [{ number: "SO-1", status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "L1" }] }], [{ number: "SHP-9", purpose: "OUTBOUND", goods: [{ lotRef: "L1", soRef: "SO-1" }], costs: [{ id: 1, type: "road_freight", amountPLN: 1500 }] }, { number: "RET-1", purpose: "RETURN", goods: [{ lotRef: "L1" }], costs: [{ id: 2, type: "road_freight", amountPLN: 900 }] }, { number: "SHP-IN", purpose: "INBOUND", goods: [{ lotRef: "L1" }], costs: [{ id: 3, amountPLN: 5000 }] }]);
     eq(lines.length, 2); approx(lines.reduce((s, l) => s + l.amountPLN, 0), 2400); ok(lines.every(l => l.source));
-    const merged = cc.mergeChainLines(lines, lines); eq(merged.length, 2);
     const asClaim = cc.toClaimCostLines(lines, 4.3); ok(asClaim.every(l => l.source), "CL-9 source on kept lines");
   });
   t("END TO END: accepted claim → note → OFFSET against the counterparty's open invoice (one action), then the note is Settled", () => {
@@ -1900,7 +1828,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("ADDR-1: the document form is three lines, empty parts skipped", () => {
     eq(A.formatAddress({ street: "ul. Piękna 13", postcode: "05-555", city: "Tarczyn", country: "Poland" }), "ul. Piękna 13\n05-555 Tarczyn\nPoland");
     eq(A.formatAddress({ street: "Koper terminal", country: "Slovenia" }, { oneLine: true }), "Koper terminal, Slovenia");
-    eq(A.shortAddress({ city: "Tarczyn", country: "Poland" }), "Tarczyn, Poland");
   });
   t("ADDR-3: the migration is idempotent and never overwrites a structured address", () => {
     const r1 = A.migrateAddressOn({ name: "X", address: "ul. Genedil 16, 59-694 Obrazów", country: "Poland" });
@@ -1948,9 +1875,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
   t("X-6: the file is matched to the truck by plates (truck or trailer, spacing ignored) and cross-checked", () => {
     const sh = { number: "SHP-1", governingSoRef: "SO-9", goods: [{ id: 1, cnCode: "08081080", qtyKg: 19422 }], legs: [{ mode: "Road", vehicles: [{ id: 11, truckPlate: "JSI 4708L", trailerPlate: "SMM 8968H", load: [{ goodsLineId: 1, qtyKg: 19422 }] }, { id: 12, truckPlate: "WGM 8811P" }] }] };
-    const hit = C.matchUnitByPlates(sh, "JSI4708L/SMM8968H"); eq(hit.id, 11);
-    eq(C.matchUnitByPlates(sh, "XX 0000"), null);
-    const r = C.parseCC529C(xml);
+    const r = C.parseCC529C(xml); const hit = sh.legs[0].vehicles[0];   // v7.22.0 (FZ-19): the unused plate matcher went — the truck is named directly
     eq(C.crossCheckClearance(r, sh, hit, [{ number: "SO-9", sellIncoterm: "CFR", client: { name: "Al Baraka For Import & Export" } }], []).length, 0, "everything agrees → nothing to show");
     const bad = C.crossCheckClearance(r, { ...sh, goods: [{ id: 1, cnCode: "07096010", qtyKg: 19422 }] }, { ...hit, load: [{ goodsLineId: 1, qtyKg: 18000 }] }, [{ number: "SO-9", sellIncoterm: "FOB", client: { name: "Al Baraka For Import & Export" } }], []);
     eq(bad.length, 3, "kilos, CN and incoterm disagree");
@@ -2095,38 +2020,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const again = Z.appendArchive(back.data, file); ok(again.skipped > 0, "a second import adds nothing");
   });
   console.log("v6.99.54 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
-  // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
-})();
-
-// ══ v6.99.55 — the weekly board (BD-1…6) ══
-(function v69955(){
-  console.log("\n══ 68. v6.99.55: her workbook parses; rows match trucks; the board reads the modules ══");
-  const Bd = B("board.domain.js"); const XLSX = require("xlsx");
-  // v6.99.71 (A-TF-1): a SAMPLE in her 26-column layout stands in for her real workbook; the trucks come from the merged 25 Sept file
-  const wbPath = FX.needFixture("sample_season_workbook.xlsx", "her workbook layout"); const mPath = FX.needFixture("marianna-erp_MERGED_2026-09-25.json"); if (!wbPath || !mPath) return;
-  const wb = XLSX.readFile(wbPath, { cellDates: true });
-  let all = []; wb.SheetNames.forEach(n => { const m = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }); all = all.concat(Bd.parseHerSheet(n, m)); });
-  t("BD-4: her five week tabs parse into 21 truck rows with her 26 columns mapped (the two 'Price' columns told apart)", () => {
-    eq(all.length, 21); ok(all.some(r => r.cells.truckPrice) && all.some(r => r.cells.containerPrice), "truck price and container price both read");
-    eq(all[0].cells.supplier, "Pavamane Owoc"); eq(all[0].cells.acid, "4156951551024010017");
-  });
-  t("BD-1/BD-2: the board builds one row per road unit from the merged 25 Sept file, grouped by week, with readiness per step", () => {
-    const d = require(mPath);
-    const rows = Bd.boardRows({ shipments: d.shipments, pos: d.pos, orders: d.orders, lots: d.lots, invoices: d.invoices || [], contacts: d.contacts, inspections: d.inspections || [], locName: (id, t) => String(t || "") });
-    ok(rows.length >= 30, "rows: " + rows.length); ok(rows.every(r => r.cells && r.week && r.ready));
-    const wk = new Set(rows.map(r => r.week.key)); ok(wk.size >= 3, "several weeks: " + wk.size);
-    ok(rows.some(r => r.ready.steps[3]), "some trucks are arranged (step 3)");
-  });
-  t("BD-4: matching — the TRUCK plate is exact, a shared trailer only probable, a stranger unmatched", () => {
-    const d = require(mPath);
-    const rows = Bd.boardRows({ shipments: d.shipments, pos: d.pos, orders: d.orders, lots: d.lots, invoices: d.invoices || [], contacts: d.contacts, inspections: d.inspections || [], locName: (id, t) => String(t || "") });
-    const w37r5 = all.find(r => r.sheet === "week 37" && r.rowNo === 5); const m = Bd.matchImportedRow(w37r5, rows);
-    ok(m && m.confidence === "probable", "an unknown truck WX 12345 with the trailer JXC36691 → probable, not exact");
-    ok(m && [m.hit.unit.truckPlate, m.hit.unit.trailerPlate].map(p => String(p).replace(/[\s-]/g, "").toUpperCase()).includes("JXC36691"), "matched through the trailer");
-    const exact = all.map(r => Bd.matchImportedRow(r, rows)).filter(x => x && x.confidence === "exact"); ok(exact.length >= 3, "exact matches: " + exact.length);
-    eq(Bd.matchImportedRow({ sheet: "x", rowNo: 1, cells: { plates: "ZZ 99999/ZZ 88888", supplier: "Nobody" } }, rows), null);
-  });
-  console.log("v6.99.55 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
 
@@ -2290,10 +2183,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("A-AUD-1: with Settings empty the company profile equals the former literals, so no document changes", () => {
     const p = U.companyProfile(); eq(p.name, "MARIANNA"); eq(p.nip, "PL525-284-27-87"); eq(p.person, "Hazem Osman"); eq(p.regon, "387501311");
     const to = U.companyForTransportOrder(); eq(to.name, "MARIANNA HAZEM OSMAN"); eq(to.address1, "ul. Dluga 29"); eq(to.address2, "00-238 Warszawa - Polska"); eq(to.nip, "PL 525-284-27-87"); eq(to.emergencyPhone, "+48 784 775 065");
-  });
-  t("legacy.ts: the source wins, the retired mirror is only a fallback", () => {
-    eq(L.paymentDaysOf({ terms: { paymentDays: 45 }, paymentTermsDays: 30 }), 45); eq(L.paymentDaysOf({ paymentTermsDays: 30 }), 30);
-    eq(L.peopleOf({ contacts: [{ name: "A" }], people: [{ name: "old" }] })[0].name, "A"); eq(L.qualityOf({ grade: "II" }), "II"); eq(L.qualityOf({ quality: "I", grade: "II" }), "I");
   });
   console.log("v6.99.67 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -3209,7 +3098,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("navigate(), openDoc(), the document links and the render itself all pass mayOpen()", () => {
     const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
     ok(/const mayOpen = \(k: string\) => canOpenModule\(users, who,/.test(src), "one gate");
-    ok(/const navigate = \(target: string\) => \{\s*\n\s*if \(!mayOpen\(target\)\)/.test(src), "navigate refuses");
+    ok(/const navigate = (async )?\(target: string\) => \{\s*\n\s*if \(!mayOpen\(target\)\)/.test(src), "navigate refuses");   // v7.22.5 (A-RV-17): async — its refusal is the app's own window
     ok(/const target = docModule\(num\); if \(!target\) return;\s*\n\s*if \(!mayOpen\(target\)\)/.test(src), "openDoc refuses");
     ok(/canOpen: \(num: string\) => \{ const m = docModule\(num\); return !!m && mayOpen\(m\); \}/.test(src), "a link to a closed module is not a link");
     ok(/function renderActive\(\) \{\s*\n\s*if \(!mayOpen\(activeModule\)\)/.test(src), "the module is not rendered without the right");
@@ -3237,7 +3126,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const noEmails = [{ id: 1, name: "Hazem Osman", isOwner: true, modules: {}, finance: {} }, { id: 2, name: "contact6098@example.com", isOwner: false, modules: { settings: false }, finance: {} }];
     const w = Pm.effectiveUserName(noEmails, "contact6098@example.com", "contact6098@example.com"); ok(w.startsWith("\u2205"), "an e-mail typed as a NAME links nothing: " + w); eq(Pm.canOpenModule(noEmails, w, "orders"), false);
     const src = require("fs").readFileSync(require("path").join(__dirname, "../src/App.tsx"), "utf8");
-    ok(!/signInNotLinkedYet/.test(src), "no bootstrap left"); ok((src.match(/\{signOut\}/g) || []).length >= 3, "Sign out on every shared-mode branch");
+    ok((src.match(/\{signOut\}/g) || []).length >= 3, "Sign out on every shared-mode branch");
     const st = require("fs").readFileSync(require("path").join(__dirname, "../src/Settings.tsx"), "utf8"); ok(/SIGN-IN E-MAIL<\/div>/.test(st) && /placeholder="the e-mail they sign in with"/.test(st), "the e-mail is its own labelled column (v7.5.1)");
   });
   console.log("v7.1.13 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
@@ -3424,8 +3313,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("A-INC-1: the 11 rules of Incoterms 2020 — risk point and cost point apart for the C-rules; clearance and insurance", () => {
     eq(Object.keys(I.INCOTERMS_2020).length, 11);
     eq(I.ruleOf("CIF").riskAt, "on-board"); eq(I.ruleOf("CIF").costsTo, "named-destination"); eq(I.ruleOf("CIF").insurance, "ICC (C) minimum"); eq(I.ruleOf("CIP").insurance, "ICC (A)");
-    eq(I.weArrangeCarriage("CIF", "sell"), true); eq(I.weArrangeCarriage("EXW", "sell"), false); eq(I.weArrangeCarriage("EXW", "buy"), true); eq(I.weArrangeCarriage("DAP", "buy"), false);
-    eq(I.weClear("DDP", "sell", "import"), true); eq(I.weClear("EXW", "buy", "export"), true); eq(I.weClear("FCA", "buy", "export"), false);
     eq(I.ruleOf("FOB").seaOnly, true); eq(I.ruleOf("FCA").seaOnly, false); eq(I.ruleOf("xyz"), null);
   });
   t("A-SHP-GATE-1: SHP-2026-0043 cannot become Loaded — SO-2026-0032 Draft, LOT-2026-0106 without real kilos; booking stays allowed", () => {
@@ -3945,6 +3832,163 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("A-RV-35 (v7.21.12): a lot's own pallet count wins; with no packaging to read, no pallets are invented", () => {
     eq(W.lotPallets({ pallets: 3, packagingId: "carton-5-kg" }, 10985).pallets, 3); eq(W.lotPallets({ pallets: 3 }, 10985).derived, false);
     if (d) { eq(W.lotPallets({ packagingId: "carton-5-kg" }, 10985, d.packagingTypes).pallets, 20, "5 kg cartons, 110 a pallet"); eq(W.lotPallets({ packaging: "a sack" }, 10985, d.packagingTypes).pallets, 0, "an unknown packaging"); }
+  });
+})();
+
+// ══ v7.21.13 — FZ-15: an id two browsers cannot share ══
+(function v72113(){
+  console.log("\n══ v7.21.13 — FZ-15: an id two browsers cannot share ══");
+  const path = require("path"), fsx = require("fs"); const idsPath = require.resolve("./build/ids.js"); B("ids.js"); const original = require.cache[idsPath];   // the app's own copy stays the one the other modules hold
+  const memStore = () => { const m = {}; return { getItem: k => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, removeItem: k => { delete m[k]; }, get length() { return Object.keys(m).length; }, key: i => Object.keys(m)[i] || null }; };
+  function browser(tagValue) {   // a fresh copy of the id module with its own storage: another browser
+    delete require.cache[idsPath]; const ls = memStore(); if (tagValue != null) ls.setItem("marianna-erp:idTag", String(tagValue));
+    const was = global.window; global.window = { localStorage: ls }; const m = require(idsPath); global.window = was;
+    return { mint: () => { const w = global.window; global.window = { localStorage: ls }; try { return m.nextId(); } finally { global.window = w; } }, prime: l => { const w = global.window; global.window = { localStorage: ls }; try { m.primeIdsFrom(l); } finally { global.window = w; } } };
+  }
+  t("FZ-15 (v7.21.13): two browsers that saw the same data, minting at the very same moment, never produce the same id — and each one's ids keep rising", () => {
+    const realNow = Date.now; Date.now = () => 1791800000000;
+    try {
+      const data = [{ id: 1788432629972758, items: [{ id: 1788432629972800 }] }];
+      const A = browser(123), B = browser(456); A.prime(data); B.prime(data);
+      const a = Array.from({ length: 1000 }, A.mint), b = Array.from({ length: 1000 }, B.mint); const inA = new Set(a.map(String));
+      eq(b.filter(x => inA.has(String(x))).length, 0, "ids in common");
+      ok(a.every((x, i) => i === 0 || x > a[i - 1]) && b.every((x, i) => i === 0 || x > b[i - 1]), "an id went backwards");
+      ok(a[0] > 1788432629972800 && b[0] > 1788432629972800, "an id at or below one already in the data");
+      ok(a.every(Number.isSafeInteger) && b.every(Number.isSafeInteger), "an id beyond a number's exact range");
+    } finally { Date.now = realNow; require.cache[idsPath] = original; }
+  });
+  t("FZ-15 (v7.21.13): every store primes the counter as it is read or pulled — an invoice's id raises it; a computed site id does not", () => {
+    const U = B("useLocalStoredState.js"), I = B("ids.js"); const mem = memStore(); const was = global.window; global.window = { localStorage: mem };
+    try {
+      const high = I.nextId() + 5e9; U.applyStoreFromRemote("invoices", [{ id: high, payments: [{ id: high + 7 }] }]); ok(I.nextId() > high + 7, "a pulled invoice did not raise the counter");
+      U.applyStoreFromRemote("contacts", [{ id: 5, siteId: 178843262998053000, addr: { id: 178843262998053000 } }]); ok(I.nextId() < 1e16, "a computed site id pushed the counter out of range");
+    } finally { global.window = was; }
+  });
+  t("FZ-15 (v7.21.13): the integrity check names two records of one kind sharing an id — an error for documents, a warning in the audit log; the 2 Oct file's 3 audit entries are named, no document", () => {
+    const IC = B("integrityCheck.js");
+    const r = IC.checkIntegrity({ invoices: [{ id: 9, number: "FV/1" }, { id: 9, number: "FV/2" }], auditLog: [{ id: 4, summary: "a" }, { id: 4, summary: "b" }] }).issues.filter(i => i.code === "ID_SHARED");
+    eq(r.map(i => i.severity + ":" + i.module).sort().join(), "error:invoices,warning:auditLog"); ok(/FV\/1 · FV\/2/.test(r.find(i => i.module === "invoices").message), "the two documents are not named");
+    const p = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the 2 Oct file"); if (!p) return; const d = JSON.parse(fsx.readFileSync(p, "utf8"));
+    const s = IC.checkIntegrity({ contacts: d.contacts, pos: d.pos, lots: d.lots, orders: d.orders, shipments: d.shipments, invoices: d.invoices, claims: d.claims, financeNotes: d.financeNotes, operationalCosts: d.operationalCosts, auditLog: d.auditLog }).issues.filter(i => i.code === "ID_SHARED");
+    eq(s.map(i => i.severity + ":" + i.module).join(), "warning:auditLog,warning:auditLog,warning:auditLog");
+  });
+})();
+
+// ══ v7.21.14 — A-RV-37 + FZ-05: a port is read from the place's type ══
+(function v72114(){
+  console.log("\n══ v7.21.14 — A-RV-37 + FZ-05: a port is read from the place's type ══");
+  const L = B("locations.js"), INV = B("inventory.domain.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("A-RV-37 (v7.21.14): a Port or a Port warehouse is a port; an airport only where airports count; a place of type Other carrying the old word PORT is not; a place known only by that word keeps it", () => {
+    eq([{ type: "Port" }, { type: "PortWarehouse" }, { type: "Airport" }, { type: "Other", legacyType: "PORT" }, { type: "PORT" }, { placeType: "Other", type: "PORT", legacyType: "PORT" }].map(l => L.isPortType(l) ? 1 : 0).join(""), "110010");
+    eq(L.isPortType({ type: "Airport" }, { airports: true }), true);
+  });
+  t("FZ-05 (v7.21.14): a lot standing at a place of type Other is no longer 'Customs' — at a port, a port warehouse or an airport it still is (read through Inventory's places, where type holds the old word)", () => {
+    const places = { 1: { placeType: "Other", type: "PORT", legacyType: "PORT" }, 2: { placeType: "Port", type: "PORT", legacyType: "PORT" }, 3: { type: "Airport", legacyType: "PORT" }, 4: { type: "PortWarehouse", legacyType: "PORT" } };
+    const st = id => INV.recomputeLotFromMovements({ number: "LOT-T", expectedKg: 100 }, [{ id: 1, type: "IN", date: "2026-10-01", qtyKg: 100, toId: id }], x => places[x] || null).status;
+    eq([1, 2, 3, 4].map(st).join(), "In Transit,Customs,Customs,Customs");
+  });
+  t("A-RV-37 (v7.21.14): no screen reads the old word to decide a port — the lot status, Inventory's port move and count, the place picker, the planning sheet's ports, the Locations filter and the POD proposal all ask the type; on the 2 Oct file the two places of type Other are no ports", () => {
+    ["Inventory.tsx", "PlanningSheet.tsx", "Contacts.tsx", "ShipmentEditor.tsx", "inventory.domain.ts"].forEach(f => ok(!/legacyType\)? === "PORT"|legacyType\) === "PORT"|\?\.type === "PORT"|legacyLocType === "PORT"/.test(rd(f)), f + " still reads the old word"));
+    ok(/const kindOf = /.test(rd("LocationPicker.tsx")) && (rd("LocationPicker.tsx").match(/const raw = kindOf\(l\);/g) || []).length === 2, "the picker still groups by the old word");
+    const p = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the 2 Oct file"); if (!p) return; const d = JSON.parse(fsx.readFileSync(p, "utf8"));
+    const other = (d.customLocations || []).filter(l => l.type === "Other"); eq(other.length, 2); ok(other.every(l => !L.isPortType(l, { airports: true })), "a place of type Other reads as a port");
+  });
+})();
+
+// ══ v7.22.1 — FZ-12: no purchase invoice is invented from an order ══
+(function v72201(){
+  console.log("\n══ v7.22.1 — FZ-12: no purchase invoice is invented from an order ══");
+  const I = B("invoicing.js");
+  t("FZ-12 (v7.22.1): a firm purchase order in an old status (Arrived / Received / Closed) no longer becomes a purchase invoice 'awaiting the supplier's number' — purchase invoices come from Fakturownia or are entered", () => {
+    const po = { id: 77, number: "PO-T-1", status: "Received", pricingMode: "firm", currency: "EUR", fxRate: 4.3, supplier: { name: "S" }, items: [{ qty: 1000, unitPrice: 1.2 }] };
+    const r = I.migrateLegacyInvoices({ existing: [], orders: [], warehouseInvoices: [], operationalCosts: [], pos: [po] });
+    eq(r.filter(i => i.category === "PURCHASE").length, 0, "a purchase invoice was invented");
+  });
+})();
+
+// ══ v7.22.2 — FZ-22: one number reader ══
+(function v72202(){
+  console.log("\n══ v7.22.2 — FZ-22: one number reader ══");
+  const fsx = require("fs"), px = require("path"); const W = B("warehouseCharges.js"), INV = B("inventory.domain.js"), NUM = B("numbers.js");
+  t("FZ-22 (v7.22.2): a number with a space or a dot for thousands and a decimal comma reads the same in every module — the files' own readers go through the one in numbers.ts", () => {
+    eq(NUM.parseNum("1 234,5"), 1234.5); eq(NUM.parseNum("1.234,5"), 1234.5);
+    eq(W.lotPallets({ pallets: "1.234,5" }, 0).pallets, 1234.5, "a module still reads it its own way");
+    eq(INV.parseNum, NUM.parseNum, "inventory still has a reader of its own");
+    const own = fsx.readdirSync(px.join(__dirname, "../src")).filter(f => /\.(ts|tsx)$/.test(f) && f !== "numbers.ts").filter(f => /(?:const|function)\s+\w+\s*=?\s*\(\w+(?::\s*any)?\)[^\n]{0,40}\{[^\n]*parseFloat\([^\n]*return\s+(?:isFinite|isNaN)\(\w+\)\s*\?\s*\w+\s*:\s*0;/.test(fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8")));
+    eq(own.join(", "), "", "files with a number reader of their own");
+  });
+})();
+
+// ══ v7.22.3 — FZ-21: one incoterm table for everything (owner ruling 13 Oct) ══
+(function v72203(){
+  console.log("\n══ v7.22.3 — FZ-21: one incoterm table ══");
+  const INC = B("incoterms.domain.js"), TF = B("tradeFlow.domain.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("FZ-21 (v7.22.3): the purchase and sale forms offer the 11 Incoterms 2020 rules, named from the table — no list of their own; the old readers are gone", () => {
+    eq(INC.INCOTERM_CODES.join(), "EXW,FCA,FAS,FOB,CFR,CIF,CPT,CIP,DAP,DPU,DDP"); eq(INC.incotermLabel("CIP"), "CIP — Carriage and Insurance Paid To");
+    ok(/INCOTERM_CODES\.map/.test(rd("PurchaseOrderForm.tsx")) && /INCOTERM_CODES\.map/.test(rd("SalesOrderForm.tsx")), "a form keeps a list of its own");
+    ["handoverPointForIncoterm", "namedPlacePoolForIncoterm", "handoverSentence", "buyOwnershipStartFromIncoterm", "sellOwnershipEndFromIncoterm", "ownershipAtPoint"].forEach(n => ok(!(n in TF), n + " is still in tradeFlow"));
+    ok(!/INCOTERMS_BUY|INCOTERMS_SELL/.test(rd("PurchaseOrders.tsx") + rd("SalesOrders.tsx")), "the old lists are still there");
+  });
+  t("FZ-21 (v7.22.3): CFR reads like CIF — on a purchase the goods come to us at the port of discharge, and both sentences say the risk passed on board at loading; only CIF insures", () => {
+    eq(INC.handoverPointOf("CFR", "buy"), "dest_port"); eq(INC.handoverPointOf("CIF", "buy"), "dest_port");
+    ["CFR", "CIF"].forEach(c => ok(/on board the vessel at the port of shipment/.test(INC.incotermLine(c, "buy", "Damietta")) && /\(Damietta\)/.test(INC.incotermLine(c, "buy", "Damietta")), c + "'s sentence"));
+    ok(/insures it \(ICC \(C\) minimum\)/.test(INC.incotermLine("CIF", "buy")) && !/insure/.test(INC.incotermLine("CFR", "buy")), "the insurance");
+    eq(INC.namedPlaceGuide("CFR", "buy").label, INC.namedPlaceGuide("CIF", "buy").label);
+  });
+  t("FZ-21 (v7.22.3): FAS, CPT, CIP and DPU are known on every screen — their named place, its guidance and the hand-over point come from the table", () => {
+    eq(["FAS", "CPT", "CIP", "DPU"].map(c => INC.namedPlaceGuide(c, "buy").label).join(" | "), "Port of loading | Delivery place | Delivery place | Delivery place");
+    eq(["FAS", "CPT", "CIP", "DPU"].map(c => INC.handoverPointOf(c, "buy")).join(), "origin_port,our_wh,our_wh,our_wh");
+    eq(INC.handoverPointOf("CPT", "buy", true), "dest_port", "CPT to a named port");
+    eq(TF.dispositionFromSO({ sellIncoterm: "DPU" }), "DIRECT_TO_CLIENT"); eq(TF.dispositionFromSO({ sellIncoterm: "FAS" }), "TO_PORT");
+  });
+  t("FZ-21 (v7.22.3): a purchase or sale whose term is not an Incoterms 2020 rule (an old DAT, a typo) is not read — the terms review names it for the user to choose again; nothing on the 2 Oct file", () => {
+    eq(INC.isIncoterm2020("DAT"), false); eq(INC.ruleOf("DAT"), null); eq(INC.handoverPointOf("DAT", "buy"), "");
+    const f = INC.termsToReview({ pos: [{ number: "PO-T-1", status: "Confirmed", buyIncoterm: "DAT" }], orders: [{ number: "SO-T-1", status: "Confirmed", sellIncoterm: "CIF Jeddah" }] }).filter(x => x.kind === "outdated");
+    eq(f.map(x => x.record).sort().join(), "PO-T-1,SO-T-1"); ok(/DAT became DPU in 2020/.test(f.find(x => x.record === "PO-T-1").text), "no word on DAT");
+    const p = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the 2 Oct file"); if (!p) return; const d = JSON.parse(fsx.readFileSync(p, "utf8"));
+    eq(INC.termsToReview({ pos: d.pos, orders: d.orders }).filter(x => x.kind === "outdated").length, 0, "an outdated term on 2 Oct");
+  });
+})();
+
+// ══ v7.22.4 — A-RV-16: no hidden module copies ══
+(function v72204(){
+  console.log("\n══ v7.22.4 — A-RV-16: no hidden module copies ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("A-RV-16 (v7.22.4): the sales, purchase and shipment screens keep no module-level copy of their data — one value from the props, handed down through a context (or a parameter)", () => {
+    ["SalesOrders.tsx", "PurchaseOrders.tsx", "Shipments.tsx"].forEach(f => ok(!/^export let \w+/m.test(rd(f)), f + " still keeps a module-level copy"));
+    ok(/export function buildSalesData\(/.test(rd("SalesOrders.tsx")) && /<SalesDataContext\.Provider value=\{sd\}>/.test(rd("SalesOrders.tsx")), "the sales data is not provided");
+    ok(/<PoDataContext\.Provider value=\{sd\}>/.test(rd("PurchaseOrders.tsx")), "the purchase data is not provided");
+    ok(!/setContactsRef|CONTACTS_REF|PO_PACKAGING_TYPES|PACKAGING_TYPES_REF|SHIPMENTS_REF|RAW_LOTS|PO_REFS/.test(["SalesOrders.tsx", "SalesOrderForm.tsx", "SalesOrderDetail.tsx", "SalesOrderDocument.tsx", "PurchaseOrders.tsx", "PurchaseOrderForm.tsx", "PurchaseOrderDetail.tsx", "PurchaseOrderDocument.tsx", "Shipments.tsx", "ShipmentEditor.tsx"].map(rd).join("\n").replace(/\/\/[^\n]*/g, "")), "a hidden copy is still named");
+  });
+})();
+
+// ══ v7.22.6 — FZ-20: the record types describe the data as it is stored ══
+(function v72206(){
+  console.log("\n══ v7.22.6 — FZ-20: the record types describe the stored data ══");
+  const fsx = require("fs"), px = require("path"); const ts = require("typescript");
+  const membersOf = (file, name) => { const text = fsx.readFileSync(px.join(__dirname, "../src/" + file), "utf8"); const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true); let out = null;
+    sf.statements.forEach(st => { if (ts.isInterfaceDeclaration(st) && st.name.text === name) out = new Set(st.members.map(m => m.name ? m.name.getText(sf).replace(/["']/g, "") : "")); }); return out; };
+  t("FZ-20 (v7.22.6): every field stored on the 2 Oct file's records — orders, lines, lots, movements, shipments, legs, units, goods, costs, companies, invoices, claims — is declared on its record type; types.ts lists every stored list", () => {
+    const p = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the 2 Oct file"); if (!p) return; const d = JSON.parse(fsx.readFileSync(p, "utf8"));
+    const recs = (store, path) => { let rs = (d[store] || []).filter(r => r && typeof r === "object"); (path ? path.split(".") : []).forEach(k => { rs = rs.flatMap(r => (r[k] || []).filter(x => x && typeof x === "object")); }); return rs; };
+    const M = [["contacts", "", "types.ts", "Counterparty"], ["pos", "", "types.ts", "POrder"], ["pos", "items", "types.ts", "POLine"], ["orders", "", "types.ts", "SOrder"], ["orders", "items", "types.ts", "SOLine"], ["lots", "", "types.ts", "Lot"], ["lots", "movements", "types.ts", "LotMovement"], ["lots", "costs", "types.ts", "LotCostLine"], ["shipments", "", "types.ts", "Shipment"], ["shipments", "legs", "types.ts", "ShipmentLeg"], ["shipments", "legs.vehicles", "types.ts", "TransportUnit"], ["shipments", "goods", "types.ts", "ShipmentGoodsLine"], ["shipments", "costs", "types.ts", "ShipmentCostLine"], ["invoices", "", "invoicing.ts", "Invoice"], ["invoices", "positions", "invoicing.ts", "InvoicePosition"], ["claims", "", "claims.domain.ts", "Claim"], ["operationalCosts", "", "operationalCosts.ts", "OperationalCost"]];
+    const gaps = [];
+    M.forEach(([store, path, file, name]) => { const have = membersOf(file, name); ok(have, name + " not found"); const keys = new Set(recs(store, path).flatMap(r => Object.keys(r))); const miss = [...keys].filter(k => !have.has(k)); if (miss.length) gaps.push(`${name}: ${miss.slice(0, 4).join(", ")}${miss.length > 4 ? ` +${miss.length - 4}` : ""}`); });
+    eq(gaps.join(" | "), "", "stored but undeclared");
+    ok(membersOf("types.ts", "StoreRecords") && ["contacts", "pos", "orders", "lots", "shipments", "invoices", "auditLog", "planningSheets"].every(k => membersOf("types.ts", "StoreRecords").has(k)), "the catalogue of stored lists");
+  });
+})();
+
+// ══ v7.22.7 — A-RV-18: the repository describes today's system ══
+(function v72207(){
+  console.log("\n══ v7.22.7 — A-RV-18: repository tidy-up ══");
+  const fsx = require("fs"), px = require("path"); const root = px.join(__dirname, "..");
+  t("A-RV-18 (v7.22.7): the README describes today's system and every file it names exists; the unused demo seed and the stale colour survey are gone", () => {
+    ok(!fsx.existsSync(px.join(root, "demoSeed_reference.ts")) && !fsx.existsSync(px.join(root, "RED_COLOUR_SURVEY.md")), "an unused file is still in the repository");
+    const rd = fsx.readFileSync(px.join(root, "README.md"), "utf8");
+    const named = [...rd.matchAll(/`((?:src|api|tests|vendor)\/[\w./-]+|[A-Z_]+\.md)`/g)].map(m => m[1]).filter(f => !f.endsWith("/"));
+    ok(named.length >= 5, "the README names too few files"); eq(named.filter(f => !fsx.existsSync(px.join(root, f))).join(", "), "", "named in the README but missing");
+    ok(!/Integrated Prototype|local JSON export\/import/.test(rd), "the README still describes the old prototype");
   });
 })();
 

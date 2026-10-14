@@ -1,5 +1,6 @@
 // ── BUDGETS (v6.79.0, F-6) ───────────────────────────────────────────────────
 import { r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // Owner ruling: a budgets table now ("may not be used now but will become
 // handy later"). Monthly targets per measure; variance derives from actuals.
 export type BudgetMeasure = "revenue" | "contribution" | "overhead" | "net";
@@ -7,7 +8,7 @@ export const BUDGET_MEASURES: BudgetMeasure[] = ["revenue", "contribution", "ove
 
 export interface Budget { id: any; period: string; measure: BudgetMeasure; amountPLN: number; note?: string; }
 
-const n = (v: any) => { const x = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(x) ? x : 0; };
+const n = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 /** One budget per (period, measure) — setting it again replaces. */
 export function upsertBudget(budgets: Budget[], b: Budget): Budget[] {

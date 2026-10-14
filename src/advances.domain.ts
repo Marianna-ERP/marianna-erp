@@ -9,8 +9,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { applyPaymentEvent } from "./payments.domain";
 import { r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const n = (v: any) => { const x = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(x) ? x : 0; };
+const n = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export interface AdvanceAllocation { id: any; invoiceId: any; invoiceNumber: string; amount: number; date: string; }
 export interface AdvancePayment {

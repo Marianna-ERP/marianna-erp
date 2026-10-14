@@ -182,15 +182,6 @@ export function toClaimCostLines(lines: ChainCostLine[], plnPerEur: any): any[] 
   }));
 }
 
-/** Merge derived lines into whatever the claim already carries, WITHOUT
- *  duplicating: a line whose key is already present is left alone, so
- *  re-deriving after adding a cost is safe and never doubles a figure.
- *  (The same replace-by-key discipline the shipment cost allocation uses.) */
-export function mergeChainLines(existing: ChainCostLine[], derived: ChainCostLine[]): ChainCostLine[] {
-  const have = new Set((existing || []).map(l => String(l.key)));
-  return [...(existing || []), ...(derived || []).filter(l => !have.has(String(l.key)))];
-}
-
 /** What is missing before this chain is a fair statement of the loss.
  *  Reported, never blocking — the person signing decides. */
 export function chainGaps(t: ChainTotals, clientLines: PassThroughInput[] = []): string[] {

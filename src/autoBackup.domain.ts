@@ -13,8 +13,7 @@
 // so test and real files never mix even in one folder; the real copy's pattern is unchanged and ignores TEST files
 let COPY_LABEL = "";
 export function setBackupCopyLabel(label: string) { COPY_LABEL = String(label || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, ""); }
-export function autoPrefix(): string { return COPY_LABEL ? `marianna-erp-${COPY_LABEL}_auto_` : "marianna-erp_auto_"; }
-export const AUTO_PREFIX = "marianna-erp_auto_";   // the real copy's prefix (kept for readers)
+export function autoPrefix(): string { return COPY_LABEL ? `marianna-erp-${COPY_LABEL}_auto_` : "marianna-erp_auto_"; }   // the real copy's prefix (kept for readers)
 function autoRe(): RegExp { return new RegExp("^" + autoPrefix().replace(/[-_]/g, m => "\\" + m) + "(\\d{4}-\\d{2}-\\d{2})_(\\d{2})-(\\d{2})-(\\d{2})_v[0-9A-Za-z.-]+\\.json$"); }
 
 export const KEEP_NEWEST = 30;
@@ -88,22 +87,4 @@ export function fingerprint(entries: Array<[string, string | null | undefined]>)
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
   }
   return `${len}:${(h >>> 0).toString(16)}`;
-}
-
-// ── the local ring (BK-3) ───────────────────────────────────────────────────────────────────────────────────────────
-export const RING_CEILING = 0.7;   // the Settings gauge turns amber at 70 % — the ring alone must never push it there
-export const RING_MAX_COUNT = 20;  // a list-length bound only; space is the real limit
-/** Oldest-first ring in, ids to drop out: the oldest go while the store is over the ceiling; the newest always stays. */
-export function planRingPrune(ring: Array<{ id: string; chars: number }>, liveChars: number, budgetChars: number, ceiling = RING_CEILING, maxCount = RING_MAX_COUNT): string[] {
-  const list = (ring || []).slice();
-  const drop: string[] = [];
-  const total = () => liveChars + list.reduce((s, b) => s + (b.chars || 0), 0);
-  while (list.length > 1 && (list.length > maxCount || total() > ceiling * budgetChars)) drop.push(list.shift()!.id);
-  return drop;
-}
-
-/** The storage error that means "full" — the only one for which dropping a snapshot can help. */
-export function isQuotaError(err: any): boolean {
-  const name = String(err?.name || ""); const code = Number(err?.code);
-  return name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED" || code === 22 || code === 1014;
 }

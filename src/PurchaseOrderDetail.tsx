@@ -11,8 +11,9 @@ import { effectiveCounts } from "./pricingUnit.domain";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { isEstimatedLine } from "./so.domain";
 import { paymentText } from "./po.domain";   // v6.99.76 (A-PV-2)
-import { CONTACTS_REF, FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, PO_PACKAGING_TYPES, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg } from "./PurchaseOrders";
+import { FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
 import { nextId } from "./ids";   // v7.17.5 (A-RV-06): extra packing-list lines take the one counter
+import { isIncoterm2020, deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 // ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
 // ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
@@ -135,6 +136,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm, pos 
 }
 
 export function OrderDetail({ termsFindings = [], users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+  const sd = usePoData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -225,7 +227,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                           <td style={{ padding: "10px", color: "#555" }}>{it.size || "—"}</td>
                           <td style={{ padding: "10px" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
-                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{(() => { const b = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PO_PACKAGING_TYPES || []).boxes; return b ? fmtNum(b) : "—"; })()}</td>
+                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{(() => { const b = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return b ? fmtNum(b) : "—"; })()}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
                           <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {order.currency}</>}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{lt.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
@@ -234,7 +236,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                     })}
                     <tr style={{ background: "#F9FAFB" }}>
                       <td colSpan={5} style={{ padding: "10px", fontWeight: 700, color: "#111" }}>Total</td>
-                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s: number, it: any) => s + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PO_PACKAGING_TYPES || []).boxes) || 0), 0)) || "—"}</td>
+                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s: number, it: any) => s + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes) || 0), 0)) || "—"}</td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(totalKg)} kg</td>
                       <td></td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>
@@ -248,7 +250,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" from={order.number} />
                 <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" from={order.number} />
-                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && ["EXW", "DAP", "DPU", "DDP", "CIF", "CFR", "FOB", "FCA"].includes(String(o.sellIncoterm || "").toUpperCase())); void sos;
+                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && isIncoterm2020(o.sellIncoterm)); void sos;
                   return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
                 <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" from={order.number} />
                 {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
@@ -288,7 +290,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginBottom: 4 }}>{order.supplier?.name}</div>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>{order.supplier?.country}</div>
                 {order.supplier?.nip && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>NIP / VAT</div><div style={{ fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.supplier.nip}</div></div>}
-                {liveParty(order.supplier, CONTACTS_REF || [])?.address && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Address</div><div style={{ fontSize: 12, color: "#444" }}>{formatAddress(addressOf(liveParty(order.supplier, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.supplier, CONTACTS_REF || [])?.address}</div></div>}
+                {liveParty(order.supplier, sd.contacts || [])?.address && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Address</div><div style={{ fontSize: 12, color: "#444" }}>{formatAddress(addressOf(liveParty(order.supplier, sd.contacts || [])), { oneLine: true }) || liveParty(order.supplier, sd.contacts || [])?.address}</div></div>}
                 {order.supplier?.contact && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Contact</div><div style={{ fontSize: 12, color: "#444" }}>{order.supplier.contact}</div></div>}
                 {order.supplier?.email && <div><div style={{ fontSize: 10, color: "#888" }}>Email</div><a href={`mailto:${order.supplier.email}`} style={{ fontSize: 12, color: "#2563EB", textDecoration: "none" }}>{order.supplier.email}</a></div>}
               </Card>
@@ -306,7 +308,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                     <div style={{ fontSize: 10, color: "#888" }}>SEA FREIGHT</div>
 <div style={{ fontWeight: 600, color: "#888" }}>—</div>
                   </div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order, liveParty(order.supplier, CONTACTS_REF || []) || order.supplier)}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order, liveParty(order.supplier, sd.contacts || []) || order.supplier)}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
                 </div>
               </Card>
@@ -336,7 +338,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
           </div>
           {/* v7.8.2 (A-PV-7, owner 7 Oct): under the two columns, full width — the supplier's truck, then (consignment) the truck settlement */}
           {/* v6.99.36 (A-R25-6): SUPPLIER'S TRUCK — its own box under the lines, showing what was registered */}
-          {["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status !== "Draft" && (() => {
+          {deliveredAtDestination(order.buyIncoterm) && order.status !== "Draft" && (() => {
             const trucks = supplierTrucks || [];   // v6.99.42 (hotfix): was filtering a list of NUMBERS for .arrangedBy — never matched, the box always read empty
             return (
               <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>

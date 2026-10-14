@@ -1,10 +1,11 @@
 import { paymentBasisOf } from "./po.domain";
 import { S } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─────────────────────────────────────────────────────────────────────────────
 // counterparty.domain.ts — v6.99.2: COUNTERPARTIES BATCH (CP-1…CP-7, CP-9; owner 11 Sept 2026)
 // Pure.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export const ROLES = ["Client", "Supplier", "Carrier", "Forwarder", "Broker", "Warehouse", "ShippingLine", "Other"] as const;
 

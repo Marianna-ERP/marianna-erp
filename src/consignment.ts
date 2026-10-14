@@ -168,12 +168,3 @@ export function computeLotSettlement(
   const payoutPLN = r2(netPLN - commissionPLN);
   return { grossPLN, salesLines, expenseLines, expensesPLN, netPLN, commissionPct: pct, commissionPLN, payoutPLN, soldKg, warnings };
 }
-
-// Cost components written onto the lot when the settlement closes. Idempotent
-// via fixed sources; producer invoice amount may differ from expected net.
-export function settlementCostComponents(lot: any, producerInvoicePLN: number, commissionPLN: number, producerInvoiceNo: string, commissionInvoiceNo: string) {
-  return [
-    { type: "Consignment purchase", label: `Producer invoice ${producerInvoiceNo || "(no number)"} — net sales value`, pln: r2(n(producerInvoicePLN)), source: `CONSIGN-${lot.id}` },
-    { type: "Commission credit", label: `Our commission invoice ${commissionInvoiceNo || "(no number)"}`, pln: r2(-Math.abs(n(commissionPLN))), source: `CONSIGNC-${lot.id}` },
-  ];
-}

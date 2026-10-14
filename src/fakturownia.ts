@@ -4,6 +4,7 @@
 // too. Here the browser keeps one thing of its own: the live-push switch. A token an older build left in this browser is removed
 // the first time the configuration is read. Callers still handle {ok:false} by offering the file import.
 import { sessionToken } from "./remoteStore";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 export interface FakturowniaConfig {
   liveWriteEnabled?: boolean;  // v6.18.4: live invoice creation is OFF unless explicitly enabled (per browser)
@@ -134,7 +135,7 @@ export interface MappedInvoice {
   ksefNo: string;
 }
 
-function num(v: any): number { const x = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(x) ? x : 0; }
+function num(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function str(v: any): string { return v === null || v === undefined ? "" : String(v); }
 
 export function mapInvoice(raw: any): MappedInvoice {

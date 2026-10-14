@@ -1,3 +1,4 @@
+import { primeIdsFrom } from "./ids";   // v7.21.13 (FZ-15): every store raises the id counter as it is read or pulled
 // ─── Local-storage-backed React state hook ──────────────────────────────────
 //
 // Drop-in replacement for useState. Reads initial value from localStorage if
@@ -126,9 +127,9 @@ export function storageUsage(): { perKey: Array<{ key: string; kb: number }>; to
 const storeSetters = new Map<string, (v: any) => void>();
 export let onStoreWritten: ((name: string, json: string) => void) | null = null;
 export function setStoreWrittenHook(fn: ((name: string, json: string) => void) | null) { onStoreWritten = fn; }
-export function applyStoreFromRemote(name: string, value: any): boolean { const set = storeSetters.get(name); if (!set) { writeToStorage(name, value); return false; } set(value); return true; }
+export function applyStoreFromRemote(name: string, value: any): boolean { try { primeIdsFrom(value); } catch { /* never blocks a pull */ } const set = storeSetters.get(name); if (!set) { writeToStorage(name, value); return false; } set(value); return true; }
 export function useLocalStoredState<T>(name: string, initialValue: T): [T, (v: T | ((prev: T) => T)) => void] {
-  const [state, setState] = useState<T>(() => readFromStorage(name, initialValue));
+  const [state, setState] = useState<T>(() => { const v = readFromStorage(name, initialValue); try { primeIdsFrom(v as any); } catch { /* best effort */ } return v; });   // v7.21.13 (FZ-15)
   useEffect(() => { storeSetters.set(name, setState as any); return () => { storeSetters.delete(name); }; }, [name]);
   useEffect(() => {
     writeToStorage(name, state);

@@ -1,4 +1,4 @@
-import { DocNavContext } from "./ui";
+import { DocNavContext, useConfirm } from "./ui";
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { checkIntegrity } from "./integrityCheck";
 import Dashboard from "./Dashboard";
@@ -41,7 +41,6 @@ import { fxDatesNeeded, fxFillInvoice } from "./fxNbp.domain";   // v7.13.1 / v7
 import { periodGuard } from "./periodClose.domain";   // v7.13.1 (A-AU-11): closed months are not re-rated
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
-import { primeIdsFrom } from "./ids";
 import Invoices from "./Invoices";
 import { migrateLegacyInvoices, stripPendingInvoices, foldWarehouseInvoiceStore } from "./invoicing";   // v7.21.4 (A-ST-10)
 import { syncOverheadOpCosts } from "./operationalCosts";
@@ -203,6 +202,7 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
 }
 
 export default function App() {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [contacts, _setContacts] = useLocalStoredState("contacts", SHELL_SEED.contacts);
   const [pos, setPOs] = useLocalStoredState("pos", SHELL_SEED.pos);
   const [lots, setLots] = useLocalStoredState("lots", SHELL_SEED.lots);
@@ -373,18 +373,14 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contacts]);
 
-  // Keep the stable-id generator primed above every id already in loaded data, so a
-  // freshly minted id can never collide with one from storage or a JSON import.
-  useEffect(() => {
-    primeIdsFrom(contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts);
-  }, [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts]);
+  // v7.21.13 (FZ-15): the id counter is primed by every store as it is read or pulled (useLocalStoredState) — no longer seven of them here
 
   // Fold the four legacy invoice representations (SO pendingInvoices, warehouse
   // invoices, invoice-backed operational costs) into the unified Invoicing model.
   // Idempotent by source tag — safe to run on every relevant change; never duplicates.
   useEffect(() => {
     setInvoices((prev: any[]) => {
-      const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts, pos });
+      const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts });   // v7.22.1 (FZ-12): no purchase invoice is invented from an order
       return merged.length !== (prev || []).length ? merged : prev;
     });
     // v6.33.0 (A3-6): the register is now the sole owner — once this snapshot's
@@ -392,7 +388,7 @@ export default function App() {
     // from the orders. Same-reference return when clean, so no effect loop.
     setOrders((prev: any[]) => stripPendingInvoices(prev).orders);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, warehouseInvoices, operationalCosts, pos]);
+  }, [orders, warehouseInvoices, operationalCosts]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v7.21.4 (A-ST-10, owner 9 Oct batch): the separate warehouse-invoices store is folded into the register once — what only the store
   // knew (the warehouse, the month, an allocation) moves onto the register invoice, the lots' cost lines follow it, the store empties
   useEffect(() => {
@@ -520,9 +516,9 @@ export default function App() {
   const [leaveAsk, setLeaveAsk] = useState<{ target: string; labels: string[]; canSave: boolean; saving?: boolean; refused?: boolean } | null>(null);
   // v7.1.11 (owner 6 Oct, security): permissions used to hide the tabs only — a Dashboard or document link still opened the module.
   // ONE gate now: every road into a module passes mayOpen(), and the module is not even rendered when the person may not open it.
-  const mayOpen = (k: string) => canOpenModule(users, who, k === "loadPlans" ? "loadplans" : k);
-  const navigate = (target: string) => {
-    if (!mayOpen(target)) { window.alert("You don't have access to this module. Ask the owner (Settings → Users)."); return; }
+  const mayOpen = (k: string) => canOpenModule(users, who, k);   // v7.22.0 (A-RV-15 e): no load-plans right — the screen was retired
+  const navigate = async (target: string) => {
+    if (!mayOpen(target)) { (await uiAlert({ message: "You don't have access to this module. Ask the owner (Settings → Users)." })); return; }
     if (target === activeModule) return;
     const d = dirtyEntries();
     if (!d.length) { setActiveModule(target); return; }
@@ -535,9 +531,9 @@ export default function App() {
     if (has(pos)) return "pos"; if (has(orders)) return "orders"; if (has(shipments)) return "shipments"; if (has(lots)) return "lots"; if (has(invoices)) return "invoices"; if (has(claims)) return "claims";   // v7.20.0 (A-INC-2): a claim's number opens the claim
     return "";
   };
-  const openDoc = (num: string, from = "") => {
+  const openDoc = async (num: string, from = "") => {
     const target = docModule(num); if (!target) return;
-    if (!mayOpen(target)) { window.alert("You don't have access to this module. Ask the owner (Settings → Users)."); return; }   // v7.1.11
+    if (!mayOpen(target)) { (await uiAlert({ message: "You don't have access to this module. Ask the owner (Settings → Users)." })); return; }   // v7.1.11
     if (dirtyEntries().length) { navigate(target); return; }   // an unsaved form: the leave-guard asks first, as for any move
     setNavBack(from ? { module: activeModule, number: from } : { module: activeModule, number: "" });
     if (target === "pos") setOpenPO({ number: num, action: "" });
@@ -619,12 +615,12 @@ export default function App() {
 
 
   // v6.99.4 (DA-7): the Dashboard's integrity tile reads the same check as the badge.
-  const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog } as any).issues, // eslint-disable-next-line react-hooks/exhaustive-deps
-    [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog]);
+  const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog } as any).issues,   /* v7.21.13: + the audit log, for shared ids */ // eslint-disable-next-line react-hooks/exhaustive-deps
+    [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog]);
 
-  if (!shared.ready) return <>{shared.node}</>;   // v6.99.148: sign in / loading the shared data
+  if (!shared.ready) return <>{dialogNode}{shared.node}</>;   // v6.99.148: sign in / loading the shared data
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>{dialogNode}
       <EnvironmentStrip />{/* v6.99.149 */}
       {(users || []).length > 0 && !hasOwner(users) && <div style={{ background: "#FEF3C7", color: "#92400E", borderBottom: "1px solid #FDE68A", textAlign: "center", fontSize: 12.5, fontWeight: 700, padding: "6px 0", flexShrink: 0 }}>No owner with a sign-in e-mail is defined in Settings → Users. Until there is one, Settings is open to every signed-in person — set the owner and their e-mail now.</div>}{/* v7.1.14 */}
       {tab.readOnly && (   /* v6.99.114 (AUD-02): a second tab of the app in this browser is read-only — two writing tabs overwrite each other */
@@ -660,7 +656,7 @@ export default function App() {
         // Single-browser mode keeps the typed name; an unmatched browser picks its person from the list (v7.0.1). The v7.0.2 'change' link is gone (owner).
         if (signInEmail) {   // v7.1.13: ONE rule on the shared copy — the sign-in; the v7.1.10 typed-name bootstrap is gone
           const me = userBySignIn(users, signInEmail);
-          const signOut = <button onClick={() => { if (window.confirm(`Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.`)) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button>;
+          const signOut = <button onClick={async () => { if ((await uiConfirm({ title: "Please confirm", message: `Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.` }))) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button>;
           if (!(users || []).length) return <><span title={signInEmail}>{signInEmail}</span>{signOut}</>;
           if (!me) {
             // v7.1.12 (owner 6 Oct, trapped again): a sign-in that matches no entry CLAIMS its entry here — only an entry that carries no
@@ -670,8 +666,8 @@ export default function App() {
             return (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
                 {signInEmail} is not linked to an entry.{free.length ? " Which entry is you?" : " Every entry is already linked to another sign-in — ask the owner."}
-                {free.length > 0 && <select value="" onChange={e => { const id = e.target.value; if (!id) return; const u = free.find((x: any) => String(x.id) === id); if (!u) return;
-                  if (!window.confirm(`Link ${signInEmail} to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}?\n\nThis is recorded in the audit trail and cannot be undone from here.`)) return;
+                {free.length > 0 && <select value="" onChange={async e => { const id = e.target.value; if (!id) return; const u = free.find((x: any) => String(x.id) === id); if (!u) return;
+                  if (!(await uiConfirm({ title: "Please confirm", message: `Link ${signInEmail} to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}?\n\nThis is recorded in the audit trail and cannot be undone from here.` }))) return;
                   setUsers((prev: any[]) => (prev || []).map((x: any) => String(x.id) === id ? { ...x, email: signInEmail } : x));
                   recordAudit({ module: "Settings", docType: "User", docNumber: String(u.name), action: "updated", summary: `${signInEmail} linked itself to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}` });
                 }} style={{ border: "1px solid #FCD34D", borderRadius: 6, padding: "2px 6px", fontSize: 11.5, background: "#fff" }}>
@@ -704,9 +700,9 @@ export default function App() {
         <IntegrityBadge
           data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog }}
           onNavigate={navigate}
-          onRepair={(kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
-            if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !window.confirm(`Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.`)) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
-            if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n || !window.confirm(`Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?`)) return;
+          onRepair={async (kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
+            if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !(await uiConfirm({ title: "Please confirm", message: `Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.` }))) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
+            if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n || !(await uiConfirm({ title: "Please confirm", message: `Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?` }))) return;
               const bad = new Map<string, Set<string>>(dl.invoices.map(x => [String(x.id), new Set<string>(x.links.map((l: any) => l.type + ":" + l.number))]));
               setInvoices((prev: any[]) => (prev || []).map((i: any) => bad.has(String(i.id)) ? { ...i, links: (i.links || []).filter((l: any) => !bad.get(String(i.id))!.has(l.type + ":" + l.number)) } : i));
               const badC = new Map<string, Set<string>>(dl.claims.map(x => [String(x.id), new Set<string>(x.subjects.map((s: any) => s.kind + ":" + s.ref))]));

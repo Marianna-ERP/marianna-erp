@@ -26,8 +26,9 @@
 //    differently. Derivation is a starting point, never a constraint.
 
 import { grossForGoodsLine, palletManifest, findPackaging, defaultPackagingForProduct, PackagingType, PACKAGING_SEED } from "./packaging.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 // v7.16.3 (AUD-42): a line's kilos. A deliberate 0 kg stays 0 (zero-kg lines are kept to show ordered vs loaded);
 // only a line with no kilo figure at all falls back to its old 'qty'.
 export const lineKg = (g: any): number => (g?.qtyKg !== undefined && g?.qtyKg !== null && String(g.qtyKg).trim() !== "") ? num(g.qtyKg) : num(g?.qty);
@@ -171,14 +172,8 @@ export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPallet
       });
     });
   });
-  lastDeriveUnresolved = unresolved;
   return padToSheet(rows);
 }
-
-/** Products whose packaging could not be resolved on the last deriveRows call.
- *  Read straight after deriving, so the screen can explain an empty table
- *  instead of leaving the user staring at 21 blank lines. */
-export let lastDeriveUnresolved: string[] = [];
 
 /** Which packaging a goods line will use, and whether it can be resolved at all.
  *  Exposed so the UI can warn BEFORE the producer prints a useless sheet. */
@@ -441,10 +436,6 @@ export function protocolExceptions(p: LoadingProtocol | any): string[] {
   return out;
 }
 
-export function isProtocolClean(p: LoadingProtocol | any): boolean {
-  return protocolExceptions(p).length === 0;
-}
-
 /** What still has to come back before the protocol can serve as evidence. */
 /** A driver signs AT THE DOCK, before departure. A signature dated after the goods
  *  left proves nothing about the state they left in — the exact weakness a carrier
@@ -459,9 +450,6 @@ export function signatureWarnings(p: any): string[] {
   if (drv && iss && drv !== iss) out.push(`Driver (${drv}) and producer (${iss}) signed on different days — both sign at the dock.`);
   return out;
 }
-
-/** Is the returned sheet genuinely usable as evidence? */
-export function isProtocolComplete(p: any): boolean { return protocolGaps(p).length === 0; }
 
 export function protocolGaps(p: LoadingProtocol | any): string[] {
   const gaps: string[] = [];

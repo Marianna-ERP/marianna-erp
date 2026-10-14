@@ -1,6 +1,7 @@
 // ── v6.99.0 (FN-1/FN-2/FN-3): PERIOD CLOSE, MANAGEMENT SNAPSHOT, CASH PROJECTION ──
 import { S, r2 } from "./format";
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export interface ClosedPeriod { period: string; closedAt: string; closedBy: string; snapshot: any; }
 export function isDateInClosedPeriod(dateISO: any, closed: ClosedPeriod[]): string | null {

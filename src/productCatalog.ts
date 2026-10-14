@@ -59,14 +59,6 @@ export function addCatalogVariety(catalog: CatalogItem[], item: string, variety:
   });
 }
 
-export function removeCatalogVariety(catalog: CatalogItem[], item: string, variety: string): CatalogItem[] {
-  return (catalog || []).map(c => lc(c.item) === lc(item) ? { ...c, varieties: c.varieties.filter(x => lc(x) !== lc(variety)) } : c);
-}
-
-export function removeCatalogItem(catalog: CatalogItem[], item: string): CatalogItem[] {
-  return (catalog || []).filter(c => lc(c.item) !== lc(item));
-}
-
 export function renameCatalogItem(catalog: CatalogItem[], oldItem: string, newItem: string): CatalogItem[] {
   const nn = norm(newItem); if (!nn) return catalog;
   return (catalog || []).map(c => lc(c.item) === lc(oldItem) ? { ...c, item: nn } : c).sort((a, b) => a.item.localeCompare(b.item));

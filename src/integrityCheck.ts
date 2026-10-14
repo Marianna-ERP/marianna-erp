@@ -8,6 +8,7 @@ import { missingPeopleInfo } from "./counterparty.domain";
 import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
 import { purchaseInvoiceVariance } from "./po.domain";
 import { claimNoteMismatches } from "./claimReadiness.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─── DATA INTEGRITY CHECKER ─────────────────────────────────────────────────
 //
 // A single pure function that scans the whole dataset for structural problems —
@@ -59,10 +60,11 @@ export interface IntegrityInputs {
   advancePayments?: any[];
   bankAccounts?: any[];
   productCatalog?: any[];
+  auditLog?: any[];   // v7.21.13 (FZ-15): checked for shared ids only
 }
 
 // ── small helpers (kept local so this module has zero imports) ──
-function num(v: any): number { const x = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(x) ? x : 0; }
+function num(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function r2(x: number): number { return Math.round(x * 100) / 100; }
 function norm(s: any): string { return String(s ?? "").trim().toLowerCase(); }
 function arr<T = any>(v: any): T[] { return Array.isArray(v) ? v : []; }
@@ -687,6 +689,19 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     const tagged = lots.some((l: any) => arr(l.costs).some((c: any) => String(c?.source || "").startsWith(`${sh.number}/`)));
     if (!tagged) add("warning", "STALE_BILLING_FLAG", "Shipments", sh.number || "(shipment)",
       `billingStatus is "Cost allocated" but no lot carries this shipment's cost allocation — the flag is stale (allocation never ran, was reverted, or the shipment was cancelled). Re-run the allocation or reset the status.`);
+  });
+
+  // v7.21.13 (FZ-15, owner 12 Oct): two records of one kind sharing an id would be taken for ONE by the shared data's merge —
+  // named, never changed (an error for documents, a warning in the audit log)
+  Object.entries(inp as any).forEach(([kind, list]: [string, any]) => {
+    if (!Array.isArray(list)) return;
+    const byId = new Map<string, any[]>();
+    list.forEach((r: any) => { if (r && r.id != null && r.id !== "") byId.set(String(r.id), [...(byId.get(String(r.id)) || []), r]); });
+    byId.forEach((rs, id) => {
+      if (rs.length < 2) return;
+      const what = rs.map((r: any) => String(r.number || r.name || r.invoiceNo || r.summary || r.id).slice(0, 40)).join(" · ");
+      add(kind === "auditLog" ? "warning" : "error", "ID_SHARED", kind, what, `${rs.length} ${kind} records share the id ${id} (${what}) — the shared data would take them for one record. Tell the developer before editing them.`);
+    });
   });
 
   // v7.21.10 (A-RV-33, owner 11 Oct): a shipment naming a carrier that only existed in the code (the retired placeholders 1001, 9, 10)

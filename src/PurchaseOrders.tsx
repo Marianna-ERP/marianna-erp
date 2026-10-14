@@ -9,14 +9,14 @@ import DateInput from "./DateInput";
 import React, { useState, useMemo } from "react";
 import { computedPOLinks } from "./documents.domain";
 import { poTermsMissing, poWarnings } from "./purchaseOrderGuards";
-import { handoverSentence, poDirectFromSOs } from "./tradeFlow.domain";
+import { poDirectFromSOs } from "./tradeFlow.domain";
 import { Card, Lbl, SectionTitle, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { LOGO_DATA_URL } from "./brand";
 import { nextId } from "./ids";
 import { FX_RATES, nbpRateBefore } from "./fx";   // v7.18.6: + nbpRateBefore
 import { getCounterpartiesByType } from "./Contacts";
 import { locationById } from "./locations";
-import { termsToReview, termsFindingsForDoc } from "./incoterms.domain";   // v7.20.0 (A-INC-2): the PO view shows its terms to review
+import { termsToReview, termsFindingsForDoc, incotermLine, deliveredAtDestination } from "./incoterms.domain";   // v7.20.0 (A-INC-2): the PO view shows its terms to review
 import { recomputeLotFromMovements } from "./inventory.domain";
 import { receiptMovement, supplierDeliveryFromPO } from "./seasonOps.domain";
 import { isEstimatedLine, planPackingResult } from "./so.domain";
@@ -36,7 +36,12 @@ import { companyProfile } from "./useLocalStoredState";
 import { OrderForm } from "./PurchaseOrderForm";
 import { PackingResultWindow, SupplierTruckWindow, OrderDetail } from "./PurchaseOrderDetail";
 import { PODoc, PrintModal } from "./PurchaseOrderDocument";
-export let PO_PACKAGING_TYPES: any[] = PACKAGING_SEED; // v6.88.0: refreshed from the App prop
+// v7.22.4 (A-RV-16, Batch F): no hidden module copies — the packaging types and the counterparties the purchase screens and the
+// printed PO read are one value from the props (PoData), handed down through a context.
+export interface PoData { packagingTypes: any[]; contacts: any[] }
+export const EMPTY_PO_DATA: PoData = { packagingTypes: PACKAGING_SEED, contacts: [] };
+export const PoDataContext = React.createContext<PoData>(EMPTY_PO_DATA);
+export const usePoData = (): PoData => React.useContext(PoDataContext);
 
 // ─── COMPANY ────────────────────────────────────────────────────────────────
 export const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the company block comes from Settings (defaults = the former literal)
@@ -61,20 +66,6 @@ function getSuppliersStub() {
 
 // ─── REFERENCE ──────────────────────────────────────────────────────────────
 export const CURRENCIES = ["PLN", "EUR", "USD"];
-
-// v6.99.23: the legacy PAYMENT_TERMS list retired — one source: basis + days (po.domain)
-
-export const INCOTERMS_BUY = [
-  { code: "EXW", label: "EXW — Ex Works (we pick up at supplier)" },
-  { code: "FCA", label: "FCA — Free Carrier" },
-  { code: "FOB", label: "FOB — Free On Board (sea, we handle from port)" },
-  { code: "CFR", label: "CFR — Cost & Freight (supplier ships, we customs)" },
-  { code: "CIF", label: "CIF — Cost, Insurance, Freight (supplier ships+insures, we customs)" },
-  { code: "CPT", label: "CPT — Carriage Paid To" },
-  { code: "CIP", label: "CIP — Carriage and Insurance Paid To" },
-  { code: "DAP", label: "DAP — Delivered At Place (supplier delivers, no customs)" },
-  { code: "DDP", label: "DDP — Delivered Duty Paid (supplier does everything)" },
-];
 
 // Flow types — 11 flows organised in two groups (EXP / IMP).
 // `buyIncoterms` is a soft hint used for the cross-validation warning, not a hard rule.
@@ -186,7 +177,7 @@ export function FlowBadge({ flow, order = null, compact = false }: any) {
   if (order && order.buyIncoterm) {
     const place = order.destinationText || (locationById(order.destinationLocationId)?.name) || "";
     return (
-      <span title={handoverSentence(order.buyIncoterm, place)} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
+      <span title={incotermLine(order.buyIncoterm, "buy", place)} style={{ display: "inline-block", maxWidth: "100%", background: "#F9FAFB", border: "1px solid #EBEBEB", padding: compact ? "1px 7px" : "3px 10px", borderRadius: 4, fontSize: compact ? 10.5 : 11.5, color: "#555", whiteSpace: compact ? "normal" : "nowrap", lineHeight: 1.25, fontWeight: 500 }}>
         {order.buyIncoterm}{place ? ` ${place}` : ""}
       </span>
     );
@@ -218,7 +209,7 @@ export function fmtMoney(n, cur = "PLN") {
 export function fmtDate(d) { return d || "—"; }
 
 export function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
-export let CONTACTS_REF: any[] = [];   // v6.99.39 (D-1): the printed document resolves a place's address through the registry
+// v7.22.4 (A-RV-16): CONTACTS_REF is gone — the printed PO reads usePoData().contacts
 export function destinationDisplay(order) {
   const custom = String(order?.destinationText || order?.destinationLocationText || "").trim();
   if (custom) return custom;
@@ -447,6 +438,7 @@ export function LifecycleTimeline({ status }: any) {
 
 // ── v6.90.0: THE TRUCK'S FINAL RESULT — settlement per PO (owner rulings V1…V6) ──
 export function TruckSettlementCard({ onOpenResult = null, order, lots = [], orders = [], invoices = [], shipments = [], claims = [], inspections = [], contacts = [], settlements = [], setSettlements = null, setFinanceNotes = null, setInvoices = null, financeNotes = [] }: any) {
+  const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const rec: any = (settlements || []).find((s: any) => String(s.poNumber) === String(order.number)) || null;
   const producer = (contacts || []).find((c: any) => String(c.id) === String(order.supplier?.id)) || null;
   const rateRec = producer ? currentCommissionRate(producer, order.loadingDate || order.orderDate || localTodayISO()) : null;   // v6.99.129 (AUD-13): the rate valid when the truck was bought, not today's
@@ -480,7 +472,7 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
   }
   const myIns = (inspections || []).filter((x: any) => calc.lines.some(l => String(l.lotNumber) === String(x.lotNumber)));
   return (
-    <Card style={{ marginBottom: 16, borderLeft: "4px solid #7C3AED" }}>
+    <Card style={{ marginBottom: 16, borderLeft: "4px solid #7C3AED" }}>{dialogNode}
       <SectionTitle right={<span style={{ fontSize: 11, fontWeight: 800, color: closed ? "#16A34A" : "#B45309" }}>{closed ? `CLOSED ${rec.closedAt}` : (calc.fullySold ? "FULLY SOLD — ready to close" : "INTERIM")}</span>}>Producer's settlement — {order.number}{rec?.number ? ` · ${rec.number}` : ""}{onOpenResult && <button onClick={() => onOpenResult(order)} style={{ marginLeft: 10, padding: "2px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 0 }}>Result of this truck → Finance</button>}</SectionTitle>{/* v7.8.3 (A-PL-2): the producer's statement; our result lives in Finance */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
         <div><Lbl>{cur === "PLN" ? "Rate — the PO is in PLN" : `Rate PLN→${cur} · NBP`}</Lbl><div data-settlement-rate="1" style={{ ...inp, background: "#F8FAFC", fontVariantNumeric: "tabular-nums" }}>{cur === "PLN" ? "1" : rate > 0 ? rate.toFixed(4) : "—"}</div>
@@ -574,7 +566,7 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
               : <button onClick={() => setAskClose(true)} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>🔒 Close settlement{calc.fullySold ? "" : " (interim)"}</button>
         )}
         {closed && setSettlements && !rec?.commissionInvoiceId && (
-          <button onClick={() => { if (!window.confirm(`Re-open settlement ${rec?.number || ""}? Its expected credit note is withdrawn and the figures become live again.`)) return;
+          <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Re-open settlement ${rec?.number || ""}? Its expected credit note is withdrawn and the figures become live again.` }))) return;
             // v6.99.117 (AUD-27): the expected notes this close created are withdrawn (status Cancelled) — before, the confirmation promised it and nothing happened, so a re-close doubled them
             { const ids = [rec?.expectedCreditNoteId, rec?.expectedExtraInvoiceId].filter((x: any) => x != null).map(String); if (ids.length && typeof setFinanceNotes === "function") setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => ids.includes(String(n.id)) ? { ...n, status: "Cancelled", cancelledAt: localTodayISO(), cancelReason: `settlement ${rec?.number || ""} re-opened` } : n)); }
             upd({ status: "Open", closedAt: null, expectedCreditNoteId: null, expectedExtraInvoiceId: null }); recordAudit({ module: "Purchase orders", docType: "PO", docNumber: order.number, action: "status", summary: `Truck settlement ${rec?.number || ""} re-opened` }); }}
@@ -800,8 +792,9 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   );
 }
 
-export default function PurchaseOrders({ canOpenResult = false, onOpenResult = null, archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setPackagingTypes = null, setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], financeNotes: extFinanceNotes = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
-  PO_PACKAGING_TYPES = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED; // v6.88.0
+function PurchaseOrdersScreen({ canOpenResult = false, onOpenResult = null, archive = null, pos: extPOs, setPOs: extSetPOs, contacts: extContacts, lots: extLots = [], setLots: extSetLots, orders: extSOs = [], setOrders: extSetSOs, shipments: extShipments = [], invoices: extInvoices = [], productCatalog = [], setProductCatalog, packagingTypes = [], setPackagingTypes = null, setShipments: extSetShipments = null, claims: extClaims = [], inspections: extInspections = [], poSettlements: extSettlements = [], financeNotes: extFinanceNotes = [], setPoSettlements: extSetSettlements = null, setFinanceNotes: extSetFinanceNotes = null, setInvoices: extSetInvoices = null, users = [], userName = "", initialSelectedNumber = "", initialAction = "", onOpenShipment = null}: any = {}) {
+  const sd = usePoData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
+  
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: poDialogNode } = useConfirm(); // P2-6 + v6.89.0
   // v6.35.1: shared cancelled-doc set (shipments + SOs + POs) for struck-through refs.
   const cancelledRefs = cancelledDocSet(extShipments, extSOs, extPOs);
@@ -810,7 +803,7 @@ export default function PurchaseOrders({ canOpenResult = false, onOpenResult = n
   const orders = extPOs ?? localOrders;
   const termsAll = useMemo(() => termsToReview({ pos: orders || [], orders: extSOs || [], shipments: extShipments || [], claims: extClaims || [], contacts: extContacts || [], lots: extLots || [], placeOf: (id: any) => locationById(id, extContacts || []) }), [orders, extSOs, extShipments, extClaims, extContacts, extLots]);   // v7.20.0 (A-INC-2): the PO view shows its terms to review
   const setOrders = extSetPOs ?? setLocalOrders;
-  CONTACTS_REF = extContacts || [];
+  
   const suppliers = useMemo(() => suppliersFromContacts((extContacts || []).filter((c: any) => !c.archived && !c.deleted)), [extContacts]); // v6.99.2 (CP-4)
   const lots = extLots || [];
   // v6.99.37: a PO can be opened directly — deep link, and the render smoke exercises the settlement card
@@ -929,7 +922,7 @@ ${blockNote}`.trim(),
   async function saveOrder(o) {
     // v6.99.46 (A-PO-11): the stored boxes / pallets ARE the effective counts (derived from the line's packaging unless
     // overridden), so every reader downstream — totals, shipments, protocol, invoices — sees one figure.
-    o = { ...o, items: (o.items || []).map((it: any) => { const ec = effectiveCounts(it, PO_PACKAGING_TYPES || []); const isBoxUnit = String(it.pricingUnit || "kg") !== "kg"; return { ...it, boxes: isBoxUnit ? it.boxes : (ec.boxes ?? it.boxes ?? null), pallets: ec.pallets ?? it.pallets ?? null }; }) };
+    o = { ...o, items: (o.items || []).map((it: any) => { const ec = effectiveCounts(it, sd.packagingTypes || []); const isBoxUnit = String(it.pricingUnit || "kg") !== "kg"; return { ...it, boxes: isBoxUnit ? it.boxes : (ec.boxes ?? it.boxes ?? null), pallets: ec.pallets ?? it.pallets ?? null }; }) };
     // Batch 6b: hard confirm-gate — no PO past Draft without its terms.
     const termsMissing = poTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
@@ -1187,9 +1180,9 @@ ${blockNote}`.trim(),
         {emailOrder && <EmailModal order={emailOrder} contacts={extContacts} onClose={() => setEmailOrder(null)} />}
         {packingWindow && selected && (() => {
           // v6.99.56 (A-PL-1 · PL-2, owner): the packing list moves the PO, its expected lots, the sales that sell it, and the shipments not yet loaded — together
-          const deps = { buildLots: (o: any, ls: any[]) => buildExpectedLotsFromPO(o, ls), syncShipment: (sh: any, o: any, ls: any[]) => syncGoodsFromPO(sh, o, ls, { nextId }), counts: (line: any) => effectiveCounts(line, PO_PACKAGING_TYPES || []), nextId };
+          const deps = { buildLots: (o: any, ls: any[]) => buildExpectedLotsFromPO(o, ls), syncShipment: (sh: any, o: any, ls: any[]) => syncGoodsFromPO(sh, o, ls, { nextId }), counts: (line: any) => effectiveCounts(line, sd.packagingTypes || []), nextId };
           const ctx = { orders: extSOs || [], lots: extLots || [], shipments: extShipments || [], todayISO: localTodayISO() };
-          return <PackingResultWindow order={selected} catalog={productCatalog} setCatalog={setProductCatalog} packagingTypes={PO_PACKAGING_TYPES || []} counts={(l: any) => effectiveCounts(l, PO_PACKAGING_TYPES || [])} onClose={() => setPackingWindow(false)} preview={(rows: any[], answers: any) => planPackingResult(selected, rows, ctx, deps, answers)} onConfirm={async (rows: any[], answers: any) => {
+          return <PackingResultWindow order={selected} catalog={productCatalog} setCatalog={setProductCatalog} packagingTypes={sd.packagingTypes || []} counts={(l: any) => effectiveCounts(l, sd.packagingTypes || [])} onClose={() => setPackingWindow(false)} preview={(rows: any[], answers: any) => planPackingResult(selected, rows, ctx, deps, answers)} onConfirm={async (rows: any[], answers: any) => {
             const pl = planPackingResult(selected, rows, ctx, deps, answers);
             if (pl.questions.length) { await uiAlert({ tone: "warn", title: "One more answer needed", message: pl.questions.map((q: any) => q.label).join("\n") }); return; }
             extSetPOs((prev: any[]) => (prev || []).map((p: any) => p.id === selected.id ? pl.po : p));
@@ -1217,7 +1210,7 @@ ${blockNote}`.trim(),
         <OrderDetail
           order={selected}
           termsFindings={termsFindingsForDoc(termsAll, selected.number)}   // v7.20.0 (A-INC-2)
-          expectedLots={["DDP", "DAP", "DPU"].includes(String(selected.buyIncoterm || "").toUpperCase())
+          expectedLots={deliveredAtDestination(selected.buyIncoterm)
             ? (extLots || []).filter((l: any) => String(l.poRef) === String(selected.number) && ["Expected", "Direct Expected"].includes(String(l.status)) && !(l.movements || []).some((m: any) => !m.voided))
             : [] /* v6.80.0 (D-42): EXW/FCA/FOB/CIF goods arrive on OUR shipment — the receipt is posted there */}
           ctxOrders={extSOs}
@@ -1412,3 +1405,11 @@ ${blockNote}`.trim(),
   );
 }
 
+
+
+/** v7.22.4 (A-RV-16): the purchase screens and the printed PO read their packaging types and counterparties from here. */
+export default function PurchaseOrders(props: any) {
+  const p = props || {};
+  const sd = useMemo(() => ({ packagingTypes: (p.packagingTypes && p.packagingTypes.length) ? p.packagingTypes : PACKAGING_SEED, contacts: p.contacts || [] }), [p.packagingTypes, p.contacts]);
+  return <PoDataContext.Provider value={sd}><PurchaseOrdersScreen {...p} /></PoDataContext.Provider>;
+}

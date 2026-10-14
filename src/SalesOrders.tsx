@@ -81,27 +81,15 @@ function clientsFromContacts(contacts) {
 // ─── STOCK LOTS STUB ──────────────────────────────────────────────────────
 // Mirrors the Inventory module's lot export — replaced on integration.
 
-// Module-scope mutable data source.
-// In standalone mode, defaults to the stubs above.
-// In integration mode, the SalesOrders component synchronously assigns shell-provided arrays to these
-// at the top of its render, BEFORE any of the LOTS/PO_REFS readers run. Because React renders synchronously,
-// every helper called downstream (computeLineAvailability, SourcePickerModal, save guards) sees the updated values.
-//
-// We're using `let` here intentionally — these are NOT React state, they're just references to whatever
-// state the parent owns. Treating them as `const` would force us to plumb props through ~14 call sites in
-// 4 different functions. The render-time assignment pattern is safe given React's synchronous render model.
-export let LOTS: any[] = [];      // Batch 0 (G1): no stub fallback — live props only
-export let PO_REFS: any[] = [];   // Batch 0 (G1): no stub fallback — live props only
-// v6.41.0 (A5): raw lots (with .movements) + shipments, for the unshipped-
-// remainder reservation rule. The adapted LOTS above lose .movements, so we
-// keep the raw arrays here for shippedKgByLine.
-export let RAW_LOTS: any[] = [];
-export let SHIPMENTS_REF: any[] = [];
-export let CONTACTS_REF: any[] = [];   // v6.99.39 (D-1): the documents resolve a place's address through the registry
-// v6.61.0: packaging types, so a line priced per box can convert to kilos using
-// the same box weights the loading protocol already uses. Synced below.
-export let PACKAGING_TYPES_REF: any[] = PACKAGING_SEED;
-function reserveCtx() { return RAW_LOTS.length ? { lots: RAW_LOTS, shipments: SHIPMENTS_REF } : undefined; }
+// v7.22.4 (A-RV-16, Batch F): NO HIDDEN MODULE COPIES. The lots, POs, shipments, contacts and packaging these screens read were
+// module-level variables overwritten at the top of every render: a reader outside that render — a print, a second screen, a
+// check — saw whatever the last render had left. They are now ONE value built from the props (buildSalesData), handed down
+// through a React context; the helpers that need it take it as their last parameter.
+export interface SalesData { lots: any[]; rawLots: any[]; poRefs: any[]; contacts: any[]; shipments: any[]; packagingTypes: any[] }
+export const EMPTY_SALES_DATA: SalesData = { lots: [], rawLots: [], poRefs: [], contacts: [], shipments: [], packagingTypes: PACKAGING_SEED };
+export const SalesDataContext = React.createContext<SalesData>(EMPTY_SALES_DATA);
+export const useSalesData = (): SalesData => React.useContext(SalesDataContext);
+function reserveCtx(sd: SalesData) { return sd.rawLots.length ? { lots: sd.rawLots, shipments: sd.shipments } : undefined; }
 
 // Convert the lots into the Inventory→SalesOrders interface shape.
 // Inventory stores: { number, product, quality, size, origin, warehouse, physicalKg, ... }
@@ -177,23 +165,9 @@ export function destinationDisplay(order) {
   return `${loc.name}${loc.country ? `, ${loc.country}` : ""}`;
 }
 /** v6.99.39 (D-1): the DOCUMENT prints the place with its address — resolved from the id, the text only as a fallback. */
-export function destinationForPrint(order: any): string {
-  return placeForPrint(order?.destinationLocationId, order?.destinationText || order?.destinationLocationText, CONTACTS_REF || []).line;
+export function destinationForPrint(order: any, sd: SalesData): string {
+  return placeForPrint(order?.destinationLocationId, order?.destinationText || order?.destinationLocationText, sd.contacts || []).line;
 }
-
-// ─── SO STATUS LIFECYCLE ──────────────────────────────────────────────────
-// SO_STATUSES: canonical definition moved to ./types (Batch 0).
-
-// Incoterms typical for sales (we're the seller, client is buyer)
-export const INCOTERMS_SELL = [
-  { code: "EXW", label: "Ex Works (client picks up from our warehouse)" },
-  { code: "FCA", label: "Free Carrier (we deliver to carrier client nominated)" },
-  { code: "FOB", label: "Free On Board (we deliver to port, client takes vessel)" },
-  { code: "CIF", label: "Cost, Insurance & Freight (we ship to destination port)" },
-  { code: "CFR", label: "Cost & Freight (we ship, client insures)" },
-  { code: "DAP", label: "Delivered At Place (we deliver to client site)" },
-  { code: "DDP", label: "Delivered Duty Paid (we cover everything incl. customs)" },
-];
 
 export const CURRENCIES = ["PLN", "EUR", "USD"];
 export const QUALITY_GRADES = ["I", "IB", "II", "Industrial"];
@@ -214,11 +188,11 @@ export function fmtMoney(n, cur) {
   return `${Number(n).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur ? " " + cur : ""}`;
 }
 export function fmtDate(d) { return d || "—"; }
-export function netTotal(items) {
+export function netTotal(items, sd: SalesData) {
   // v6.61.0: a line priced per BOX totals boxes x price. Lines priced per kg —
   // every existing line — behave exactly as before, because pricingUnit is
   // absent on them and defaults to kg.
-  return (items || []).reduce((sum, it) => sum + lineTotalPU(it, PACKAGING_TYPES_REF), 0);
+  return (items || []).reduce((sum, it) => sum + lineTotalPU(it, sd.packagingTypes), 0);
 }
 // Next SO number — scans for current year, increments highest NNNN
 function nextSONumber(orders) {
@@ -263,7 +237,7 @@ function parsePaymentTermsDays(terms) {
 // Build a Sales Invoice (SINV) draft object from a Shipped SO.
 // Mirrors the shape of invoice objects in Invoices.tsx (INIT_INVOICES seed there)
 // so when integration happens, the object slots directly into the invoices state.
-export function buildInvoiceFromSO(order, invoiceNumber, today, clientVatRate: any = null) {   // v7.18.7 (BP-46): + the client's default VAT rate
+export function buildInvoiceFromSO(order, invoiceNumber, today, clientVatRate: any = null, sd: SalesData = EMPTY_SALES_DATA) {   // v7.18.7 (BP-46): + the client's default VAT rate
   const issueDate = today || localTodayISO();
   const saleDate = order.deliveryDate || issueDate; // when goods physically shipped
   const days = parsePaymentTermsDays(order.paymentTerms === "Other" ? order.paymentTermsOther : order.paymentTerms);
@@ -274,7 +248,7 @@ export function buildInvoiceFromSO(order, invoiceNumber, today, clientVatRate: a
   // VAT — Polish food default is 5%, but it depends on product/destination.
   // We pre-fill 5% and flag for user review in the modal.
   const VAT_DEFAULT = clientVatRate !== null && clientVatRate !== undefined && clientVatRate !== "" && [0, 5, 8, 23].includes(Number(clientVatRate)) ? Number(clientVatRate) : 5;   // v7.18.7 (BP-46): the client's default when it has one
-  const net = netTotal(order.items);
+  const net = netTotal(order.items, sd);
   const vat = Math.round(net * VAT_DEFAULT) / 100;
   const gross = Math.round((net + vat) * 100) / 100;
   const fx = parseFloat(order.fxRate) || 1;
@@ -324,15 +298,15 @@ export function validateSourcing(items) {
 }
 
 
-export function validatePOReadinessForSO(items: any[]) {
+export function validatePOReadinessForSO(items: any[], sd: SalesData) {
   const blocked: any[] = [];
   (items || []).forEach((it: any, idx: number) => {
     // v6.99.127 (A-ONE-1): a line sells a LOT — its readiness is its PO's; the PO path stays for the old lines left on it
-    const poNumber = it.sourceType === "PO" ? it.sourceRef : it.sourceType === "STOCK" && it.sourceRef ? ((RAW_LOTS || []).find((l: any) => String(l.number) === String(it.sourceRef)) || {}).poRef : null;
+    const poNumber = it.sourceType === "PO" ? it.sourceRef : it.sourceType === "STOCK" && it.sourceRef ? ((sd.rawLots || []).find((l: any) => String(l.number) === String(it.sourceRef)) || {}).poRef : null;
     if (!poNumber) return;
-    const lot = it.sourceType === "STOCK" ? (RAW_LOTS || []).find((l: any) => String(l.number) === String(it.sourceRef)) : null;
+    const lot = it.sourceType === "STOCK" ? (sd.rawLots || []).find((l: any) => String(l.number) === String(it.sourceRef)) : null;
     if (lot && (parseNum(lot.physicalKg) > 0 || parseNum(lot.receivedKg) > 0)) return;   // received goods are ours whatever the PO says
-    const po = PO_REFS.find((p: any) => p.number === poNumber);
+    const po = sd.poRefs.find((p: any) => p.number === poNumber);
     if (!po || !isPOUsableForConfirmedSO(po)) {
       blocked.push({ idx, poRef: poNumber, status: po?.status || "Missing", product: it.product || "" });
     }
@@ -355,13 +329,13 @@ export function validatePOReadinessForSO(items: any[]) {
 
 // Returns: { liveAvailable, reservations: [{ soNumber, soId, status, qty }] }
 // for a given lot, considering reservations from all SOs except `excludeOrderId`.
-export function lotReservations(lot, allOrders, excludeOrderId) {
-  return lotReservationsForPicker(lot, allOrders, excludeOrderId, reserveCtx()); // engine: salesOrders.domain (Batch 1)
+export function lotReservations(lot, allOrders, excludeOrderId, sd: SalesData) {
+  return lotReservationsForPicker(lot, allOrders, excludeOrderId, reserveCtx(sd)); // engine: salesOrders.domain (Batch 1)
 }
 
 // Same idea for a PO line — reservations from non-Draft, non-Cancelled SOs.
-export function poLineReservations(po, poLine, allOrders, excludeOrderId) {
-  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId, reserveCtx()); // engine (Batch 1)
+export function poLineReservations(po, poLine, allOrders, excludeOrderId, sd: SalesData) {
+  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId, reserveCtx(sd)); // engine (Batch 1)
 }
 
 // Availability check — for each line, compute how much of its demanded qty is
@@ -395,9 +369,9 @@ export function sameSoDuplicateSources(soItems) {
   return dups;
 }
 
-export function computeLineAvailability(soItems, allOrders, currentOrderId) {
+export function computeLineAvailability(soItems, allOrders, currentOrderId, sd: SalesData) {
   // Engine extracted to salesOrders.domain (Batch 1) — LOTS/PO_REFS passed explicitly.
-  return domainComputeLineAvailability(soItems, allOrders, currentOrderId, LOTS, PO_REFS, SHIPMENTS_REF);
+  return domainComputeLineAvailability(soItems, allOrders, currentOrderId, sd.lots, sd.poRefs, sd.shipments);
 }
 
 // ─── SHARED UI ATOMS ──────────────────────────────────────────────────────
@@ -445,8 +419,8 @@ export function SourceBadge({ sourceType, sourceRef, supplierName }: any) {
 }
 
 // Resolve the supplier name for a PO-sourced line (from the SO's PO references)
-export function supplierNameForPO(poRef: any): string {
-  const po: any = (PO_REFS || []).find((p: any) => p.number === poRef);
+export function supplierNameForPO(poRef: any, sd: SalesData): string {
+  const po: any = (sd.poRefs || []).find((p: any) => p.number === poRef);
   return po?.supplierName || po?.supplier?.name || "";
 }
 
@@ -711,7 +685,7 @@ function CollectionModal({ so, onClose, onSave }: any) {
   );
 }
 
-export default function SalesOrders({ archive = null,
+function SalesOrdersScreen({ archive = null,
   claims: extClaims = [],
   setClaims: extSetClaims = null,
   orders: extOrders, setOrders: extSetOrders,
@@ -729,6 +703,7 @@ export default function SalesOrders({ archive = null,
   initialSelectedNumber = "",
   initialView = "",
 }: any = {}) {
+  const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const { confirm: uiConfirm, alert: uiAlert, dialogNode: soDialogNode } = useConfirm(); // P2-6
   // v6.35.1: cancelled document numbers (POs, SOs, shipments) for struck-through refs.
   const cancelledRefs = cancelledDocSet(extPOs, extOrders, extShipments);
@@ -780,26 +755,6 @@ export default function SalesOrders({ archive = null,
     setFktMatchMsg({ kind: matched ? "success" : "error", text: matched ? `Matched ${matched} invoice(s) from Fakturownia.` : "No matching invoice found in Fakturownia for this SO yet." });
   }
 
-  // Sync the module-scope LOTS and PO_REFS with shell-provided live data BEFORE any helpers run.
-  // This works because (a) React renders synchronously, (b) every reader of LOTS/PO_REFS is invoked
-  // downstream of this assignment within the same render pass.
-  // In standalone mode (no extInvLots / extPOs), LOTS and PO_REFS retain their seed values.
-  if (extInvLots) LOTS = _adaptLotsFromInventory(extInvLots, extInspections);
-  RAW_LOTS = extInvLots || [];
-  SHIPMENTS_REF = extShipments || [];
-  CONTACTS_REF = extContacts || [];
-  PACKAGING_TYPES_REF = (packagingTypes && packagingTypes.length) ? packagingTypes : PACKAGING_SEED;
-  if (extPOs)    PO_REFS = _adaptPOsFromModule(extPOs);
-  // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields.
-  // Backfill them from the originating PO line so sourcing "from stock" is as complete as
-  // "from PO" (both the picker row and the inherited SO line then show Item — Variety + CN/HS).
-  LOTS = (LOTS || []).map((lot: any) => {
-    if ((lot.variety && lot.cnCode) || !lot.poRef) return lot;
-    const po: any = (PO_REFS || []).find((p: any) => p.number === lot.poRef);
-    const line: any = po && (po.items || []).find((it: any) => String(it.product || "").toLowerCase() === String(lot.product || "").toLowerCase());
-    if (!line) return lot;
-    return { ...lot, variety: lot.variety || line.variety || "", cnCode: lot.cnCode || line.cnCode || "" };
-  });
   const termsAll = useMemo(() => termsToReview({ pos: extPOs || [], orders: orders || [], shipments: extShipments || [], claims: extClaims || [], contacts: extContacts || [], lots: extInvLots || [], placeOf: (id: any) => locationById(id, extContacts || []) }), [extPOs, orders, extShipments, extClaims, extContacts, extInvLots]);   // v7.20.0 (A-INC-2)
   const clients = useMemo(() => clientsFromContacts((extContacts || []).filter((c: any) => !c.archived && !c.deleted)), [extContacts]); // v6.99.2 (CP-4): archived parties leave the picker
 
@@ -844,10 +799,10 @@ export default function SalesOrders({ archive = null,
   // KPIs
   const activeStatuses = new Set(["Draft", "Confirmed", "Loading", "Shipped"]);
   const activeCount = orders.filter(o => activeStatuses.has(o.status)).length;
-  const deliveredNotInvoicedCount = orders.filter(o => effectiveSoStatus(o, SHIPMENTS_REF) === "Delivered").length; // v6.79.0 (W-1)
+  const deliveredNotInvoicedCount = orders.filter(o => effectiveSoStatus(o, sd.shipments) === "Delivered").length; // v6.79.0 (W-1)
   const activeValuePLN = orders
     .filter(o => activeStatuses.has(o.status))
-    .reduce((sum, o) => sum + netTotal(o.items) * (o.fxRate || 1), 0);
+    .reduce((sum, o) => sum + netTotal(o.items, sd) * (o.fxRate || 1), 0);
   const upcomingDeliveryCount = orders.filter(o => {
     if (!o.deliveryDate || !activeStatuses.has(o.status)) return false;
     const days = Math.floor((new Date(o.deliveryDate).getTime() - Date.now()) / 86400000);
@@ -876,7 +831,7 @@ export default function SalesOrders({ archive = null,
       acidNo: "",
       paymentTerms: "30 days from invoice date",
       paymentTermsOther: "",
-      sellIncoterm: "DAP",
+      sellIncoterm: "",   // v7.22.3 (FZ-21): no term assumed — the user chooses one of the 11 Incoterms 2020 rules
       client: null,
       destinationLocationId: null,
       destinationText: "",
@@ -948,14 +903,14 @@ export default function SalesOrders({ archive = null,
   async function saveOrder(o) {
     // v6.99.46 (A-PO-11): the stored boxes / pallets ARE the effective counts (derived from the line's packaging unless
     // overridden), so every reader downstream — totals, shipments, protocol, invoices — sees one figure.
-    o = { ...o, items: (o.items || []).map((it: any) => { const ec = effectiveCounts(it, PACKAGING_TYPES_REF || []); const isBoxUnit = String(it.pricingUnit || "kg") !== "kg"; return { ...it, boxes: isBoxUnit ? it.boxes : (ec.boxes ?? it.boxes ?? null), pallets: ec.pallets ?? it.pallets ?? null }; }) };
+    o = { ...o, items: (o.items || []).map((it: any) => { const ec = effectiveCounts(it, sd.packagingTypes || []); const isBoxUnit = String(it.pricingUnit || "kg") !== "kg"; return { ...it, boxes: isBoxUnit ? it.boxes : (ec.boxes ?? it.boxes ?? null), pallets: ec.pallets ?? it.pallets ?? null }; }) };
     // v6.65.0 (D-18): kilos are the single stored quantity (v6.61 ruling), so a
     // box-priced line must land in storage with its derived kg in `qty` and its
     // box weight in `kgPerBox` — every engine (reservations, margin, settlement,
     // allocation) reads those raw fields and must never learn about boxes.
     o = { ...o, items: (o.items || []).map((it: any) => {
       if (pricingUnitOf(it) !== "box") return it;
-      const kgPerBox = kgPerBoxForLine(it, PACKAGING_TYPES_REF);
+      const kgPerBox = kgPerBoxForLine(it, sd.packagingTypes);
       if (kgPerBox <= 0) return it; // unresolved — the form already warns loudly
       const boxes = Math.round(parseFloat(String(it.boxes || 0)) || 0);
       return { ...it, kgPerBox, qty: Math.round(boxes * kgPerBox * 1000) / 1000 };
@@ -963,7 +918,7 @@ export default function SalesOrders({ archive = null,
     // Batch 6b: hard confirm-gate — no SO past Draft without its sell terms.
     const termsMissing = soTermsMissing(o);
     if (!["Draft", "Cancelled"].includes(o.status) && termsMissing) {
-      await uiAlert({ tone: "warn", title: "Terms incomplete", message: `This SO cannot move to ${o.status} without ${termsMissing}. "CIF" without "CIF Jeddah" is only half the contract.` });
+      await uiAlert({ tone: "warn", title: "Terms incomplete", message: `This SO cannot move to ${o.status} without ${termsMissing}. A term without its named place is only half the contract.` });
       return;
     }
 
@@ -1016,7 +971,7 @@ export default function SalesOrders({ archive = null,
       await uiAlert({ tone: "warn", title: "Lines unsourced", message: `Cannot save SO as ${o.status} — ${src.unsourcedIndexes.length} line(s) unsourced. Pick a lot for every line first (expected, in stock or direct), or save as Draft.` });
       return;
     }
-    const poIssues = validatePOReadinessForSO(o.items);
+    const poIssues = validatePOReadinessForSO(o.items, sd);
     if (poIssues.length && o.status !== "Draft" && o.status !== "Cancelled") {
       const poDetails = poIssues.map((x: any) => `• Line ${x.idx + 1}: ${x.poRef} (${x.status})`).join("\n");
       await uiAlert({ tone: "warn", title: "Source PO not usable", message: `Cannot save SO as ${o.status} because it refers to a PO that is Draft, Cancelled or missing:\n\n${poDetails}\n\nConfirm the PO first, choose another source, or keep the SO as Draft.` });
@@ -1024,7 +979,7 @@ export default function SalesOrders({ archive = null,
     }
     // Availability guard — same hard rule, parallel to sourcing.
     // Can't promise to a client what we cannot supply (from stock or any PO).
-    const avail = computeLineAvailability(o.items, orders, o.id);
+    const avail = computeLineAvailability(o.items, orders, o.id, sd);
     const overCount = avail.filter(a => a.hasOverage).length;
     const needsSupply = overCount > 0 && o.status !== "Draft" && o.status !== "Cancelled";
     if (needsSupply) {
@@ -1349,7 +1304,7 @@ export default function SalesOrders({ archive = null,
               .filter((value: any): value is string => typeof value === "string" && value.length > 0);
             const uniqueSources: string[] = Array.from(new Set<string>(sources));
             // Quick overage check for the row badge
-            const rowAvail = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(o, SHIPMENTS_REF || []))) ? [] : computeLineAvailability(o.items, orders, o.id);   // v6.99.16: history is not checked
+            const rowAvail = ["Shipped", "Delivered", "Invoiced", "Closed"].includes(String(effectiveSoStatus(o, sd.shipments || []))) ? [] : computeLineAvailability(o.items, orders, o.id, sd);   // v6.99.16: history is not checked
             const rowOverageCount = rowAvail.filter(a => a.hasOverage).length;
             return (
               <div key={o.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 110px 110px 130px 130px 140px", padding: "12px 18px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: "#fff", cursor: "pointer" }}
@@ -1372,7 +1327,7 @@ export default function SalesOrders({ archive = null,
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(o.deliveryDate) || "—"}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(netTotal(o.items), o.currency)}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(netTotal(o.items, sd), o.currency)}</div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, fontFamily: "ui-monospace, Menlo, monospace" }}>
                   {/* v6.34.2 (module review): list the linked source documents, don't truncate to 2. */}
@@ -1444,4 +1399,24 @@ export default function SalesOrders({ archive = null,
 
     </div>
   );
+}
+
+
+/** v7.22.4 (A-RV-16): the data the sales screens read, built once from the props (no module copy). */
+export function buildSalesData(p: { invLots?: any[]; inspections?: any[]; pos?: any[]; shipments?: any[]; contacts?: any[]; packagingTypes?: any[] }): SalesData {
+  const poRefs = p.pos ? _adaptPOsFromModule(p.pos) : [];
+  // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields — backfilled from its PO line
+  const lots = (p.invLots ? _adaptLotsFromInventory(p.invLots, p.inspections) : []).map((lot: any) => {
+    if ((lot.variety && lot.cnCode) || !lot.poRef) return lot;
+    const po: any = poRefs.find((x: any) => x.number === lot.poRef);
+    const line: any = po && (po.items || []).find((it: any) => String(it.product || "").toLowerCase() === String(lot.product || "").toLowerCase());
+    if (!line) return lot;
+    return { ...lot, variety: lot.variety || line.variety || "", cnCode: lot.cnCode || line.cnCode || "" };
+  });
+  return { lots, rawLots: p.invLots || [], poRefs, contacts: p.contacts || [], shipments: p.shipments || [], packagingTypes: (p.packagingTypes && p.packagingTypes.length) ? p.packagingTypes : PACKAGING_SEED };
+}
+export default function SalesOrders(props: any) {
+  const p = props || {};
+  const sd = useMemo(() => buildSalesData({ invLots: p.invLots, inspections: p.inspections, pos: p.allPOs, shipments: p.shipments, contacts: p.contacts, packagingTypes: p.packagingTypes }), [p.invLots, p.inspections, p.allPOs, p.shipments, p.contacts, p.packagingTypes]);
+  return <SalesDataContext.Provider value={sd}><SalesOrdersScreen {...p} /></SalesDataContext.Provider>;
 }

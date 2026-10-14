@@ -1,3 +1,4 @@
+import { useConfirm } from "./ui";   // v7.22.5 (A-RV-17)
 // v6.99.148: the login and the sync status for the shared store — shown only when the two settings are present
 import React, { useEffect, useState } from "react";
 import { remoteConfigured, readSession, login, logout, pullAll, uploadStores, storesFromExport, startSync, onSync, SyncState, clearConflict, ENV_LABEL, keepMine, dismissNotice } from "./remoteStore";   // v7.14.0: + keepMine, dismissNotice
@@ -49,12 +50,13 @@ export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncS
 
 /** The status pill + conflict notices + the one-time upload offer, for the top bar. */
 export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLabel: string }) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [busy, setBusy] = useState(false);
   if (sync.status === "off") return null;
   const color = sync.status === "synced" ? "#15803D" : sync.status === "saving" || sync.status === "pulling" ? "#B45309" : sync.status === "offline" ? "#DC2626" : "#6366F1";
   const label = sync.status === "synced" ? "shared · synced" : sync.status === "saving" ? "shared · saving…" : sync.status === "pulling" ? "shared · loading…" : sync.status === "offline" ? "shared · offline — changes kept here, retried on the next save" : sync.status === "empty" ? "shared store is empty" : "shared";
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 700, color }} title={sync.lastPull ? `last pulled ${sync.lastPull.slice(11, 19)} UTC` : ""}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 700, color }} title={sync.lastPull ? `last pulled ${sync.lastPull.slice(11, 19)} UTC` : ""}>{dialogNode}
       <span style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }} />{label}
       {sync.status === "empty" && <>
         {/* v6.99.152 (owner 6 Oct): the first shared data from an EXPORTED FILE — e.g. a colleague's browser copy — without importing it into this browser first */}
@@ -65,9 +67,9 @@ export function SharedStoreStatus({ sync, userLabel }: { sync: SyncState; userLa
             try {
               const parsed = storesFromExport(await file.text());
               const when = parsed.meta?.exportedAt ? String(parsed.meta.exportedAt).replace("T", " ").slice(0, 16) + " UTC" : "unknown time";
-              if (!window.confirm(`Make the file "${file.name}" the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}?\n\nExported ${when}, app ${parsed.meta?.appVersion || "?"}.\nIt holds: ${parsed.summary}.\n\nEveryone who signs in after this — you included — will see exactly this data; each browser keeps a snapshot of its own data first. Anything entered after the file was exported is NOT in it.`)) return;
-              setBusy(true); const n = await uploadStores(parsed.stores, userLabel); window.alert(`${n} stores uploaded from ${file.name} — the file's data is now the shared data, and this browser shows it.`);
-            } catch (x: any) { window.alert(String(x?.message || x)); }
+              if (!(await uiConfirm({ title: "Please confirm", message: `Make the file "${file.name}" the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}?\n\nExported ${when}, app ${parsed.meta?.appVersion || "?"}.\nIt holds: ${parsed.summary}.\n\nEveryone who signs in after this — you included — will see exactly this data; each browser keeps a snapshot of its own data first. Anything entered after the file was exported is NOT in it.` }))) return;
+              setBusy(true); const n = await uploadStores(parsed.stores, userLabel); (await uiAlert({ message: `${n} stores uploaded from ${file.name} — the file's data is now the shared data, and this browser shows it.` }));
+            } catch (x: any) { (await uiAlert({ message: String(x?.message || x) })); }
             setBusy(false);
           }} />
         </label>

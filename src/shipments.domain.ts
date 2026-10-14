@@ -23,6 +23,7 @@ import { noteNames } from "./format";
 
 import { findLotForSOLine } from "./salesOrders.domain";
 import { unitKg as derivedUnitKg } from "./shipmentModel.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 function num(v: any): number {
   const x = parseFloat(String(v ?? "").replace(",", "."));
@@ -386,7 +387,7 @@ const FREIGHT_TYPE_BY_MODE: Record<string, string> = { Air: "air_freight", Rail:
 export function legFreightSource(legNo: number): string { return `leg-freight:${legNo}`; }
 export function syncLegFreightCostLines(sh: any, payers?: Array<{ payer: string }>): any {
   const legs = sh?.legs || [];
-  const numv = (v: any) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+  const numv = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
   let costs = [...(sh?.costs || [])];
   legs.forEach((leg: any, i: number) => {
     if (payers && payers[i] && payers[i].payer !== "us") return;   // v7.19.0 (A-INC-1): the supplier's / the client's leg — no line of ours (an old one stays, flagged)

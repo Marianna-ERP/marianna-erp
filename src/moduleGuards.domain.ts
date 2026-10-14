@@ -1,6 +1,7 @@
 // ── SHIPMENT & INVENTORY GATES (v6.78.0) ────────────────────────────────────
 import { S } from "./format";
 import { lotLoadedTwice } from "./lotView.domain";   // v7.11.5 (A-RV-28)
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // The same shape Purchase Orders got in v6.72.0: a very small number of hard
 // gates, more warnings that state their CONSEQUENCE, and a readiness view while
 // you work rather than a refusal at the save button.
@@ -9,7 +10,7 @@ import { lotLoadedTwice } from "./lotView.domain";   // v7.11.5 (A-RV-28)
 // would leave the data saying a thing that did not happen. Everything else
 // reports — because a truck at a dock does not wait for a form.
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── SHIPMENTS ───────────────────────────────────────────────────────────────
 

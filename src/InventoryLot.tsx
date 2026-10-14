@@ -14,6 +14,7 @@ import { gradeSplit, inspectionTotals } from "./seasonOps.domain";
 import { INSPECTION_CONTEXTS, countryOfLot, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel } from "./Inventory";
 import { SeasonActions } from "./InventoryWindows";
 import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
+import { deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [], season = null , userName = "" }: any) {
   // v6.99.30 (A-R21-3, owner): a recall document must be identifiable afterwards — it carries its own number,
@@ -46,7 +47,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
             <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
           )}
           {/* v6.99.28 (owner): only a purchase the SUPPLIER delivers (DDP / DAP / DPU) is received here — every other lot arrives through its shipment */}
-          {typeof onDirectReceive === "function" && (lot.status === "Expected" || lot.status === "Direct Expected") && !(lot.movements || []).some((m: any) => !m.voided) && ["DDP", "DAP", "DPU"].includes(String((pos || []).find((x: any) => String(x.number) === String(lot.poRef))?.buyIncoterm || "").toUpperCase()) && (
+          {typeof onDirectReceive === "function" && (lot.status === "Expected" || lot.status === "Direct Expected") && !(lot.movements || []).some((m: any) => !m.voided) && deliveredAtDestination((pos || []).find((x: any) => String(x.number) === String(lot.poRef))?.buyIncoterm) && (
             <button onClick={onDirectReceive} title="For DDP / direct arrivals with no shipment of ours: posts the receipt movement so the stock becomes available." style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📥 Receive into stock (direct/DDP)</button>
           )}
           <ActionButton action="delete" onClick={onDelete} />

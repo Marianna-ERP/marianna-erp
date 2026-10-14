@@ -15,8 +15,13 @@ export interface IncotermRule {
   costsTo: "delivery" | "named-destination";
   exportClearance: "buyer" | "seller"; importClearance: "buyer" | "seller";
   insurance: "" | "ICC (C) minimum" | "ICC (A)";
+  name: string;                        // v7.22.3 (FZ-21): the official name — the one label every screen shows
+  namedPlace: "seller-premises" | "origin-place" | "origin-port" | "destination-port" | "destination-place";   // what the named place IS
 }
-const R = (code: IncotermCode, seaOnly: boolean, riskAt: IncotermRule["riskAt"], risk: string, carriagePaidBy: "buyer" | "seller", costsTo: IncotermRule["costsTo"], exportClearance: "buyer" | "seller", importClearance: "buyer" | "seller", insurance: IncotermRule["insurance"] = ""): IncotermRule => ({ code, seaOnly, riskAt, risk, carriagePaidBy, costsTo, exportClearance, importClearance, insurance });
+const R = (code: IncotermCode, seaOnly: boolean, riskAt: IncotermRule["riskAt"], risk: string, carriagePaidBy: "buyer" | "seller", costsTo: IncotermRule["costsTo"], exportClearance: "buyer" | "seller", importClearance: "buyer" | "seller", insurance: IncotermRule["insurance"] = ""): IncotermRule => ({ code, seaOnly, riskAt, risk, carriagePaidBy, costsTo, exportClearance, importClearance, insurance, name: INCOTERM_NAMES[code], namedPlace: NAMED_PLACE[code] });
+// v7.22.3 (FZ-21, owner ruling 13 Oct): ONE TABLE FOR EVERYTHING — the official names and what each rule's named place is
+const INCOTERM_NAMES: Record<string, string> = { EXW: "Ex Works", FCA: "Free Carrier", FAS: "Free Alongside Ship", FOB: "Free On Board", CFR: "Cost and Freight", CIF: "Cost, Insurance and Freight", CPT: "Carriage Paid To", CIP: "Carriage and Insurance Paid To", DAP: "Delivered at Place", DPU: "Delivered at Place Unloaded", DDP: "Delivered Duty Paid" };
+const NAMED_PLACE: Record<string, IncotermRule["namedPlace"]> = { EXW: "seller-premises", FCA: "origin-place", FAS: "origin-port", FOB: "origin-port", CFR: "destination-port", CIF: "destination-port", CPT: "destination-place", CIP: "destination-place", DAP: "destination-place", DPU: "destination-place", DDP: "destination-place" };
 export const INCOTERMS_2020: Record<IncotermCode, IncotermRule> = {
   EXW: R("EXW", false, "seller-premises", "at the seller's premises, not loaded", "buyer", "delivery", "buyer", "buyer"),
   FCA: R("FCA", false, "named-place-carrier", "handed to the buyer's carrier at the named place", "buyer", "delivery", "seller", "buyer"),
@@ -31,16 +36,65 @@ export const INCOTERMS_2020: Record<IncotermCode, IncotermRule> = {
   DDP: R("DDP", false, "destination", "at the named place, ready for unloading", "seller", "named-destination", "seller", "seller"),
 };
 export function ruleOf(code: any): IncotermRule | null { const k = String(code || "").trim().toUpperCase() as IncotermCode; return (INCOTERMS_2020 as any)[k] || null; }
-/** Do WE arrange (and pay) the main carriage? side "buy" = we are the buyer (PO); "sell" = we are the seller (SO). */
-export function weArrangeCarriage(code: any, side: "buy" | "sell"): boolean { const r = ruleOf(code); if (!r) return false; return side === "buy" ? r.carriagePaidBy === "buyer" : r.carriagePaidBy === "seller"; }
-/** Who clears customs for import / export, seen from our side. */
-export function weClear(code: any, side: "buy" | "sell", which: "export" | "import"): boolean { const r = ruleOf(code); if (!r) return false; const party = which === "export" ? r.exportClearance : r.importClearance; return side === "buy" ? party === "buyer" : party === "seller"; }
-/** Who carries the risk of a loss, given WHERE it happened relative to the delivery point: "before" → the seller, "after" → the buyer. */
-export function riskBearer(code: any, lossBeforeDelivery: boolean): "seller" | "buyer" | "" { return ruleOf(code) ? (lossBeforeDelivery ? "seller" : "buyer") : ""; }
-/** One plain sentence for a document or a screen. */
-export function incotermSentence(code: any, namedPlace: string): string {
-  const r = ruleOf(code); if (!r) return "";
-  return `${r.code} ${namedPlace || "(named place missing)"} — risk passes ${r.risk}; ${r.carriagePaidBy === "seller" ? `seller pays carriage to ${namedPlace || "the named place"}` : "buyer arranges and pays the main carriage"}${r.insurance ? `; seller insures (${r.insurance})` : ""}; export clearance by the ${r.exportClearance}, import clearance by the ${r.importClearance}.`;
+
+// ── v7.22.3 (FZ-21, owner ruling 13 Oct): every incoterm question on every screen is answered HERE, from the table above. ──
+// A term that is not one of the 11 Incoterms 2020 rules (an old DAT, a typo) is not read at all: the terms review names it on its
+// PO or SO and the user picks the right rule; the forms show it as "outdated — choose again".
+export const INCOTERM_CODES: IncotermCode[] = Object.keys(INCOTERMS_2020) as IncotermCode[];
+export const isIncoterm2020 = (code: any): boolean => !!ruleOf(code);
+export const incotermLabel = (code: any): string => { const r = ruleOf(code); return r ? `${r.code} — ${r.name}` : String(code || ""); };
+/** EXW / FCA: the goods are taken at the seller's side — on a purchase, at the supplier's site by default. */
+export const takenAtSeller = (code: any): boolean => ["seller-premises", "origin-place"].includes(String(ruleOf(code)?.namedPlace || ""));
+/** FCA / FAS / FOB: the named place is where the goods leave — a port there is the port of loading. */
+export const namedPlaceIsOrigin = (code: any): boolean => ["origin-place", "origin-port"].includes(String(ruleOf(code)?.namedPlace || ""));
+/** C- and D-rules: the seller arranges and pays the main carriage. */
+export const sellerPaysCarriage = (code: any): boolean => ruleOf(code)?.carriagePaidBy === "seller";
+/** D-rules: the goods are delivered at the named destination (risk passes there). */
+export const deliveredAtDestination = (code: any): boolean => ruleOf(code)?.riskAt === "destination";
+/** C-rules: carriage paid to the destination, risk passed earlier. */
+export const carriagePaidToDestination = (code: any): boolean => { const r = ruleOf(code); return !!r && r.carriagePaidBy === "seller" && r.riskAt !== "destination"; };
+/** Where the goods come into our hands (buying) or leave them (selling), as the stock reads it. A named place that is a port
+ *  counts as the port for the C- and D-rules; otherwise our warehouse (buying) or the client (selling). */
+export const OWNERSHIP_POINTS = ["supplier", "origin_port", "dest_port", "our_wh", "client"] as const;
+export function handoverPointOf(code: any, side: "buy" | "sell", namedPlaceIsPort = false): string {
+  const p = ruleOf(code)?.namedPlace; if (!p) return "";
+  if (p === "seller-premises" || p === "origin-place") return "supplier";
+  if (p === "origin-port") return "origin_port";
+  if (p === "destination-port") return "dest_port";
+  return namedPlaceIsPort ? "dest_port" : (side === "buy" ? "our_wh" : "client");
+}
+export function ownershipAtPoint(point: string, buyIncoterm: any, sellIncoterm: any): string {
+  const order = OWNERSHIP_POINTS as readonly string[];
+  const pI = order.indexOf(point), sI = order.indexOf(handoverPointOf(buyIncoterm, "buy") || "supplier"), eI = order.indexOf(handoverPointOf(sellIncoterm, "sell") || "client");
+  if (pI === -1 || sI === -1 || eI === -1) return "owned";
+  if (pI < sI) return "not_owned";
+  if (pI > eI) return "handed_over";
+  return "owned";
+}
+/** What to name as the place, the kinds of place to offer first, and one line of guidance — for a purchase or a sale. */
+export function namedPlaceGuide(code: any, side: "buy" | "sell"): { kinds: string[]; label: string; hint: string } {
+  const r = ruleOf(code);
+  if (!r) return { kinds: ["SUPPLIER", "PORT", "OWN", "CLIENT"], label: "Place (choose an Incoterms 2020 rule first)", hint: code ? `"${code}" is not an Incoterms 2020 rule — choose the right one.` : "Choose the incoterm — it sets what to fill here." };
+  const c = r.code, buy = side === "buy";
+  switch (r.namedPlace) {
+    case "seller-premises": return buy ? { kinds: ["SUPPLIER"], label: "Pickup place (supplier site)", hint: `${c} — we collect at the supplier's premises (defaults to the supplier's site).` }
+                                       : { kinds: ["OWN", "SUPPLIER"], label: "Collection place", hint: `${c} — the client collects from us; we do not deliver.` };
+    case "origin-place": return buy ? { kinds: ["SUPPLIER", "PORT"], label: "Hand-over place", hint: `${c} — handed to our carrier at the named place (defaults to the supplier's site).` }
+                                    : { kinds: ["OWN", "PORT"], label: "Hand-over place", hint: `${c} — the place where we hand the goods to the client's carrier.` };
+    case "origin-port": return { kinds: ["PORT"], label: "Port of loading", hint: `${c} — name the port of loading.` };
+    case "destination-port": return { kinds: ["PORT"], label: buy ? "Port of discharge" : "Port of destination", hint: `${c} — name the port of discharge (destination port).` };
+    default: return buy ? { kinds: ["OWN", "CLIENT"], label: "Delivery place", hint: `${c} — the place where the supplier's carriage ends (defaults to our warehouse; change if elsewhere).` }
+                        : { kinds: ["CLIENT", "OWN"], label: "Delivery place", hint: `${c} — the client's address, or another address the client indicates.` };
+  }
+}
+/** The one sentence under an incoterm — from the table: where the risk passes, who pays the carriage (and insures), who clears. */
+export function incotermLine(code: any, side: "buy" | "sell", placeName = ""): string {
+  const r = ruleOf(code); if (!r) return code ? `"${code}" is not an Incoterms 2020 rule — choose the right one.` : "";
+  const us = side === "buy", other = us ? "the supplier" : "the client", at = placeName ? ` (${placeName})` : "";
+  const riskTo = us ? "us" : other;
+  const carriage = r.carriagePaidBy === "seller" ? `${us ? "The supplier pays" : "We pay"} the main carriage to the named place${at}${r.insurance ? ` and insure${us ? "s" : ""} it (${r.insurance})` : ""}` : `${us ? "We arrange" : "The client arranges"} and pay${us ? "" : "s"} the main carriage${r.namedPlace === "seller-premises" ? "" : ` from the named place${at}`}`;
+  const who = (x: "buyer" | "seller") => x === "seller" ? (us ? other : "us") : (us ? "us" : other);
+  return `${r.code} — the risk passes to ${riskTo} ${r.risk}. ${carriage}. Export clearance by ${who(r.exportClearance)}; import clearance by ${who(r.importClearance)}.`;
 }
 
 /** v7.9.2 (A-INC-1): EMPTY places on a shipment filled from their owners — the goods' location (origin), the booking's ports
@@ -250,11 +304,11 @@ export function claimShipment(claim: any, shipments: any[] = []): any {
 //   v7.20.1  a CFR / CIF named place that is not a port           v7.20.4  a shipment's places against the named places
 //   v7.20.2  a CIF / CIP sale with no insurance certificate held  v7.20.5  a carrier of ours on a leg someone else pays
 //   v7.20.3  a sea-only rule on a journey with no sea and no port v7.20.6  a C- or D-rule sale with no freight of ours
-export type TermsKind = "freight" | "exw" | "customs" | "claim" | "port" | "insurance" | "sea" | "places" | "carrier" | "nofreight";
+export type TermsKind = "freight" | "exw" | "customs" | "claim" | "port" | "insurance" | "sea" | "places" | "carrier" | "nofreight" | "outdated";   // v7.22.3 (FZ-21): a term that is not an Incoterms 2020 rule
 export interface TermsFinding { kind: TermsKind; term: string; doc: string; record: string; recordKind: "shipment" | "order" | "po" | "claim"; shipment: string; text: string; }
 export interface TermsCtx { pos?: any[]; orders?: any[]; shipments?: any[]; claims?: any[]; contacts?: any[]; lots?: any[]; placeOf?: (id: any) => any; countryOf?: (id: any) => string; }
-export const TERMS_KINDS: TermsKind[] = ["port", "nofreight", "exw", "freight", "carrier", "customs", "insurance", "sea", "places", "claim"];
-export const TERMS_KIND_LABEL: Record<TermsKind, string> = { freight: "freight on a leg not ours", exw: "shipment of ours, sold EXW", customs: "customs", claim: "claim routing", port: "named place not a port", insurance: "no insurance certificate", sea: "sea rule, no sea leg", places: "places off the named place", carrier: "carrier on a leg not ours", nofreight: "no freight of ours" };
+export const TERMS_KINDS: TermsKind[] = ["outdated", "port", "nofreight", "exw", "freight", "carrier", "customs", "insurance", "sea", "places", "claim"];
+export const TERMS_KIND_LABEL: Record<TermsKind, string> = { freight: "freight on a leg not ours", exw: "shipment of ours, sold EXW", customs: "customs", claim: "claim routing", port: "named place not a port", insurance: "no insurance certificate", sea: "sea rule, no sea leg", places: "places off the named place", carrier: "carrier on a leg not ours", nofreight: "no freight of ours", outdated: "not an Incoterms 2020 rule" };
 const S0 = (v: any) => String(v ?? "").trim();
 const known = (v: any) => v != null && v !== "";
 const num0 = (v: any) => parseNum(v);   // numbers.parseNum — the one way to read a typed number (AUD-11)
@@ -393,6 +447,11 @@ export function shipmentTermsFindings(sh: any, ctx: TermsCtx = {}): TermsFinding
 export function termsToReview(ctx: TermsCtx = {}): TermsFinding[] {
   const out: TermsFinding[] = [];
   (ctx.shipments || []).filter(liveRec).forEach((sh: any) => out.push(...shipmentTermsFindings(sh, ctx)));
+  // v7.22.3 (FZ-21, owner ruling 13 Oct): a term that is not one of the 11 Incoterms 2020 rules is not read at all — it is named
+  // here, on its record, for the user to choose the right rule (an old DAT became DPU in 2020)
+  const outdated = (t: any, verb: string) => `${verb} "${S0(t)}": not one of the 11 Incoterms 2020 rules — open the order and choose the right one${S0(t).toUpperCase() === "DAT" ? " (DAT became DPU in 2020)" : ""}.`;
+  (ctx.orders || []).filter(liveRec).filter((o: any) => S0(o.sellIncoterm) && !isIncoterm2020(o.sellIncoterm)).forEach((o: any) => out.push({ kind: "outdated", term: S0(o.sellIncoterm), doc: S0(o.number), record: S0(o.number), recordKind: "order", shipment: "", text: outdated(o.sellIncoterm, "Sold") }));
+  (ctx.pos || []).filter(liveRec).filter((p: any) => S0(p.buyIncoterm) && !isIncoterm2020(p.buyIncoterm)).forEach((p: any) => out.push({ kind: "outdated", term: S0(p.buyIncoterm), doc: S0(p.number), record: S0(p.number), recordKind: "po", shipment: "", text: outdated(p.buyIncoterm, "Bought") }));
   (ctx.orders || []).filter(liveRec).forEach((o: any) => {
     const no = S0(o.number); const n = namedPlaceNotPort(o, "sell", ctx);
     if (n) out.push({ kind: "port", term: n.term, doc: no, record: no, recordKind: "order", shipment: "", text: `Sold ${n.term}: the named place must be the port of destination — it is ${n.typed ? `"${n.place}", an address typed with no port behind it` : `${n.place}, not a port`}.` });

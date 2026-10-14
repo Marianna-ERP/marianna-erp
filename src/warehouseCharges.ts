@@ -1,5 +1,6 @@
 import { counterpartyLocations } from "./locations";   // v7.21.12 (A-RV-35): a warehouse's sites are its own locations
 import { findPackaging, PACKAGING_SEED } from "./packaging.domain";   // v7.21.12 (A-RV-35): a lot's pallets from its packaging
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─── v6.5.0: WAREHOUSE CHARGES ENGINE ───────────────────────────────────────
 // Computes EXPECTED rented-warehouse charges per lot from its movement history,
 // so the warehouse's invoice can be double-checked line by line.
@@ -51,7 +52,7 @@ export interface LotWarehouseCharges {
   notes: string[];
 }
 
-function safeN(v: any): number { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; }
+function safeN(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function r2(n: number): number { return Math.round(n * 100) / 100; }
 function dayMs(d: string): number {
   // date-only midnight (local) — tolerate "YYYY-MM-DDTHH:mm" legacy values

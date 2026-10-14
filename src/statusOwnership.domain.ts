@@ -1,5 +1,6 @@
 // ── STATUS OWNERSHIP (v6.77.0) ──────────────────────────────────────────────
 import { S } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // Owner ruling, Sept 2026: "once we create the shipment for that SO, the status
 // of this SO should reflect the status of the shipment… we need to have
 // distinction about where the ownership of each module ends and where the other
@@ -29,17 +30,12 @@ import { S } from "./format";
 //     shipment; you must be able to say so. It is recorded as an override, never
 //     silently blended with a derived value.
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
-
-/** Statuses the SALES ORDER owns. Everything else is derived. */
-export const COMMERCIAL_SO_STATUSES = ["Draft", "Confirmed", "Invoiced", "Closed", "Cancelled"];
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 /** Statuses the SHIPMENTS own. These may no longer be typed on a sales order. */
 // v6.79.0 (owner ruling, W-1): "Reserved" DROPPED as a status — reservation is an
 // INVENTORY fact (kg allocated to the order, shown as a figure on the lot), not
 // something a shipment can know. Only these three are shipment-derived.
 export const PHYSICAL_SO_STATUSES = ["Loading", "Shipped", "Delivered"];
-
-export function isCommercialStatus(s: any): boolean { return COMMERCIAL_SO_STATUSES.includes(S(s)); }
 export function isPhysicalStatus(s: any): boolean { return PHYSICAL_SO_STATUSES.includes(S(s)); }
 
 const LIVE = (sh: any) => {

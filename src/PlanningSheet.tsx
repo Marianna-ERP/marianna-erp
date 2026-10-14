@@ -1,3 +1,4 @@
+import { useConfirm } from "./ui";   // v7.22.5 (A-RV-17)
 import { localTodayISO } from "./dates";
 // ─────────────────────────────────────────────────────────────────────────────
 // PlanningSheet.tsx — v6.99.63 (A-SH-1…13, owner 25 Sept)
@@ -8,7 +9,7 @@ import React, { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { SHEET_COLUMNS, SheetTab, SheetRow, SheetLogEntry, blankRow, sid, parseClipboard, pasteGrid, productText, tabToGrid, importWorkbookRows, sheetUsage, toISODate } from "./sheet.domain";
 import { HER_HEADERS } from "./board.domain";
-import { unifiedLocations } from "./locations";
+import { unifiedLocations , isPortType } from "./locations";
 import { S } from "./format";
 import { activeParties } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
 
@@ -16,6 +17,7 @@ const nowISO = () => new Date().toISOString();
 const rolesOf = (c: any) => (Array.isArray(c?.roles) && c.roles.length ? c.roles : [c?.type, ...(c?.additionalTypes || [])]).map((x: any) => String(x || ""));
 
 export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, contacts = [], catalog = [], orders = [], invoices = [], userName = "" }: any) {
+  const { confirm: uiConfirm, alert: uiAlert, prompt: uiPrompt, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const sorted: SheetTab[] = useMemo(() => [...(tabs || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)), [tabs]);
   const [activeId, setActiveId] = useState<string>("");
   const tab = sorted.find(t => t.id === activeId) || sorted[sorted.length - 1] || null;
@@ -27,7 +29,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   const lists = useMemo(() => {
     const by = (r: string) => activeParties(contacts).filter((c: any) => rolesOf(c).includes(r))   // v7.10.2 (A-RV-15 · CP-4).map((c: any) => c.name).filter(Boolean).sort((a: string, b: string) => a.localeCompare(b, "pl"));
     const locs = unifiedLocations(contacts || []);
-    const ports = locs.filter((l: any) => String(l.type) === "Port" || String((l as any).legacyType) === "PORT").map((l: any) => l.name);
+    const ports = locs.filter((l: any) => isPortType(l)).map((l: any) => l.name);   // v7.21.14 (A-RV-37): by the type — a place of type Other is no port
     return { clients: by("Client"), suppliers: by("Supplier"), carriers: by("Carrier"), forwarders: Array.from(new Set([...by("Forwarder"), ...by("Shipping line")])),
       ports: Array.from(new Set(ports)).sort(), places: Array.from(new Set(locs.map((l: any) => l.name))).sort(),
       orders: (orders || []).filter((o: any) => o.status !== "Cancelled").map((o: any) => o.number),
@@ -54,14 +56,14 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   // ── rows ──
   function addRow(at?: number) { if (!tab) return; const r = blankRow(nowISO()); updateTab(tab.id, t => { const rows = [...t.rows]; rows.splice(at === undefined ? rows.length : at, 0, r); return { ...t, rows }; }); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: "row+" }]); }
   function duplicateRow(i: number) { if (!tab) return; const src = tab.rows[i]; const r = { ...blankRow(nowISO()), cells: JSON.parse(JSON.stringify(src.cells)) }; updateTab(tab.id, t => { const rows = [...t.rows]; rows.splice(i + 1, 0, r); return { ...t, rows }; }); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: "row+" }]); }
-  function deleteRow(i: number) { if (!tab) return; const r = tab.rows[i]; if (r.frozen) { window.alert("A frozen row cannot be deleted — unfreeze it first."); return; } if (!window.confirm("Delete this row?")) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.filter((_, k) => k !== i) })); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: "row-" }]); }
-  function toggleFreeze(i: number) { if (!tab) return; const r = tab.rows[i]; if (r.frozen && !window.confirm("Unfreeze this row? It becomes editable again (recorded).")) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.map((x, k) => k === i ? { ...x, frozen: !x.frozen } : x) })); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: r.frozen ? "unfreeze" : "freeze" }]); }
+  async function deleteRow(i: number) { if (!tab) return; const r = tab.rows[i]; if (r.frozen) { (await uiAlert({ message: "A frozen row cannot be deleted — unfreeze it first." })); return; } if (!(await uiConfirm({ title: "Please confirm", message: "Delete this row?" }))) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.filter((_, k) => k !== i) })); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: "row-" }]); }
+  async function toggleFreeze(i: number) { if (!tab) return; const r = tab.rows[i]; if (r.frozen && !(await uiConfirm({ title: "Please confirm", message: "Unfreeze this row? It becomes editable again (recorded)." }))) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.map((x, k) => k === i ? { ...x, frozen: !x.frozen } : x) })); addLog([{ at: nowISO(), who, tab: tab.id, row: r.id, action: r.frozen ? "unfreeze" : "freeze" }]); }
   // ── tabs ──
-  function newTab() { const name = window.prompt("Name of the new tab", `week ${sorted.length + 1}`); if (!name) return; const t: SheetTab = { id: sid("t"), name: S(name), order: (sorted[sorted.length - 1]?.order ?? 0) + 1, createdAt: nowISO(), rows: [blankRow(nowISO())] }; setTabs((prev: SheetTab[]) => [...(prev || []), t]); setActiveId(t.id); addLog([{ at: nowISO(), who, tab: t.id, action: "tab+", now: t.name }]); }
-  function renameTab() { if (!tab) return; const name = window.prompt("Rename the tab", tab.name); if (!name || S(name) === tab.name) return; updateTab(tab.id, t => ({ ...t, name: S(name) })); addLog([{ at: nowISO(), who, tab: tab.id, action: "rename", old: tab.name, now: S(name) }]); }
+  async function newTab() { const name = (await uiPrompt({ message: "Name of the new tab", defaultValue: `week ${sorted.length + 1}` })); if (!name) return; const t: SheetTab = { id: sid("t"), name: S(name), order: (sorted[sorted.length - 1]?.order ?? 0) + 1, createdAt: nowISO(), rows: [blankRow(nowISO())] }; setTabs((prev: SheetTab[]) => [...(prev || []), t]); setActiveId(t.id); addLog([{ at: nowISO(), who, tab: t.id, action: "tab+", now: t.name }]); }
+  async function renameTab() { if (!tab) return; const name = (await uiPrompt({ message: "Rename the tab", defaultValue: tab.name })); if (!name || S(name) === tab.name) return; updateTab(tab.id, t => ({ ...t, name: S(name) })); addLog([{ at: nowISO(), who, tab: tab.id, action: "rename", old: tab.name, now: S(name) }]); }
   function moveTab(dir: -1 | 1) { if (!tab) return; const i = sorted.findIndex(t => t.id === tab.id); const j = i + dir; if (j < 0 || j >= sorted.length) return; const a = sorted[i], b = sorted[j]; setTabs((prev: SheetTab[]) => (prev || []).map(t => t.id === a.id ? { ...t, order: b.order } : t.id === b.id ? { ...t, order: a.order } : t)); }
-  function deleteTab() { if (!tab) return; if (tab.rows.some(r => r.frozen)) { window.alert("This tab has frozen rows — unfreeze them before deleting the tab."); return; } if (!window.confirm(`Delete the tab "${tab.name}" and its ${tab.rows.length} row(s)?`)) return; setTabs((prev: SheetTab[]) => (prev || []).filter(t => t.id !== tab.id)); addLog([{ at: nowISO(), who, tab: tab.id, action: "tab-", old: tab.name }]); setActiveId(""); }
-  function freezeTab() { if (!tab) return; if (!window.confirm(`Freeze every row of "${tab.name}"?`)) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.map(r => ({ ...r, frozen: true })) })); addLog(tab.rows.filter(r => !r.frozen).map(r => ({ at: nowISO(), who, tab: tab.id, row: r.id, action: "freeze" as const }))); }
+  async function deleteTab() { if (!tab) return; if (tab.rows.some(r => r.frozen)) { (await uiAlert({ message: "This tab has frozen rows — unfreeze them before deleting the tab." })); return; } if (!(await uiConfirm({ title: "Please confirm", message: `Delete the tab "${tab.name}" and its ${tab.rows.length} row(s)?` }))) return; setTabs((prev: SheetTab[]) => (prev || []).filter(t => t.id !== tab.id)); addLog([{ at: nowISO(), who, tab: tab.id, action: "tab-", old: tab.name }]); setActiveId(""); }
+  async function freezeTab() { if (!tab) return; if (!(await uiConfirm({ title: "Please confirm", message: `Freeze every row of "${tab.name}"?` }))) return; updateTab(tab.id, t => ({ ...t, rows: t.rows.map(r => ({ ...r, frozen: true })) })); addLog(tab.rows.filter(r => !r.frozen).map(r => ({ at: nowISO(), who, tab: tab.id, row: r.id, action: "freeze" as const }))); }
   // ── paste a block from Excel ──
   function onPaste(e: React.ClipboardEvent) {
     if (!tab) return; const text = e.clipboardData.getData("text/plain"); if (!/[\t\n]/.test(text)) return;   // a single value pastes normally into the cell
@@ -73,9 +75,9 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
   // ── her workbook in, the sheet out ──
   function importFile(f: any) {
     if (!f) return; const rd = new FileReader();
-    rd.onload = () => { const wb = XLSX.read(rd.result, { type: "array", cellDates: true }); let order = (sorted[sorted.length - 1]?.order ?? 0);
+    rd.onload = async () => { const wb = XLSX.read(rd.result, { type: "array", cellDates: true }); let order = (sorted[sorted.length - 1]?.order ?? 0);
       const added: SheetTab[] = wb.SheetNames.map(n => ({ ...importWorkbookRows(n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: null }) as any[][], HER_HEADERS, nowISO()), order: ++order }));
-      if (!window.confirm(`Import ${added.length} tab(s), ${added.reduce((s, t) => s + t.rows.length, 0)} row(s) from ${f.name}? Existing tabs are kept.`)) return;
+      if (!(await uiConfirm({ title: "Please confirm", message: `Import ${added.length} tab(s), ${added.reduce((s, t) => s + t.rows.length, 0)} row(s) from ${f.name}? Existing tabs are kept.` }))) return;
       setTabs((prev: SheetTab[]) => [...(prev || []), ...added]); addLog(added.map(t => ({ at: nowISO(), who, tab: t.id, action: "import" as const, now: `${t.name} · ${t.rows.length} rows from ${f.name}` }))); if (added[0]) setActiveId(added[0].id); };
     rd.readAsArrayBuffer(f);
   }
@@ -118,7 +120,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
 
   const usage = showUsage ? sheetUsage(sorted, log || []) : [];
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#FAFAFA" }}>{dialogNode}
       {["clients", "suppliers", "carriers", "forwarders", "ports", "places", "orders", "items", "varieties"].map(k => <datalist key={k} id={"ps-" + k}>{(lists[k] || []).map((x: string) => <option key={x} value={x} />)}</datalist>)}
       <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "8px 16px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>Planning sheet</div>

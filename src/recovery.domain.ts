@@ -11,8 +11,6 @@ export const RECOVERABLE: Array<{ key: string; label: string }> = [
   { key: "claims", label: "Claims" }, { key: "inspections", label: "Quality reports" }, { key: "operationalCosts", label: "Operational costs" },
   { key: "poSettlements", label: "Truck settlements" },
 ];
-const MASTER = new Set(["contacts", "customLocations", "productCatalog", "packagingTypes", "users", "company", "numbering"]);
-export const isMasterStore = (k: string) => MASTER.has(k);
 
 const keyOf = (r: any) => (r && r.id != null ? `id:${r.id}` : r && r.number ? `no:${r.number}` : "");
 export const labelOf = (r: any) => String(r?.number || r?.name || r?.id || "—");

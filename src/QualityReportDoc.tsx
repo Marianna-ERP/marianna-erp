@@ -4,8 +4,9 @@
 import React from "react";
 import { PrintLogo } from "./brand";
 import { inspectionVerdict, samplePctOf } from "./seasonOps.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export default function QualityReportDoc({ x, lot, no, supplierRef = "", inline = false }: any) {
   const v = inspectionVerdict(x);

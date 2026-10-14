@@ -10,8 +10,9 @@ import { paymentDaysOf } from "./legacy";
 // ─────────────────────────────────────────────────────────────────────────────
 import { kgPerBoxForLine } from "./pricingUnit.domain";
 import { S, r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── PO-1 ─────────────────────────────────────────────────────────────────────
 /** Recompute the derived side of a PO line after the user typed the other. */
@@ -29,11 +30,6 @@ export function derivePOLineQuantities(line: any, packagingTypes: any[], changed
   }
   out.kgPerBox = kgPerBox;
   return out;
-}
-/** Line value in the PO currency, whatever the unit. */
-export function poLineValue(line: any): number {
-  const unit = String(line?.pricingUnit || "kg").toLowerCase();
-  return r2((unit === "box" ? num(line?.boxes) : num(line?.qty)) * num(line?.unitPrice));
 }
 
 // ── PO-2 ─────────────────────────────────────────────────────────────────────

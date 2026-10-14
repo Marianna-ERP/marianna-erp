@@ -25,6 +25,7 @@
 // would have to part company, and the rest of the system still would not care.
 
 import { PackagingType, findPackaging, defaultPackagingForProduct } from "./packaging.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 export type PricingUnit = "kg" | "box";
 
@@ -100,13 +101,6 @@ export function quantityLabel(line: any, types: PackagingType[]): string {
   return `${q.boxes.toLocaleString("pl-PL")} boxes × ${q.kgPerBox} kg (${kg})`;
 }
 
-/** How the price should read on a document. */
-export function priceLabel(line: any, currency = ""): string {
-  const price = num(line?.unitPrice);
-  const cur = currency ? ` ${currency}` : "";
-  return pricingUnit(line) === "box" ? `${price}${cur}/box` : `${price}${cur}/kg`;
-}
-
 /** Switching a line between units keeps the SAME PHYSICAL QUANTITY and converts
  *  the price so the line total does not silently move. Changing how you price
  *  something must not change what it is worth. */
@@ -133,7 +127,7 @@ export function unresolvedBoxLines(lines: any[], types: PackagingType[]): string
 
 // ── v6.99.6 (A-R9-2/3/6): ONE totals function for PO & SO — editor, detail and print all read it ──
 export function documentTotals(items: any[], packagingTypes: any[] = [], fxRate: any = 1): { kg: number; boxes: number; pallets: number; value: number; valuePLN: number; lines: number } {
-  const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+  const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
   let kg = 0, boxes = 0, pallets = 0, value = 0, lines = 0;
   (items || []).forEach((it: any) => {
     if (!it || !String(it.product || "").trim()) return;

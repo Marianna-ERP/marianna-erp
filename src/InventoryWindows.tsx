@@ -2,15 +2,14 @@
 import LocationPicker from "./LocationPicker";
 import QualityReportDoc from "./QualityReportDoc";
 import React, { useState } from "react";
-import { Lbl, useConfirm, ActionButton, SmallButton } from "./ui";
-import { computeLotSettlement, currentCommissionPct, currentCommissionRate, commissionPctForSales } from "./consignment";
+import { Lbl, SmallButton, useConfirm } from "./ui";
 import { issueReportNumber, lastReportNumber } from "./reportNumbers";
 import { localTodayISO } from "./dates";
 import { nextId } from "./ids";
 import { r0 } from "./format";
 import { sortingJob as runSortingJob, gradeSplit, blankInspection, PEPPER_DEFECTS, applyStockCount, gradeCommitmentWarning, inspectionVerdict, tolerancesFromLast, countLinesForLot, countedKgOf, samplePctOf, sortablePools, beforeReceiptWarning, clientReportKg, repostDirectToReport } from "./seasonOps.domain";
 import { recordAudit } from "./audit";
-import { CountWindow, Inp, InspectionWindow, MOVEMENT_TYPES, Sel, SortingWindow, locType, lotReservations, mergedLocations, normName, num, parseNum, printHtmlNodeInv, qhDelete, qhEdit, qhPrint, supplierRefOf, today } from "./Inventory";
+import { CountWindow, Inp, InspectionWindow, MOVEMENT_TYPES, Sel, SortingWindow, locType, lotReservations, mergedLocations, num, parseNum, printHtmlNodeInv, qhDelete, qhEdit, qhPrint, supplierRefOf, today } from "./Inventory";
 
 // ─── MOVEMENT MODAL ─────────────────────────────────────────────────────────
 export function MovementModal({ lot, liveSOs = [], editing = null, initialMode = "movement", contacts = [], allLots = [], shipments = [], onCancel, onConfirm }: any) {
@@ -218,180 +217,8 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
   );
 }
 
-// ─── v6.6: CONSIGNMENT SETTLEMENT MODAL ─────────────────────────────────────
-// Per-lot/truck settlement: gross sales (auto from SOs) − expenses (auto from
-// lot costs + manual) = net sales value → producer invoice; commission % × net
-// → our invoice; payout = net − commission. Closing writes the two cost
-// components onto the lot so SO P/L lands at exactly the commission.
-export function SettlementModal({ lot, orders = [], contacts = [], pos = [], onCancel, onSave }: any) {
-  const { confirm: stConfirm, dialogNode: stDialogNode } = useConfirm(); // P2-6
-  const po = (pos || []).find((p: any) => p.number === lot.poRef);
-  const producer = po ? (contacts || []).find((c: any) => normName(c.name) === normName(po.supplier?.name)) : null;
-  const seasonPct = producer ? currentCommissionPct(producer, localTodayISO()) : null;
-  const st = lot.settlement || { status: "None" };
-  const [pct, setPct] = useState<any>(st.commissionPct ?? (seasonPct ?? ""));
-  const [extra, setExtra] = useState<any[]>(st.extraExpenses || []);
-  const [prodInvNo, setProdInvNo] = useState(st.producerInvoiceNo || "");
-  const [prodInvPLN, setProdInvPLN] = useState<any>(st.producerInvoiceAmountPLN ?? "");
-  const [commInvNo, setCommInvNo] = useState(st.commissionInvoiceNo || "");
-  // v6.81.0 (D-57, owner ruling): tiers per TRUCK — the band follows this settlement's own gross.
-  const rateRec = producer ? currentCommissionRate(producer, localTodayISO()) : null;
-  const grossForBand = computeLotSettlement(lot, orders, 0, extra).grossPLN;
-  const bandPct = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, grossForBand) : null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  React.useEffect(() => { if (bandPct != null && st.status !== "Closed" && (pct === "" || pct === seasonPct)) setPct(bandPct); }, [bandPct]);
-  const calc = computeLotSettlement(lot, orders, parseFloat(pct) || 0, extra);
-  const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
-  const status = st.status || "None";
-  // v6.63.0 (owner ruling D2): once Closed — its cost components written and the
-  // commission invoice issued — a settlement can NEVER be reopened. Corrections,
-  // like invoices, happen only via credit/debit note.
-  const closedFinal = status === "Closed";
-  const prodInvNum = parseFloat(prodInvPLN);
-  const invVariance = isFinite(prodInvNum) && prodInvNum > 0 ? Math.round((prodInvNum - calc.netPLN) * 100) / 100 : null;
-
-  function save(nextStatus: string) {
-    if (closedFinal) return; // ruling D2: Closed is immutable — no path may rewrite it
-    const settlement = {
-      ...st,
-      status: nextStatus,
-      commissionPct: parseFloat(pct) || 0,
-      extraExpenses: extra,
-      producerInvoiceNo: prodInvNo,
-      producerInvoiceAmountPLN: isFinite(prodInvNum) ? prodInvNum : null,
-      commissionInvoiceNo: commInvNo,
-      expectedNetPLN: calc.netPLN,
-      expectedCommissionPLN: calc.commissionPLN,
-      // commission is charged on the producer's ACTUAL invoiced net sales value
-      finalCommissionPLN: isFinite(prodInvNum) && prodInvNum > 0 ? Math.round(prodInvNum * (parseFloat(pct) || 0)) / 100 : calc.commissionPLN,
-      ...(nextStatus === "Sent" && !st.sentAt ? { sentAt: localTodayISO() } : {}),
-      ...(nextStatus === "Closed" ? { closedAt: localTodayISO() } : {}),
-    };
-    onSave(settlement, nextStatus === "Closed");
-  }
-
-  function canClose() {
-    return isFinite(prodInvNum) && prodInvNum > 0 && (parseFloat(pct) || 0) > 0;
-  }
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 120, padding: 20 }}>
-      {stDialogNode}
-      <div style={{ width: 860, maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
-        <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>Consignment settlement {st?.number ? <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 6, padding: "1px 8px", marginRight: 6 }}>{st.number}</span> : null}· {lot.number}</div>
-            <div style={{ fontSize: 11.5, color: "#888", marginTop: 2 }}>{po ? `${po.number} · ${po.supplier?.name || "producer"}` : "No PO link"} · status: <strong>{status}</strong>{producer && seasonPct !== null && <> · season rate {seasonPct}%</>}</div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => printHtmlNodeInv("settlement-statement", `Settlement-${lot.number}`)} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Print / PDF statement</button>
-            <button onClick={onCancel} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Close</button>
-          </div>
-        </div>
-
-        <div style={{ padding: "14px 22px", display: "grid", gridTemplateColumns: "200px 1fr 1fr 1fr", gap: 10, alignItems: "end", borderBottom: "1px solid #F3F4F6", background: "#FAFAFA" }}>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Commission %</label>
-            <input type="number" step="0.1" value={pct} onChange={e => setPct(e.target.value)} disabled={status === "Closed"} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Producer invoice no. (their FV to us)</label>
-            <input value={prodInvNo} onChange={e => setProdInvNo(e.target.value)} disabled={status === "Closed"} placeholder="FV/…" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Producer invoice amount (PLN)</label>
-            <input type="number" value={prodInvPLN} onChange={e => setProdInvPLN(e.target.value)} disabled={status === "Closed"} placeholder={`expected ${fmt(calc.netPLN)}`} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-            {invVariance !== null && Math.abs(invVariance) >= 1 && <div style={{ fontSize: 10.5, color: invVariance > 0 ? "#DC2626" : "#D97706", marginTop: 3, fontWeight: 600 }}>{invVariance > 0 ? "+" : ""}{fmt(invVariance)} vs expected net</div>}
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Our commission invoice no.</label>
-            <input value={commInvNo} onChange={e => setCommInvNo(e.target.value)} disabled={status === "Closed"} placeholder="FV/…" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13 }} />
-          </div>
-        </div>
-
-        {calc.warnings.length > 0 && (
-          <div style={{ margin: "12px 22px 0", padding: "8px 12px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 7, fontSize: 11.5, color: "#92400E" }}>
-            {calc.warnings.map((w, i) => <div key={i}>· {w}</div>)}
-          </div>
-        )}
-
-        {/* The bilingual statement — also the print target */}
-        <div style={{ padding: 22 }}>
-          <div id="settlement-statement" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "18px 22px", fontSize: 11.5 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 800 }}>CONSIGNMENT SETTLEMENT / ROZLICZENIE SPRZEDAŻY KOMISOWEJ</div>
-                <div style={{ color: "#555", marginTop: 2 }}>Lot / Partia: <strong>{lot.number}</strong> · {lot.product}{lot.variety ? " — " + lot.variety : ""} · {po ? `PO ${po.number}` : ""} · Date / Data: {localTodayISO()}</div>
-              </div>
-              <div style={{ textAlign: "right", color: "#555" }}>
-                <div style={{ fontWeight: 700 }}>MARIANNA</div>
-                <div>for / dla: {po?.supplier?.name || "Producer"}</div>
-              </div>
-            </div>
-            <div style={{ fontWeight: 800, fontSize: 11, marginTop: 6 }}>1. Sales / Sprzedaż</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 3 }}>
-              <thead><tr>{["SO", "Client / Klient", "Product / Produkt", "Kg", "Price / Cena", "Value / Wartość PLN"].map(h => <th key={h} style={{ border: "1px solid #D1D5DB", padding: 3, background: "#F9FAFB", textAlign: "left", fontSize: 10 }}>{h}</th>)}</tr></thead>
-              <tbody>{calc.salesLines.map((l, i) => <tr key={i}>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.soNumber}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.client}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3 }}>{l.product}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.kg.toLocaleString("pl-PL")}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.unitPrice.toFixed(2)} {l.currency}</td>
-                <td style={{ border: "1px solid #D1D5DB", padding: 3, textAlign: "right" }}>{l.pln.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
-              </tr>)}</tbody>
-            </table>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 2px", fontWeight: 700 }}>
-              <span>Gross sales value / Wartość sprzedaży brutto ({calc.soldKg.toLocaleString("pl-PL")} kg)</span><span>{fmt(calc.grossPLN)}</span>
-            </div>
-            <div style={{ fontWeight: 800, fontSize: 11, marginTop: 6 }}>2. Deducted expenses / Potrącone koszty</div>
-            {calc.expenseLines.map((l, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "2px 2px", borderBottom: "1px dotted #E5E7EB" }}>
-                <span>{l.label}{l.manual ? " (manual / ręczny)" : ""}</span><span>−{l.pln.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</span>
-              </div>
-            ))}
-            {!calc.expenseLines.length && <div style={{ color: "#888", fontStyle: "italic", padding: "2px 2px" }}>No expenses recorded / Brak kosztów</div>}
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 2px", fontWeight: 700 }}>
-              <span>Total expenses / Suma kosztów</span><span>−{fmt(calc.expensesPLN)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6, marginTop: 6, fontWeight: 800 }}>
-              <span>3. NET SALES VALUE / WARTOŚĆ SPRZEDAŻY NETTO — producer invoices us this amount / producent wystawia fakturę na tę kwotę</span><span>{fmt(calc.netPLN)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 8px", marginTop: 4 }}>
-              <span>4. Our commission / Nasza prowizja ({calc.commissionPct}% × net)</span><span>−{fmt(calc.commissionPLN)}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, fontWeight: 800 }}>
-              <span>5. PRODUCER PAYOUT / DO WYPŁATY PRODUCENTOWI</span><span>{fmt(calc.payoutPLN)}</span>
-            </div>
-          </div>
-
-          {/* manual expense editor (not printed) */}
-          {status !== "Closed" && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em", marginBottom: 6 }}>MANUAL EXPENSE LINES</div>
-              {extra.map((e: any, i: number) => (
-                <div key={e.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 160px 34px", gap: 8, marginBottom: 6 }}>
-                  <input value={e.label} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, label: ev.target.value } : x))} placeholder="e.g. Phytosanitary certificate" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
-                  <input type="number" value={e.pln} onChange={ev => setExtra(prev => prev.map((x, idx) => idx === i ? { ...x, pln: ev.target.value } : x))} placeholder="PLN" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} />
-                  <ActionButton action="remove" onClick={() => setExtra(prev => prev.filter((_, idx) => idx !== i))} />
-                </div>
-              ))}
-              <button onClick={() => setExtra(prev => [...prev, { id: nextId(), label: "", pln: "" }])} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ Add expense line</button>
-            </div>
-          )}
-        </div>
-
-        <div style={{ padding: "14px 22px", borderTop: "1px solid #EBEBEB", display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          {status !== "Closed" && <button onClick={() => save(status === "None" ? "Draft" : status)} style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Save</button>}
-          {(status === "None" || status === "Draft") && <button onClick={() => save("Sent")} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: "#2563EB", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Mark statement sent</button>}
-          {closedFinal && <div style={{ fontSize: 12, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "8px 12px", fontWeight: 600 }}>🔒 Closed &amp; final (ruling D2) — this settlement cannot be reopened or edited. Corrections go through a credit or debit note.</div>}
-          {status !== "Closed" && <button disabled={!canClose()} title={canClose() ? "Writes producer invoice and commission credit into the lot's landed cost" : "Enter commission % and the producer's invoice amount first"} onClick={async () => { if (await stConfirm({ tone: "warn", title: `Close settlement for ${lot.number}?`, message: `Producer invoice ${prodInvNo || "(no number)"} = ${fmt(prodInvNum)} and commission ${fmt(calc.commissionPLN)} will be written into the lot's landed cost. SO P/L for this lot becomes final.`, confirmLabel: "Close settlement" })) save("Closed"); }} style={{ padding: "8px 16px", borderRadius: 7, border: "none", background: canClose() ? "#16A34A" : "#E5E7EB", color: canClose() ? "#fff" : "#9CA3AF", fontSize: 13, fontWeight: 700, cursor: canClose() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>Close settlement</button>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "", shipments: shipmentsRef = [], users = [] }: any) {   // v7.18.5: + users
+export function SeasonActions({ lot, lots = [], setLots = null, inspections = [], setInspections = null, stockCounts = [], setStockCounts = null, recompute, claims = [], settlements = [], orders = [], pos = [], contacts = [], userName = "", shipments: shipmentsRef = [], users = [] }: any) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's   // v7.18.5: + users
   // v6.99.19 (A-R14-8): once a claim on this lot is finalised or its truck settlement is closed, the facts behind them are frozen.
   const frozenBy = (() => {
     const cl = (claims || []).find((c: any) => ["Settled", "Accepted", "Closed"].includes(String(c.status)) && ((c.subjects || []).some((s: any) => String(s.ref) === String(lot.number)) || String(c.rootDoc?.number) === String(lot.poRef)));
@@ -452,7 +279,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
   );
 
   return (
-    <div style={{ background: "#fff", border: "2px solid #0E7490", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
+    <div style={{ background: "#fff", border: "2px solid #0E7490", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>{dialogNode}
       <div style={{ background: "#ECFEFF", borderBottom: "1px solid #A5F3FC", padding: "8px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ fontSize: 12, fontWeight: 800, color: "#0E7490", letterSpacing: "0.04em" }}>QUALITY &amp; HANDLING</div>
         <div style={{ fontSize: 11.5, color: "#0F766E" }}>class I {g.I.toLocaleString("pl-PL")} kg · class II {g.II.toLocaleString("pl-PL")} kg · waste {g.waste.toLocaleString("pl-PL")} kg</div>
@@ -479,7 +306,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
               {!frozenBy && <button onClick={() => openInspection(x)} style={qhEdit}>Edit</button>}
               <button style={qhPrint} onClick={() => { const no = x.number || lastReportNumber("QR", String(x.id)) || issueReportNumber("QR", `${lot.number} · inspection ${x.date}`, userName, "Inventory"); setQrNos((m: any) => ({ ...m, [String(x.id)]: no })); setTimeout(() => printHtmlNodeInv(`insp-print-${x.id}`, `${no}-${lot.number}`), 60); }}>⎙ Print</button>
-              {!frozenBy && setInspections && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the inspection of ${x.date}?`)) return; setInspections((prev: any[]) => (prev || []).map((p: any) => String(p.id) === String(x.id) ? { ...p, status: "Cancelled", cancelledAt: localTodayISO() } : p))   /* v6.99.126 (AUD-44): kept, struck through */; recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} deleted` }); }}>🗑 Delete</button>}
+              {!frozenBy && setInspections && <button style={qhDelete} onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Delete the inspection of ${x.date}?` }))) return; setInspections((prev: any[]) => (prev || []).map((p: any) => String(p.id) === String(x.id) ? { ...p, status: "Cancelled", cancelledAt: localTodayISO() } : p))   /* v6.99.126 (AUD-44): kept, struck through */; recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "deleted", summary: `Inspection ${x.date} deleted` }); }}>🗑 Delete</button>}
             </span>
             <QualityReportDoc x={x} lot={lot} no={x.number || qrNos[String(x.id)] || lastReportNumber("QR", String(x.id))} supplierRef={supplierRefOf(lot, shipmentsRef)} />
           </div>
@@ -491,7 +318,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
             {j.by ? <span>· {j.by}</span> : null}{j.hours ? <span>· {j.hours} h</span> : null}
             <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
               {!frozenBy && <button style={qhEdit} onClick={() => { voidJob(j, "corrected"); setSortF({ date: j.date, followsInspection: j.followsInspection || "", kgIn: j.kgIn, classIKg: j.classIKg, classIIKg: j.classIIKg, wasteKg: j.wasteKg, by: j.by || "", hours: j.hours || "", note: j.note || "" }); setWin("sort"); }}>Edit</button>}
-              {!frozenBy && <button style={qhDelete} onClick={() => { if (!window.confirm(`Delete the sorting job of ${j.date}? Its RECLASS and DAMAGE movements are voided (they stay visible in the history).`)) return; voidJob(j, "deleted"); }}>🗑 Delete</button>}
+              {!frozenBy && <button style={qhDelete} onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Delete the sorting job of ${j.date}? Its RECLASS and DAMAGE movements are voided (they stay visible in the history).` }))) return; voidJob(j, "deleted"); }}>🗑 Delete</button>}
             </span>
           </div>
         ))}
@@ -505,8 +332,8 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
       </div>
 
       {win === "inspect" && ins && (
-        <InspectionWindow users={users} ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={(final0: any) => {
-          const w = beforeReceiptWarning(lot, final0.date); if (w) { window.alert("⚠ " + w); return; }
+        <InspectionWindow users={users} ins={ins} setIns={setIns} lot={lot} cat={cat} onClose={() => setWin("")} onSave={async (final0: any) => {
+          const w = beforeReceiptWarning(lot, final0.date); if (w) { (await uiAlert({ message: "⚠ " + w })); return; }
           // v6.99.101 (A-QC-5, owner 2 Oct — one source): the report's number is issued when it is SAVED and stored on it; prints read it from there
           const final = { ...final0, number: final0.number || lastReportNumber("QR", String(final0.id)) || issueReportNumber("QR", `${lot.number} · inspection ${final0.date}`, userName, "Inventory") };
           setInspections && setInspections((prev: any[]) => (prev || []).some((p: any) => String(p.id) === String(final.id)) ? (prev || []).map((p: any) => String(p.id) === String(final.id) ? final : p) : [...(prev || []), final]);
@@ -518,20 +345,20 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
         }} />
       )}
       {win === "sort" && sortF && (
-        <SortingWindow f={sortF} setF={setSortF} lot={lot} inspections={myIns} contacts={contacts} onClose={() => setWin("")} onSave={() => {
-          const w = beforeReceiptWarning(lot, sortF.date); if (w) { window.alert("⚠ " + w); return; }
+        <SortingWindow f={sortF} setF={setSortF} lot={lot} inspections={myIns} contacts={contacts} onClose={() => setWin("")} onSave={async () => {
+          const w = beforeReceiptWarning(lot, sortF.date); if (w) { (await uiAlert({ message: "⚠ " + w })); return; }
           const r = runSortingJob(lot, { ...sortF, fromPool: sortF.fromPool || "UNSORTED", date: sortF.date || localTodayISO() }, { nextId });
-          if (r.error) { window.alert(r.error); return; }
+          if (r.error) { (await uiAlert({ message: r.error })); return; }
           const healed = recompute(r.lot, r.lot.movements);
           setLots && setLots((prev: any[]) => (prev || []).map((l: any) => l.id === lot.id ? healed : l));
           recordAudit({ module: "Inventory", docType: "Lot", docNumber: lot.number, action: "movement", summary: `Sorting job: I ${sortF.classIKg} · II ${sortF.classIIKg} · waste ${sortF.wasteKg} kg` });
-          const warn = gradeCommitmentWarning(healed, orders || []); if (warn) window.alert("⚠ " + warn);
+          const warn = gradeCommitmentWarning(healed, orders || []); if (warn) (await uiAlert({ message: "⚠ " + warn }));
           setWin("");
         }} />
       )}
       {win === "count" && countF && (
-        <CountWindow users={users} f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={() => {
-          const w = beforeReceiptWarning(lot, countF.date); if (w) { window.alert("⚠ " + w); return; }
+        <CountWindow users={users} f={countF} setF={setCountF} lot={lot} onClose={() => setWin("")} onSave={async () => {
+          const w = beforeReceiptWarning(lot, countF.date); if (w) { (await uiAlert({ message: "⚠ " + w })); return; }
           const lines = countLinesForLot(lot).filter((r: any) => !r.informational).map((r: any) => { const e = { ...(countF.entries || {})[r.grade || "-"], kgPerBox: countF.kgPerBox }; const counted = countedKgOf(e as any);
             return { lotNumber: lot.number, grade: r.grade, countedKg: counted, systemKg: r.systemKg, diffKg: r0(counted - num(r.systemKg)), pallets: (e as any).pallets, boxesPerPallet: (e as any).boxesPerPallet, looseBoxes: (e as any).looseBoxes }; });
           const count = { id: nextId(), date: countF.date || localTodayISO(), locationId: lot.locationId, by: countF.by || userName || "", lines };

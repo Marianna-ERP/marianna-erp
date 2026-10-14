@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // seasonOps.domain.ts — v6.89.0: CONSIGNMENT SEASON RECORDS (pure)
 // Owner rulings 6 Sept 2026 (CONSIGNMENT_SEASON_DESIGN.md, VEGA_PRO_REPORTING_MAPPING.md).
 // One owner per fact:
@@ -9,7 +10,7 @@ import { S, r2, r0 } from "./format";
 //   sorting job: class I / class II (same lot, grade) / waste   → Inventory
 //   stock count → reasoned adjustments                          → Inventory
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
 // ── SUPPLIER-DELIVERY SHIPMENT (decision 1) ─────────────────────────────────
@@ -32,10 +33,9 @@ export function supplierDeliveryFromPO(po: any, deps: { nextId: () => any; nextN
     originText: po.supplier?.name || "supplier", destinationLocationId: po.destinationLocationId ?? null, destinationText: po.destinationText || "",
     expectedDeliveryDate: S(announce.eta) || po.deliveryDate || "",
     legs: [{ mode: "Road", status: "Booked", fromText: po.supplier?.name || "supplier", toLocationId: po.destinationLocationId ?? null, toText: po.destinationText || "", carrierId: null, costAmount: 0, costCurrency: po.currency || "PLN", costFxRate: 1, vehicles: [unit] }],
-    goods, costs: [], documents: [], notes: `Supplier-delivered (${po.buyIncoterm || "DDP"}) — tracked, not paid. Created from ${po.number}.`, createdAt: deps.todayISO(),
+    goods, costs: [], documents: [], notes: `Supplier-delivered (${po.buyIncoterm || "no incoterm"}) — tracked, not paid. Created from ${po.number}.`, createdAt: deps.todayISO(),
   };
 }
-export function isSupplierDelivery(sh: any): boolean { return String(sh?.arrangedBy || "").toUpperCase() === "SUPPLIER"; }
 /** Plates announced vs plates that arrived. */
 export function plateMismatch(unit: any): boolean {
   const a = S(unit?.announcedPlate).replace(/\s/g, "").toUpperCase(), b = S(unit?.truckPlate).replace(/\s/g, "").toUpperCase();
@@ -174,10 +174,6 @@ export function gradeSplit(lot: any): { I: number; II: number; waste: number; un
 // ── STOCK COUNT ─────────────────────────────────────────────────────────────
 export interface StockCountLine { lotNumber: string; countedKg: any; countedBoxes?: any; }
 export interface StockCount { id: any; date: string; locationId: any; by: string; lines: Array<StockCountLine & { systemKg: number; diffKg: number }>; }
-export function buildStockCount(lots: any[], locationId: any, lines: StockCountLine[], deps: { nextId: () => any; todayISO: () => string }, by = ""): StockCount {
-  return { id: deps.nextId(), date: deps.todayISO(), locationId, by,
-    lines: (lines || []).map(l => { const lot = (lots || []).find(x => String(x.number) === String(l.lotNumber)); const sys = r0(num(lot?.physicalKg)); const c = r0(num(l.countedKg)); return { ...l, countedKg: c, systemKg: sys, diffKg: r0(c - sys) }; }) };
-}
 /** Apply a count: every difference beyond 1 kg becomes a reasoned CORRECTION movement on the lot. */
 export function applyStockCount(lots: any[], count: StockCount, reason: string, deps: { nextId: () => any }): { lots: any[]; adjusted: number } {
   let adjusted = 0;

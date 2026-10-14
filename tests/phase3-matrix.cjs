@@ -17,7 +17,6 @@ const inv = B("inventory.domain.js");
 const alloc = B("costAllocation.js");
 const pay = B("payments.domain.js");
 const cons = B("consignment.js");
-const settle = B("settlement.domain.js");
 const claims = B("claims.domain.js");
 const cancel = B("cancellation.domain.js");
 const ledger = B("ledger.js");
@@ -273,15 +272,6 @@ t("settlement: gross from SOs sourcing the lot, minus tracked expenses, commissi
   approx(s.payoutPLN, 3312);
   eq(s.soldKg, 1000);
 });
-t("closing writes the two components; a re-run of the settlement EXCLUDES its own output (no feedback loop)", () => {
-  const lot = mkLot({ ownership: "CONSIGNMENT", costs: [{ type: "freight", source: "SHP-1/10", pln: 800 }] });
-  const comps = cons.settlementCostComponents(lot, 3600, 288, "FA-PROD-1", "FV-COMM-1");
-  eq(comps.length, 2);
-  approx(comps[0].pln, 3600); approx(comps[1].pln, -288);
-  const lotClosed = { ...lot, costs: [...lot.costs, ...comps.map((c, i) => ({ ...c, source: "CONSIGN-" + (i + 1) }))] };
-  const again = cons.computeLotSettlement(lotClosed, [mkOrder()], 8, []);
-  approx(again.expensesPLN, 800, "CONSIGN-* components must not count as expenses of themselves");
-});
 t("after close, the margin engine prices the consignment lot at payout+commission — SO margin is sane", () => {
   const lot = mkLot({ receivedKg: 1000, physicalKg: 0, status: "Empty", ownership: "CONSIGNMENT",
     costs: [
@@ -409,12 +399,6 @@ t("import → side-aware staging → cost invoice → duplicate rejected → shi
 
 // ═════════════════════════════════════════════════════════════════════════════
 console.log("\n══ P3.11 Cancellation × downstream consumers — Cancelled means invisible ══");
-// ═════════════════════════════════════════════════════════════════════════════
-t("liveOnly / countsOperationally exclude cancelled records for every consumer", () => {
-  const recs = [{ number: "A", status: "Confirmed" }, { number: "B", status: "Cancelled" }];
-  eq(cancel.liveOnly(recs).map(r => r.number), ["A"]);
-  eq(cancel.countsOperationally(recs[1]), false);
-});
 t("a claim whose subject document got cancelled is flagged for review, not silently wrong", () => {
   const w = cancel.staleClaimWarnings(
     [{ number: "CLM-1", status: "Accepted", subjects: [{ kind: "SO", ref: "SO-1" }] }],

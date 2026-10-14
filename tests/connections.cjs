@@ -321,7 +321,9 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     await act(async () => { Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(inp, "070960"); inp.dispatchEvent(new window.Event("input", { bubbles: true })); });
     ok(writes === 0, `typing wrote the catalog ${writes} time(s)`);
     const save = Array.from(host.querySelectorAll("button")).find(b => (b.textContent || "").trim() === "Save"); ok(save && !save.disabled, "no active Save under the catalog");
-    const oc = window.confirm; window.confirm = () => true; await act(async () => { save.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); }); window.confirm = oc;
+    await act(async () => { save.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });   // v7.22.5 (A-RV-17): the app's own window asks
+    const yes = Array.from(host.querySelectorAll("button")).find(b => (b.textContent || "").trim() === "Confirm"); ok(yes, "the app's own confirmation did not open");
+    await act(async () => { yes.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
     ok(writes === 1 && cat[0].defaultCnCode === "070960", `after Save: ${writes} write(s), code '${cat[0].defaultCnCode}'`);
     await act(async () => { root.unmount(); });
   });
@@ -460,7 +462,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     const h = edS(shp("SHP-2026-0039", { status: "Delivered" })); ok(!/Bought DAP\/DDP — the supplier arranges/.test(h) && !/the supplier's truck: tracked/.test(h), "the tick is still there, or SHP-0039 called the supplier's truck");
   });
   await t("A-INC-1 (4/5): the customs section says who clears from the terms — an export sold CIF is ours, the same sold EXW is the client's (no fields, no cost line); a customs cost already there is kept, flagged", async () => {
-    const ShM = require(path.resolve("./src/Shipments")); ShM.setContactsRef(d.contacts);
+    const ShM = require(path.resolve("./src/Shipments"));
     const a = edS(shp("SHP-2026-0035", { status: "Loaded" })); ok(/Who clears: export — ours \(sold CIF\)/.test(a) && /Cleared where/.test(a), "SHP-0035 (sold CIF): " + (a.match(/Who clears.{0,80}|Customs clearance applies.{0,40}/) || ["(nothing)"])[0]);
     const orders2 = d.orders.map(o => o.number === "SO-2026-0025" ? { ...o, sellIncoterm: "EXW" } : o);
     const b = T(renderToStaticMarkup(React.createElement(EditShipmentModal, { shipment: shp("SHP-2026-0035", { status: "Loaded", customs: { applies: true, cost: 450, currency: "PLN" } }), contacts: d.contacts, lots: d.lots, pos: d.pos, orders: orders2, packagingTypes: d.packagingTypes || [], allShipmentsForCap: d.shipments, invoices: d.invoices || [], onSave: noop, onCancel: noop })));
@@ -485,14 +487,14 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
   });
   //@@C719_NEXT@@
   await t("A-RV-36: saving SHP-2026-0021 keeps one sea freight line (9 142 EUR, Received); SHP-2026-0017's invoice is kept and flagged against its unit prices", async () => {
-    const ShM = require(path.resolve("./src/Shipments")); ShM.setContactsRef(d.contacts); const IC2 = require(path.resolve("./src/incoterms.domain"));
+    const ShM = require(path.resolve("./src/Shipments")); const IC2 = require(path.resolve("./src/incoterms.domain"));
     const save = no => { const s = d.shipments.find(x => x.number === no); return { ...s, costs: ShM.costLinesByCarrierLegApply(s, IC2.legFreightPayers(s, { pos: d.pos, orders: d.orders })).costs }; };
     const s21 = save("SHP-2026-0021"); const sea = s21.costs.filter(c => c.type === "sea_freight"); ok(sea.length === 1 && Number(sea[0].amount) === 9142 && sea[0].invoiceStatus === "Received", "SHP-0021: " + JSON.stringify(sea.map(c => [c.amount, c.invoiceStatus])));
     const h = edS({ ...save("SHP-2026-0017"), status: "Delivered" }); ok(/Invoiced 3 ?600 EUR; the unit prices on this leg add up to 1 ?800 EUR/.test(h), "SHP-0017's difference is not flagged");
   });
 
   // ══ v7.20.x — A-INC-2: every inconsistency with the incoterms flagged for review, and one place to review them ══
-  const ShM20 = require(path.resolve("./src/Shipments")); ShM20.setContactsRef(d.contacts);
+  const ShM20 = require(path.resolve("./src/Shipments"));
   const shipList = extra => T(renderToStaticMarkup(React.createElement(ShM20.default, { shipments: d.shipments, setShipments: noop, contacts: d.contacts, pos: d.pos, lots: d.lots, orders: d.orders, claims: d.claims || [], setLots: noop, setOrders: noop, setPOs: noop, packagingTypes: d.packagingTypes || [], invoices: d.invoices || [], inspections: d.inspections || [], ...(extra || {}) })));
   const soView = (no, data) => { const x = data || d; return T(renderToStaticMarkup(React.createElement(require(path.resolve("./src/SalesOrders")).default, { orders: x.orders, setOrders: noop, contacts: x.contacts, allPOs: x.pos, invLots: x.lots, setLots: noop, shipments: x.shipments, setShipments: noop, invoices: x.invoices || [], claims: x.claims || [], financeNotes: x.financeNotes || [], packagingTypes: x.packagingTypes || [], initialSelectedNumber: no }))); };
   await t("A-INC-2 (v7.20.0): Shipments has a 'Terms to review' filter — 21 lines on 19 records on the 2 Oct file, sales included, each naming the term, the document and the record", async () => {

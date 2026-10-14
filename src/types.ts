@@ -39,6 +39,19 @@ export interface Counterparty {
   /** LEGACY (BP-43): static list, replaced by computed linked documents. */
   linkedDocs?: string[];
   archived?: boolean;         // BP-44 archive-not-delete (not yet enforced)
+  additionalTypes?: any[] | string[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  addr?: Record<string, any>;   // v7.22.6 (FZ-20): stored in the data, now declared
+  addressNeedsCheck?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  countryIso?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  extraAddresses?: any[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  finance?: Record<string, any>;   // v7.22.6 (FZ-20): stored in the data, now declared
+  paymentTermsDays?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  paymentTermsOther?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  people?: Record<string, any>[] | any[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  roles?: string[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  siteId?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  terms?: Record<string, any>;   // v7.22.6 (FZ-20): stored in the data, now declared
+  mergedFromIds?: any[];   // v7.22.6 (FZ-20): written when two companies are merged — not in the 2 Oct file
 }
 
 // ── Product catalog ──────────────────────────────────────────────────────────
@@ -72,6 +85,13 @@ export interface POLine {
    *  only pricing truth. Kept optional for old stored records. */
   currency?: string;
   packaging?: string;
+  addedByPackingResult?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  boxes?: number | string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  estimatedQty?: number | string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  kgPerBox?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  packagingId?: string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  pricingUnit?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  quantityStatus?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 export interface POrder {
@@ -101,6 +121,13 @@ export interface POrder {
   linkedInvoices?: string[];
   variance?: { expectedKg: number; receivedKg: number } | null;
   cancelledAt?: string;
+  directFlow?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  lotRefs?: string[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  packingResultAt?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  paymentBasis?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  paymentDays?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  pricingMode?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  statusNormalisedFrom?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 // ── Sales Orders ─────────────────────────────────────────────────────────────
@@ -122,6 +149,14 @@ export interface SOLine {
   packaging?: string;
   /** BP / audit P1-1: per-line shipped qty lands here in the engine batch. */
   shippedKg?: number;
+  addedByPackingResult?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  boxes?: number | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  coloration?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  grade?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  kgPerBox?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  packagingId?: string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  priceToAgree?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  pricingUnit?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 export interface SOrder {
@@ -152,6 +187,14 @@ export interface SOrder {
   /** @deprecated v6.33.0 (A3-6): the Invoices register is the sole owner — this
    *  field is read only by the legacy fold, then stripped. Never write it. */
   pendingInvoices?: any[];
+  blockedReason?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  cancelledAt?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  expectedLoadingDate?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  paymentBasis?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  paymentDays?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  statusOverride?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  statusOverrideAt?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  statusOverrideReason?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 // ── Inventory ────────────────────────────────────────────────────────────────
@@ -171,6 +214,14 @@ export interface LotMovement {
   source?: string;   // provenance tag (idempotency key for system events)
   voided?: boolean;  // v6.18.17: excluded from recompute, kept for the record
   voidedAt?: string;
+  boxes?: any;   // v7.22.6 (FZ-20): stored in the data, now declared
+  claimCurrency?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  claimValue?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  expectedKg?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  grade?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  poNote?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  shipmentRef?: string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  varianceKg?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 export interface LotCostLine {
@@ -217,6 +268,13 @@ export interface Lot {
   costs?: LotCostLine[];
   movements?: LotMovement[];
   baseLocationId?: number | string | null;
+  cancelledAt?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  claimedKg?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  notes?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  overIssuedKg?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  packagingId?: string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  poStatus?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  wasteKg?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 // ── Shipments ────────────────────────────────────────────────────────────────
@@ -250,6 +308,32 @@ export interface TransportUnit {
   load?: Array<{ goodsLineId: any; qtyKg: number }>;
   /** v6.53.0: pallet footprint for THIS truck — standard 26 or euro 33. */
   palletType?: "standard" | "euro";
+  actualLoadDate?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  actualUnloadDate?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  announcedPlate?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  carrierId?: number | string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  cmrNumber?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  costAmount?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  deliveredAt?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  deliveryLocationId?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  deliveryText?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  eta?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  feeders?: Record<string, any>[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  fromUnitId?: number | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  kind?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  loadDateManual?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  loadedAt?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  manualLoad?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  pickupLocationId?: number | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  pickupText?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  plannedDeliveryDate?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  plannedDeliveryTime?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  plannedLoadingDate?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  plannedLoadingTime?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  price?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  priceCurrency?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  supplierRef?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  unloadedAt?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 export interface ShipmentLeg {
@@ -308,6 +392,9 @@ export interface ShipmentLeg {
     notes?: string;
   }>;
   notes?: string;
+  costResponsibility?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  fromText?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  toText?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 export interface ShipmentGoodsLine {
@@ -326,6 +413,12 @@ export interface ShipmentGoodsLine {
   grossKg?: number;
   pallets?: number;
   description?: string;
+  _grossAuto?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  addedByPackingResult?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  boxes?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  packagingId?: string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  poLineId?: number | string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  soLineId?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 export interface ShipmentCostLine {
@@ -342,6 +435,12 @@ export interface ShipmentCostLine {
   /** BP-26: per-line responsibility (header field exists; per-line lands Batch 3). */
   costResponsibility?: CostResponsibility;
   notes?: string;
+  _customsAuto?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  label?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  legId?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  needsCarrier?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
+  responsibility?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  source?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 export interface Shipment {
@@ -382,6 +481,23 @@ export interface Shipment {
   documents?: Array<{ id: number; type: string; ref?: string; status?: string; date?: string; notes?: string }>;
   supplierManagedTransport?: boolean;   // "Bought DAP/DDP"
   cancelledAt?: string;
+  arrangedBy?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  bookings?: Record<string, any>[] | any[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  createdAt?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  customOrderTerms?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  customs?: Record<string, any>;   // v7.22.6 (FZ-20): stored in the data, now declared
+  destinationText?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  docsCourierDate?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  docsCourierTrackingNo?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  governingSoRef?: string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  loadingProtocol?: Record<string, any>;   // v7.22.6 (FZ-20): stored in the data, now declared
+  loadingProtocols?: Record<string, any>[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  originText?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  supplierId?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  supplierRef?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  terms?: string[];   // v7.22.6 (FZ-20): stored in the data, now declared
+  tradeDirection?: string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
+  transportOrders?: Record<string, { sentAt?: string; told?: any }>;   // v7.22.6 (FZ-20): written by the app (transport order sent, per carrier and leg) — not in the 2 Oct file
 }
 
 // ── Canonical SO status semantics (single source — BP-48 / Batch 0) ─────────
@@ -408,3 +524,96 @@ export const SO_STATUSES: Record<string, any> = {
 // Draft/Cancelled/Closed. Inventory and the SalesOrders engine share that one
 // engine — they agree by construction (the old 7-vs-3 divergence is resolved).
 export const SO_PRE_DISPATCH_STATUSES = new Set(["Confirmed", "Reserved", "Loading"]);
+
+// ══ v7.22.6 (FZ-20, Batch F): THE RECORDS AS THEY ARE STORED — one catalogue, read from the data itself; the base for the table map ══
+// The record types that live with their module are named here too, so this file lists every stored record.
+export type { Invoice, InvoicePosition, FinanceNote } from "./invoicing";
+export type { OperationalCost } from "./operationalCosts";
+export type { Claim } from "./claims.domain";
+export type { PackagingType } from "./packaging.domain";
+export type { Inspection, StockCount } from "./seasonOps.domain";
+export type { AdvancePayment } from "./advances.domain";
+export type { BankAccount } from "./bankReconciliation.domain";
+export type { Budget } from "./budgets.domain";
+export type { ClosedPeriod } from "./periodClose.domain";
+export type { AppUser } from "./permissions.domain";
+/** A PO's settlement with its supplier (commission or truck settlement), as stored. */
+export interface PoSettlement {
+  commissionPct?: number;
+  id?: number;
+  poNumber?: string;
+  provisionalEUR?: number;
+  provisionalInvoiceNo?: string;
+  ratePLNperEUR?: number;
+  status?: string;
+}
+/** A place added in Settings (port, warehouse, border…), as stored. */
+export interface CustomLocation {
+  addr?: Record<string, any>;
+  address?: string;
+  country?: string;
+  custom?: boolean;
+  id?: number;
+  legacyType?: string;
+  migratedFromSeed?: boolean;
+  name?: string;
+  type?: string;
+}
+/** A quality report kept on record, as stored. */
+export interface ReportEntry {
+  by?: string;
+  issuedAt?: string;
+  kind?: string;
+  number?: string;
+  subject?: string;
+}
+/** One tab of the planning sheet, as stored. */
+export interface PlanningSheet {
+  createdAt?: string;
+  id?: string;
+  name?: string;
+  order?: number;
+  rows?: Record<string, any>[];
+}
+/** One change on the planning sheet, as stored. */
+export interface PlanningSheetLogEntry {
+  action?: string;
+  at?: string;
+  col?: string;
+  now?: Record<string, any> | string;
+  row?: string;
+  tab?: string;
+  who?: string;
+}
+/** One line of the audit trail, as stored. */
+export interface AuditEntry {
+  action?: string;
+  docNumber?: string;
+  docType?: string;
+  id?: number;
+  module?: string;
+  summary?: string;
+  ts?: string;
+  user?: string;
+}
+/** Settings → Company, as stored. */
+export interface CompanyProfile {
+  address?: string;
+  email?: string;
+  name?: string;
+  nip?: string;
+  phone?: string;
+}
+/** When a season starts, as stored. */
+export interface SeasonSettings {
+  startDay?: number;
+  startMonth?: number;
+}
+/** Every stored list and the record it holds (retired stores — warehouseInvoices, settledRefs, creditNotes, loadPlans, logisticsPoints — are emptied or gone and not listed). */
+export interface StoreRecords {
+  contacts: Counterparty; pos: POrder; orders: SOrder; lots: Lot; shipments: Shipment; invoices: import("./invoicing").Invoice; financeNotes: import("./invoicing").FinanceNote;
+  operationalCosts: import("./operationalCosts").OperationalCost; claims: import("./claims.domain").Claim; inspections: import("./seasonOps.domain").Inspection; stockCounts: import("./seasonOps.domain").StockCount;
+  advancePayments: import("./advances.domain").AdvancePayment; bankAccounts: import("./bankReconciliation.domain").BankAccount; budgets: import("./budgets.domain").Budget; closedPeriods: import("./periodClose.domain").ClosedPeriod;
+  users: import("./permissions.domain").AppUser; productCatalog: CatalogItem; packagingTypes: import("./packaging.domain").PackagingType; poSettlements: PoSettlement; customLocations: CustomLocation;
+  reportRegister: ReportEntry; planningSheets: PlanningSheet; planningSheetLog: PlanningSheetLogEntry; auditLog: AuditEntry;
+}

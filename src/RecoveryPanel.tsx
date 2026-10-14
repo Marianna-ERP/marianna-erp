@@ -1,3 +1,4 @@
+import { useConfirm } from "./ui";   // v7.22.5 (A-RV-17)
 // v7.4.2 (A-REC-1, owner 6–7 Oct): "Recover from a backup" — compare, tick, bring back with what each record needs; nothing removed.
 import React, { useEffect, useState } from "react";
 import { compareBackup, planRecovery, applyRecovery, labelOf, StoreDiff } from "./recovery.domain";
@@ -11,6 +12,7 @@ const btn: any = { padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E
 const fmtWhen = (iso: string) => { const d = new Date(iso); return isNaN(d.getTime()) ? iso : d.toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }); };
 
 export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [snaps, setSnaps] = useState<string[]>([]); const [busy, setBusy] = useState(""); const [err, setErr] = useState("");
   const [source, setSource] = useState<{ label: string; stores: Record<string, any> } | null>(null);
   const [current, setCurrent] = useState<Record<string, any>>({}); const [diffs, setDiffs] = useState<StoreDiff[]>([]);
@@ -31,7 +33,7 @@ export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
     const plan = planRecovery(current, source.stores, chosen);
     const extra = plan.take.filter(t => t.why !== "chosen");
     const lines = plan.take.map(t => `${t.why === "chosen" ? "•" : "  ↳"} ${t.key}: ${labelOf(t.rec)}${t.why === "chosen" ? "" : ` (${t.why})`}`);
-    if (!window.confirm(`Bring back ${chosen.length} record(s) from ${source.label}${extra.length ? `, with ${extra.length} record(s) they need` : ""}?\n\n${lines.slice(0, 40).join("\n")}${lines.length > 40 ? `\n… +${lines.length - 40} more` : ""}\n\nNothing that exists now is removed. The shared data as it is now is downloaded first.`)) return;
+    if (!(await uiConfirm({ title: "Please confirm", message: `Bring back ${chosen.length} record(s) from ${source.label}${extra.length ? `, with ${extra.length} record(s) they need` : ""}?\n\n${lines.slice(0, 40).join("\n")}${lines.length > 40 ? `\n… +${lines.length - 40} more` : ""}\n\nNothing that exists now is removed. The shared data as it is now is downloaded first.` }))) return;
     setBusy("Recovering…");
     try {
       const next = applyRecovery(current, plan);
@@ -40,11 +42,11 @@ export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
         await replaceSharedStores(next, readSession()?.email || "");
       }
       recordAudit({ module: "System", docType: "Recovery", docNumber: source.label, action: "updated", summary: `recovered ${plan.take.length} record(s): ${plan.take.map(t => labelOf(t.rec)).join(", ").slice(0, 700)}` });
-      window.alert(`${plan.take.length} record(s) brought back. The page reloads to show them.`); window.location.reload();
+      (await uiAlert({ message: `${plan.take.length} record(s) brought back. The page reloads to show them.` })); window.location.reload();
     } catch (e: any) { setErr(`Recovery failed: ${String(e?.message || e)}`); setBusy(""); }
   }
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={onClose}>{dialogNode}
       <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 860, maxWidth: "96vw", maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB" }}>
           <div style={{ fontSize: 16, fontWeight: 800 }}>Recover from a backup</div>

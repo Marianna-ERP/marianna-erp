@@ -42,7 +42,7 @@ export const PACKAGING_SEED: PackagingType[] = [
   { id: "mesh-bag-25",   label: "Mesh bag (25 kg)",   capacityKg: 25, tareKg: 0.15, boxesPerPallet: 40, palletTareKg: 25, appliesTo: ["Onions", "Potatoes", "Carrots", "Garlic"] },
 ];
 
-const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const lc = (s: any) => String(s ?? "").trim().toLowerCase();
 
 /** Fallback flat gross factor when packaging/capacity is unknown (≈6%). */

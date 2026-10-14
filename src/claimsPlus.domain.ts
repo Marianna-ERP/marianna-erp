@@ -8,8 +8,9 @@ import { claimMoney } from "./claims.domain";
 import { applyPaymentEvent, outstandingAmount } from "./payments.domain";
 import { NOTICE_DEFAULTS, addDays } from "./claimReadiness.domain";
 import { S, r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── CL-2: the defect comes from the Inspection the claim references ───────────
 export function defectFromInspection(claim: any, inspections: any[]): { defectType: string; defectPct: number; description: string; inspection: any | null } {

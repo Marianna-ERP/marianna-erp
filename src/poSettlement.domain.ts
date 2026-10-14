@@ -3,6 +3,7 @@ import { S, r2, r0 } from "./format";
 import { gradeSplit } from "./seasonOps.domain";   // v6.99.108 (A-QC-6)
 import { nbpRateBeforeKnown } from "./fx";   // v7.18.6 (A-AU-12)
 import { localTodayISO } from "./dates";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // poSettlement.domain.ts — v6.90.0: THE TRUCK'S FINAL RESULT (settlement per PO)
 // Owner rulings 6 Sept 2026 (VEGA_PRO_REPORTING_MAPPING.md §1, §4, §5):
 //   V1 one PO = one truck → the settlement is FOR THE PO, summing its lots by variety
@@ -16,7 +17,7 @@ import { localTodayISO } from "./dates";
 //   waste = kg counted, never sold; class II same lot as a grade
 // Pure. Reads the stores it needs; writes nothing.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export interface POSettlementRecord {
   id: any; poNumber: string; status: "Open" | "Closed"; number?: string;
@@ -50,19 +51,6 @@ export interface POSettlementCalc {
   currency: string; provisionalCurrency: string; provisionalOriginal: number; correctionEUR: number; balanceEUR: number;
   provisionalPaidEUR: number | null; stillToTransferEUR: number | null; salesBasis: "invoice" | "order" | "mixed";
   fullySold: boolean; warnings: string[];
-}
-
-/** Default rate: the last sales invoice of the truck that carries an EUR rate; else the PO's own rate. */
-export function defaultTruckRate(po: any, lots: any[], orders: any[], invoices: any[]): number {
-  const soNums = new Set((orders || []).filter(o => (o.items || []).some((it: any) => lotsOfPO(po, lots).some(l => sourcesLot(it, l)))).map(o => String(o.number)));
-  const sinvs = (invoices || []).filter(i => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "SO" && soNums.has(String(l.number))))
-    .sort((a, b) => String(a.issueDate || "").localeCompare(String(b.issueDate || "")));
-  const last = sinvs.slice(-1)[0];
-  const poCur = String(po?.currency || "EUR").toUpperCase();   // v6.99.84 (A-ST-1): the rate of the PO's currency, whichever it is
-  if (poCur === "PLN") return 1;
-  if (last && String(last.currency || "").toUpperCase() === poCur && num(last.fxRate) > 0) return num(last.fxRate);
-  if (num(po?.fxRate) > 0) return num(po.fxRate);
-  return 0;
 }
 
 /** v7.18.6 (A-AU-12, owner 9 Oct): a settlement's rate is the NBP rate of the last working day BEFORE the settlement's date —

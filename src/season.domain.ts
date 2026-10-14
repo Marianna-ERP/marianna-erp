@@ -1,11 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // season.domain.ts — v6.99.54 (AR-1…7, owner ruling 23 Sept)
 // Numbers continue across seasons. The old season is ARCHIVED: tagged, hidden from the day-to-day screens, exportable to
 // its own JSON, re-importable read-only. Nothing is deleted at season end, and nothing about a document changes except
 // how it is shown. A lot that still holds kilos is this season's stock whenever it was bought — it never archives.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(S(v).replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export interface SeasonSettings { startMonth: number; startDay: number; }   // default 1 July
 export const DEFAULT_SEASON: SeasonSettings = { startMonth: 7, startDay: 1 };

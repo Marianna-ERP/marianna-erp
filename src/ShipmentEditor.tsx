@@ -16,16 +16,16 @@ import { nextId } from "./ids";
 import { appendSourceGoods, normalizeCustoms, syncLegFreightCostLines } from "./shipments.domain";
 import { recordAudit } from "./audit";
 import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
-import { locationById, placeForPrint } from "./locations";
+import { locationById, placeForPrint , isPortType } from "./locations";
 import { useUnsavedGuard, dirtyEntries } from "./unsaved";
-import { COST_TYPES, Card, HEADER_MODES, Inp, LEG_MODES, LEG_STATUSES, Lbl, ModeBadge, STATUS_ORDER, SectionTitle, Sel, Stage, allUnitsCarrierNames, blankTransportUnit, costLinesByCarrierLegApply, countryOfLocation, findUnitIn, fmtMoney, fmtNum, goodsRowCap, isFreightCostType, logisticsProviders, modeChangePatch, parseNum, shipmentCostPLN, shipmentVehicleCount, syncCustomsCostLine, todayISO, transportUnitsForLeg, withStandardDocs, setContactsRef, setOtherShipmentsRef } from "./Shipments";
+import { COST_TYPES, Card, HEADER_MODES, Inp, LEG_MODES, LEG_STATUSES, Lbl, ModeBadge, STATUS_ORDER, SectionTitle, Sel, Stage, allUnitsCarrierNames, blankTransportUnit, costLinesByCarrierLegApply, countryOfLocation, findUnitIn, fmtMoney, fmtNum, goodsRowCap, isFreightCostType, logisticsProviders, modeChangePatch, parseNum, shipmentCostPLN, shipmentVehicleCount, syncCustomsCostLine, todayISO, transportUnitsForLeg, withStandardDocs } from "./Shipments";
 import { pickerParties, archivedMark } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
-import { legFreightPayers, freightLineNotOurs, PAYER_LABEL, exwCarriageConflict, isSuppliersTruck, customsDuties, customsDutiesText, shipmentTermsFindings } from "./incoterms.domain";   // v7.19.0–7.19.3 (A-INC-1) · v7.20.0 (A-INC-2)
+import { legFreightPayers, freightLineNotOurs, PAYER_LABEL, exwCarriageConflict, isSuppliersTruck, customsDuties, customsDutiesText, shipmentTermsFindings, namedPlaceIsOrigin, sellerPaysCarriage, takenAtSeller } from "./incoterms.domain";   // v7.19.0–7.19.3 (A-INC-1) · v7.20.0 (A-INC-2)
 import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 
 export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], orders = [], packagingTypes = [], onSave, onCancel, allShipmentsForCap = [], invoices = [] }: any) {
-  setContactsRef(contacts || []);
-  setOtherShipmentsRef(allShipmentsForCap || []);
+  
+  
   // v6.57.0 (BP-60 part D): which lifecycle stage is expanded. Booking opens by
   // default because that is where a new shipment starts; the rest stay closed
   // until their information exists.
@@ -55,10 +55,10 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     const po = (pos || []).find((pp: any) => (d.poRefs || []).includes(pp.number)) || null;
     const doc: any = so || po; const ic = String((so ? so.sellIncoterm : po?.buyIncoterm) || "").toUpperCase();
     const named: any = doc ? locationById(doc.destinationLocationId, contacts || []) : null;
-    const isPort = (l: any) => !!l && (l.legacyType === "PORT" || String(l.type) === "Port");
+    const isPort = (l: any) => isPortType(l);   // v7.21.14 (A-RV-37): a Port or a Port warehouse, by its type
     const soDest: any = so ? locationById(so.destinationLocationId, contacts || []) : null;
-    const pol = isPort(named) && ["FOB", "FCA", "FAS"].includes(ic) ? named : null;
-    const pod = isPort(named) && ["CFR", "CIF", "CPT", "CIP", "DAP", "DPU", "DDP"].includes(ic) ? named : (isPort(soDest) ? soDest : null);
+    const pol = isPort(named) && namedPlaceIsOrigin(ic) ? named : null;   // v7.22.3 (FZ-21)
+    const pod = isPort(named) && sellerPaysCarriage(ic) ? named : (isPort(soDest) ? soDest : null);
     return { so, pol: pol ? { id: pol.id, name: pol.name } : null, pod: pod ? { id: pod.id, name: pod.name } : null, soPort: isPort(soDest) ? { id: soDest.id, name: soDest.name } : null };
   }
   function proposeEmpties(d0: any) {
@@ -81,16 +81,16 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     return touched ? { ...d, legs } : d;
   }
   // v6.99.58 (A-US): the Save button and the leave-guard call the SAME function — so every warning and gate still applies
-  function saveShipmentDraft() {
+  async function saveShipmentDraft() {
           // v6.99.44 (L-6, owner): a unit with no price or no carrier is named before saving — a warning, never a block (the price can arrive after the booking)
           if (draft.arrangedBy !== "SUPPLIER") {
             const gaps = (draft.legs || []).flatMap((l: any, li: number) => (l.vehicles || []).map((u: any, ui: number) => { const miss = [!(parseNum(u.costAmount) > 0) && "no price", (carrierOfUnit(draft, l, u) == null) && "no carrier"].filter(Boolean); return miss.length ? `leg ${li + 1} · ${u.truckPlate || u.containerNo || "unit " + (ui + 1)}: ${miss.join(", ")}` : null; })).filter(Boolean);
             // v6.99.59 (A-CB-1): a cost line without its carrier / forwarder is named too — the line only LOOKED complete before
             (draft.costs || []).forEach((c: any, ci: number) => { if (!c.supplierId && (parseNum(c.amount) > 0 || c.type)) gaps.push(`cost line ${ci + 1} (${c.type || "cost"}${parseNum(c.amount) > 0 ? " · " + c.amount + " " + (c.currency || "") : ""}): no supplier`); });
-            if (gaps.length && !window.confirm("Some items are incomplete:\n" + gaps.join("\n") + "\n\nSave anyway?")) return;
+            if (gaps.length && !(await uiConfirm({ title: "Please confirm", message: "Some items are incomplete:\n" + gaps.join("\n") + "\n\nSave anyway?" }))) return;
           }
           { let fin = autoAllocate(autoFillSingleUnitKg(draft), 0); const cr = customsRule(fin); if (cr.known) fin = { ...fin, customs: { ...(fin.customs || {}), applies: cr.ours } };   // v7.19.3: the stored tick follows the terms
-            onSave(costLinesByCarrierLegApply(syncCustomsCostLine(fin), legFreightPayers(fin, { pos, orders }))); }   // v7.19.0 (A-INC-1): only legs that are ours make a line
+            onSave(costLinesByCarrierLegApply(syncCustomsCostLine(fin), legFreightPayers(fin, { pos, orders }), contacts || [])); }   // v7.19.0 (A-INC-1): only legs that are ours make a line
   }
   useUnsavedGuard({ id: "shipment-editor", label: `Shipment ${draft?.number || ""}`.trim(), draft, save: () => saveShipmentDraft() });
   // v6.99.59 (A-OW-3): closing the WINDOW asks like leaving the module does — the guard covers both
@@ -98,9 +98,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
   function requestClose() { if (dirtyEntries().some((e: any) => e.id === "shipment-editor")) setCloseAsk(true); else onCancel(); }
   const [govChange, setGovChange] = useState(false);   // v6.99.44 (H-6)
   const [govPrev, setGovPrev] = useState<string>("");   // v6.99.59 (A-OW-6)
-  // v6.93.0: roadProviders no longer used — carriers live on the units (A-R8-4/9)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const roadProviders = logisticsProviders(contacts, "Road");
   const customsProviders = logisticsProviders(pickerParties(contacts, draft?.brokerId), "Customs");   // v7.10.2 (A-RV-15 · CP-4)
   function sf(k, v) { setDraft(prev => ({ ...prev, [k]: v })); }
   function updateLeg(idx, k, v) {
@@ -238,7 +236,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     const po = (pos || []).find((pp: any) => (d.poRefs || []).includes(pp.number)) || null;
     const inbound = String(d.purpose || "").toUpperCase() === "INBOUND" || (!!po && !so);
     const lotOf = (d.goods || []).map((g: any) => (lots || []).find((l: any) => String(l.number) === String(g.lotRef))).find(Boolean);
-    const loadId = inbound ? (po?.destinationLocationId && ["EXW", "FCA"].includes(String(po?.buyIncoterm || "").toUpperCase()) ? po.destinationLocationId : null) : (lotOf?.locationId ?? null);
+    const loadId = inbound ? (po?.destinationLocationId && takenAtSeller(po?.buyIncoterm) ? po.destinationLocationId : null) : (lotOf?.locationId ?? null);
     const loadText = inbound ? (po?.destinationText || po?.supplier?.name || "") : "";
     const delId = inbound ? (po?.destinationLocationId ?? null) : (so?.destinationLocationId ?? null);
     const delText = inbound ? (po?.destinationText || "") : (so?.destinationText || so?.client?.address || "");
@@ -270,10 +268,10 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
       return { ...prev, legs: (prev.legs || []).map((leg, i) => i === legIdx ? { ...leg, vehicles: [...transportUnitsForLeg(leg), unit] } : leg) };
     });
   }
-  function removeVehicle(legIdx, unitIdx) {
+  async function removeVehicle(legIdx, unitIdx) {
     // v6.99.69 (A-CF-2, owner): a row in an unsaved editor goes without a dialog — unless the truck already carries what someone typed
     { const u: any = transportUnitsForLeg((draft.legs || [])[legIdx] || {})[unitIdx] || {}; const has = [u.truckPlate, u.trailerPlate, u.driverName].some(Boolean) || parseNum(u.costAmount) > 0;
-      if (has && !window.confirm(`Remove ${u.truckPlate || u.containerNo || "this unit"}? Its plates, driver and price are lost.`)) return; }
+      if (has && !(await uiConfirm({ title: "Please confirm", message: `Remove ${u.truckPlate || u.containerNo || "this unit"}? Its plates, driver and price are lost.` }))) return; }
     setDraft(prev => ({
       ...prev,
       legs: (prev.legs || []).map((leg, i) => i === legIdx ? { ...leg, vehicles: transportUnitsForLeg(leg).filter((_, ui) => ui !== unitIdx) } : leg)
@@ -312,7 +310,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
     });
   }
   async function removeLeg(legIdx) {
-    { const leg: any = (draft.legs || [])[legIdx] || {}; const units = transportUnitsForLeg(leg).length; if (units && !window.confirm(`Remove leg ${legIdx + 1} with its ${units} unit(s)? Their plates, prices and dates are lost.`)) return; }   // v6.99.69 (A-CF-2)
+    { const leg: any = (draft.legs || [])[legIdx] || {}; const units = transportUnitsForLeg(leg).length; if (units && !(await uiConfirm({ title: "Please confirm", message: `Remove leg ${legIdx + 1} with its ${units} unit(s)? Their plates, prices and dates are lost.` }))) return; }   // v6.99.69 (A-CF-2)
     if ((draft.legs || []).length <= 1) { await uiAlert({ tone: "warn", title: "Can't remove leg", message: "A shipment needs at least one leg." }); return; }
     setDraft(prev => {
       if ((prev.legs || []).length <= 1) { return prev; }
@@ -500,9 +498,9 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   const po = (pos || []).find((pp: any) => (draft.poRefs || []).includes(pp.number)) || null;
                   const doc: any = so || po; const ic = String((so ? so.sellIncoterm : po?.buyIncoterm) || "").toUpperCase();
                   const named = doc ? locationById(doc.destinationLocationId, contacts || []) : null;
-                  const isPort = !!named && (named.legacyType === "PORT" || String(named.type) === "Port");
-                  const polDoc = isPort && ["FOB", "FCA", "FAS"].includes(ic) ? named : null;
-                  const podDoc = isPort && ["CFR", "CIF", "CPT", "CIP", "DAP", "DPU", "DDP"].includes(ic) ? named : null;
+                  const isPort = isPortType(named);   // v7.21.14 (A-RV-37): by the type
+                  const polDoc = isPort && namedPlaceIsOrigin(ic) ? named : null;
+                  const podDoc = isPort && sellerPaysCarriage(ic) ? named : null;   // v7.22.3 (FZ-21)
                   const srcLbl = (which: any) => which && doc ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {doc.number} ({ic})</span> : null;
                   const bp = { polDoc, podDoc, srcLbl };
                   return <>
@@ -603,7 +601,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                           const dLive = autoFillSingleUnitKg(draft); const liveKg = unitKg(findUnitIn(dLive, x.id) || x, dLive); const liveRem = truckRemainingForFeeding(dLive, x.id, u.id);
                           const cur = feedersOf(u); const f = cur.find((z: any) => String(z.fromUnitId) === String(x.id));
                           return <label key={String(x.id)} style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11.5, border: "1px solid " + (f ? "#7C3AED" : "#E5E7EB"), borderRadius: 6, padding: "3px 7px", background: f ? "#F5F3FF" : "#fff" }}>
-                            <input type="checkbox" checked={!!f} disabled={!f && liveRem <= 0} title={!f && liveKg <= 0 ? "Allocate the goods to this truck first" : !f && liveRem <= 0 ? "Already fully placed in other containers" : ""} onChange={() => { if (f) { setDraft((d: any) => setFeeders(d, u.id, cur.filter((z: any) => String(z.fromUnitId) !== String(x.id)))); return; } const r = addFeederChecked(draft, u.id, x.id); if (r.error) { window.alert(r.error); return; } setDraft(() => r.sh); }} />
+                            <input type="checkbox" checked={!!f} disabled={!f && liveRem <= 0} title={!f && liveKg <= 0 ? "Allocate the goods to this truck first" : !f && liveRem <= 0 ? "Already fully placed in other containers" : ""} onChange={async () => { if (f) { setDraft((d: any) => setFeeders(d, u.id, cur.filter((z: any) => String(z.fromUnitId) !== String(x.id)))); return; } const r = addFeederChecked(draft, u.id, x.id); if (r.error) { (await uiAlert({ message: r.error })); return; } setDraft(() => r.sh); }} />
                             {x.truckPlate || `unit ${x.id}`} · {Math.round(unitKg(x, draft)).toLocaleString("pl-PL")} kg
                             {f && <input type="number" placeholder="split kg" value={f.kg ?? ""} onChange={e => { const v = parseNum(e.target.value, 0); setDraft((d: any) => setFeeders(d, u.id, cur.map((z: any) => String(z.fromUnitId) === String(x.id) ? { ...z, kg: v || undefined } : z))); }} style={{ width: 70, border: "1px solid #DDD6FE", borderRadius: 4, padding: "1px 4px", fontSize: 11 }} />}
                           </label>;
@@ -712,11 +710,11 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       <div style={{ fontSize: 11.5, color: "#334155" }}>
                         {g.product}{g.variety ? ` · ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}
                       </div>
-                      <Inp type="number" value={assigned || ""} placeholder={`${room}`} onChange={e => {
+                      <Inp type="number" value={assigned || ""} placeholder={`${room}`} onChange={async e => {
                         const v = parseNum(e.target.value);
                         // v6.92.0 (A-R8-14): a truck can never be allocated more than the row has left.
                         const r = setUnitLoad(draft, u.id, g.id, v);
-                        if (r.error) { window.alert(r.error); return; }
+                        if (r.error) { (await uiAlert({ message: r.error })); return; }
                         const rest = (u.load || []).filter(a => String(a.goodsLineId) !== String(g.id));
                         updateVehicle(i, ui, "load", v > 0 ? [...rest, { goodsLineId: g.id, qtyKg: v }] : rest);
                         updateVehicle(i, ui, "manualLoad", true);
@@ -878,16 +876,16 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   <div style={{ fontSize: 11.5, fontWeight: 800, color: "#1D4ED8" }}>{key}</div>
                   <div style={{ fontSize: 11.5, color: "#64748B" }}>{doc?.client?.name || doc?.supplier?.name || ""}</div>
                   <div style={{ marginLeft: "auto", fontSize: 11.5, fontWeight: 700 }}>{fmtNum(sub)} kg</div>
-                  {!loaded && groupsOf.size > 1 && <SmallButton kind="red" onClick={() => { if (!window.confirm(`Remove ${key} and its ${idxs.length} row(s) from this shipment?`)) return; setDraft((prev: any) => ({ ...prev, goods: (prev.goods || []).filter((_: any, gi: number) => !idxs.includes(gi)), soRefs: (prev.soRefs || []).filter((r: string) => r !== key), poRefs: (prev.poRefs || []).filter((r: string) => r !== key) })); }}>Remove</SmallButton>}
+                  {!loaded && groupsOf.size > 1 && <SmallButton kind="red" onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Remove ${key} and its ${idxs.length} row(s) from this shipment?` }))) return; setDraft((prev: any) => ({ ...prev, goods: (prev.goods || []).filter((_: any, gi: number) => !idxs.includes(gi)), soRefs: (prev.soRefs || []).filter((r: string) => r !== key), poRefs: (prev.poRefs || []).filter((r: string) => r !== key) })); }}>Remove</SmallButton>}
                 </div>
                 {idxs.map(i => { const g: any = (draft.goods || [])[i]; return <div key={g.id || i}>
                     <div style={{ display: "grid", gridTemplateColumns: (draft.legs || []).length > 1 ? "1.8fr 0.9fr 0.9fr 0.7fr 1.1fr" : "2fr 1fr 1fr 0.8fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
             <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
-            <div><Lbl>Net (kg){(() => { const cap = goodsRowCap(g, draft, orders, pos); return cap != null ? ` (max ${Math.round(cap).toLocaleString("pl-PL")})` : ""; })()}</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={e => {
+            <div><Lbl>Net (kg){(() => { const cap = goodsRowCap(g, draft, orders, pos, allShipmentsForCap || []); return cap != null ? ` (max ${Math.round(cap).toLocaleString("pl-PL")})` : ""; })()}</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={async e => {
               // v6.99.7 (A-R9-11): a goods row can carry less than its SO/PO line (partial load) but never more than the line's remainder;
               // trucks re-derive proportionally unless one was set by hand (then the leg banner shows the gap).
-              const v = parseNum(e.target.value); const cap = goodsRowCap(g, draft, orders, pos);
-              if (cap != null && v > cap + 0.5) { window.alert(`This line has only ${Math.round(cap).toLocaleString("pl-PL")} kg left on its order — a shipment cannot carry more than the sale (or purchase) holds.`); return; }
+              const v = parseNum(e.target.value); const cap = goodsRowCap(g, draft, orders, pos, allShipmentsForCap || []);
+              if (cap != null && v > cap + 0.5) { (await uiAlert({ message: `This line has only ${Math.round(cap).toLocaleString("pl-PL")} kg left on its order — a shipment cannot carry more than the sale (or purchase) holds.` })); return; }
               updateGood(i, "qtyKg", v);
               setDraft((d: any) => (d.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => u.manualLoad)) ? d : autoAllocate(d, 0));
             }} /></div>

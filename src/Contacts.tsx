@@ -1419,7 +1419,8 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
 // ── v6.99.11 (owner, 13 Sept): PORTS TAB — ports · border crossings · customs points. Everything with an owner
 // (warehouses, port warehouses like Silvertech, supplier / client sites) lives on its COUNTERPARTY; these are the
 // places nobody invoices us for. Edited here, read everywhere through the one LocationPicker.
-export function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [], onOpenCompany = null, prefillOwner = null, onPrefillUsed = null, onLinkSaleDestination = null }: any) {   // v7.18.1: exported for the screen check
+export function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [], onOpenCompany = null, prefillOwner = null, onPrefillUsed = null, onLinkSaleDestination = null }: any) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's   // v7.18.1: exported for the screen check
   // v7.6.1 (A-PT-5, owner 7 Oct): the LOCATIONS tab works like Companies and People — search, filter chips, one table with actions, "+ New location" in a window
   const [q, setQ] = useState(""); const [chip, setChip] = useState("all"); const [winOpen, setWinOpen] = useState(false);
   useEffect(() => { if (prefillOwner) { setEditId(null); setForm({ name: `${prefillOwner.name} — `, country: prefillOwner.country || "", type: "ClientFacility", street: "", postcode: "", city: "", unlocode: "", ownerId: prefillOwner.id }); setWinOpen(true); onPrefillUsed && onPrefillUsed(); } }, [prefillOwner]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -1465,7 +1466,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
   const companyName = (id: any) => (counterparties || []).find((c: any) => String(c.id) === String(id))?.name || "";
   const ownerOf = (l: any) => (l as any).ownerId != null ? (l as any).ownerId : (sourceOf(l) === "counterparty site" ? (counterparties || []).find((c: any) => counterpartyLocations([c]).some((x: any) => String(x.id) === String(l.id)))?.id : null);
   const CHIPS: Array<[string, string, (l: any) => boolean]> = [
-    ["all", "All", () => true], ["ports", "Ports & airports", (l: any) => ["Port", "Airport", "PortWarehouse"].includes(String(l.type)) || String(l.legacyType) === "PORT"],
+    ["all", "All", () => true], ["ports", "Ports & airports", (l: any) => ["Port", "Airport", "PortWarehouse"].includes(String(l.type)) /* v7.21.14 (A-RV-37): by the type only */],
     ["border", "Border crossings", (l: any) => String(l.type) === "BorderCrossing" || String(l.legacyType) === "BORDER"], ["customs", "Customs", (l: any) => String(l.type) === "Customs" || String(l.legacyType) === "CUSTOMS"],
     ["company", "Companies' places", (l: any) => ownerOf(l) != null],   /* v7.7.1 (A-RET-1): no "Hidden" chip — the built-ins it showed are gone */
   ];
@@ -1475,7 +1476,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
   const count = (key: string) => base.filter((CHIPS.find(c => c[0] === key) || CHIPS[0])[2]).length;
   const openEdit = (l: any) => { setEditId(l.id); const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address || ""); setForm({ name: l.name, country: l.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: (l as any).unlocode || "", ownerId: (l as any).ownerId ?? null, __builtin: sourceOf(l) === "built-in" }); setWinOpen(true); };
   return (
-    <div>
+    <div>{dialogNode}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         {CHIPS.map(([k, label]) => <button key={k} onClick={() => setChip(k)} style={{ padding: "6px 14px", borderRadius: 20, border: "1px solid", borderColor: chip === k ? "#111" : "#E5E7EB", background: chip === k ? "#111" : "#fff", color: chip === k ? "#fff" : "#374151", fontSize: 12.5, cursor: "pointer" }}>{label} <span style={{ opacity: 0.6, marginLeft: 4 }}>{count(k)}</span></button>)}
         <button onClick={() => { setEditId(null); setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "", ownerId: null }); setWinOpen(true); }} style={{ marginLeft: "auto", padding: "8px 16px", borderRadius: 8, border: "none", background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ New location</button>
@@ -1485,10 +1486,10 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
         if (!typed.length) return null;
         const makeSite = async (r: any) => {
           const c = (counterparties || []).find((x: any) => String(x.id) === String(r.clientId)); if (!c && r.legalSiteId == null) return;
-          if (r.legalSiteId != null) { if (!window.confirm(`Link ${r.orders.length} sale(s) to ${r.clientName}'s legal address?\n\n${r.orders.join(", ")}`)) return; onLinkSaleDestination(r.key, { id: r.legalSiteId, name: r.clientName }); return; }
+          if (r.legalSiteId != null) { if (!(await uiConfirm({ title: "Please confirm", message: `Link ${r.orders.length} sale(s) to ${r.clientName}'s legal address?\n\n${r.orders.join(", ")}` }))) return; onLinkSaleDestination(r.key, { id: r.legalSiteId, name: r.clientName }); return; }
           const tail = String(r.text).split(",").map((s: string) => s.replace(/\d{2}-\d{3}|\b\d{4,6}\b/g, "").trim()).filter(Boolean).pop() || "site";
           const name = `${c.name} — ${tail}`.slice(0, 80);
-          if (!window.confirm(`Add "${name}" as a location of ${c.name} (address: ${r.text}) and link ${r.orders.length} sale(s) to it?\n\n${r.orders.join(", ")}`)) return;
+          if (!(await uiConfirm({ title: "Please confirm", message: `Add "${name}" as a location of ${c.name} (address: ${r.text}) and link ${r.orders.length} sale(s) to it?\n\n${r.orders.join(", ")}` }))) return;
           const loc: any = addCustomLocation({ name, country: c.country || r.country || "", type: "ClientFacility" as any, address: r.text, ownerId: c.id });
           onLinkSaleDestination(r.key, { id: loc.id, name: loc.name }); force((x: number) => x + 1);
         };
@@ -1514,7 +1515,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
             <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
               {src === "counterparty site" && onOpenCompany && <button onClick={() => onOpenCompany(owner)} title="the legal address is edited on its company" style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>open company →</button>}
               {(mine || src === "built-in") && !(l as any).__hidden && <button onClick={() => openEdit(l)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #BFDBFE", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Edit</button>}
-              {mine && <button onClick={() => { if (used > 0) { const docs = usersOf(l.id); window.alert(`${l.name} is used by ${docs.length} document(s): ${docs.slice(0, 12).join(", ")}${docs.length > 12 ? ` and ${docs.length - 12} more` : ""} — it cannot be deleted while they use it.`); return; } if (window.confirm(`Delete ${l.name}?`)) { removeCustomLocation(Number(l.id)); force(x => x + 1); } }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 12, cursor: "pointer" }}>Delete</button>}
+              {mine && <button onClick={async () => { if (used > 0) { const docs = usersOf(l.id); (await uiAlert({ message: `${l.name} is used by ${docs.length} document(s): ${docs.slice(0, 12).join(", ")}${docs.length > 12 ? ` and ${docs.length - 12} more` : ""} — it cannot be deleted while they use it.` })); return; } if ((await uiConfirm({ title: "Please confirm", message: `Delete ${l.name}?` }))) { removeCustomLocation(Number(l.id)); force(x => x + 1); } }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 12, cursor: "pointer" }}>Delete</button>}
               {(l as any).__hidden && <button onClick={() => { writeLocationOverride(Number(l.id), { hidden: false } as any); setTimeout(() => window.location.reload(), 150); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Show again</button>}
             </div>
           </div>); })}
@@ -1554,13 +1555,14 @@ export function readCountries(): Array<{ iso: string; name: string; eu: boolean 
 }
 function writeCountries(list: any[]) { try { window.localStorage.setItem("marianna-erp:v2:countries", JSON.stringify(list)); } catch {} }
 function CountriesView() {
+  const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   setUserCountries(readCountries());
   const [list, setList] = useState<any[]>(() => readCountries());
   const [form, setForm] = useState<any>({ iso: "", name: "", eu: false });
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const save = (next: any[]) => { const sorted = [...next].sort((a, b) => Number(b.eu) - Number(a.eu) || String(a.name).localeCompare(String(b.name), "en")); setList(sorted); writeCountries(sorted); };
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>{dialogNode}
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🌍 Countries</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>The list behind every country dropdown — EU first, then the others, alphabetical. The EU flag drives customs / VAT treatment. Built-in rows are editable and removable like any other.</div>
       <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 90px auto", gap: 8, alignItems: "end", marginBottom: 12 }}>
@@ -1569,7 +1571,7 @@ function CountriesView() {
         <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", paddingBottom: 8 }}><input type="checkbox" checked={!!form.eu} onChange={e => setForm({ ...form, eu: e.target.checked })} /> EU</label>
         <button onClick={() => { if (!form.iso || !form.name) return; save([...list.filter(x => x.iso !== form.iso), { ...form }]); setForm({ iso: "", name: "", eu: false }); }} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add / update</button>
       </div>
-      {list.map(x => <div key={x.iso} style={{ display: "grid", gridTemplateColumns: "80px 1fr 90px auto", gap: 8, fontSize: 12, padding: "4px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}><b>{x.iso}</b><span>{x.name}</span><span style={{ color: x.eu ? "#166534" : "#64748B" }}>{x.eu ? "EU" : "non-EU"}</span><div style={{ display: "flex", gap: 6 }}><button onClick={() => setForm({ ...x })} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button><button onClick={() => { if (window.confirm(`Remove ${x.name}?`)) save(list.filter(y => y.iso !== x.iso)); }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button></div></div>)}
+      {list.map(x => <div key={x.iso} style={{ display: "grid", gridTemplateColumns: "80px 1fr 90px auto", gap: 8, fontSize: 12, padding: "4px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}><b>{x.iso}</b><span>{x.name}</span><span style={{ color: x.eu ? "#166534" : "#64748B" }}>{x.eu ? "EU" : "non-EU"}</span><div style={{ display: "flex", gap: 6 }}><button onClick={() => setForm({ ...x })} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button><button onClick={async () => { if ((await uiConfirm({ title: "Please confirm", message: `Remove ${x.name}?` }))) save(list.filter(y => y.iso !== x.iso)); }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button></div></div>)}
     </div>
   );
 }

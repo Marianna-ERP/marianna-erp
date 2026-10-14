@@ -83,30 +83,3 @@ export function computedSOLinks(so: any, { shipments = [], invoices = [], lots =
     linkedLots,
   };
 }
-
-/**
- * BP-3: the PO's sales-link state, derived from the SOs that source from it.
- * Unsold / Linked / Partially sold / Fully sold — quantity-aware where possible.
- */
-export function poSalesLink(po: any, orders: any[]) {
-  const soLines: any[] = [];
-  (orders || []).forEach(o => {
-    if (o.status === "Cancelled") return;
-    (o.items || []).forEach((it: any) => {
-      if (it.sourceType === "PO" && it.sourceRef === po.number) soLines.push({ o, it });
-    });
-  });
-  const linkedSOs = Array.from(new Set(soLines.map(x => x.o.number)));
-  if (!linkedSOs.length) return { state: "Unsold", label: "Unsold", linkedSOs: [], soldKg: 0, orderedKg: 0, pct: 0 };
-
-  const orderedKg = (po.items || []).reduce((s: number, l: any) => s + (parseFloat(l.qty) || 0), 0);
-  const soldKg = soLines.reduce((s: number, x: any) => s + (parseFloat(x.it.qty) || 0), 0);
-  const pct = orderedKg > 0 ? Math.round((soldKg / orderedKg) * 100) : 0;
-
-  let state: string, label: string;
-  if (orderedKg > 0 && soldKg >= orderedKg - 0.001) { state = "Fully"; label = "Fully sold"; }
-  else if (linkedSOs.length > 1) { state = "Multiple"; label = `Sold to ${linkedSOs.length} orders (${pct}%)`; }
-  else if (orderedKg > 0 && soldKg > 0 && pct < 100) { state = "Partial"; label = `Partially sold — ${linkedSOs[0]} (${pct}%)`; }
-  else { state = "Linked"; label = `Linked to ${linkedSOs[0]}`; }
-  return { state, label, linkedSOs, soldKg, orderedKg, pct };
-}

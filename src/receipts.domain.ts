@@ -54,20 +54,6 @@ export function isReceiptOfPO(sh: any): boolean {
   return p === "INBOUND";
 }
 
-/** Kilos received per PO line, across live inbound shipments. */
-export function receivedKgByPoLine(shipments: any[], poNumber: string): Record<string, number> {
-  const map: Record<string, number> = {};
-  (shipments || []).filter(isReceiptOfPO).forEach(sh => {
-    (sh.goods || []).forEach((g: any) => {
-      if (String(g.poRef || "") !== String(poNumber)) return;
-      const key = String(g.poLineId ?? g.lineId ?? "");
-      if (!key) return;
-      map[key] = (map[key] || 0) + num(g.qtyKg);
-    });
-  });
-  return map;
-}
-
 export interface OverReceipt { lineId: string; product: string; orderedKg: number; receivedKg: number; overKg: number; }
 
 /** Lines where more has arrived than was ordered.

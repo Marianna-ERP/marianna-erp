@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─── v6.48.0  CLAIMS — a first-class document ────────────────────────────────
 // Claims used to be two unrelated things: a "producer claim" nested inside
 // lot.claims[] (numbered, with the full cost-and-defect maths) and a "client
@@ -122,9 +123,10 @@ export interface Claim {
   movementRef: any;              // the CLAIM movement that carries claimedKg
   notes: string;
   migratedFrom?: string;          // provenance when lifted out of the old structures
+  requestedAmount?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
-const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const str = (v: any) => String(v ?? "").trim();
 
 /** Next claim number from the CLAIMS store (not from lots — that was defect D2). */
@@ -186,13 +188,6 @@ export function claimsForSO(claims: any[], soNumber: any): any[] {
 export function claimsForShipment(claims: any[], shipmentNumber: any): any[] {
   const want = str(shipmentNumber);
   return (claims || []).filter(c => subjectRefs(c, "SHIPMENT").includes(want));
-}
-
-/** The claimed quantity a claim attributes to one lot. */
-export function affectedKgForLot(c: any, lotNumber: any): number {
-  const want = str(lotNumber);
-  return (c?.subjects || []).filter((s: any) => s?.kind === "LOT" && str(s.ref) === want)
-    .reduce((a: number, s: any) => a + num(s.affectedKg), 0);
 }
 
 /**

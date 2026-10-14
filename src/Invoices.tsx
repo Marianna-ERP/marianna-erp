@@ -28,6 +28,7 @@ import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import { useUnsavedGuard } from "./unsaved";
 import { companyProfile } from "./useLocalStoredState";
 import { pickerParties, archivedMark } from "./counterparty.domain";   // v7.10.2 (A-RV-15 · CP-4)
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 const COMPANY: any = companyProfile();   // v6.99.67 (A-AUD-1): the company block comes from Settings (defaults = the former literal)
 
@@ -121,6 +122,7 @@ const TAG_LABELS: Record<string, string> = { GOODS: "Goods purchase", FREIGHT: "
 const OP_CATEGORIES = ["salary", "office_rent", "accountant", "petrol", "software", "bank_fees", "insurance", "phone_internet", "office_supplies", "other"];
 
 function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], pos = [], onClose, onPost }: any) {
+  const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [rows, setRows] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -176,7 +178,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
         const cDate = findCol(headers, "data wyst", "data sprzed", "issue", "date", "data");
         const cCur = findCol(headers, "walut", "currency");
         if (cNo < 0 && cSeller < 0) { setError("Could not recognize columns — expected headers like Numer/Number, Sprzedawca/Seller, Netto/Net."); return; }
-        const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+        const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
         stage(body.map((r: any[], i: number) => {
           const cur = String((cCur >= 0 ? r[cCur] : "") || "PLN").toUpperCase();
           return {
@@ -196,7 +198,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
 
   function post() {
     const inc = rows.filter(r => r.include && r.tag !== "SKIP");
-    const regs: any[] = []; const flips: any[] = []; const opCosts: any[] = []; const whInvs: any[] = [];
+    const regs: any[] = []; const flips: any[] = []; const opCosts: any[] = [];   /* v7.22.0 (A-RV-40): warehouse invoices go to the register (v7.21.4) — no list of their own */
     inc.forEach(r => {
       const contact = contactForSeller(r, contacts);
       if (r.tag === "WAREHOUSE") {
@@ -225,13 +227,13 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
         if (lineId != null) flips.push({ shipmentNumber: r.shipmentNumber, costLineId: lineId, invoiceNumber: r.number });
       }
     });
-    onPost({ regs, flips, opCosts, whInvs });
+    onPost({ regs, flips, opCosts });
   }
 
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12 };
   const included = rows.filter(r => r.include && r.tag !== "SKIP").length;
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130, padding: 20 }} onClick={onClose}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(17,24,39,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 130, padding: 20 }} onClick={onClose}>{dialogNode}
       <div style={{ width: 1100, maxWidth: "96vw", maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={(e: any) => e.stopPropagation()}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -263,12 +265,12 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
               const rowPLN = Math.round((r.net || r.gross) * (r.fxRate || 1) * 100) / 100;
               return (
                 <div key={r.key} style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "7px 0", borderBottom: "1px solid #F8FAFC", alignItems: "center", opacity: r.include ? 1 : 0.55 }}>
-                  <input type="checkbox" checked={r.include} onChange={(e: any) => {
+                  <input type="checkbox" checked={r.include} onChange={async (e: any) => {
                     // v6.66.0 (D-30): re-including a flagged duplicate is a deliberate act.
                     if (e.target.checked && r.dup) {
                       const info = duplicateCostInvoiceInfo(r.number, invoices);
                       const msg = info ? `"${r.number}" is ALREADY registered (${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? ", entered manually" : ""}). Importing it again double-counts the money.\n\nInclude it anyway?` : `"${r.number}" is already in the register. Include it anyway?`;
-                      if (!window.confirm(msg)) return;
+                      if (!(await uiConfirm({ title: "Please confirm", message: msg }))) return;
                     }
                     upd(r.key, { include: e.target.checked });
                   }} />
@@ -403,7 +405,7 @@ export default function Invoices(props: any) {
   const [allocFor, setAllocFor] = useState<any>(null);   // v6.99.109 (A-ST-7): the warehouse invoice being allocated to lots
   const [showImport, setShowImport] = useState(false); // v6.39.0
   // v6.39.0: everything a posted import touches, in one place.
-  async function handleImportPost({ regs, flips, opCosts, whInvs }: any) {
+  async function handleImportPost({ regs, flips, opCosts }: any) {
     if (regs.length) setInvoices((prev: any[]) => [...regs.map((r: any) => recomputeInvoiceMoney(r)), ...(prev || [])]);
     if (flips.length && setShipments) setShipments((prev: any[]) => (prev || []).map((sh: any) => {
       const mine = flips.filter((f: any) => f.shipmentNumber === sh.number);
@@ -411,11 +413,10 @@ export default function Invoices(props: any) {
     }));
     if (opCosts.length && setOperationalCosts) setOperationalCosts((prev: any[]) => [...(prev || []), ...opCosts]);
     setShowImport(false);
-    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "imported", summary: `Import posted: ${regs.length} invoice(s)${flips.length ? `, ${flips.length} shipment cost line(s) -> Received` : ""}${opCosts.length ? `, ${opCosts.length} operational cost(s)` : ""}${whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : ""}` });
+    recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "imported", summary: `Import posted: ${regs.length} invoice(s)${flips.length ? `, ${flips.length} shipment cost line(s) -> Received` : ""}${opCosts.length ? `, ${opCosts.length} operational cost(s)` : ""}` });
     await invAlert({ tone: "info", title: "Import posted", message: `Posted: ${regs.length} invoice(s) to the register` +
       (flips.length ? `, ${flips.length} shipment cost line(s) marked Received` : "") +
-      (opCosts.length ? `, ${opCosts.length} operational cost(s)` : "") +
-      (whInvs.length ? `, ${whInvs.length} warehouse invoice(s)` : "") + "." });
+      (opCosts.length ? `, ${opCosts.length} operational cost(s)` : "") + "." });
   }
   // v6.99.72: `initialSelectedNumber` opens a detail directly (the render smoke uses it, like the other modules)
   const initialHit = props.initialSelectedNumber ? (invoices as any[]).find((i: any) => String(i.number) === String(props.initialSelectedNumber)) : null;

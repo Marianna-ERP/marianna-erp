@@ -1,4 +1,4 @@
-import { fillEmptyPlaces, termsToReview } from "./incoterms.domain";   // v7.9.2 · v7.20.0 (A-INC-2): the incoterm review
+import { fillEmptyPlaces, termsToReview, deliveredAtDestination } from "./incoterms.domain";   // v7.9.2 · v7.20.0 (A-INC-2): the incoterm review
 import { TermsReviewList, TERMS_REVIEW } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { statusWord } from "./format";
 import { ModuleHeader, ActionButton, notifySaved } from "./ui";
@@ -14,7 +14,7 @@ import { protocolsForShipment, upsertProtocol, poGateReason } from "./loadingPro
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { shipmentPostBlockReason, newestFirst } from "./moduleGuards.domain";
 import { overShipReport, derivedBillingStatus } from "./shipments.domain";
-import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, documentRegister, costLinesByCarrierLeg, carrierOfUnit, shipmentDates } from "./shipmentModel.domain";
+import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, costLinesByCarrierLeg, carrierOfUnit, shipmentDates } from "./shipmentModel.domain";
 
 import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, useConfirm } from "./ui";
@@ -37,20 +37,17 @@ import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDo
 import { outstandingCustoms } from "./customs.domain";   // v7.10.4 (A-RV-15)
 const CUSTOMS_OPEN = "Customs open";   // v7.10.4 (A-RV-15): the Shipments list filter for clearances not yet Cleared
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
-export let CONTACTS_REF: any[] = [];
-export function setContactsRef(v: any[]) { CONTACTS_REF = v || []; }   // v6.99.68 (A-AUD-2): assigned from the split editor
+// v7.22.4 (A-RV-16): no hidden copy of the counterparties — costLinesByCarrierLegApply takes them as a parameter
 /** v6.99.7 (A-R9-11): the most a goods row may carry = its source line's kg minus what OTHER live shipments already carry of that line. */
-export function goodsRowCap(g: any, draft: any, orders: any[] = [], pos: any[] = []): number | null {
-  const parse = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+export function goodsRowCap(g: any, draft: any, orders: any[] = [], pos: any[] = [], otherShipments: any[] = []): number | null {   // v7.22.4 (A-RV-16): the other shipments come as a parameter
+  const parse = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
   let lineKg: number | null = null;
   if (g?.soRef) { const so = (orders || []).find((o: any) => String(o.number) === String(g.soRef)); const it = so && (so.items || []).find((x: any, i: number) => String(x.id ?? i + 1) === String(g.soLineId) || (g.soLineId == null && String(x.product).toLowerCase() === String(g.product).toLowerCase())); if (it) lineKg = parse(it.qty); }
   else if (g?.poRef) { const po = (pos || []).find((p: any) => String(p.number) === String(g.poRef)); const it = po && (po.items || []).find((x: any, i: number) => String(x.id ?? i + 1) === String(g.poLineId)); if (it) lineKg = parse(it.qty); }
   if (lineKg == null) return null;
-  const carriedElsewhere = OTHER_SHIPMENTS_REF.filter((s: any) => s && s.id !== draft.id && String(s.status) !== "Cancelled").reduce((sum: number, s: any) => sum + (s.goods || []).filter((x: any) => (g.soRef && String(x.soRef) === String(g.soRef) && String(x.soLineId ?? "") === String(g.soLineId ?? "")) || (!g.soRef && g.poRef && String(x.poRef) === String(g.poRef) && String(x.poLineId ?? "") === String(g.poLineId ?? ""))).reduce((a: number, x: any) => a + parse(x.qtyKg), 0), 0);
+  const carriedElsewhere = (otherShipments || []).filter((s: any) => s && s.id !== draft.id && String(s.status) !== "Cancelled").reduce((sum: number, s: any) => sum + (s.goods || []).filter((x: any) => (g.soRef && String(x.soRef) === String(g.soRef) && String(x.soLineId ?? "") === String(g.soLineId ?? "")) || (!g.soRef && g.poRef && String(x.poRef) === String(g.poRef) && String(x.poLineId ?? "") === String(g.poLineId ?? ""))).reduce((a: number, x: any) => a + parse(x.qtyKg), 0), 0);
   return Math.max(0, lineKg - carriedElsewhere);
 }
-export let OTHER_SHIPMENTS_REF: any[] = [];
-export function setOtherShipmentsRef(v: any[]) { OTHER_SHIPMENTS_REF = v || []; }   // v6.99.68 (A-AUD-2)
 
 export function allUnitsCarrierNames(sh: any, contacts: any[]): string[] {
   const out: string[] = [];
@@ -58,10 +55,10 @@ export function allUnitsCarrierNames(sh: any, contacts: any[]): string[] {
   return out;
 }
 setFxFallback((cur: string) => documentFxDefault(cur));
-export function costLinesByCarrierLegApply(sh: any, payers?: Array<{ payer: string }>): any {   // v7.19.0 (A-INC-1): payers = incoterms.legFreightPayers
+export function costLinesByCarrierLegApply(sh: any, payers: Array<{ payer: string }> | undefined, contacts: any[]): any {   // v7.19.0 (A-INC-1): payers = incoterms.legFreightPayers
   const anyPriced = (sh.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => parseNum(u?.costAmount, 0) > 0));
   if (!anyPriced) return syncLegFreightCostLines(sh, payers);
-  return { ...sh, costs: costLinesByCarrierLeg(sh, (id: any) => (CONTACTS_REF.find((c: any) => String(c.id) === String(id)) || {}).name || "", payers) };
+  return { ...sh, costs: costLinesByCarrierLeg(sh, (id: any) => ((contacts || []).find((c: any) => String(c.id) === String(id)) || {}).name || "", payers) };
 }
 
 
@@ -126,24 +123,6 @@ export const MODE_CONFIG = {
   Air:        { bg: "#FCE7F3", color: "#DB2777", label: "Air", icon: "✈️" },
   Multimodal: { bg: "#F5F3FF", color: "#7C3AED", label: "Multimodal", icon: "🔀" },
 };
-
-// v6.56.0: PURPOSE_LABELS removed — its last consumer was the one-line list
-// row's tooltip, replaced by BP-60's two-line row where route, dates, weight
-// and carrier are visible outright rather than hidden behind a hover.
-
-// v6.80.0 (D-48): kept as the LEGACY vocabulary (stored values in old data); the live value is derivedBillingStatus().
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const BILLING_STATUSES = [
-  "Not ready",
-  "Ready for supplier invoice",
-  "Supplier invoice received",
-  "Cost allocated",
-  // v6.62.0: an outbound delivery's freight is a direct cost of the sale, not
-  // lot landed cost. It used to be forced into "Cost allocated", which then read
-  // as a stale flag because no lot carried anything.
-  "Direct cost of sale",
-  "Closed",
-];
 
 export const COST_TYPES = [
   { code: "road_freight", label: "Road freight", inventoryType: "freight" },
@@ -647,7 +626,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
   //   • DAP/DPU/DDP (seller delivers) → named place is OUR delivery place, so
   //     it stays the DESTINATION default and the origin stays the supplier.
   // Fallback for POs without a named place: supplier facility as before.
-  const sellerDelivers = ["DAP", "DPU", "DDP"].includes(String(po.buyIncoterm || "").toUpperCase());
+  const sellerDelivers = deliveredAtDestination(po.buyIncoterm);   // v7.22.3 (FZ-21)
   const namedPlaceId = po.destinationLocationId || null;
   const namedPlaceText = po.destinationText || "";
   const supplierGuessId = guessSupplierLocationId(po);
@@ -1177,22 +1156,6 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
   );
 }
 
-// ── v6.85.0 (D11): ONE document register — a derived view over the three sources ──
-export function DocumentRegisterCard({ shipment, protocols = [] }: any) {
-  const rows = documentRegister(shipment, protocols);
-  const color = (s: string) => s === "Returned" || s === "Have it" || s === "N/A" ? "#16A34A" : s === "Sent" ? "#0284C7" : "#B45309";
-  return (
-    <Card>
-      <SectionTitle>Document register</SectionTitle>
-      {rows.map((r: any, i: number) => (
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "150px 1fr 90px 90px", gap: 8, fontSize: 11.5, padding: "3px 0", borderTop: i ? "1px solid #F8FAFC" : "none" }}>
-          <span style={{ fontWeight: 700 }}>{r.kind}</span><span style={{ color: "#64748B" }}>{r.ref}{r.unit ? " · " + r.unit : ""}{r.link ? " · 🔗" : ""}</span><span style={{ color: color(r.status), fontWeight: 800 }}>{r.status}</span><span style={{ color: "#94A3B8" }}>{r.date}</span>
-        </div>
-      ))}
-    </Card>
-  );
-}
-
 
 // ── v6.93.0 (A-R8-19): TRANSPORT ORDERS — one per CARRIER × LEG, each with its own Mark sent ──
 
@@ -1247,7 +1210,7 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
   const shipmentsMirror = React.useRef(null);
   React.useEffect(() => { shipmentsMirror.current = shipments; });
   const [localShipments, setLocalShipments] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
-  const [localPOs, setLocalPOs] = useState<any[]>([]);
+  const [localPOs] = useState<any[]>([]);   // v7.22.0 (FZ-19): read-only fallback — the legacy PO link writes are gone
   const [localLots, setLocalLots] = useState<any[]>([]);
   const [localOrders, setLocalOrders] = useState<any[]>([]);
   const shipments = extShipments || localShipments;
@@ -1257,9 +1220,7 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
   // not silently swap in the STANDALONE_* demo data. Stubs remain for true standalone
   // use only (props undefined).
   const pos = extPOs ?? localPOs;
-  // v6.63.0 (D-15): legacy link writes retired — setPOs kept for API symmetry.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const setPOs = extSetPOs || setLocalPOs;
   const lots = extLots ?? localLots;
   const setLots = extSetLots || setLocalLots;
   const orders = extOrders ?? localOrders;

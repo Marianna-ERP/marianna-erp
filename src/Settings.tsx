@@ -403,7 +403,7 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
   const cnSaved: any = (catalog || []).reduce((o: any, c: any) => { o[c.item] = c.defaultCnCode || ""; return o; }, {});
   const { draft: cnDraft, setDraft: setCnDraft, bar: cnBar } = useSectionDraft(cnSaved, (next: any) => setCatalog((cat: any) =>
     Object.keys(next || {}).reduce((acc: any, item: string) => String(next[item] ?? "") !== String(cnSaved[item] ?? "") ? setCatalogCnCode(acc, item, String(next[item] ?? "")) : acc, cat || [])), "catalog-cn", "CN codes");
-  const { confirm: pcConfirm, alert: pcAlert, dialogNode: pcNode } = useConfirm(); // P2-6
+  const { confirm: pcConfirm, alert: pcAlert, dialogNode: pcNode , prompt: uiPrompt } = useConfirm(); // P2-6
   const [newItem, setNewItem] = useState("");
   const [vDraft, setVDraft] = useState<Record<string, string>>({});
   const [catQuery, setCatQuery] = useState(""); // v6.63.0 (D-12) — declared with the other hooks (rules-of-hooks)
@@ -422,7 +422,7 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
   };
   const renameItem = async (item: string) => {
     const used = usageCount(item);
-    const next = typeof window !== "undefined" ? window.prompt(`Rename "${item}" to:`, item) : null;
+    const next = typeof window !== "undefined" ? (await uiPrompt({ message: `Rename "${item}" to:`, defaultValue: item })) : null;
     if (!next || !String(next).trim() || String(next).trim() === item) return;
     const target = String(next).trim();
     if ((catalog || []).some((c: any) => String(c.item).toLowerCase() === target.toLowerCase())) {
@@ -571,8 +571,9 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
 // row-level security on Supabase with exactly this shape.
 
 // ─── v7.5.0 (A-ROLE-1, owner 6–7 Oct): THE ROLES — rights ticked once per role; users choose a role ────────────────
-const MOD_LABEL_R: Record<string, string> = { dashboard: "Dashboard", pos: "POs", lots: "Inventory", orders: "SOs", shipments: "Shipments", loadplans: "Load plans", invoices: "Invoices", claims: "Claims", finance: "Finance", contacts: "Parties", audit: "Audit", settings: "Settings" };
+const MOD_LABEL_R: Record<string, string> = { dashboard: "Dashboard", pos: "POs", lots: "Inventory", orders: "SOs", shipments: "Shipments", invoices: "Invoices", claims: "Claims", finance: "Finance", contacts: "Parties", audit: "Audit", settings: "Settings" };
 function RolesPanel({ roles: savedRoles = [], setRoles: saveRoles = null, users = [], setUsers = null }: any) {
+  const { prompt: uiPrompt, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const base = rolesOrDefault(savedRoles);
   const { draft, setDraft, bar } = useSectionDraft(base, (next: any) => {
     if (typeof saveRoles !== "function") return; saveRoles(next);
@@ -582,7 +583,7 @@ function RolesPanel({ roles: savedRoles = [], setRoles: saveRoles = null, users 
   const setRole = (id: string, patch: any) => setDraft(list.map((r: any) => r.id === id ? { ...r, ...patch } : r));
   if (typeof saveRoles !== "function") return null;
   return (
-    <div style={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }}>
+    <div style={{ background: "#fff", border: "1px solid #E5E7EB", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }}>{dialogNode}
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🧩 Roles</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Tick once what each role may open; every user chooses a role below. The General Manager sees everything and manages users, roles and backups.{!(savedRoles || []).length && <b style={{ color: "#B45309" }}> These are the proposed roles — press Save to adopt them.</b>}</div>
       {list.map((r: any) => (
@@ -592,20 +593,21 @@ function RolesPanel({ roles: savedRoles = [], setRoles: saveRoles = null, users 
             {r.isGM && <span style={{ fontSize: 11, color: "#15803D", fontWeight: 700 }}>sees everything</span>}
           </div>
           {!r.isGM && <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11.5 }}>
-            {MODULE_KEYS.filter(k => k !== "loadplans").map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={!!r.modules?.[k]} onChange={e => setRole(r.id, { modules: { ...r.modules, [k]: e.target.checked } })} />{MOD_LABEL_R[k] || k}</label>)}
+            {MODULE_KEYS.map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={!!r.modules?.[k]} onChange={e => setRole(r.id, { modules: { ...r.modules, [k]: e.target.checked } })} />{MOD_LABEL_R[k] || k}</label>)}
           </div>}
           {!r.isGM && r.modules?.finance && <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11, color: "#475569", marginTop: 4, paddingLeft: 12 }}>Finance →
             {FINANCE_KEYS.map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={!!r.finance?.[k]} onChange={e => setRole(r.id, { finance: { ...r.finance, [k]: e.target.checked } })} />{k}</label>)}
           </div>}
         </div>
       ))}
-      <button onClick={() => { const name = window.prompt("Name of the new role:"); if (name && name.trim()) setDraft([...list, { id: `role-${mintId()}`, name: name.trim(), modules: { dashboard: true }, finance: {} }]); }} style={{ marginTop: 6, padding: "5px 12px", borderRadius: 7, border: "1px dashed #94A3B8", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add role</button>
+      <button onClick={async () => { const name = (await uiPrompt({ message: "Name of the new role:", defaultValue: "" })); if (name && name.trim()) setDraft([...list, { id: `role-${mintId()}`, name: name.trim(), modules: { dashboard: true }, finance: {} }]); }} style={{ marginTop: 6, padding: "5px 12px", borderRadius: 7, border: "1px dashed #94A3B8", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add role</button>
       {bar}
     </div>
   );
 }
 
 function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles: savedRolesU = [] }: any) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const roleList = rolesOrDefault(savedRolesU); const [editing, setEditing] = useState<Record<string, boolean>>({});   // v7.5.1 (A-USR-8)
   // v7.2.0 (A-SET-1, owner 6 Oct): the list is edited as a DRAFT — nothing is written until "Save users", which shows what changes and
   // refuses a list that would lock anyone out. Before, every tick and letter went to the shared data at once.
@@ -615,12 +617,12 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
   useEffect(() => { if (!dirtyRef.current) setUsers(savedUsers || []); }, [savedJson]);   // eslint-disable-line react-hooks/exhaustive-deps
   useUnsavedGuard({ id: "settings-users", label: "Settings → Users & permissions", draft: users, resetKey: savedJson, save: () => saveDraft() });
   // (v7.5.1: removed with the old per-user tick grid)
-  const shared = true; const signInEmail = readSession()?.email || "";   // v7.21.0 (A-RV-19): there is only the shared data — the sign-in always decides
-  const problems = dirty ? usersSaveProblems(users, { shared, signInEmail }) : [];
-  function saveDraft(): boolean {
-    const p = usersSaveProblems(users, { shared, signInEmail }); if (p.length) { window.alert(`The users can't be saved yet:\n\n• ${p.join("\n• ")}`); return false; }
+  const signInEmail = readSession()?.email || "";   // v7.21.0 (A-RV-19): there is only the shared data — the sign-in always decides
+  const problems = dirty ? usersSaveProblems(users, { signInEmail }) : [];
+  async function saveDraft(): Promise<boolean> {
+    const p = usersSaveProblems(users, { signInEmail }); if (p.length) { (await uiAlert({ message: `The users can't be saved yet:\n\n• ${p.join("\n• ")}` })); return false; }
     const d = usersDiff(savedUsers || [], users); if (!d.length) return true;
-    if (!window.confirm(`Save these changes to the users — for everyone?\n\n${d.join("\n")}`)) return false;
+    if (!(await uiConfirm({ title: "Please confirm", message: `Save these changes to the users — for everyone?\n\n${d.join("\n")}` }))) return false;
     saveUsers(users); recordAudit({ module: "Settings", docType: "Users", docNumber: "users", action: "updated", summary: d.join(" · ").slice(0, 900) }); return true;
   }
   if (typeof saveUsers !== "function") return null;
@@ -629,7 +631,7 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
   const gaps = usersGaps(users);
   // (v7.5.1: removed with the old per-user tick grid)
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>{dialogNode}
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>👥 Users & permissions</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Tick what each user may open. With no users defined everyone sees everything; the first user should be the owner. The user is recognised by the name entered in Settings → "Your name".</div>
       {gaps.map((g, i) => <div key={i} style={{ fontSize: 11.5, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", marginBottom: 6 }}>{g}</div>)}
@@ -645,17 +647,17 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
           {ed ? <input value={u.email || ""} placeholder="the e-mail they sign in with" onChange={e => upd({ email: e.target.value.trim() })} style={inp} /> : <div style={{ color: u.email ? "#334155" : "#B45309" }}>{u.email || "not linked"}</div>}
           <div style={{ fontSize: 11.5, color: "#475569" }}>{rightsSummary(u, roleList)}
             {ed && u.roleId && <details style={{ marginTop: 4 }}><summary style={{ cursor: "pointer", color: "#64748B" }}>extra modules for this person</summary>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>{MODULE_KEYS.filter(k => k !== "loadplans" && !((roleList.find((r: any) => String(r.id) === String(u.roleId)) || {} as any).modules || {})[k]).map(k => <label key={k} style={{ display: "flex", gap: 3, alignItems: "center" }}><input type="checkbox" checked={(u.extraModules || []).includes(k)} onChange={e => upd({ extraModules: e.target.checked ? [...(u.extraModules || []), k] : (u.extraModules || []).filter((x: string) => x !== k) })} />{k}</label>)}</div></details>}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>{MODULE_KEYS.filter(k => !((roleList.find((r: any) => String(r.id) === String(u.roleId)) || {} as any).modules || {})[k]).map(k => <label key={k} style={{ display: "flex", gap: 3, alignItems: "center" }}><input type="checkbox" checked={(u.extraModules || []).includes(k)} onChange={e => upd({ extraModules: e.target.checked ? [...(u.extraModules || []), k] : (u.extraModules || []).filter((x: string) => x !== k) })} />{k}</label>)}</div></details>}
           </div>
           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
             <button onClick={() => setEditing(e => ({ ...e, [String(u.id)]: !ed }))} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{ed ? "Done" : "Edit"}</button>
-            <button onClick={() => { if (window.confirm(`Remove ${u.name || "this user"} from the list? (Nothing changes until Save users.)`)) setUsers((prev: any[]) => (prev || []).filter((x: any) => x.id !== u.id)); }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 12, cursor: "pointer" }}>Remove</button>
+            <button onClick={async () => { if ((await uiConfirm({ title: "Please confirm", message: `Remove ${u.name || "this user"} from the list? (Nothing changes until Save users.)` }))) setUsers((prev: any[]) => (prev || []).filter((x: any) => x.id !== u.id)); }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 12, cursor: "pointer" }}>Remove</button>
           </div>
         </div>); })}
       {/* v7.2.0 (A-SET-1): nothing is written until Save; the bar says what is pending and why a save is refused */}
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #F1F5F9", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <button disabled={!dirty} onClick={() => saveDraft()} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: dirty ? (problems.length ? "#B45309" : "#16A34A") : "#E5E7EB", color: dirty ? "#fff" : "#94A3B8", fontSize: 12.5, fontWeight: 800, cursor: dirty ? "pointer" : "default" }}>Save users</button>
-        <button disabled={!dirty} onClick={() => { if (window.confirm("Discard the changes to the users?")) setUsers(savedUsers || []); }} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", color: dirty ? "#111" : "#94A3B8", fontSize: 12.5, fontWeight: 700, cursor: dirty ? "pointer" : "default" }}>Cancel</button>
+        <button disabled={!dirty} onClick={async () => { if ((await uiConfirm({ title: "Please confirm", message: "Discard the changes to the users?" }))) setUsers(savedUsers || []); }} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", color: dirty ? "#111" : "#94A3B8", fontSize: 12.5, fontWeight: 700, cursor: dirty ? "pointer" : "default" }}>Cancel</button>
         {dirty ? <span style={{ fontSize: 11.5, color: problems.length ? "#B45309" : "#475569", fontWeight: 600 }}>{problems.length ? `Not savable yet: ${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ""}` : `${usersDiff(savedUsers || [], users).length} change(s) not saved yet`}</span> : <span style={{ fontSize: 11.5, color: "#94A3B8" }}>no unsaved changes</span>}
       </div>
     </div>
@@ -700,12 +702,13 @@ function useSectionDraft(saved: any, save: ((v: any) => void) | null, id: string
   const savedJson = JSON.stringify(saved ?? {}); const [draft, setDraft] = useState<any>(saved ?? {});
   const dirty = JSON.stringify(draft) !== savedJson; const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   useEffect(() => { if (!dirtyRef.current) setDraft(saved ?? {}); }, [savedJson]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const doSave = () => { if (!dirty || typeof save !== "function") return true; const keys = Array.from(new Set([...Object.keys(saved || {}), ...Object.keys(draft || {})])).filter(k => JSON.stringify((saved || {})[k]) !== JSON.stringify((draft || {})[k]));
-    if (!window.confirm(`Save ${label} — for everyone?\n\n${keys.map(k => `${k}: ${JSON.stringify((saved || {})[k] ?? "")} → ${JSON.stringify((draft || {})[k] ?? "")}`).join("\n")}`)) return false;
+  const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own window — rendered with the save bar
+  const doSave = async (): Promise<boolean> => { if (!dirty || typeof save !== "function") return true; const keys = Array.from(new Set([...Object.keys(saved || {}), ...Object.keys(draft || {})])).filter(k => JSON.stringify((saved || {})[k]) !== JSON.stringify((draft || {})[k]));
+    if (!(await uiConfirm({ title: "Please confirm", message: `Save ${label} — for everyone?\n\n${keys.map(k => `${k}: ${JSON.stringify((saved || {})[k] ?? "")} → ${JSON.stringify((draft || {})[k] ?? "")}`).join("\n")}` }))) return false;
     save(draft); recordAudit({ module: "Settings", docType: label, docNumber: id, action: "updated", summary: keys.join(", ") }); return true; };
   useUnsavedGuard({ id: `settings-${id}`, label: `Settings → ${label}`, draft, resetKey: savedJson, save: doSave });
   const bar = (
-    <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>
+    <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>{dialogNode}
       <button disabled={!dirty} onClick={() => doSave()} style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: dirty ? "#16A34A" : "#E5E7EB", color: dirty ? "#fff" : "#94A3B8", fontSize: 12, fontWeight: 800, cursor: dirty ? "pointer" : "default" }}>Save</button>
       <button disabled={!dirty} onClick={() => setDraft(saved ?? {})} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", color: dirty ? "#111" : "#94A3B8", fontSize: 12, fontWeight: 700, cursor: dirty ? "pointer" : "default" }}>Cancel</button>
       <span style={{ fontSize: 11.5, color: dirty ? "#475569" : "#94A3B8" }}>{dirty ? "changes not saved yet" : "no unsaved changes"}</span>
@@ -813,7 +816,7 @@ export default function Settings({ roles = [], setRoles = null,
   archivedSeasons?: string[];
   setArchivedSeasons?: any;
 }) {
-  const { confirm: stConfirm, dialogNode: stNode } = useConfirm(); // P2-6
+  const { confirm: stConfirm, dialogNode: stNode, prompt: uiPrompt } = useConfirm(); // P2-6
   const [manage, setManage] = React.useState<null | "products" | "locations" | "packaging">(null); // v6.38.0 (R1-C)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState<{ kind: "info" | "success" | "error"; text: string } | null>(null);
@@ -913,7 +916,7 @@ export default function Settings({ roles = [], setRoles = null,
       {   // v7.21.0 (A-RV-19): a backup is only ever restored into the shared data — there is no browser of its own to import into
         { const meU = userBySignIn(users || [], readSession()?.email); if (!meU || !meU.isOwner) { setMessage({ kind: "error", text: "Only the owner can restore a backup into the shared data." }); return; } }   // v7.2.4 (A-SET-4)
         let parsed: any; try { parsed = storesFromExport(result); } catch (x: any) { setMessage({ kind: "error", text: String(x?.message || x) }); return; }
-        const word = window.prompt(`RESTORE this file into the SHARED data${ENV_LABEL ? ` (${ENV_LABEL})` : ""} — for everyone?\n\nFile: ${file.name}\nExported: ${String(parsed.meta?.exportedAt || "?").replace("T", " ").slice(0, 16)}, app ${parsed.meta?.appVersion || "?"}\nIt holds: ${parsed.summary}\n\nEvery colleague's screen will show this data. The shared copy as it is now will be downloaded first.\n\nType RESTORE to go ahead:`);
+        const word = (await uiPrompt({ message: `RESTORE this file into the SHARED data${ENV_LABEL ? ` (${ENV_LABEL})` : ""} — for everyone?\n\nFile: ${file.name}\nExported: ${String(parsed.meta?.exportedAt || "?").replace("T", " ").slice(0, 16)}, app ${parsed.meta?.appVersion || "?"}\nIt holds: ${parsed.summary}\n\nEvery colleague's screen will show this data. The shared copy as it is now will be downloaded first.\n\nType RESTORE to go ahead:`, defaultValue: "" }));
         if (String(word || "").trim().toUpperCase() !== "RESTORE") { setMessage({ kind: "info", text: "Restore not done (the confirmation word was not typed)." }); return; }
         try {
           const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION); const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `marianna-shared-copy-before-restore-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
