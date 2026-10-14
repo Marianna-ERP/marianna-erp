@@ -1,3 +1,4 @@
+import { writeSharedStoreValue } from "./useLocalStoredState";
 import { localTodayISO } from "./dates";
 // ── v6.99.31 (owner 15 Sept): EVERY REPORT CARRIES ITS OWN NUMBER ──
 // A printed report is a document: it must be identifiable afterwards (which trace, which quality report, for which
@@ -17,10 +18,11 @@ export function readReportRegister(): IssuedReport[] {
 export function issueReportNumber(kind: ReportKind, subject: string, by = "", module = "Inventory"): string {
   const year = new Date().getFullYear();
   const reg = readReportRegister();
-  const seq = reg.filter(r => r.kind === kind && String(r.number).includes(`-${year}-`)).length + 1;
+  // v7.17.5 (A-RV-06): the highest number of its kind this year + 1 — a count repeats a number after any gap
+  const seq = reg.filter(r => r.kind === kind && String(r.number).startsWith(`${kind}-${year}-`)).reduce((m, r) => Math.max(m, parseInt(String(r.number).slice(-4), 10) || 0), 0) + 1;
   const number = `${kind}-${year}-${String(seq).padStart(4, "0")}`;
   const entry: IssuedReport = { number, kind, subject: String(subject || ""), issuedAt: localTodayISO(), by: String(by || "") };
-  try { window.localStorage.setItem(KEY, JSON.stringify([...reg, entry])); } catch { /* best effort */ }
+  try { writeSharedStoreValue("reportRegister", [...reg, entry]); } catch { /* best effort */ }   // v7.3.3 (A-SYNC-1): numbers issued by any person reach everyone
   recordAudit({ module, docType: "Report", docNumber: number, action: "created", summary: `${REPORT_LABEL[kind] || kind} issued for ${subject}${by ? ` by ${by}` : ""}` });
   return number;
 }

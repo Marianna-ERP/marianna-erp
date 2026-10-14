@@ -1,10 +1,11 @@
+import { fillEmptyPlaces, termsToReview, deliveredAtDestination } from "./incoterms.domain";   // v7.9.2 · v7.20.0 (A-INC-2): the incoterm review
+import { TermsReviewList, TERMS_REVIEW } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { statusWord } from "./format";
 import { ModuleHeader, ActionButton, notifySaved } from "./ui";
 import React, { useMemo, useState } from "react";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 
 import DateInput from "./DateInput";
-import { shipmentTradeDirection } from "./tradeFlow.domain";
 import { postShipmentToLots, derivePurpose, nextShipmentAction, syncLegFreightCostLines, legFreightSource, findLotForSOLine } from "./shipments.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
@@ -13,7 +14,7 @@ import { protocolsForShipment, upsertProtocol, poGateReason } from "./loadingPro
 import { isCancelled, liveOnly, releaseSummaryText } from "./cancellation.domain";
 import { shipmentPostBlockReason, newestFirst } from "./moduleGuards.domain";
 import { overShipReport, derivedBillingStatus } from "./shipments.domain";
-import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, documentRegister, costLinesByCarrierLeg, carrierOfUnit, shipmentDates } from "./shipmentModel.domain";
+import { setFxFallback, applyStuffingReport, spawnFromDevanning, stampEvent, costLinesByCarrierLeg, carrierOfUnit, shipmentDates } from "./shipmentModel.domain";
 
 import { blankClaim, nextClaimNumber } from "./claims.domain";
 import { SmallButton, useConfirm } from "./ui";
@@ -33,21 +34,20 @@ import { clientReportKg } from "./seasonOps.domain";   // v6.99.87   // v6.99.72
 import { CreateShipmentModal } from "./ShipmentCreate";
 import { ShipmentDetail } from "./ShipmentDetail";
 import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDocuments";
+import { outstandingCustoms } from "./customs.domain";   // v7.10.4 (A-RV-15)
+const CUSTOMS_OPEN = "Customs open";   // v7.10.4 (A-RV-15): the Shipments list filter for clearances not yet Cleared
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
-export let CONTACTS_REF: any[] = [];
-export function setContactsRef(v: any[]) { CONTACTS_REF = v || []; }   // v6.99.68 (A-AUD-2): assigned from the split editor
+// v7.22.4 (A-RV-16): no hidden copy of the counterparties — costLinesByCarrierLegApply takes them as a parameter
 /** v6.99.7 (A-R9-11): the most a goods row may carry = its source line's kg minus what OTHER live shipments already carry of that line. */
-export function goodsRowCap(g: any, draft: any, orders: any[] = [], pos: any[] = []): number | null {
-  const parse = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+export function goodsRowCap(g: any, draft: any, orders: any[] = [], pos: any[] = [], otherShipments: any[] = []): number | null {   // v7.22.4 (A-RV-16): the other shipments come as a parameter
+  const parse = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
   let lineKg: number | null = null;
   if (g?.soRef) { const so = (orders || []).find((o: any) => String(o.number) === String(g.soRef)); const it = so && (so.items || []).find((x: any, i: number) => String(x.id ?? i + 1) === String(g.soLineId) || (g.soLineId == null && String(x.product).toLowerCase() === String(g.product).toLowerCase())); if (it) lineKg = parse(it.qty); }
   else if (g?.poRef) { const po = (pos || []).find((p: any) => String(p.number) === String(g.poRef)); const it = po && (po.items || []).find((x: any, i: number) => String(x.id ?? i + 1) === String(g.poLineId)); if (it) lineKg = parse(it.qty); }
   if (lineKg == null) return null;
-  const carriedElsewhere = OTHER_SHIPMENTS_REF.filter((s: any) => s && s.id !== draft.id && String(s.status) !== "Cancelled").reduce((sum: number, s: any) => sum + (s.goods || []).filter((x: any) => (g.soRef && String(x.soRef) === String(g.soRef) && String(x.soLineId ?? "") === String(g.soLineId ?? "")) || (!g.soRef && g.poRef && String(x.poRef) === String(g.poRef) && String(x.poLineId ?? "") === String(g.poLineId ?? ""))).reduce((a: number, x: any) => a + parse(x.qtyKg), 0), 0);
+  const carriedElsewhere = (otherShipments || []).filter((s: any) => s && s.id !== draft.id && String(s.status) !== "Cancelled").reduce((sum: number, s: any) => sum + (s.goods || []).filter((x: any) => (g.soRef && String(x.soRef) === String(g.soRef) && String(x.soLineId ?? "") === String(g.soLineId ?? "")) || (!g.soRef && g.poRef && String(x.poRef) === String(g.poRef) && String(x.poLineId ?? "") === String(g.poLineId ?? ""))).reduce((a: number, x: any) => a + parse(x.qtyKg), 0), 0);
   return Math.max(0, lineKg - carriedElsewhere);
 }
-export let OTHER_SHIPMENTS_REF: any[] = [];
-export function setOtherShipmentsRef(v: any[]) { OTHER_SHIPMENTS_REF = v || []; }   // v6.99.68 (A-AUD-2)
 
 export function allUnitsCarrierNames(sh: any, contacts: any[]): string[] {
   const out: string[] = [];
@@ -55,10 +55,10 @@ export function allUnitsCarrierNames(sh: any, contacts: any[]): string[] {
   return out;
 }
 setFxFallback((cur: string) => documentFxDefault(cur));
-export function costLinesByCarrierLegApply(sh: any): any {
+export function costLinesByCarrierLegApply(sh: any, payers: Array<{ payer: string }> | undefined, contacts: any[]): any {   // v7.19.0 (A-INC-1): payers = incoterms.legFreightPayers
   const anyPriced = (sh.legs || []).some((l: any) => (l.vehicles || []).some((u: any) => parseNum(u?.costAmount, 0) > 0));
-  if (!anyPriced) return syncLegFreightCostLines(sh);
-  return { ...sh, costs: costLinesByCarrierLeg(sh, (id: any) => (CONTACTS_REF.find((c: any) => String(c.id) === String(id)) || {}).name || "") };
+  if (!anyPriced) return syncLegFreightCostLines(sh, payers);
+  return { ...sh, costs: costLinesByCarrierLeg(sh, (id: any) => ((contacts || []).find((c: any) => String(c.id) === String(id)) || {}).name || "", payers) };
 }
 
 
@@ -124,24 +124,6 @@ export const MODE_CONFIG = {
   Multimodal: { bg: "#F5F3FF", color: "#7C3AED", label: "Multimodal", icon: "🔀" },
 };
 
-// v6.56.0: PURPOSE_LABELS removed — its last consumer was the one-line list
-// row's tooltip, replaced by BP-60's two-line row where route, dates, weight
-// and carrier are visible outright rather than hidden behind a hover.
-
-// v6.80.0 (D-48): kept as the LEGACY vocabulary (stored values in old data); the live value is derivedBillingStatus().
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const BILLING_STATUSES = [
-  "Not ready",
-  "Ready for supplier invoice",
-  "Supplier invoice received",
-  "Cost allocated",
-  // v6.62.0: an outbound delivery's freight is a direct cost of the sale, not
-  // lot landed cost. It used to be forced into "Cost allocated", which then read
-  // as a stale flag because no lot carried anything.
-  "Direct cost of sale",
-  "Closed",
-];
-
 export const COST_TYPES = [
   { code: "road_freight", label: "Road freight", inventoryType: "freight" },
   { code: "sea_freight", label: "Sea freight", inventoryType: "freight" },
@@ -204,17 +186,6 @@ export function mergedLocations(contacts: any[]) {
   // v6.86.0 (owner ruling): ONE source — unifiedLocations() — no module-level merge, no demo seeds.
   return unifiedLocations(contacts || []).map((l: any) => ({ ...l, type: l.legacyType }));
 }
-
-const FALLBACK_PROVIDERS = [
-  { id: 1001, type: "Carrier", name: "Mikolaj Majewski", country: "Poland", nip: "6010091289", address: "Marysin 36, 26-414 Potworow", services: ["Road"], contact: "Mikolaj Majewski", phone: "", email: "" },
-  { id: 9, type: "Carrier", name: "Trans-Logistics PL", country: "Poland", nip: "5213456789", address: "ul. Transportowa 5, Warszawa", services: ["Road"], contact: "Tomasz Mazur", phone: "+48 22 555 8800", email: "dispatch@trans-logistics.pl" },
-  { id: 10, type: "Carrier", name: "EuroFreight GmbH", country: "Germany", nip: "DE876543210", address: "Hafenstrasse 12, Hamburg", services: ["Road"], contact: "Lukas Hoffmann", phone: "+49 40 876 5432", email: "ops@eurofreight.de" },
-  { id: 15, type: "Forwarder", name: "Raben Logistics PL", country: "Poland", nip: "7820210577", address: "ul. Zbozowa 1, Gadki", services: ["Road", "Sea", "Customs"], contact: "Joanna Krawczyk", phone: "+48 61 898 5200", email: "j.krawczyk@raben.pl" },
-  { id: 16, type: "Forwarder", name: "DSV Solutions Polska", country: "Poland", nip: "5252222333", address: "Raszyn", services: ["Road", "Sea", "Air", "Customs", "Warehousing"], contact: "Piotr Sobieski", phone: "+48 22 333 4400", email: "p.sobieski@dsv.pl" },
-  { id: 17, type: "Forwarder", name: "Pekaes SA", country: "Poland", nip: "5260250289", address: "Warszawa", services: ["Road", "Customs"], contact: "Robert Adamski", phone: "+48 22 460 3000", email: "r.adamski@pekaes.pl" },
-  { id: 18, type: "Carrier", name: "MSC Mediterranean Shipping", country: "Switzerland", nip: "", address: "Geneva", services: ["Sea"], contact: "MSC Poland Office", phone: "+48 58 765 4300", email: "bookings.pl@msc.com" },
-  { id: 11, type: "Broker", name: "CustomsPro Sp. z o.o.", country: "Poland", nip: "5252111222", address: "ul. Celna 4, Warszawa", services: ["Customs"], contact: "Customs desk", phone: "", email: "" },
-];
 
 // v6.32.0 (R7b-5): demo seed STANDALONE_POS moved out of the production bundle → dev/demoSeed.reference.ts
 
@@ -558,11 +529,7 @@ export function logisticsProviders(contacts = [], service = "") {
       return (service === "Customs" && types.includes("Broker"));
     })
     .map(providerFromContact);
-  // v6.30.2 (clean system): FALLBACK_PROVIDERS are NO LONGER offered as options —
-  // pickers list Contacts only, so a reset system shows no demo carriers/forwarders.
-  // Legacy shipments that still reference a fallback id keep displaying correctly
-  // (providerById below resolves them, preferring a same-named live contact per T-25);
-  // on the next edit the user re-picks the provider from Contacts.
+  // v6.30.2 (clean system): pickers list Contacts only · v7.21.10 (A-RV-33): the fallback carriers are gone from the code
   const combined = [...fromContacts];
   const seen = new Set();
   return combined.filter(p => {
@@ -578,16 +545,8 @@ export function providerById(id, contacts = []) {
   const live = logisticsProviders(contacts);
   const fromContacts = live.find(p => String(p.id) === String(id));
   if (fromContacts) return fromContacts;
-  // Legacy fallback record (seed scaffolding). Real data lives in Contacts, so if a
-  // same-named counterparty exists there, prefer it — this is what lets a user FIX a
-  // missing carrier email in Contacts and have the transport order pick it up
-  // (previously a fallback id with email:"" could never be corrected).
-  const fb = FALLBACK_PROVIDERS.find(p => String(p.id) === String(id));
-  if (fb) {
-    const liveMatch = live.find(p => (p.name || "").trim().toLowerCase() === (fb.name || "").trim().toLowerCase());
-    if (liveMatch) return liveMatch;
-    return fb;
-  }
+  // v7.21.10 (A-RV-33, owner 11 Oct): no carrier written into the code any more — an id that is no company in Contacts names nobody
+  // (the integrity check lists a shipment still holding one of the retired ids 1001 / 9 / 10)
   return null;
 }
 
@@ -667,7 +626,7 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
   //   • DAP/DPU/DDP (seller delivers) → named place is OUR delivery place, so
   //     it stays the DESTINATION default and the origin stays the supplier.
   // Fallback for POs without a named place: supplier facility as before.
-  const sellerDelivers = ["DAP", "DPU", "DDP"].includes(String(po.buyIncoterm || "").toUpperCase());
+  const sellerDelivers = deliveredAtDestination(po.buyIncoterm);   // v7.22.3 (FZ-21)
   const namedPlaceId = po.destinationLocationId || null;
   const namedPlaceText = po.destinationText || "";
   const supplierGuessId = guessSupplierLocationId(po);
@@ -770,7 +729,6 @@ function buildShipmentFromPO__raw(po, opts, shipments, lots, governingSO = null,
     originCustom,
     destinationLocationId,
     destinationCustom,
-    costResponsibility: "Marianna",
     loadingDate: opts.loadingDate || po.loadingDate || todayISO(),
     expectedDeliveryDate: opts.expectedDeliveryDate || po.expectedDeliveryDate || todayISO(),
     actualLoadingDate: null,
@@ -797,7 +755,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
   // v6.45.0 (B): the shipment owns the trade direction — derived from its
   // governing SO (the from-PO builder already did this; this one never did,
   // which is why direct-export lots showed "Import").
-  const tradeDirection = shipmentTradeDirection(null, null, so, countryOfLocation);
+  // v7.12.1 (A-TD-2): no direction is written — every reader asks tradeFlow.shipmentTradeDirection (rule 7: one source)
   const id = nextId();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
@@ -839,7 +797,6 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
       poRef: it.sourceType === "PO" ? it.sourceRef : lot?.poRef || "",
       soRef: so.number,
       soLineId: it.id ?? idx + 1,   // v6.34.8: stamp the source SO line
-      tradeDirection,               // rows keep the derived direction for lot badges (read-only)
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product || "Goods",
       variety: it.variety || "",
@@ -879,7 +836,6 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
     forwarderId,
     brokerId: null,
     vehicleCount: 1,
-    costResponsibility: "Marianna",
     loadingDate: opts.loadingDate || todayISO(),
     expectedDeliveryDate: opts.expectedDeliveryDate || so.deliveryDate || todayISO(),
     actualLoadingDate: null,
@@ -908,7 +864,7 @@ function buildManualShipment__raw(opts, shipments) {
   const id = nextId();
   const number = nextShipmentNumber(shipments);
   const mode = opts.mode || "Road";
-  const carrierId = opts.carrierId ? parseNum(opts.carrierId) : 1001;
+  const carrierId = opts.carrierId ? parseNum(opts.carrierId) : null;   // v7.21.10 (A-RV-33): no carrier until one is picked from the list — never the fixed 1001
   const forwarderId = opts.forwarderId ? parseNum(opts.forwarderId) : null;
   const amount = parseNum(opts.amount, 0);
   const currency = opts.currency || "PLN";
@@ -928,7 +884,6 @@ function buildManualShipment__raw(opts, shipments) {
     forwarderId,
     brokerId: null,
     vehicleCount: 1,
-    costResponsibility: "Marianna",
     loadingDate: opts.loadingDate || todayISO(),
     expectedDeliveryDate: opts.expectedDeliveryDate || todayISO(),
     actualLoadingDate: null,
@@ -1069,6 +1024,11 @@ export function syncCustomsCostLine(sh: any) {
   const costs = (sh.costs || []).filter((c: any) => !(c._customsAuto || c.source === "customs-auto"));
   const c = sh.customs || {};
   const amt = parseNum(c.cost);
+  // v7.19.3 (A-INC-1, 4/5): when customs is not ours (the terms say the other side clears) an auto line that carries money is
+  // RELEASED as an ordinary line — flagged on the shipment, never dropped silently.
+  if (!(c.applies && amt > 0) && prevAuto && (parseNum(prevAuto.amount) > 0 || parseNum(prevAuto.amountPLN) > 0)) {
+    const { _customsAuto, source, ...rest } = prevAuto; costs.push({ ...rest, notes: prevAuto.notes || "Customs clearance" });
+  }
   if (c.applies && amt > 0) {
     const fx = parseNum(c.fxRate) || 1;
     costs.push({
@@ -1168,7 +1128,7 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
                   {t.truckPlate || `truck ${t.id}`}{f && <input type="number" placeholder="split kg" value={f.kg ?? ""} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, feeders: x.feeders.map((z: any) => String(z.truckId) === String(t.id) ? { ...z, kg: parseNum(e.target.value, 0) || undefined } : z) } : x))} style={{ ...inp, width: 68, padding: "1px 4px" }} />}
                 </label>; })}
             </div>
-            <ActionButton action="close" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} />
+            <ActionButton action="remove" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} />
           </div>
         ))}
         <div style={{ display: "flex", gap: 8 }}>
@@ -1184,7 +1144,7 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
             <input type="number" placeholder="kg" value={r.kg} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, kg: e.target.value } : x))} style={inp} />
             <select value={r.destKind} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, destKind: e.target.value } : x))} style={inp}><option value="WAREHOUSE">→ our warehouse (transfer)</option><option value="SO">→ client (SO)</option></select>
             {r.destKind === "SO" ? <select value={r.soNumber} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, soNumber: e.target.value } : x))} style={inp}><option value="">— sales order —</option>{(orders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft").map((o: any) => <option key={o.number} value={o.number}>{o.number} · {o.client?.name}</option>)}</select> : <span />}
-            <ActionButton action="close" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} />
+            <ActionButton action="remove" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} />
           </div>
         ))}
         <div style={{ display: "flex", gap: 8 }}>
@@ -1192,22 +1152,6 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
           <SmallButton kind="green" onClick={() => { onDevanning(rows.filter((r: any) => r.truckPlate.trim() && parseNum(r.kg, 0) > 0 && (r.destKind === "WAREHOUSE" || r.soNumber))); setMode(""); }}>Create onward shipments</SmallButton>
         </div>
       </>)}
-    </Card>
-  );
-}
-
-// ── v6.85.0 (D11): ONE document register — a derived view over the three sources ──
-export function DocumentRegisterCard({ shipment, protocols = [] }: any) {
-  const rows = documentRegister(shipment, protocols);
-  const color = (s: string) => s === "Returned" || s === "Have it" || s === "N/A" ? "#16A34A" : s === "Sent" ? "#0284C7" : "#B45309";
-  return (
-    <Card>
-      <SectionTitle>Document register</SectionTitle>
-      {rows.map((r: any, i: number) => (
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "150px 1fr 90px 90px", gap: 8, fontSize: 11.5, padding: "3px 0", borderTop: i ? "1px solid #F8FAFC" : "none" }}>
-          <span style={{ fontWeight: 700 }}>{r.kind}</span><span style={{ color: "#64748B" }}>{r.ref}{r.unit ? " · " + r.unit : ""}{r.link ? " · 🔗" : ""}</span><span style={{ color: color(r.status), fontWeight: 800 }}>{r.status}</span><span style={{ color: "#94A3B8" }}>{r.date}</span>
-        </div>
-      ))}
     </Card>
   );
 }
@@ -1239,7 +1183,7 @@ export function ChecklistLine({ ok, label, warnText = "" }: any) {
   return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F1F5F9" }}><div style={{ fontSize: 12, color: "#444" }}>{label}</div><div style={{ fontSize: 11, fontWeight: 800, color: ok ? "#16A34A" : "#D97706" }}>{ok ? "OK" : (warnText || "Open")}</div></div>;
 }
 
-export default function Shipments({ archive = null,
+export default function Shipments({ archive = null, claims: extClaims = [], initialStatusFilter = "",   // v7.20.0 (A-INC-2): the claims the review reads; the Dashboard opens the list on its filter
   shipments: extShipments,
   packagingTypes = [],
   setClaims = null,
@@ -1266,7 +1210,7 @@ export default function Shipments({ archive = null,
   const shipmentsMirror = React.useRef(null);
   React.useEffect(() => { shipmentsMirror.current = shipments; });
   const [localShipments, setLocalShipments] = useState<any[]>([]); // v6.32.0 (R7b-5): demo seed removed from bundle
-  const [localPOs, setLocalPOs] = useState<any[]>([]);
+  const [localPOs] = useState<any[]>([]);   // v7.22.0 (FZ-19): read-only fallback — the legacy PO link writes are gone
   const [localLots, setLocalLots] = useState<any[]>([]);
   const [localOrders, setLocalOrders] = useState<any[]>([]);
   const shipments = extShipments || localShipments;
@@ -1276,9 +1220,7 @@ export default function Shipments({ archive = null,
   // not silently swap in the STANDALONE_* demo data. Stubs remain for true standalone
   // use only (props undefined).
   const pos = extPOs ?? localPOs;
-  // v6.63.0 (D-15): legacy link writes retired — setPOs kept for API symmetry.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const setPOs = extSetPOs || setLocalPOs;
   const lots = extLots ?? localLots;
   const setLots = extSetLots || setLocalLots;
   const orders = extOrders ?? localOrders;
@@ -1289,7 +1231,7 @@ export default function Shipments({ archive = null,
   const [boardView, setBoardView] = useState(false);   // v6.99.55 (BD-1): list · detail · BOARD
   const [query, setQuery] = useState("");
   const [modeFilter, setModeFilter] = useState("All");
-  const [statusFilter, setStatusFilter] = useState("Open");
+  const [statusFilter, setStatusFilter] = useState(initialStatusFilter || "Open");   // v7.20.0: the Dashboard's 'Terms to review' tile opens on that filter
   const [showCreate, setShowCreate] = useState(false);
   // v6.56.0: Load Plan lives as a TAB inside Shipments (user ruling), not a
   // separate module — it is the same work, one level up.
@@ -1308,19 +1250,27 @@ export default function Shipments({ archive = null,
   const sorted = useMemo(() => [...shipments].sort((a, b) => statusRank(a.status) - statusRank(b.status) || String(b.loadingDate || "").localeCompare(String(a.loadingDate || ""))), [shipments]);
   // v6.99.54 (AR-4, owner): the day-to-day lists show the CURRENT season; archived documents appear only with "include archived".
   const archiveShow = (doc: any) => !archive || archive.includeArchived || !isArchived("shipment", doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
+  const customsOpenSet = useMemo(() => new Set(outstandingCustoms(shipments).map(r => r.number)), [shipments]);   // v7.10.4 (A-RV-15)
+  // v7.20.0 (A-INC-2, P-9): every inconsistency with the incoterms — this season's shipments, sales and purchases (as the Dashboard counts them) and the claims
+  const inSeason = (kind: string, doc: any) => !archive || archive.includeArchived || !isArchived(kind as any, doc, archive.archivedSeasons || [], archive.settings || DEFAULT_SEASON, { pos: archive.pos || [] });
+  const termsAll = useMemo(() => termsToReview({ pos: (pos || []).filter((p: any) => inSeason("po", p)), orders: (orders || []).filter((o: any) => inSeason("so", o)), shipments: (shipments || []).filter((s: any) => inSeason("shipment", s)), claims: extClaims || [], contacts, lots: lots || [], placeOf: (id: any) => locationById(id, contacts), countryOf: countryOfLocation }), [pos, orders, shipments, extClaims, contacts, lots, archive]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const termsShipmentSet = useMemo(() => new Set(termsAll.map(x => x.shipment).filter(Boolean)), [termsAll]);
+  const termsShown = useMemo(() => { const q = norm(query); return q ? termsAll.filter(x => [x.term, x.doc, x.record, x.text].join(" ").toLowerCase().includes(q)) : termsAll; }, [termsAll, query]);   // eslint-disable-line react-hooks/exhaustive-deps
   const filtered = useMemo(() => {
     const q = norm(query);
     return sorted.filter(s => {
       if (!archiveShow(s)) return false;   // v6.99.54 (AR-4)
       if (modeFilter !== "All" && s.mode !== modeFilter) return false;
       if (statusFilter === "Open" && ["Closed", "Cancelled"].includes(s.status)) return false;
-      if (statusFilter !== "All" && statusFilter !== "Open" && s.status !== statusFilter) return false;
+      if (statusFilter === TERMS_REVIEW) { if (!termsShipmentSet.has(String(s.number))) return false; }   // v7.20.0 (A-INC-2): shipments with a term to review
+      else if (statusFilter === CUSTOMS_OPEN) { if (!customsOpenSet.has(String(s.number))) return false; }   // v7.10.4 (A-RV-15): shipments whose customs clearance is still open
+      else if (statusFilter !== "All" && statusFilter !== "Open" && s.status !== statusFilter) return false;
       if (!q) return true;
       const hay = [s.number, s.transportOrderNo, s.status, s.mode, s.purpose, ...(s.poRefs || []), ...(s.soRefs || []), ...(s.lotRefs || []), providerName(s.carrierId || s.forwarderId, contacts), ...(s.goods || []).map(g => g.product)].join(" ").toLowerCase();
       return hay.includes(q);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sorted, query, modeFilter, statusFilter, contacts, archive]);
+  }, [sorted, query, modeFilter, statusFilter, contacts, archive, customsOpenSet, termsShipmentSet]);
   const selected = shipments.find(s => s.id === selectedId) || filtered[0] || shipments[0] || null;
 
   // v6.58.0 one-time reconcile: shipments that reached Loaded/Arrived before
@@ -1366,6 +1316,7 @@ export default function Shipments({ archive = null,
   }, [shipments]);
 
   async function saveShipment(next) {
+    { const f = fillEmptyPlaces(next, { orders: extOrders || [], lots: extLots || [] }); if (f.filled.length) next = f.next; }   // v7.9.2 (A-INC-1): empty places filled from their owners, never overwritten
     // v6.66.0 (owner ruling): over-shipping an SO is confirm-gated, not silent.
     const over = overShipReport(next, shipments, extOrders || []);
     if (over.length) {
@@ -1583,7 +1534,7 @@ export default function Shipments({ archive = null,
     // shipment with no goods posts nothing and still reports the movement as
     // done — the same class as the phantom receipts. Booking is never gated:
     // the transport order goes to the carrier before the goods are final.
-    const postBlock = shipmentPostBlockReason(sh, status);
+    const postBlock = shipmentPostBlockReason(sh, status, { orders: extOrders || [], lots: extLots || [] });   // v7.9.1 (A-SHP-GATE-1)
     if (postBlock) {
       await shConfirm({ tone: "warn", title: `${sh.number} has no goods`, message: postBlock, confirmLabel: "OK" });
       return;
@@ -1799,14 +1750,16 @@ export default function Shipments({ archive = null,
         <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "grid", gap: 10 }}>
             <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}</Sel></div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}<option value={CUSTOMS_OPEN}>{CUSTOMS_OPEN} ({customsOpenSet.size})</option><option value={TERMS_REVIEW}>{TERMS_REVIEW} ({termsAll.length})</option></Sel></div>
           </div>
           <div style={{ overflow: "auto", flex: 1 }}>
-            {filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
+            {statusFilter === TERMS_REVIEW   // v7.20.0 (A-INC-2): the review — one line per inconsistency, sales and purchases included; a shipment line opens its editor
+              ? <TermsReviewList findings={termsShown} onOpenShipment={(no: string) => { const sh = shipments.find((x: any) => String(x.number) === String(no)); if (sh) { setSelectedId(sh.id); setEditShipment(sh); } }} />
+              : filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
           </div>
         </Card>
         <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
+          {selected ? <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} termsFindings={termsAll.filter(x => x.shipment === String(selected.number))} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
             onMarkTOSent={(key: string) => { updateShipment(selected.id, (s: any) => ({ ...s, transportOrders: { ...(s.transportOrders || {}), [key]: { sentAt: todayISO(), told: sentCargoSnapshot(s, packagingTypes || []) } }, confirmationStatus: "Sent", confirmationSentAt: s.confirmationSentAt || todayISO() })); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "status", summary: `Transport order ${key} marked sent` }); }}
             onStuffing={(rows: any[]) => { updateShipment(selected.id, (s: any) => applyStuffingReport(s, rows, { nextId })); setToast(`${selected.number}: ${rows.length} container(s) created from the forwarder's report.`); }}
             onDevanning={(rows: any[]) => {
@@ -1821,13 +1774,14 @@ export default function Shipments({ archive = null,
       </div>
     </div>
 
-    {showCreate && <CreateShipmentModal pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
+    {showCreate && <CreateShipmentModal productCatalog={productCatalogProp} pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}
     {editShipment && <EditShipmentModal shipment={editShipment} contacts={contacts} lots={lots} pos={pos} orders={orders} packagingTypes={packagingTypes} allShipmentsForCap={shipments} invoices={extInvoices} onCancel={() => setEditShipment(null)} onSave={saveShipment} />}
     {showCustomsImport && <CustomsImportModal shipments={shipments} invoices={extInvoices} onClose={() => setShowCustomsImport(false)} setShipments={(next: any[]) => { setShipments(() => next); notifySaved("customs files"); }} />}
     {protocolShipment && <LoadingProtocolModal
       shipment={protocolShipment}
       contacts={contacts}
       pos={pos}
+      lots={lots}   /* v7.15.2 */
       packagingTypes={packagingTypes.length ? packagingTypes : PACKAGING_SEED}
       allShipments={shipments}
       companyName={COMPANY.name}

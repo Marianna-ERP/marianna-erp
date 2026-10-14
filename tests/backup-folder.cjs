@@ -36,8 +36,8 @@ const eq = (a, b, m) => { if (a !== b) throw new Error((m ? m + ": " : "") + JSO
   console.log("BACKUP FOLDER ENGINE (simulated Chrome folder)");
   const folder = simulatedFolder("MARIANNA backups");
   window.showDirectoryPicker = async () => folder;
-  localStorage.setItem("marianna-erp:v2:pos", JSON.stringify([{ number: "PO-2026-0040", supplier: { name: "Grójecki Owoc" } }]));
-  localStorage.setItem("marianna-erp:v2:contacts", JSON.stringify([{ name: "Grójecki Owoc" }]));
+  localStorage.setItem("marianna-erp:v2:pos", JSON.stringify([{ number: "PO-2026-0040", supplier: { name: "Pavamane Owoc" } }]));
+  localStorage.setItem("marianna-erp:v2:contacts", JSON.stringify([{ name: "Pavamane Owoc" }]));
   const AB = require(path.resolve("./src/autoBackup"));
   const U = require(path.resolve("./src/useLocalStoredState"));
   const D = require(path.resolve("./src/autoBackup.domain"));
@@ -48,7 +48,7 @@ const eq = (a, b, m) => { if (a !== b) throw new Error((m ? m + ": " : "") + JSO
     const content = folder.files.get(names[0]); const p = JSON.parse(content);
     eq(p._meta.app, "marianna-erp"); eq(p.pos[0].number, "PO-2026-0040");
     eq(content.replace(/"exportedAt": "[^"]*"/, ""), U.exportAllData().replace(/"exportedAt": "[^"]*"/, ""), "same bytes as Export all data (apart from the time stamp)");
-    ok(U.importAllData(content, { autoBackup: false }).ok, "Import accepts it");
+    ok(require(path.resolve("./src/remoteStore")).storesFromExport(content).stores.pos, "v7.21.0 (A-RV-19): the restore into the shared data reads it");
     const st = AB.getAutoBackupStatus(); eq(st.mode, "active"); eq(st.folderName, "MARIANNA backups"); eq(st.lastFileName, names[0]);
     eq(AB.bannerFor(st, D.localDay(new Date())), "none", "healthy: no banner");
   });

@@ -196,6 +196,177 @@ company is saved.
 - **Goods already in stock load where the lot is** (not at the producer).
 - Every window's **Close** button is drawn again.
 
+### Version 7.12 — the trade direction from the real ends (v7.12.0–7.12.3)
+
+- **One rule, worked out every time it is needed — nothing typed, nothing stored.**
+  *Where the goods start:* on their first trip (the producer's truck, the receipt of a PO) the
+  producer's country; on a later trip of goods already received, the shipment's starting place
+  (filled from where the lots are), else the producer.
+  *Where they end:* the sale's registered place, else the client's country — a typed address is
+  never read as a country; with no sale, the shipment's destination, then the PO's named place,
+  then Poland (our company).
+  Import, Export, Intra-EU or Cross-trade follows from whether each end is in the EU (the one
+  country list, the same as Counterparties → Countries).
+- **Shipment editor → Arrange → Trade direction** shows the answer and, under it, the two countries
+  it used and where each came from, e.g. "Slovenia (starting place) → Poland (client's country)".
+  When an end cannot be known it shows "—" and says which place to fill — it never guesses
+  "Import".
+- **Everyone reads the same answer:** the customs checks (an export asks for its declaration
+  reference as the proof for 0 % VAT), the lot's direction badge in Inventory (now with its two
+  countries), and the traceability report.
+- The directions typed in old versions were cleared once; the audit trail lists each
+  (HEAL-7.12.2). The direction is never set by hand — the places decide (owner, 8 Oct).
+
+### Version 7.11 — warnings per line, all lot warnings, hand-set status shown (v7.11.0–7.11.5)
+
+- **"More than ordered", per line:** when you create a shipment from a PO and the kilos of one
+  line (already on this PO's shipments plus what this truck loads) go more than 1 kg over that
+  line's order, an amber sentence names the line: "… would be over-received by 500 kg — ordered …,
+  arriving …". It is a warning, never a block — over-loading is recorded as variance. (Before
+  v7.11.0 this warning added up the whole PO and, in practice, never appeared.)
+- **All four lot warnings, in amber**, on the Inventory list and on the lot: still expected after
+  10 days; received kilos 5 % or more off the order; **movements with no shipment, note or
+  reason**; **stock in store more than 30 days** since its last receipt.
+- **Lots received twice** (the "+100 %" badge, kept as history) no longer get the ±5 % warning on
+  top — the badge already says it.
+- **A sales order status set by hand** shows, next to the status: "set by hand — *the reason* ·
+  *date*".
+- **Loading protocol → "+ Pallet"** gives the new pallet the product, variety and calibre of the
+  last pallet that carries goods.
+
+### Version 7.10 — checks connected to the screens (v7.10.0–7.10.6)
+
+- **A claim's cost chain also offers the sale's freight:** besides the lots' own costs, the chain
+  now lists the delivery and return freight of the sales that carried those lots (outbound
+  shipments only — inbound freight is already in the lot's cost). It is scaled to the affected
+  share like the rest of the chain.
+- **The notice deadline follows the agreement:** when a claim is linked to a company and that
+  company has **Notice days (claims)** filled in (Counterparties → the company's terms), the
+  suggested deadline uses those days and says "Agreement with …". Otherwise the usual default
+  applies (CMR 7 days, Hague-Visby 3, commercial 14 / 30). A date someone typed is never replaced.
+- **Archived companies leave the lists you pick from:** carriers, forwarders, customs agents,
+  cost suppliers on a shipment, the party of an invoice or a finance note, warehouses on an
+  imported cost line, and the suggestions of the planning sheet and the sorting window. A document
+  that already names an archived company keeps showing it, marked **(archived)**. Counterparties
+  itself and the warehouse-charges report still show them.
+- **Lot warnings, in amber:** a lot still **expected more than 10 days** after its loading date,
+  and a lot whose **received kilos are 5 % or more** away from what was ordered, are marked on the
+  Inventory list (hover for the sentence) and explained on the lot itself.
+- **Shipments → filter → "Customs open (N)":** the shipments whose customs clearance applies and
+  is not yet Cleared, without opening each one.
+- **Loading protocol → "✓ Loaded exactly as printed":** one click marks every pallet that carries
+  goods Boxes OK = Tak, Goods OK = Tak and fills an empty remark with "Brak"; spare lines stay blank.
+- **A sales order status set by hand asks why:** when you choose a status the shipments do not
+  show yet, the app asks for the reason and keeps it on the order. No reason, no change.
+
+### Version 7.9 — Incoterms 2020 (v7.9.0–7.9.2)
+
+- The app knows the eleven ICC Incoterms® 2020 rules: for each, where the RISK passes (delivery
+  point), up to where the seller PAYS carriage (named place — different from the risk point for
+  CFR, CIF, CPT and CIP), who clears export and import, and the seller's insurance (CIF: minimum
+  Institute Cargo Clauses C; CIP: clauses A).
+- **A shipment moves on only when what it carries is confirmed:** it may be booked on a draft
+  sale and on expected goods (the transport orders go out early), but it cannot become Loaded
+  or later while a sale is still a Draft or a lot has no real kilos — the message names each.
+- **Empty places fill themselves when a shipment is saved:** origin from where the goods are,
+  the sea leg and the road pre-carriage from the booking's ports, the destination from the
+  sale's named place. A place someone set is never overwritten.
+
+### Version 7.8 — references, lot card, PO layout, producer's settlement (v7.8.0–7.8.3)
+
+- **The producer's reference is unique:** the supplier's-truck window says "Already used on PO-…"
+  and will not confirm; spaces, dashes and capitals do not count; the data issues list any
+  duplicates already in the data.
+- **Sales report:** "Producer's provisional invoice <number>".
+- **Lot card:** the status badge and "from PO-…" once on the left; under the product, the
+  supplier, when it arrived (or is expected) and WHERE the goods are now.
+- **PO view:** Line items | Supplier first, then the supplier's truck and (consignment) the
+  settlement, both full width.
+- **Consignment:** the box on the PO is the **Producer's settlement**; people with Finance and P/L
+  see "Result of this truck → Finance", where **Consignment trucks — our result** lists our
+  commission per truck (own non-recharged costs and overheads not yet deducted).
+
+### Version 7.7 — selling ahead, the lot picker, leftovers retired (v7.7.0–7.7.2)
+
+- **A lot not yet received** offers its expected kilos (as class I, less what other sales already
+  reserved) in the sales-order picker, so selling ahead works from the screen.
+- **The lot picker:** "Choose the lot for line N", with how many lots have kilos available; lots
+  you can sell come first (in stock, expected, direct) with the available kilos large and green;
+  shipped, delivered or sold-out lots fold into "Show not available (N)"; the text is readable.
+- **Retired on the shared data:** the load-plans and logistics-points stores, the demo-places
+  fallback, the "Hidden" locations chip, the per-browser role, and seven pre-v7 one-time repairs
+  that still ran silently at every start.
+
+### Version 7.6 — the Locations tab (v7.6.0–7.6.2)
+
+- **Counterparties → Locations** (formerly Places) works like Companies and People: a search
+  box, filter chips (All · Ports & airports · Border crossings · Customs · Companies' places ·
+  Hidden), one table with actions — **Edit** and **Remove** for your own locations, **open
+  company →** for a company's legal address — and **+ New location** in a window.
+- A location can **belong to a company** (its warehouse, its second farm…). The company's card
+  lists its LOCATIONS — the legal address when ticked, and its own sites — with
+  **+ add location**, which opens the window already set to that company.
+
+### Version 7.5 — roles (v7.5.0–7.5.2)
+
+- **Settings → Roles:** General Manager, Administration, Finance, Operations, Sales, Warehouse —
+  each with its modules (and Finance options) ticked once. The six arrive as a proposal: press
+  **Save** to adopt them, then adjust; **+ Add role** for another. Saving a role updates at once
+  the rights of everyone who has it.
+- **Settings → Users:** each person is one row — name · role · sign-in e-mail · rights
+  ("Operations + invoices"). Rows are read-only; **Edit** unlocks one; **+ Add user** opens an
+  empty row. A person can get extra modules beyond their role ("extra modules for this
+  person"). The General Manager role makes the owner. **Save users** stays the only way to
+  write, and refuses a person without a role or a sign-in e-mail.
+- Existing users keep their old ticks until a role is chosen for them — choose a role for each
+  and save once.
+- The per-browser "Current user & role" section is gone on the shared data.
+
+### Version 7.4 — recover from a backup (v7.4.0–7.4.2)
+
+- **Settings → Recover from a backup** (General Manager): choose a backup file, or a Supabase
+  snapshot once step 6 of the set-up guide is done. The app compares it with today's data,
+  module by module: what is **missing now**, what is **different**, what was **added since**.
+  Tick what to bring back; each record returns with what it needs that is missing too (a PO
+  with its producer, a sale with its client…). Nothing that exists now is removed; a record
+  that differs is replaced only when ticked. The shared data as it was is downloaded first.
+- **Snapshots in Supabase** at 13:00 and 20:00 (Warsaw, summer time; an hour earlier in
+  winter), kept 30 days — set up once with the SQL in the guide, step 6.
+- The full "Restore a backup into the shared data" stays below it, for a real disaster.
+
+### Version 7.3 — locations (v7.3.0–7.3.5)
+
+- **A company's legal address** is the address on documents. On the company form, the tick
+  **"Goods are loaded / delivered at this address"** decides whether it is also offered as a
+  loading / delivery place (on for producers, suppliers, clients and warehouses unless you
+  untick it; any other company can be ticked). Unticking never changes a document or a print:
+  the address keeps resolving everywhere it was used.
+- **No built-in places any more.** The ports a document uses (Venice / Marghera, Koper,
+  Trieste, Port Said, Rijeka, Damietta in the real data) became ordinary locations under the
+  same ids — edit or delete them like any other.
+- Places added on the shared data, and quality-report numbers, now reach everyone (before,
+  they stayed in the browser that created them).
+- The integrity check lists documents whose place no longer exists, with the text they read.
+- People → the arrow opens the company on the Companies tab.
+- Each browser deletes its old local snapshots by itself once its backup folder holds a new file.
+
+### Version 7.2 — Settings saved on purpose (v7.2.0–7.2.5)
+
+- **Users & permissions are edited as a draft.** Nothing is written until **Save users**; the
+  confirmation lists exactly what changes. A save is refused while the list would lock
+  anyone out: exactly one owner, with a sign-in e-mail; no empty or repeated names; no
+  e-mail on two entries; no malformed e-mail; you cannot remove your own access to Settings.
+  **Cancel** discards the draft; leaving the page with unsaved changes asks first.
+- **Company information** and **Numbering** have their own Save / Cancel too.
+- Company information no longer has "default bank account per currency" (nothing read it);
+  the Locations card left Settings — **Counterparties → Places** is the one place.
+- **Restore a backup into the shared data** (the former Import) is for the owner only.
+- On the shared data the browser takes **no local snapshots** any more; old ones can be
+  deleted from Settings once the automatic backup folder shows a recent file.
+- Since v7.1.12–7.1.15: a sign-in not yet linked chooses its own entry from the top bar
+  (only entries without an e-mail, recorded in the audit trail); an owner without a sign-in
+  e-mail counts as no owner, so Settings stays reachable until there is one.
+
 ### Version 7.1 — who you are, the result of a sale, links (v7.1.0–7.1.9)
 
 - **Who you are comes from your sign-in.** Each person in Settings → Users carries their

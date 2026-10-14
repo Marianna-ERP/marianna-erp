@@ -136,6 +136,7 @@ async function writeFile(fp: string): Promise<boolean> {
     clock = afterWrite(clock, fp, now.getTime());
     patchPrefs({ writtenFp: fp, wroteAt: now.getTime(), lastWrittenAt: now.toISOString(), lastFileName: name, filesKept: kept });
     setStatus({ mode: "active", busy: false, lastError: "", lastWrittenAt: now.toISOString(), lastFileName: name, filesKept: kept });
+    // v7.3.1 (A-SET-6, owner 7 Oct): a copy now exists outside the browser — on the shared data the old local snapshots go by themselves
     return true;
   } catch (err: any) {
     clock = afterFailure(clock, now.getTime());

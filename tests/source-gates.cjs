@@ -24,4 +24,34 @@ for (const r of rules) {
 // the clock itself: the suite must be running on Poland's clock
 const tz = Intl.DateTimeFormat().resolvedOptions().timeZone; checked++;
 if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the suites must run in Europe/Warsaw`); } else console.log("  ✓ clock: Europe/Warsaw");
+// v7.22.5 (A-RV-17, Batch F): THE APP'S OWN WINDOWS — no browser confirm / alert / prompt; only the crash screen keeps one,
+// because it is a class component shown when the app itself has failed
+{
+  checked++; const hits = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && f !== "ErrorBoundary.tsx").forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => { if (/window\.(confirm|alert|prompt)\(/.test(l.replace(/\/\/.*$/, ""))) hits.push(`${f}:${i + 1}`); }));
+  if (hits.length) { failed++; console.log(`  ✗ own windows: ${hits.length} browser pop-up(s) — ${hits.slice(0, 5).join(", ")}`); } else console.log("  ✓ own windows: no browser confirm, alert or prompt outside the crash screen");
+}
+// v7.22.3 (FZ-21, owner ruling 13 Oct): ONE INCOTERM TABLE — no file but incoterms.domain.ts names an incoterm (comments aside)
+{
+  checked++; const hits = [];
+  fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && f !== "incoterms.domain.ts").forEach(f => fs.readFileSync(path.join(src, f), "utf8").split("\n").forEach((l, i) => {
+    const s = l.trim(); if (s.startsWith("//") || s.startsWith("*") || s.startsWith("/*")) return;
+    if (/["'`](EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP|DAT)["'`]/.test(l.replace(/\/\/.*$/, ""))) hits.push(`${f}:${i + 1}`);
+  }));
+  if (hits.length) { failed++; console.log(`  ✗ one incoterm table: ${hits.length} line(s) name a term outside it — ${hits.slice(0, 5).join(", ")}`); } else console.log("  ✓ one incoterm table: no file outside incoterms.domain.ts names a term");
+}
+// v7.22.0 (FZ-19, Batch F): DEAD CODE CANNOT COME BACK UNSEEN — (1) every file of the app is reached from its start (index.tsx)
+{
+  checked++; const seen = new Set(); const files = fs.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && !/\.d\.ts$/.test(f));
+  const resolve = spec => ["", ".ts", ".tsx"].map(x => spec + x).find(c => files.includes(c));
+  const walk = f => { if (!f || seen.has(f)) return; seen.add(f); const t = fs.readFileSync(path.join(src, f), "utf8"); (t.match(/(?:from\s+|import\s*\(\s*|import\s+)["']\.\/([^"']+)["']/g) || []).forEach(m => walk(resolve(m.replace(/^.*["']\.\//, "").replace(/["']$/, "")))); };
+  walk("index.tsx"); const lost = files.filter(f => !seen.has(f));
+  if (lost.length) { failed++; console.log(`  ✗ reachable: ${lost.length} file(s) no screen can load — ${lost.join(", ")}`); } else console.log(`  ✓ reachable: all ${files.length} files are loaded from the app's start`);
+}
+// (2) no variable, import or function inside a file is declared and never used (TypeScript's own check)
+{
+  checked++; let out = ""; try { out = require("child_process").execSync("npx tsc --noEmit --noUnusedLocals -p .", { cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "pipe"], maxBuffer: 32 * 1024 * 1024 }).toString(); } catch (e) { out = String(e.stdout || "") + String(e.stderr || ""); }
+  const unused = (out.match(/error TS61(33|92|96|98)[^\n]*/g) || []);
+  if (unused.length) { failed++; console.log(`  ✗ unused: ${unused.length} — ${unused.slice(0, 3).join(" | ")}`); } else console.log("  ✓ unused: no variable, import or function is declared and never used");
+}
 console.log(`SOURCE GATES: ${checked - failed} passed, ${failed} failed`); process.exit(failed ? 1 : 0);

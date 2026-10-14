@@ -57,7 +57,11 @@ function statusFor(inv: any, paid: number): string {
   const gross = n(inv?.grossAmount);
   if (gross > 0 && paid >= gross - 0.01) return "Paid";
   if (paid > 0) return "Partially paid";
-  return inv?.paymentStatus === "Paid" || inv?.paymentStatus === "Partially paid" ? "Sent" : (inv?.paymentStatus || "Draft");
+  // v7.16.0 (AUD-23): the last payment removed — back to where the invoice stood before it was paid. A sales invoice we
+  // issued had been sent; a cost invoice we RECEIVED was never 'Sent' by us, and that word locks it (isLocked) → Issued.
+  if (inv?.paymentStatus === "Paid" || inv?.paymentStatus === "Partially paid")
+    return String(inv?.kind || "").toUpperCase() === "SALES" || inv?.fakturownia?.exported || inv?.sentAt ? "Sent" : "Issued";
+  return inv?.paymentStatus || "Draft";
 }
 
 /** Append a payment event; recomputes the derived paidAmount + paymentStatus. */
@@ -202,4 +206,29 @@ export function clientExposurePLN(clientName: any, invoices: any[]): number {
     if (out > 0.005) total += out * (n(i.fxRate) || 1);
   });
   return r2(total);
+}
+
+// ── v7.13.5 (A-AU-2, owner 9 Oct): exchange differences per client — the season's realised rate against the invoiced one ──
+// For every payment of a foreign-currency invoice that carries its NBP rate: what was paid, at the invoice's rate and at the
+// payment's rate, weighted by the amounts (each instalment counts for what it paid). Gain/loss signed as realizedFxPLN.
+export interface FxClientRow { counterparty: string; currency: string; side: "receivable" | "payable"; paid: number; avgInvoiceRate: number; avgPaymentRate: number; gainPLN: number; payments: number; }
+export function fxDifferencesByCounterparty(invoices: any[]): FxClientRow[] {
+  const m = new Map<string, FxClientRow & { _inv: number; _pay: number }>();
+  (invoices || []).forEach((inv: any) => {
+    const cur = String(inv?.currency || "PLN").toUpperCase(); const ir = n(inv?.fxRate);
+    if (!inv || cur === "PLN" || inv.paymentStatus === "Cancelled" || !(ir > 0)) return;
+    const side: "receivable" | "payable" = inv.kind === "SALES" ? "receivable" : "payable";
+    const who = String(inv.counterparty?.name || inv.counterpartyName || "—");
+    normalizeInvoicePayments(inv).forEach((p: any) => {
+      const pr = n(p?.settlementFxRate), a = n(p?.amount); if (!(pr > 0) || !(a > 0)) return;
+      const k = `${who}|${cur}|${side}`;
+      const row = m.get(k) || { counterparty: who, currency: cur, side, paid: 0, avgInvoiceRate: 0, avgPaymentRate: 0, gainPLN: 0, payments: 0, _inv: 0, _pay: 0 };
+      row.paid += a; row._inv += a * ir; row._pay += a * pr; row.payments += 1;
+      const d = (pr - ir) * a; row.gainPLN += side === "receivable" ? d : -d;
+      m.set(k, row);
+    });
+  });
+  return Array.from(m.values()).map(r => ({ counterparty: r.counterparty, currency: r.currency, side: r.side, payments: r.payments, paid: r2(r.paid),
+    avgInvoiceRate: r.paid ? Math.round((r._inv / r.paid) * 10000) / 10000 : 0, avgPaymentRate: r.paid ? Math.round((r._pay / r.paid) * 10000) / 10000 : 0, gainPLN: r2(r.gainPLN) }))
+    .sort((a, b) => Math.abs(b.gainPLN) - Math.abs(a.gainPLN));
 }

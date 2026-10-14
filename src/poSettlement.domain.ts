@@ -1,6 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2, r0 } from "./format";
 import { gradeSplit } from "./seasonOps.domain";   // v6.99.108 (A-QC-6)
+import { nbpRateBeforeKnown } from "./fx";   // v7.18.6 (A-AU-12)
+import { localTodayISO } from "./dates";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // poSettlement.domain.ts — v6.90.0: THE TRUCK'S FINAL RESULT (settlement per PO)
 // Owner rulings 6 Sept 2026 (VEGA_PRO_REPORTING_MAPPING.md §1, §4, §5):
 //   V1 one PO = one truck → the settlement is FOR THE PO, summing its lots by variety
@@ -14,7 +17,7 @@ import { gradeSplit } from "./seasonOps.domain";   // v6.99.108 (A-QC-6)
 //   waste = kg counted, never sold; class II same lot as a grade
 // Pure. Reads the stores it needs; writes nothing.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export interface POSettlementRecord {
   id: any; poNumber: string; status: "Open" | "Closed"; number?: string;
@@ -50,19 +53,19 @@ export interface POSettlementCalc {
   fullySold: boolean; warnings: string[];
 }
 
-/** Default rate: the last sales invoice of the truck that carries an EUR rate; else the PO's own rate. */
-export function defaultTruckRate(po: any, lots: any[], orders: any[], invoices: any[]): number {
-  const soNums = new Set((orders || []).filter(o => (o.items || []).some((it: any) => lotsOfPO(po, lots).some(l => sourcesLot(it, l)))).map(o => String(o.number)));
-  const sinvs = (invoices || []).filter(i => i?.kind === "SALES" && i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "SO" && soNums.has(String(l.number))))
-    .sort((a, b) => String(a.issueDate || "").localeCompare(String(b.issueDate || "")));
-  const last = sinvs.slice(-1)[0];
-  const poCur = String(po?.currency || "EUR").toUpperCase();   // v6.99.84 (A-ST-1): the rate of the PO's currency, whichever it is
-  if (poCur === "PLN") return 1;
-  if (last && String(last.currency || "").toUpperCase() === poCur && num(last.fxRate) > 0) return num(last.fxRate);
-  if (num(po?.fxRate) > 0) return num(po.fxRate);
-  return 0;
+/** v7.18.6 (A-AU-12, owner 9 Oct): a settlement's rate is the NBP rate of the last working day BEFORE the settlement's date —
+ *  its closing date once closed (the rate stored then is kept), today while it is open. Not typed; the last sales invoice no
+ *  longer stands in for it. 0 = NBP not read yet (the screen reads it; a foreign settlement cannot be closed without it). */
+export function settlementRate(po: any, rec: any, todayISO: string = localTodayISO()): { rate: number; tableDate: string; kept: boolean } {
+  const cur = String(po?.currency || "EUR").toUpperCase();
+  if (cur === "PLN") return { rate: 1, tableDate: "", kept: false };
+  if (rec?.status === "Closed" && num(rec?.ratePLNperEUR) > 0) return { rate: num(rec.ratePLNperEUR), tableDate: S(rec.fxTableDate), kept: true };
+  const r = nbpRateBeforeKnown(cur, todayISO);
+  return { rate: r ? r.rate : 0, tableDate: r ? r.tableDate : "", kept: false };
 }
 
+/** v7.21.7 (AUD-29): the lot cost types the producer's statement counts as the warehouse's — by code, not by text. */
+export const WAREHOUSE_LOT_COST_TYPES = new Set(["storage", "warehouse", "warehousing", "sorting"]);
 export function computePOSettlement(input: {
   po: any; lots: any[]; orders: any[]; invoices?: any[]; shipments?: any[]; claims?: any[];
   ratePLNperEUR: any; provisionalEUR?: any; commissionPct: any; provisionalCurrency?: any; provisionalRate?: any; provisionalInvoiceNo?: any; financeNotes?: any[];
@@ -152,8 +155,10 @@ export function computePOSettlement(input: {
       if (kind === "Supplier") producerRecoveriesPLN += Math.abs(pln); else thirdPartyRecoveriesPLN += Math.abs(pln);   // G6
       return;
     }
-    const t = String(c.type || c.label || "").toLowerCase();
-    if (/warehouse|storage|handling|sorting|service/.test(t)) warehousePLN += pln; else additionalPLN += pln;
+    // v7.21.7 (AUD-29): sorted by the cost line's TYPE — the code picked from the list — never by words in its label. The warehouse's
+    // own work (storage, its handling, sorting) and every allocation of a warehouse invoice (WHINV-…) are warehouse; port handling,
+    // freight, customs, insurance and the rest are additional. Before, "Warehousing" lines fell outside and "handling" at a port fell in.
+    if (WAREHOUSE_LOT_COST_TYPES.has(String(c.type || "").trim().toLowerCase()) || src.startsWith("WHINV-")) warehousePLN += pln; else additionalPLN += pln;
   }));
   // G5: direct costs of the sales sourced from the truck (outbound shipments), by this truck's kg share
   (input.shipments || []).forEach((sh: any) => {
@@ -187,7 +192,8 @@ export function computePOSettlement(input: {
   if (!fullySold) warnings.push(`Not fully sold: ${lines.filter(l => l.onStockKg > 1).map(l => `${l.variety || l.lotNumber} ${l.onStockKg} kg on stock`).join(", ")} — this is an INTERIM report.`);
   return { poNumber: po.number, lines, grossPLN, creditNotesPLN, warehousePLN, additionalPLN, thirdPartyRecoveriesPLN, expensesPLN, producerRecoveriesPLN, netPLN,
     ratePLNperEUR: rate, netSalesEUR, commissionPct: pct, commissionEUR, netAfterCommissionEUR,
-    provisionalEUR, differenceEUR, expectedCreditNoteEUR: provisionalEUR > 0 ? r2(Math.max(0, -differenceEUR)) : 0, extraInvoiceEUR: provisionalEUR > 0 ? r2(Math.max(0, differenceEUR)) : 0,
+    // v7.16.2 (AUD-31): no rate → no net sales in the PO's currency → nothing can be expected from the producer (it was the whole provisional, at 1.0)
+    provisionalEUR, differenceEUR, expectedCreditNoteEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, -differenceEUR)) : 0, extraInvoiceEUR: provisionalEUR > 0 && rate > 0 ? r2(Math.max(0, differenceEUR)) : 0,
     transferEUR: r2(netAfterCommissionEUR), fullySold, warnings,
     currency, provisionalCurrency: provCur, provisionalOriginal: r2(provAmt),
     correctionEUR: provisionalEUR > 0 ? differenceEUR : 0, balanceEUR: provisionalEUR > 0 ? r2(differenceEUR - commissionEUR) : r2(netAfterCommissionEUR),
@@ -216,7 +222,7 @@ export function salesReportRows(calc: POSettlementCalc): Array<{ item: string; s
 /** V5: the producer's expected credit note (incoming CREDIT, status Expected) — or nothing when the difference is not in his favour. */
 export function expectedProducerCreditNote(po: any, calc: POSettlementCalc, deps: { nextId: () => any; todayISO: () => string }): any | null {
   if (!(calc.expectedCreditNoteEUR > 0)) return null;
-  const fx = calc.ratePLNperEUR || 1;
+  const fx = num(calc.ratePLNperEUR); if (!(fx > 0)) return null;   // v7.16.2 (AUD-31): no rate, no document — never booked at 1.0
   return { id: deps.nextId(), noteType: "CREDIT", direction: "incoming", issuedBy: "COUNTERPARTY", status: "Expected",
     partyName: po.supplier?.name || "Producer", partyId: po.supplier?.id ?? null, category: "Consignment adjustment",
     amount: calc.expectedCreditNoteEUR, currency: calc.currency || "EUR", fxRate: fx, amountPLN: r2(calc.expectedCreditNoteEUR * fx),
@@ -226,7 +232,7 @@ export function expectedProducerCreditNote(po: any, calc: POSettlementCalc, deps
 
 /** V4/V6: one commission invoice per truck, drafted by the run; the offset (compensation) is proposed, never posted silently. */
 export function commissionInvoiceDraft(po: any, calc: POSettlementCalc, settlement: POSettlementRecord, deps: { nextId: () => any; todayISO: () => string }): any {
-  const fx = calc.ratePLNperEUR || 1;
+  const fx = num(calc.ratePLNperEUR); if (!(fx > 0)) return null;   // v7.16.2 (AUD-31): no rate, no document — never booked at 1.0
   return { id: deps.nextId(), kind: "SALES", category: "COMMISSION", number: "", isProforma: false,
     counterparty: { id: po.supplier?.id ?? null, name: po.supplier?.name || "Producer", nip: po.supplier?.nip || "", address: po.supplier?.address || "" },
     issueDate: deps.todayISO(), saleDate: deps.todayISO(), dueDate: deps.todayISO(), currency: calc.currency || "EUR", fxRate: fx,
@@ -247,6 +253,7 @@ export function commissionRun(settlements: POSettlementRecord[], pos: any[], cal
     const calc = calcFor(po, s);
     if (!(calc.commissionEUR > 0)) return s;
     const inv = commissionInvoiceDraft(po, calc, s, deps);
+    if (!inv) return s;   // v7.16.2 (AUD-31): no rate on the settlement — no commission invoice
     invoices.push(inv);
     return { ...s, commissionInvoiceId: inv.id, runId };
   });
@@ -276,7 +283,7 @@ export function provisionalFromInvoice(inv: any): Partial<POSettlementRecord> & 
 // ─── v6.99.85 (A-CS-3): the producer's EXTRA INVOICE is expected in the register exactly as his credit note is ────────
 export function expectedProducerExtraInvoice(po: any, calc: POSettlementCalc, deps: { nextId: () => any; todayISO: () => string }): any | null {
   if (!(calc.extraInvoiceEUR > 0)) return null;
-  const fx = calc.ratePLNperEUR || 1;
+  const fx = num(calc.ratePLNperEUR); if (!(fx > 0)) return null;   // v7.16.2 (AUD-31): no rate, no document — never booked at 1.0
   return { id: deps.nextId(), noteType: "DEBIT", direction: "incoming", issuedBy: "COUNTERPARTY", status: "Expected",
     partyName: po.supplier?.name || "Producer", partyId: po.supplier?.id ?? null, category: "Consignment adjustment",
     amount: calc.extraInvoiceEUR, currency: calc.currency || "EUR", fxRate: fx, amountPLN: r2(calc.extraInvoiceEUR * fx),
@@ -289,7 +296,7 @@ export interface ConsignmentPosition { poNumber: string; producer: string; curre
 export function consignmentPositions(inp: { pos: any[]; lots: any[]; orders: any[]; invoices?: any[]; shipments?: any[]; claims?: any[]; financeNotes?: any[]; poSettlements?: any[] }): ConsignmentPosition[] {
   return (inp.pos || []).filter(p => p && String(p.pricingMode || "") === "consignment" && p.status !== "Cancelled").map(po => {
     const rec: any = (inp.poSettlements || []).find((s: any) => String(s.poNumber) === String(po.number)) || {};
-    const rate = rec.ratePLNperEUR ?? defaultTruckRate(po, inp.lots, inp.orders, inp.invoices || []);
+    const rate = settlementRate(po, rec).rate;   // v7.18.6 (A-AU-12): NBP, not a typed rate nor the last sales invoice
     const calc = computePOSettlement({ po, lots: inp.lots, orders: inp.orders, invoices: inp.invoices || [], shipments: inp.shipments || [], claims: inp.claims || [], financeNotes: inp.financeNotes || [], ratePLNperEUR: rate, provisionalEUR: rec.provisionalEUR, commissionPct: rec.commissionPct ?? 0, provisionalCurrency: rec.provisionalCurrency, provisionalRate: rec.provisionalRate, provisionalInvoiceNo: rec.provisionalInvoiceNo });
     const sum = (k: keyof VarietyLine) => calc.lines.reduce((a, l) => a + num(l[k]), 0);
     return { poNumber: po.number, producer: S(po.supplier?.name), currency: calc.currency, state: rec.status === "Closed" ? "closed" : (calc.fullySold ? "open" : "interim"), settlementNumber: S(rec.number),

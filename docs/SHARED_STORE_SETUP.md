@@ -73,3 +73,39 @@ From then on: work you want to try goes to `test` first; when it is right, the s
 
 ## What does NOT change
 Backups, Export / Import and the auto-backup folder keep working exactly as before — they read this browser's copy, which is the shared copy once synced.
+
+
+## Step 6 — the twice-a-day snapshots (A-REC-2, v7.4.1)
+Supabase → **SQL Editor** → New query → paste → **Run** (once, on the REAL project; on the TEST project too if you want snapshots there).
+
+```sql
+-- the whole shared data copied at 13:00 and 20:00 Warsaw, kept 30 days
+create extension if not exists pg_cron;
+create table if not exists public.store_snapshots (
+  id bigserial primary key,
+  taken_at timestamptz not null,
+  key text not null,
+  data jsonb not null
+);
+create index if not exists store_snapshots_taken_at on public.store_snapshots (taken_at desc);
+alter table public.store_snapshots enable row level security;
+drop policy if exists "marianna read snapshots" on public.store_snapshots;
+create policy "marianna read snapshots" on public.store_snapshots for select to authenticated using (true);
+
+create or replace function public.take_store_snapshot() returns void language plpgsql security definer as $$
+declare t timestamptz := date_trunc('minute', now());
+begin
+  insert into public.store_snapshots (taken_at, key, data) select t, key, data from public.stores;
+  delete from public.store_snapshots where taken_at < now() - interval '30 days';
+end $$;
+
+-- the schedule runs in UTC: 11:00 and 18:00 UTC = 13:00 and 20:00 in Warsaw in summer (12:00 and 19:00 in winter)
+select cron.unschedule(jobid) from cron.job where jobname in ('marianna-snapshot-midday', 'marianna-snapshot-evening');
+select cron.schedule('marianna-snapshot-midday',  '0 11 * * *', $$select public.take_store_snapshot()$$);
+select cron.schedule('marianna-snapshot-evening', '0 18 * * *', $$select public.take_store_snapshot()$$);
+
+-- take one now, to see it work
+select public.take_store_snapshot();
+```
+It should finish without an error. Settings → **Recover from a backup** then lists the snapshots ("7 Oct 13:00 …") beside backup files.
+If Supabase says the extension is not available, open **Database → Extensions**, switch on **pg_cron**, and run the block again.

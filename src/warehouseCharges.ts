@@ -1,3 +1,6 @@
+import { counterpartyLocations } from "./locations";   // v7.21.12 (A-RV-35): a warehouse's sites are its own locations
+import { findPackaging, PACKAGING_SEED } from "./packaging.domain";   // v7.21.12 (A-RV-35): a lot's pallets from its packaging
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─── v6.5.0: WAREHOUSE CHARGES ENGINE ───────────────────────────────────────
 // Computes EXPECTED rented-warehouse charges per lot from its movement history,
 // so the warehouse's invoice can be double-checked line by line.
@@ -49,7 +52,7 @@ export interface LotWarehouseCharges {
   notes: string[];
 }
 
-function safeN(v: any): number { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; }
+function safeN(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function r2(n: number): number { return Math.round(n * 100) / 100; }
 function dayMs(d: string): number {
   // date-only midnight (local) — tolerate "YYYY-MM-DDTHH:mm" legacy values
@@ -61,12 +64,30 @@ function dayMs(d: string): number {
 const DAY = 86400000;
 
 // Resolve which warehouse counterparty (with a tariff) operates a location.
+/** v7.21.12 (A-RV-35, owner 11 Oct — P-8): the sites a warehouse's tariff applies at are the warehouse company's OWN locations
+ *  (its address and its other addresses, by their site ids) — derived, not ticked; a site ticked by hand still counts. */
+export function tariffSiteIds(c: any): Set<string> {
+  const ids = new Set<string>(((c?.warehouseTariff?.locationIds || []) as any[]).map(String));
+  if (c?.siteId != null && c.siteId !== "") ids.add(String(c.siteId));
+  (c?.extraAddresses || []).forEach((a: any) => { if (a && typeof a === "object" && a.siteId != null && a.siteId !== "") ids.add(String(a.siteId)); });
+  try { counterpartyLocations([c]).forEach((l: any) => { if (l && l.id != null) ids.add(String(l.id)); }); } catch { /* not a place of its own */ }
+  return ids;
+}
+/** v7.21.12 (A-RV-35): a lot's pallets — its own count when one is recorded, else worked out from its received kilos and its packaging
+ *  (kilos ÷ the box's capacity = boxes, boxes ÷ boxes per pallet = pallets, each rounded up), as the loading protocol counts them. */
+export function lotPallets(lot: any, receivedKg: number, types: any[] = PACKAGING_SEED as any[]): { pallets: number; derived: boolean; from: string } {
+  const own = safeN(lot?.pallets); if (own > 0) return { pallets: own, derived: false, from: "" };
+  const pt: any = findPackaging(types as any, lot?.packagingId || lot?.packaging);
+  const cap = safeN(pt?.capacityKg), per = safeN(pt?.boxesPerPallet), kg = safeN(receivedKg);
+  if (!(cap > 0 && per > 0 && kg > 0)) return { pallets: 0, derived: false, from: "" };
+  return { pallets: Math.ceil(Math.ceil(kg / cap - 1e-9) / per - 1e-9), derived: true, from: `${pt.label || pt.id}: ${per} boxes a pallet` };
+}
 export function warehouseForLocation(contacts: any[], locationId: any): { warehouse: any; tariff: WarehouseTariff } | null {
   if (locationId === null || locationId === undefined || locationId === "") return null;
   for (const c of contacts || []) {
     const t = c?.warehouseTariff;
     if (!t) continue;
-    if ((t.locationIds || []).map(String).includes(String(locationId))) return { warehouse: c, tariff: t };
+    if (tariffSiteIds(c).has(String(locationId))) return { warehouse: c, tariff: t };   // v7.21.12 (A-RV-35): its own locations
   }
   return null;
 }
@@ -147,14 +168,16 @@ export function computeLotWarehouseCharges(
   lot: any,
   contacts: any[],
   asOfISO: string,
-  win?: ChargeWindow
+  win?: ChargeWindow,
+  warehouseId?: any,
+  packagingTypes?: any[]   // v7.21.12 (A-RV-35): to work a lot's pallets out from its packaging
 ): LotWarehouseCharges | null {
-  const { periods, firstInDate } = computeStoragePeriods(lot, asOfISO);
-  // Tariff resolves per stored location; in practice a lot sits in one tariffed
-  // warehouse. Use the first tariffed location found among periods (or lot.locationId).
+  const { periods, firstInDate, receivedKg } = computeStoragePeriods(lot, asOfISO);
+  // v7.19.5 (AUD-37): a NAMED warehouse is priced by its id, for its own days (a lot that moved between two warehouses is charged
+  // at each); with none named (the lot's own view), the first tariffed warehouse the lot reached, as before.
   let match = null as any;
-  for (const p of periods) { match = warehouseForLocation(contacts, p.locationId); if (match) break; }
-  if (!match) match = warehouseForLocation(contacts, lot?.locationId);
+  if (warehouseId !== undefined && warehouseId !== null && warehouseId !== "") { const w = (contacts || []).find((c: any) => String(c?.id) === String(warehouseId)); match = w && w.warehouseTariff ? { warehouse: w, tariff: w.warehouseTariff } : null; }
+  else { for (const p of periods) { match = warehouseForLocation(contacts, p.locationId); if (match) break; } if (!match) match = warehouseForLocation(contacts, lot?.locationId); }
   if (!match || !tariffHasRates(match.tariff)) return null;
   const t: WarehouseTariff = match.tariff;
   const currency = t.currency || "PLN";
@@ -164,15 +187,19 @@ export function computeLotWarehouseCharges(
   const notes: string[] = [];
   if (freeDays > 0 && firstInDate) notes.push(`Free period: first ${freeDays} day(s) from receipt (${firstInDate}) not charged.`);
 
-  const tariffedPeriods = periods.filter(p => {
-    const m = warehouseForLocation(contacts, p.locationId);
-    return m && m.warehouse.id === match.warehouse.id;
-  });
+  const sites = tariffSiteIds(match.warehouse);   // v7.19.5 (AUD-37) · v7.21.12 (A-RV-35): this warehouse's own locations, derived — not ticked
+  const atSite = (id: any) => id !== undefined && id !== null && id !== "" && sites.has(String(id));
+  const tariffedPeriods = periods.filter(p => atSite(p.locationId));
   const kgDays = r2(tariffedPeriods.reduce((s, p) => s + p.kg * clipDays(p, win?.from, win?.to), 0));
   const chargeableKgDays = r2(tariffedPeriods.reduce((s, p) => s + p.kg * chargeableDaysOf(p, freeUntil, win?.from, win?.to), 0));
-  const pallets = safeN(lot?.pallets);
-  const palletDays = r2(tariffedPeriods.reduce((s, p) => s + pallets * clipDays(p, win?.from, win?.to), 0));
-  const chargeablePalletDays = r2(tariffedPeriods.reduce((s, p) => s + pallets * chargeableDaysOf(p, freeUntil, win?.from, win?.to), 0));
+  const pal = lotPallets(lot, receivedKg > 0 ? receivedKg : Math.max(0, ...periods.map(p => p.kg)), packagingTypes && packagingTypes.length ? packagingTypes : (PACKAGING_SEED as any[]));
+  const pallets = pal.pallets;
+  if (pal.derived) notes.push(`Pallets worked out from the received kilos and the packaging (${pal.from}): ${pal.pallets}.`);   // v7.21.12 (A-RV-35)
+  // v7.19.5 (AUD-37): the pallets follow the kilos still there — what has shipped frees its positions (whole pallets, rounded up)
+  const fullKg = receivedKg > 0 ? receivedKg : Math.max(0, ...periods.map(p => p.kg));
+  const palletsFor = (kg: number) => fullKg > 0 ? Math.min(pallets, Math.ceil(pallets * kg / fullKg - 1e-9)) : pallets;
+  const palletDays = r2(tariffedPeriods.reduce((s, p) => s + palletsFor(p.kg) * clipDays(p, win?.from, win?.to), 0));
+  const chargeablePalletDays = r2(tariffedPeriods.reduce((s, p) => s + palletsFor(p.kg) * chargeableDaysOf(p, freeUntil, win?.from, win?.to), 0));
 
   const lines: ChargeLine[] = [];
   // Storage: pallet basis takes precedence when its rate is set AND the lot has a pallet count.
@@ -194,17 +221,20 @@ export function computeLotWarehouseCharges(
     const x = dayMs(d);
     return (!win?.from || x >= dayMs(win.from)) && (!win?.to || x < dayMs(win.to));
   };
+  // v7.19.5 (AUD-37): handling and sorting only AT this warehouse's sites — a receipt or a dispatch elsewhere is not its work
+  const locAt = (d: string) => { const x = dayMs(d); const p = periods.filter(pp => dayMs(pp.from) <= x && x <= dayMs(pp.to)).slice(-1)[0]; return p ? p.locationId : lot?.locationId; };
+  const inHere = (m: any) => atSite(m.toId ?? locAt(m.date)), outHere = (m: any) => atSite(m.fromId ?? locAt(m.date));
   if (safeN(t.handlingInPerKg) > 0) {
-    const kgIn = (lot?.movements || []).filter((m: any) => m.type === "IN" && !m.voided && inWin(m.date)).reduce((s: number, m: any) => s + safeN(m.qtyKg), 0);
+    const kgIn = (lot?.movements || []).filter((m: any) => m.type === "IN" && !m.voided && inWin(m.date) && inHere(m)).reduce((s: number, m: any) => s + safeN(m.qtyKg), 0);
     if (kgIn > 0) { const a = r2(kgIn * safeN(t.handlingInPerKg)); lines.push({ kind: "handling_in", label: `Handling in · ${kgIn.toLocaleString("pl-PL")} kg @ ${t.handlingInPerKg}`, qty: kgIn, unit: "kg", rate: safeN(t.handlingInPerKg), amount: a, amountPLN: r2(a * fx) }); }
   }
   if (safeN(t.handlingOutPerKg) > 0) {
-    const kgOut = (lot?.movements || []).filter((m: any) => m.type === "SHIP_OUT" && !m.voided && inWin(m.date)).reduce((s: number, m: any) => s + safeN(m.qtyKg), 0);
+    const kgOut = (lot?.movements || []).filter((m: any) => m.type === "SHIP_OUT" && !m.voided && inWin(m.date) && outHere(m)).reduce((s: number, m: any) => s + safeN(m.qtyKg), 0);
     if (kgOut > 0) { const a = r2(kgOut * safeN(t.handlingOutPerKg)); lines.push({ kind: "handling_out", label: `Handling out · ${kgOut.toLocaleString("pl-PL")} kg @ ${t.handlingOutPerKg}`, qty: kgOut, unit: "kg", rate: safeN(t.handlingOutPerKg), amount: a, amountPLN: r2(a * fx) }); }
   }
   // Sorting events logged on the lot.
   if (safeN(t.sortingPerKg) > 0) {
-    (lot?.serviceEvents || []).filter((e: any) => e.type === "SORTING" && e.date && inWin(e.date)).forEach((e: any) => {
+    (lot?.serviceEvents || []).filter((e: any) => e.type === "SORTING" && e.date && inWin(e.date) && atSite(e.locationId ?? locAt(e.date))).forEach((e: any) => {
       const kgS = safeN(e.kg);
       if (kgS <= 0) return;
       const a = r2(kgS * safeN(t.sortingPerKg));
@@ -239,17 +269,15 @@ export function warehouseMonthCharges(
   contacts: any[],
   warehouseId: any,
   period: string,
-  todayISO: string
+  todayISO: string,
+  packagingTypes?: any[]   // v7.21.12 (A-RV-35)
 ): { rows: LotWarehouseCharges[]; total: number; totalPLN: number; currency: string } {
   const win = monthWindow(period);
   const asOf = win.to && dayMs(win.to) < dayMs(todayISO) ? win.to : todayISO;
   const rows: LotWarehouseCharges[] = [];
   (lots || []).forEach(lot => {
-    const r = computeLotWarehouseCharges(lot, contacts, asOf, win);
+    const r = computeLotWarehouseCharges(lot, contacts, asOf, win, warehouseId, packagingTypes);   // v7.19.5 (AUD-37): by the warehouse's id — was the first one matched, compared by NAME
     if (!r || !r.lines.length) return;
-    // keep only rows belonging to the selected warehouse
-    const m = (contacts || []).find((c: any) => String(c.id) === String(warehouseId));
-    if (!m || r.warehouseName !== m.name) return;
     rows.push(r);
   });
   const total = r2(rows.reduce((s, r) => s + r.total, 0));

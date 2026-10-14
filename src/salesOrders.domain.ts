@@ -51,10 +51,6 @@ export function productsMatch(a: any, b: any, varA?: any, varB?: any): boolean {
   if (va && vb) return va === vb;
   return true;
 }
-/** Variety-aware match between two line-like objects ({product, variety}). */
-export function linesMatch(x: any, y: any): boolean {
-  return productsMatch(x?.product, y?.product, x?.variety, y?.variety);
-}
 export function productVarietyKey(x: any): string {
   const p = normalizeProduct(x?.product);
   const v = normalizeProduct(x?.variety);

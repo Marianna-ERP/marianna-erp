@@ -3,8 +3,9 @@
 // unclear are decided here once: the status word, whether a lot is direct, its value in its own state, the arrival /
 // age cell, the two shipments behind a "+100 %" badge, and the flow when no shipment exists yet.
 import { S } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 /** Plain words on the badge: Expected · In transit · In stock · Shipped · Delivered · Cancelled (the stored value stays). */
 export function lotStatusLabel(status: any): { label: string; color: string; bg: string } {

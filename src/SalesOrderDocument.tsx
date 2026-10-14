@@ -3,10 +3,12 @@ import React from "react";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { formatDMY } from "./dates";
 import { paymentBasisOf, paymentTermsLabel } from "./po.domain";
-import { BiLbl, COMPANY, CONTACTS_REF, PrintLogo, destinationDisplay, destinationForPrint, netTotal } from "./SalesOrders";
+import { BiLbl, COMPANY, PrintLogo, destinationDisplay, destinationForPrint, netTotal, useSalesData } from "./SalesOrders";
+import { companyAddressLines } from "./useLocalStoredState";   // v7.19.6 (A-TD-5): the country printed when the address does not name it
 
 export function SODoc({ order }: any) {
-  const total = netTotal(order.items);
+  const sd = useSalesData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
+  const total = netTotal(order.items, sd);
   const currency = order.currency || "PLN";
   const paymentDisplay = paymentTermsLabel(paymentBasisOf(order), order.paymentDays, true);   // v6.99.23
   const destinationLabel = destinationDisplay(order);
@@ -17,14 +19,14 @@ export function SODoc({ order }: any) {
     { en: "Delivery date",      pl: "Data dostawy",           value: formatDMY(order.deliveryDate) },
     { en: "Incoterm",           pl: "Warunki Incoterms",      value: order.sellIncoterm,       strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
-    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationForPrint(order) || destinationLabel },   // v6.99.39 (D-1): with the address
+    { en: "Delivery to",        pl: "Miejsce dostawy",        value: destinationForPrint(order, sd) || destinationLabel },   // v6.99.39 (D-1): with the address
     ...(order.importPermitNo ? [{ en: "Import permit no.", pl: "Nr pozwolenia importowego", value: order.importPermitNo, strong: true }] : []),
     ...(order.acidNo ? [{ en: "ACID no.", pl: "Nr ACID", value: order.acidNo, strong: true }] : []),
   ];
   const clientRows = [
     { en: "Name",      pl: "Nazwa",     value: order.client?.name    || "—" },
     { en: "Country",   pl: "Kraj",      value: order.client?.country || "—" },
-    { en: "Address",   pl: "Adres",     value: formatAddress(addressOf(liveParty(order.client, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.client, CONTACTS_REF || [])?.address || "—" },   // v6.99.40 (ADDR-1)
+    { en: "Address",   pl: "Adres",     value: formatAddress(addressOf(liveParty(order.client, sd.contacts || [])), { oneLine: true }) || liveParty(order.client, sd.contacts || [])?.address || "—" },   // v6.99.40 (ADDR-1)
     { en: "NIP / VAT", pl: "NIP / VAT", value: order.client?.nip     || "—" },
     { en: "Contact",   pl: "Kontakt",   value: order.client?.contact || "—" },
   ];
@@ -65,7 +67,7 @@ export function SODoc({ order }: any) {
               <BiLbl en="Seller" pl="Sprzedawca" />
               <div style={{ marginTop: 4, fontWeight: 700, fontSize: 12 }}>{COMPANY.name}</div>
               <div style={{ fontSize: 11 }}>{COMPANY.person}</div>
-              {COMPANY.address.split("\n").map((l, i) => <div key={i} style={{ fontSize: 11 }}>{l}</div>)}
+              {companyAddressLines(COMPANY).map((l, i) => <div key={i} style={{ fontSize: 11 }}>{l}</div>)}
               <div style={{ fontSize: 11, marginTop: 2 }}><span style={{ fontWeight: 600 }}>NIP:</span> {COMPANY.nip}</div>
             </td>
           </tr>

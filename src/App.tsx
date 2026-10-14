@@ -1,4 +1,4 @@
-import { DocNavContext } from "./ui";
+import { DocNavContext, useConfirm } from "./ui";
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { checkIntegrity } from "./integrityCheck";
 import Dashboard from "./Dashboard";
@@ -11,7 +11,7 @@ import Finance from "./Finance";
 import Settings from "./Settings";
 import { PRODUCT_CATALOG_SEED } from "./productCatalog";
 import { PACKAGING_SEED } from "./packaging.domain";
-import { migrateReferencedSeeds, pruneOrphanMigratedSeeds, migratePlaceAddresses, stampSiteIds } from "./locations";
+import { stampSiteIds, ensureUsedBuiltinsAreOrdinary, usedLocationIds } from "./locations";
 import { normaliseLot } from "./seasonOps.domain";
 import { normalisePO } from "./po.domain";
 import { normaliseSO } from "./so.domain";
@@ -19,36 +19,38 @@ import { foldLegacyClaimFields } from "./claimsPlus.domain";
 import { normaliseInvoiceCategory } from "./invoicePlus.domain";
 import { normaliseCounterparty } from "./counterparty.domain";
 import { migrateAddressOn } from "./address.domain";
-import { healShipmentModel } from "./shipmentModel.domain";
+import { mapDocTypes } from "./shipmentModel.domain";   // v7.18.2 · v7.21.0 (A-RV-19): the pre-v7 shipment repair is gone
 import { migrateSaleLinesToLots } from "./salesOrders.domain";   // v6.99.127
 import { useSingleTab } from "./useSingleTab";   // v6.99.114 (AUD-02)
 import { useSharedStore, SharedStoreStatus, EnvironmentStrip } from "./SharedStoreGate";   // v6.99.148–149
-import { setFxSettings as applyFxSettings, fetchNbpRates } from "./fx";
+import { setFxSettings as applyFxSettings, fetchNbpRates, ensureNbpRange } from "./fx";   // v7.13.x (A-AU-2)
 import { poDirectFromSOs } from "./tradeFlow.domain";
-import { healRound645, healRound651 } from "./heal.v645";
-import { migrateClaims } from "./claims.domain";
 import Claims from "./Claims";
-import { costTypeLabel, costInventoryType } from "./Shipments";
-import { localTodayISO } from "./dates";
-import { nextId as globalNextId, nextId } from "./ids";
+import { localTodayISO, addDaysISO } from "./dates";
+import { nextId } from "./ids";
 import { SHELL_SEED } from "./shell_seed";
-import { useLocalStoredState, useStorageHealth, runMigrationsIfNeeded, compactLocalBackups } from "./useLocalStoredState";
+import { useLocalStoredState, useStorageHealth, dropLegacySnapshots, COMPANY_DEFAULTS } from "./useLocalStoredState";   // v7.21.0 (A-RV-19): no storage upgrade, no local snapshots
+import { setOurCountry } from "./tradeFlow.domain";   // v7.19.6 (A-TD-5)
 import { startAutoBackup, setBackupAllowed } from "./autoBackup";   // v6.99.70 (A-BK-1) · v7.1.8
 import { BackupBanner } from "./BackupPanel";
 import { setAuditSink, recordAudit } from "./audit";
-import { appendAudit } from "./auditTrail.domain";
+import { appendAudit, splitAuditOverflow, archiveAudit } from "./auditTrail.domain";
 import AuditTrail from "./AuditTrail";
 import { convertSettledRefsToEvents } from "./payments.domain";
+import { fxDatesNeeded, fxFillInvoice } from "./fxNbp.domain";   // v7.13.1 / v7.13.3 (A-AU-11 / A-AU-2)
+import { periodGuard } from "./periodClose.domain";   // v7.13.1 (A-AU-11): closed months are not re-rated
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
-import { primeIdsFrom } from "./ids";
 import Invoices from "./Invoices";
-import { migrateLegacyInvoices, stripPendingInvoices, migrateLegacyCreditNotes } from "./invoicing";
+import { migrateLegacyInvoices, stripPendingInvoices, foldWarehouseInvoiceStore } from "./invoicing";   // v7.21.4 (A-ST-10)
 import { syncOverheadOpCosts } from "./operationalCosts";
 import { normaliseStoredSoStatus } from "./statusOwnership.domain";
 import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn, hasOwner } from "./permissions.domain";
-import { readSession, isSharedMode, logout } from "./remoteStore";   // v7.1.0 (A-USR-1)
+import { readSession, logout } from "./remoteStore";   // v7.1.0 (A-USR-1)
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
+import { liveOnly, namedList } from "./masterData.domain";   // v7.17.1 (A-RV-07)
+import { linkSpellingOnDocs } from "./packaging.domain";   // v7.18.0 (A-AU-1)
+import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
 
@@ -57,7 +59,7 @@ import { dirtyEntries, saveAndCheck } from "./unsaved";
 // NOTE (v6.26.1): this call must sit AFTER all imports — CRA's eslint
 // `import/first` rule fails the build otherwise. That exact mistake broke the
 // v6.26.0 deploy; the release gate now runs the real CRA build to catch it.
-runMigrationsIfNeeded();
+dropLegacySnapshots();   // v7.21.0 (A-RV-19, owner ruling B 8 Oct): the single-browser mode is gone — its old local snapshots leave this browser's storage once
 
 // ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
 // Owns canonical state for the frontend prototype and passes it to each module.
@@ -192,7 +194,7 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "#AAA", paddingLeft: 16, whiteSpace: "nowrap" }}>
         {rightSlot}
-        <span title="App build version. Everyone sharing a JSON file must be on the same version." style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
+        <span title="App version — every browser updates itself when a new version is published" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
         {userSlot}{/* v7.0.1 (owner 6 Oct): the person using this browser — no longer the name written into the page */}
       </div>
     </div>
@@ -200,6 +202,7 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
 }
 
 export default function App() {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [contacts, _setContacts] = useLocalStoredState("contacts", SHELL_SEED.contacts);
   const [pos, setPOs] = useLocalStoredState("pos", SHELL_SEED.pos);
   const [lots, setLots] = useLocalStoredState("lots", SHELL_SEED.lots);
@@ -208,19 +211,20 @@ export default function App() {
   const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
   const [warehouseInvoices, setWarehouseInvoices] = useLocalStoredState("warehouseInvoices", SHELL_SEED.warehouseInvoices || []);
   const [settledRefs, setSettledRefs] = useLocalStoredState("settledRefs", []);
-  const [creditNotes, setCreditNotes] = useLocalStoredState("creditNotes", []);
+  const [creditNotes] = useLocalStoredState("creditNotes", []);
   const [invoices, setInvoices] = useLocalStoredState("invoices", []);
   const [productCatalog, setProductCatalog] = useLocalStoredState("productCatalog", PRODUCT_CATALOG_SEED);
   const [packagingTypes, setPackagingTypes] = useLocalStoredState("packagingTypes", PACKAGING_SEED);
   const [claims, setClaims] = useLocalStoredState("claims", []);
   // v6.56.0: load plans group the shipments of one commercial movement.
-  const [loadPlans] = useLocalStoredState("loadPlans", []);   // v6.99.124 (A-LP-1): kept as data, read by nothing
+  // v7.7.1 (A-RET-1): the load-plans store is retired (tab gone since v6.99.124)
   // v6.68.0 (F-1/F-4): advance payments (zaliczki) + bank accounts registry —
   // the two finance tables agreed pre-Supabase so the schema freezes complete.
   const [advancePayments, setAdvancePayments] = useLocalStoredState("advancePayments", []);
   const [bankAccounts, setBankAccounts] = useLocalStoredState("bankAccounts", []);
   // v6.79.0 (F-5/F-6, owner rulings): users & tick-box permissions; monthly budgets.
   const [users, setUsers] = useLocalStoredState("users", []);
+  const [roles, setRoles] = useLocalStoredState("roles", [] as any[]);   // v7.5.0 (A-ROLE-1)
   const [budgets, setBudgets] = useLocalStoredState("budgets", []);
   // v6.89.0 (consignment season): inspections (per lot), stock counts, defect catalogue (Settings).
   const [inspections, setInspections] = useLocalStoredState("inspections", []);
@@ -245,95 +249,79 @@ export default function App() {
   // v6.99.31 (owner): the quality tolerances per product and category (Unacceptable is always 0).
   // v6.99.3 (SE-1/SE-3): company identity and numbering prefixes as settings.
   const [company, setCompany] = useLocalStoredState("company", {});
+  setOurCountry(String((company as any)?.country || "").trim() || COMPANY_DEFAULTS.country);   // v7.19.6 (A-TD-5): the trade-direction rule reads Settings → Company
   const [numbering, setNumbering] = useLocalStoredState("numbering", {});
   // FX auto (owner): NBP table A on load — sets the reference rates when reachable; manual values win when typed.
-  useEffect(() => { fetchNbpRates().then(r => { if (r) setFxSettings((prev: any) => ({ ...(r as any), ...(prev || {}), _nbp: (r as any)._date })); }); // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchNbpRates().then(r => { if (r) setFxSettings((prev: any) => ({ ...(prev || {}), ...(r as any), _nbp: (r as any)._date })); });   /* v7.13.0 (A-AU-2): today's NBP wins over old typed rates */ // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { applyFxSettings(fxSettings || {}); }, [fxSettings]);
-
-  // ─── v6.45.0 one-time DATA HEAL (test-round root causes B + C) ──────────────
-  // Repairs: (C) shipments closed before the v6.44.0 close-posting fix (their
-  // lots never got movements → COGS/direct costs/weights/integrity wrong), and
-  // (B) goods rows the old matcher pointed at the wrong lot (re-tagged, wrong
-  // movements voided, goods re-posted, costs re-allocated). Runs once per
-  // browser (marker), is idempotent anyway, and records itself in the audit
-  // trail. See src/heal.v645.ts for the full reasoning.
+  // v7.12.2 (A-TD-3, owner 8 Oct): the trade directions typed before v6.99.6 are cleared ONCE per dataset — the places decide (A-TD-1),
+  // the readers ask the rule (A-TD-2). Each cleared value is named in the audit trail. Runs on the shared data too (this is new work).
   React.useEffect(() => {
     try {
-      const MARK = "marianna:heal:v6.45.0";
-      if (typeof window === "undefined" || healDone(MARK)) return;
-      const res = healRound645({ shipments, lots, orders }, {
-        todayISO: localTodayISO,
-        nextId: globalNextId,
-        costMapper: { inventoryType: costInventoryType, label: costTypeLabel },
-      });
+      const MARK = "marianna:heal:v7.12.2-trade-direction";
+      if (typeof window === "undefined" || healDone(MARK) || !(shipments || []).length) return;
+      const had = (shipments || []).filter((s: any) => s && s.tradeDirection);
       markHeal(MARK);
-      if (res.changed) {
-        setShipments(res.shipments);
-        setLots(res.lots);
-        try { recordAudit({ module: "System", docType: "Heal", docNumber: "HEAL-6.45.0", action: "healed", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
-      }
-    } catch (e) { console.error("heal v6.45.0 failed (left data untouched):", e); }
+      if (!had.length) return;
+      setShipments((prev: any[]) => (prev || []).map((s: any) => { if (!s || !s.tradeDirection) return s; const { tradeDirection, ...rest } = s; return rest; }));
+      recordAudit({ module: "Shipments", docType: "Heal", docNumber: "HEAL-7.12.2", action: "healed", summary: `Stored trade directions cleared — the places decide (A-TD-3): ${had.map((s: any) => `${s.number} ${s.tradeDirection}`).join(", ")}` });
+    } catch (e) { console.error("heal v7.12.2 failed (left data untouched):", e); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // v6.51.1: the same repair, runnable on demand from Settings.
-  function repairInventory() {
-    const res = healRound651({ shipments, lots });
-    if (res.changed) {
-      setLots(res.lots);
-      try { recordAudit({ module: "System", docType: "Repair", docNumber: "REPAIR-6.51.1", action: "healed", summary: res.notes.slice(0, 6).join(" | ") }); } catch {}
-    }
-    return res;
-  }
-
-  // ─── v6.51.0 heal: mis-posted transfers + outbound costs in landed cost ────
+  }, [shipments.length]);
+  // v7.18.2 (A-AU-4, owner 9 Oct): the shipment document types typed before the list are mapped to it ONCE per dataset — 'PL' →
+  // Packing list, 'Export declaration MRN' → Export declaration… anything unknown → Other, its words kept as the description.
+  // Each change is named in the audit trail. Deleted shipments are left as they are.
   React.useEffect(() => {
     try {
-      const MARK = "marianna:heal:v6.51.0";
-      if (typeof window === "undefined" || healDone(MARK)) return;
-      // v6.51.1: DO NOT claim to have healed before there is anything to heal.
-      // The previous version ran once on mount and wrote the marker unconditionally
-      // — so if the stores had not finished loading in that instant, the heal found
-      // nothing, marked itself done and never ran again. It now waits for real data
-      // and only writes the marker once it has actually processed some.
-      if (!(lots || []).length || !(shipments || []).length) return;
-      const res = healRound651({ shipments, lots });
+      const MARK = "marianna:heal:v7.18.2-doc-types";
+      if (typeof window === "undefined" || healDone(MARK) || !(shipments || []).length) return;
+      const log: string[] = []; (shipments || []).forEach((s: any) => mapDocTypes(s, log));
       markHeal(MARK);
-      if (res.changed) {
-        setLots(res.lots);
-        try { recordAudit({ module: "System", docType: "Heal", docNumber: "HEAL-6.51.0", action: "healed", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
-      }
-    } catch (e) { console.error("heal v6.51.0 failed (left data untouched):", e); }
+      if (!log.length) return;
+      setShipments((prev: any[]) => (prev || []).map((s: any) => mapDocTypes(s)));
+      recordAudit({ module: "Shipments", docType: "Heal", docNumber: "HEAL-7.18.2", action: "healed", summary: `Document types mapped to the one list (A-AU-4): ${log.join("; ")}` });
+    } catch (e) { console.error("heal v7.18.2 failed (left data untouched):", e); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lots.length, shipments.length]);
-
-  // ─── v6.48.0 CLAIMS re-home (Phase 1) ──────────────────────────────────────
-  // Lifts every existing claim into its own store: the producer claims nested in
-  // lot.claims[] and the client claims that only ever existed as CLAIM movements
-  // (unnumbered, statusless). The originals are left untouched — nothing writes
-  // to them any more, so keeping them means a migration bug can't destroy the
-  // only copy. Idempotent by provenance, and marker-guarded on top.
-  React.useEffect(() => {
-    try {
-      const MARK = "marianna:claims:migrated:v6.48.0";
-      if (typeof window === "undefined" || healDone(MARK)) return;
-      const res = migrateClaims({ lots, pos, orders, existing: claims },
-        { todayISO: localTodayISO, nextId: globalNextId });
-      markHeal(MARK);
-      if (res.changed) {
-        setClaims(res.claims);
-        try { recordAudit({ module: "Claims", docType: "Migration", docNumber: "CLAIMS-6.48.0", action: "migrated", summary: res.notes.slice(0, 6).join(" | ") + (res.notes.length > 6 ? ` | +${res.notes.length - 6} more` : "") }); } catch {}
-      }
-    } catch (e) { console.error("claims migration failed (left data untouched):", e); }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [shipments.length]);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
+  // v7.13.1 (A-AU-11) + v7.13.3 (A-AU-2), owner 9 Oct: a foreign-currency invoice carries the NBP rate of the last working day BEFORE
+  // its issue date, and every payment the rate of the last working day before the day the money was received. Whatever is not yet
+  // rated from NBP is filled when NBP is reachable (fxTableDate marks a rated invoice / payment) — the invoices imported before
+  // v7.13 carried today's reference instead (4.3228 on all 34 EUR invoices of the 2 Oct file). Closed months are never changed;
+  // they are named once. Each change goes to the audit trail.
+  const fxClosed = (d: any) => !!periodGuard(d, closedPeriods || []);
+  const fxPendingKey = fxDatesNeeded(invoices || [], fxClosed).join(",");
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = invoices || [];
+        const MARK = "marianna:heal:v7.13.1-closed-months";
+        if (!healDone(MARK)) {   // once: name the foreign invoices of closed months, left as they are
+          const left = list.filter((i: any) => i && String(i.currency || "PLN").toUpperCase() !== "PLN" && !i.fxTableDate && i.issueDate && fxClosed(i.issueDate)).map((i: any) => i.number);
+          markHeal(MARK); if (left.length) recordAudit({ module: "Invoices", docType: "Heal", docNumber: "FX-NBP", action: "healed", summary: `Closed months keep their rates (A-AU-11): ${left.join(", ")}` });
+        }
+        const dates = fxDatesNeeded(list, fxClosed); if (!dates.length) return;
+        const back = (iso: string, n: number) => addDaysISO(iso, -n);   // dates.ts (AUD-07/09)
+        await ensureNbpRange(back(dates[0], 14), back(dates[dates.length - 1], 1));
+        if (cancelled) return;
+        const log: string[] = []; const after = list.map((i: any) => fxFillInvoice(i, fxClosed, log));
+        if (after.some((x: any, k: number) => x !== list[k])) {
+          setInvoices((prev: any[]) => (prev || []).map((i: any) => fxFillInvoice(i, fxClosed, null)));
+          if (log.length) recordAudit({ module: "Invoices", docType: "Heal", docNumber: "FX-NBP", action: "healed", summary: `NBP rates of the day before (A-AU-2 / A-AU-11): ${log.join("; ")}` });
+        }
+      } catch (e) { console.error("NBP rates: left untouched", e); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fxPendingKey]);
+
   // v6.99.12: logisticsPoints store retired from the UI (kept in DATA_KEYS for old backups only)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [logisticsPoints, setLogisticsPoints] = useLocalStoredState("logisticsPoints", []);
+  // v7.7.1 (A-RET-1): the logistics-points store is retired
   // Current user role — drives P/L visibility. No login system yet; switchable in Settings.
-  const [userRole, setUserRole] = useLocalStoredState("userRole", "General Manager");
+  // v7.7.1 (A-RET-1): the per-browser role is retired — rights come from the role in Settings → Users
   const [userName, setUserName] = useLocalStoredState("userName", "");
   // v6.40.0: the audit logbook — passive, capped, exported with everything else.
   const [heals, setHeals] = useLocalStoredState("heals", {} as Record<string, string>);   // v6.99.145 (AUD-46): per DATASET, not per browser
@@ -341,12 +329,38 @@ export default function App() {
   const healDone = (k: string) => !!(healsRef.current || {})[k] || (typeof window !== "undefined" && !!window.localStorage.getItem(k) && (markHeal(k), true));   // a browser-level marker from before is carried into the dataset once
   function markHeal(k: string) { const stamp = new Date().toISOString(); healsRef.current = { ...(healsRef.current || {}), [k]: stamp }; setHeals((prev: any) => ({ ...(prev || {}), [k]: stamp })); }
   const [auditLog, setAuditLog] = useLocalStoredState("auditLog", []);
+  // v7.17.1 (A-RV-07): a deleted packaging type or catalog item leaves every picker — the modules get the live ones; Settings all
+  const livePackaging = useMemo(() => liveOnly(packagingTypes as any[]), [packagingTypes]);
+  const liveCatalog = useMemo(() => liveOnly(productCatalog as any[]), [productCatalog]);
+  // v7.18.0 (A-AU-1, owner 9 Oct): a packaging spelling typed on order lines before the picker is linked to its type ONCE, from
+  // Settings → Packaging types — every live PO / SO line written that way then names the type (and prints its name). Audited.
+  const linkPackagingSpelling = (key: string, type: any) => {
+    const types = (packagingTypes as any[]) || [];
+    const a = linkSpellingOnDocs(pos || [], key, type, types), b = linkSpellingOnDocs(orders || [], key, type, types);
+    if (!a.lines && !b.lines) return;
+    if (a.lines) setPOs((prev: any[]) => linkSpellingOnDocs(prev || [], key, type, types).docs);
+    if (b.lines) setOrders((prev: any[]) => linkSpellingOnDocs(prev || [], key, type, types).docs);
+    recordAudit({ module: "Settings", docType: "Packaging", docNumber: String(type.label), action: "updated", summary: `Typed packaging "${key}" linked to ${type.label} — ${a.lines + b.lines} line(s) on ${namedList([...a.changed, ...b.changed])}` });
+  };
+  // v7.18.1 (A-AU-3, owner 9 Oct): an address typed as a sale's destination becomes the client's site ONCE (Counterparties → Locations)
+  const linkSaleDestination = (key: string, site: { id: any; name: string }) => {
+    const r = linkSaleDestinationOn(orders || [], key, site); if (!r.changed.length) return;
+    setOrders((prev: any[]) => linkSaleDestinationOn(prev || [], key, site).orders);
+    recordAudit({ module: "Counterparties", docType: "Location", docNumber: String(site.name), action: "updated", summary: `Typed sale destination linked to the client's site "${site.name}" — ${namedList(r.changed)}` });
+  };
   setAuditSink((e: any) => setAuditLog((prev: any[]) => appendAudit(prev || [], {
     id: nextId(), // v6.79.0 (W-7): central counter — burst writes collided under Date.now()
     ts: new Date().toISOString(),
     user: who || userName || "user",
     ...e,
-  })));
+  }, Number.MAX_SAFE_INTEGER)));   // v7.17.4 (A-RV-12): nothing is dropped here — past the cap the oldest move to the archive (below)
+  const [, setAuditArchive] = useLocalStoredState("auditArchive", []);   // v7.17.4: kept in every backup and export (DATA_KEYS)
+  useEffect(() => {
+    const { over } = splitAuditOverflow(auditLog as any[]); if (!over.length) return;
+    const ids = new Set(over.map((x: any) => String(x.id)));
+    setAuditArchive((a: any[]) => archiveAudit(a || [], over));
+    setAuditLog((l: any[]) => (l || []).filter((x: any) => !ids.has(String(x.id))));
+  }, [auditLog]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   function setContactsCascade(update: any) {
     _setContacts(update);
@@ -359,18 +373,14 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contacts]);
 
-  // Keep the stable-id generator primed above every id already in loaded data, so a
-  // freshly minted id can never collide with one from storage or a JSON import.
-  useEffect(() => {
-    primeIdsFrom(contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts);
-  }, [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts]);
+  // v7.21.13 (FZ-15): the id counter is primed by every store as it is read or pulled (useLocalStoredState) — no longer seven of them here
 
   // Fold the four legacy invoice representations (SO pendingInvoices, warehouse
   // invoices, invoice-backed operational costs) into the unified Invoicing model.
   // Idempotent by source tag — safe to run on every relevant change; never duplicates.
   useEffect(() => {
     setInvoices((prev: any[]) => {
-      const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts, pos });
+      const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts });   // v7.22.1 (FZ-12): no purchase invoice is invented from an order
       return merged.length !== (prev || []).length ? merged : prev;
     });
     // v6.33.0 (A3-6): the register is now the sole owner — once this snapshot's
@@ -378,23 +388,18 @@ export default function App() {
     // from the orders. Same-reference return when clean, so no effect loop.
     setOrders((prev: any[]) => stripPendingInvoices(prev).orders);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, warehouseInvoices, operationalCosts, pos]);
-
-  // v6.86.0 (owner ruling): demo seed locations left the reference list; any still referenced
-  // by stored documents becomes a user-managed custom location so nothing resolves to blank.
+  }, [orders, warehouseInvoices, operationalCosts]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // v7.21.4 (A-ST-10, owner 9 Oct batch): the separate warehouse-invoices store is folded into the register once — what only the store
+  // knew (the warehouse, the month, an allocation) moves onto the register invoice, the lots' cost lines follow it, the store empties
   useEffect(() => {
-    const ids = new Set<string>();
-    (lots || []).forEach((l: any) => { ids.add(String(l.locationId)); ids.add(String(l.baseLocationId)); (l.movements || []).forEach((m: any) => { ids.add(String(m.toId)); ids.add(String(m.fromId)); }); });
-    (pos || []).forEach((p: any) => ids.add(String(p.destinationLocationId)));
-    (orders || []).forEach((o: any) => ids.add(String(o.destinationLocationId)));
-    (shipments || []).forEach((s: any) => (s.legs || []).forEach((lg: any) => { ids.add(String(lg.fromLocationId)); ids.add(String(lg.toLocationId)); }));
-    const added = migrateReferencedSeeds(ids);
-    migratePlaceAddresses();   // v6.99.41 (ADDR-3): places get their parts once, like the counterparties
-    const dropped = pruneOrphanMigratedSeeds(ids);   // v6.99.29 (A-R19-4): and the ones nothing points at any more go
-    if (dropped.length) recordAudit({ module: "System", docType: "Locations", docNumber: "PRUNE-6.99.29", action: "healed", summary: `Removed ${dropped.length} migrated demo place(s) no document references: ${dropped.map((d: any) => d.name).join(", ")}` });
-    if (added.length) recordAudit({ module: "System", docType: "Locations", docNumber: "MIGRATE-6.86", action: "healed", summary: `Referenced demo locations kept as custom: ${added.map(a => a.name).join(", ")}` });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!(warehouseInvoices || []).length) return;
+    const r = foldWarehouseInvoiceStore({ store: warehouseInvoices, invoices, lots });
+    if (r.waiting.length) return;   // the register fold above has not written them yet
+    setInvoices((prev: any[]) => foldWarehouseInvoiceStore({ store: warehouseInvoices, invoices: prev, lots: [] }).invoices);
+    setLots((prev: any[]) => foldWarehouseInvoiceStore({ store: warehouseInvoices, invoices, lots: prev }).lots);
+    setWarehouseInvoices([]);
+    try { recordAudit({ module: "Finance", docType: "Migration", docNumber: "A-ST-10", action: "updated", summary: `Warehouse invoice(s) now kept only in the register: ${r.moved.join(", ")}` }); } catch {}
+  }, [warehouseInvoices, invoices]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // v6.82.0 (Round 6): packaging types saved before v6.46 lack boxesPerPallet/palletTareKg —
   // backfill from the seed by id/label so pallet tables split correctly.
@@ -426,10 +431,7 @@ export default function App() {
 
   // v6.99.11: pickers may ask to open the Directory ("＋ Add it in the Directory…") — never free text.
   const navigateRef = useRef<(m: string) => void>(() => {});   // v6.99.58 (A-US-2)
-  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); } catch {} }; window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
-  // v6.99.9: shipments healed once — unit kg mirrors in step with the derived figure; stale zero-amount leg-freight lines removed.
-  useEffect(() => { setShipments((prev: any[]) => { let changed = false; const next = (prev || []).map((s: any) => { const r = healShipmentModel(s); if (r.changed) changed = true; (r.notes || []).forEach((n: string) => recordAudit({ module: "Shipments", docType: "Shipment", docNumber: String(s.number || ""), action: "updated", summary: `${n} (one source: v6.99.91)` })); return r.sh; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); } catch {} };   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
   // v6.99.40 (A-ADDR): every stored address is split into its parts ONCE — street · postcode · city · country.
   // What cannot be split (a market address, a PO box) keeps its whole text in the street line and is flagged for review;
   // the original one-line text stays until the DDL, so nothing that reads `address` breaks.
@@ -463,8 +465,6 @@ export default function App() {
   // v6.98.0 (IV-3/IV-5): invoices normalised once — one category, scope derived, creditNoteIds/locked dropped.
   // v6.99.127 (A-ONE-1, owner 4 Oct): every sale sells a LOT — PO-sourced lines are pointed once at the lot made from their PO line
   useEffect(() => { if (!(lots || []).length) return; setOrders((prev: any[]) => { const r = migrateSaleLinesToLots(prev || [], lots || []); if (!r.moved) return prev; recordAudit({ module: "Sales orders", docType: "Migration", docNumber: "A-ONE-1", action: "updated", summary: `${r.moved} sale line(s) now name their lot instead of a PO line${r.left.length ? `; ${r.left.length} left as they were (no lot): ${r.left.slice(0, 5).join(", ")}` : ""}` }); return r.orders; }); }, [lots.length]);   // eslint-disable-line react-hooks/exhaustive-deps
-  // v6.99.120 (AUD-18, owner rule 11): invoices imported from Fakturownia came in as Draft — they are received invoices, open until the bank clears them
-  useEffect(() => { setInvoices((prev: any[]) => { let changed = 0; const next = (prev || []).map((i: any) => { if (i && i.source === "fakturownia-import" && i.paymentStatus === "Draft" && i.kind !== "SALES") { changed++; return { ...i, paymentStatus: "Issued" }; } return i; }); if (changed) recordAudit({ module: "Invoices", docType: "Import", docNumber: "Fakturownia", action: "updated", summary: `${changed} imported cost invoice(s) moved from Draft to Issued (received, open until the bank clears them) — rule 11` }); return changed ? next : prev; }); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setInvoices((prev: any[]) => { let changed = false; const next = (prev || []).map((i: any) => { const r = normaliseInvoiceCategory(i); if (r.changed) changed = true; return r.inv; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -499,24 +499,16 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoices]);
 
-  // v6.33.0 (A3-5 residue): one-shot fold of the legacy Finance creditNotes
-  // array into the canonical notes model (idempotent by source tag), after
-  // which they finally enter the receivable/payable totals (BP-37). The legacy
-  // array is then emptied; importing an old backup re-triggers the fold.
-  useEffect(() => {
-    if (!(creditNotes || []).length) return;
-    setFinanceNotes((prev: any[]) => migrateLegacyCreditNotes({ existing: prev || [], creditNotes }));
-    setCreditNotes([]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [creditNotes]);
-
   const [activeModule, setActiveModule] = useState("dashboard");
   const tab = useSingleTab();   // v6.99.114 (AUD-02)
   const tabRef = useRef(tab); tabRef.current = tab;
   useEffect(() => { setBackupAllowed(() => !tabRef.current.readOnly && !tabRef.current.deciding); }, []);   // v7.1.8 (A-BK-5): a read-only tab never writes the backup folder
   const shared = useSharedStore(userName || "");   // v6.99.148: the shared store — login + pull when configured, otherwise nothing
+  // v7.3.4 (A-LOC-2): a built-in place still used by a document becomes an ordinary location (same id) — re-checked whenever the
+  // data changes (idempotent), so it also lands after the shared data has been pulled and reaches everyone
+  useEffect(() => { try { const n = ensureUsedBuiltinsAreOrdinary(usedLocationIds({ pos, orders, lots, shipments })); if (n) recordAudit({ module: "Parties", docType: "Locations", docNumber: "built-in", action: "updated", summary: `${n} built-in place(s) used by documents became ordinary locations (same ids)` }); } catch { /* never blocks the start */ } }, [shared.ready, (pos || []).length, (orders || []).length, (lots || []).length, (shipments || []).length]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v7.1.0 (A-USR-1, owner 6 Oct): on the shared copy the SIGNED-IN e-mail decides who you are — the typed "Your name" is ignored there
-  const signInEmail = isSharedMode() ? (readSession()?.email || "") : "";
+  const signInEmail = readSession()?.email || "";   // v7.21.0 (A-RV-19): the app runs only on the shared data
   const who = effectiveUserName(users, userName, signInEmail);
   const [resultFocus, setResultFocus] = useState<any>(null);   // v7.1.3 (A-PL-1): "Result of this sale → Finance"
   // v6.99.58 (A-US-2, owner): every way of leaving a module passes here. An open editor with unsaved changes is named, and
@@ -524,9 +516,9 @@ export default function App() {
   const [leaveAsk, setLeaveAsk] = useState<{ target: string; labels: string[]; canSave: boolean; saving?: boolean; refused?: boolean } | null>(null);
   // v7.1.11 (owner 6 Oct, security): permissions used to hide the tabs only — a Dashboard or document link still opened the module.
   // ONE gate now: every road into a module passes mayOpen(), and the module is not even rendered when the person may not open it.
-  const mayOpen = (k: string) => canOpenModule(users, who, k === "loadPlans" ? "loadplans" : k);
-  const navigate = (target: string) => {
-    if (!mayOpen(target)) { window.alert("You don't have access to this module. Ask the owner (Settings → Users)."); return; }
+  const mayOpen = (k: string) => canOpenModule(users, who, k);   // v7.22.0 (A-RV-15 e): no load-plans right — the screen was retired
+  const navigate = async (target: string) => {
+    if (!mayOpen(target)) { (await uiAlert({ message: "You don't have access to this module. Ask the owner (Settings → Users)." })); return; }
     if (target === activeModule) return;
     const d = dirtyEntries();
     if (!d.length) { setActiveModule(target); return; }
@@ -536,12 +528,12 @@ export default function App() {
   const docModule = (num: string): string => {
     const n = String(num || "");
     const has = (list: any[]) => (list || []).some((x: any) => String(x?.number) === n);
-    if (has(pos)) return "pos"; if (has(orders)) return "orders"; if (has(shipments)) return "shipments"; if (has(lots)) return "lots"; if (has(invoices)) return "invoices";
+    if (has(pos)) return "pos"; if (has(orders)) return "orders"; if (has(shipments)) return "shipments"; if (has(lots)) return "lots"; if (has(invoices)) return "invoices"; if (has(claims)) return "claims";   // v7.20.0 (A-INC-2): a claim's number opens the claim
     return "";
   };
-  const openDoc = (num: string, from = "") => {
+  const openDoc = async (num: string, from = "") => {
     const target = docModule(num); if (!target) return;
-    if (!mayOpen(target)) { window.alert("You don't have access to this module. Ask the owner (Settings → Users)."); return; }   // v7.1.11
+    if (!mayOpen(target)) { (await uiAlert({ message: "You don't have access to this module. Ask the owner (Settings → Users)." })); return; }   // v7.1.11
     if (dirtyEntries().length) { navigate(target); return; }   // an unsaved form: the leave-guard asks first, as for any move
     setNavBack(from ? { module: activeModule, number: from } : { module: activeModule, number: "" });
     if (target === "pos") setOpenPO({ number: num, action: "" });
@@ -556,11 +548,12 @@ export default function App() {
   const [openPO, setOpenPO] = useState<{ number: string; action: string }>({ number: "", action: "" });
   // v6.99.79 (A-NAV-1, owner 28 Sept): ONE route from a document number to its document — the two hand-offs above generalised
   const [openDocNum, setOpenDocNum] = useState<{ module: string; number: string; n: number }>({ module: "", number: "", n: 0 });
+  const [shipmentsFilter, setShipmentsFilter] = useState("");   // v7.20.0 (A-INC-2): the Dashboard's 'Terms to review' opens Shipments on that filter (used once)
   const [navBack, setNavBack] = useState<{ module: string; number: string } | null>(null);   // v6.99.56 (A-PL-5): shipment → the PO's packing list
   useEffect(() => { if (activeModule !== "pos" && openPO.number) setOpenPO({ number: "", action: "" }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v6.99.80 (owner 29 Sept): the shipment hand-off was never cleared, so after one link to a shipment EVERY later visit to
   // Shipments reopened it; the same held for the SO / lot / invoice hand-offs added in v6.99.79. A hand-off is used once.
-  useEffect(() => { if (activeModule !== "shipments" && openShipmentNumber) setOpenShipmentNumber(""); if (openDocNum.module && activeModule !== openDocNum.module) setOpenDocNum({ module: "", number: "", n: openDocNum.n }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (activeModule !== "shipments" && shipmentsFilter) setShipmentsFilter(""); if (activeModule !== "shipments" && openShipmentNumber) setOpenShipmentNumber(""); if (openDocNum.module && activeModule !== openDocNum.module) setOpenDocNum({ module: "", number: "", n: openDocNum.n }); }, [activeModule]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v6.63.0 (D-13): ONE claims UI, many doors. The claim buttons in Sales Orders,
   // Shipments and Inventory no longer open their own mini-forms — they navigate
   // here with a pre-filled seed, so every claim is a numbered document in the
@@ -570,7 +563,7 @@ export default function App() {
   // v6.99.70 (A-BK, owner): the one-time "Test build — export regularly" reminder is replaced by the backup banner, which
   // shows only when something needs the user (no folder, access paused, a failed write, or today's download in a browser
   // that can't write to a folder). On opening: old pretty snapshots are compacted, then the folder backup starts.
-  useEffect(() => { try { compactLocalBackups(); } catch {} startAutoBackup(); }, []);
+  useEffect(() => { startAutoBackup(); }, []);   // v7.21.0 (A-RV-19): no local snapshots to compact
   const storageHealthState = useStorageHealth(); // Batch 5: surface failed writes
 
   // Batch 5d (BP-39): one-time conversion — legacy "mark paid" flags on invoices
@@ -594,27 +587,27 @@ export default function App() {
     if (!mayOpen(activeModule)) return <div style={{ padding: 40, textAlign: "center", color: "#64748B", fontSize: 14 }}>You don't have access to this module. <button onClick={() => setActiveModule("dashboard")} style={{ marginLeft: 8, padding: "6px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>Dashboard</button></div>;   // v7.1.11
     switch (activeModule) {
       case "dashboard":
-        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={who} integrityIssues={integrityIssuesForDashboard} />;
+        return <Dashboard pos={live.pos} orders={live.orders} lots={live.lots} contacts={contacts} shipments={live.shipments} operationalCosts={operationalCosts} invoices={invoices} claims={claims} financeNotes={financeNotes} onNavigate={navigate} onOpenFilter={(m: string, flt: string) => { setShipmentsFilter(flt); navigate(m); }}  inspections={inspections} stockCounts={stockCounts} closedPeriods={closedPeriods} poSettlements={poSettlements} users={users} userName={who} integrityIssues={integrityIssuesForDashboard} />;
       case "claims":
-        return <Claims archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
+        return <Claims key={"clm-" + (openDocNum.module === "claims" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "claims" ? openDocNum.number : ""} archive={archive} claims={claims} setClaims={setClaims} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} pos={pos} shipments={shipments}  financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} invoices={invoices} claimSeed={claimSeed} onClaimSeedConsumed={() => setClaimSeed(null)}  setInvoices={setInvoices} inspections={inspections} />;
       case "audit":
         return <AuditTrail auditLog={auditLog} />;
       case "finance":
-        return <Finance focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
+        return <Finance packagingTypes={packagingTypes} focusResultOf={resultFocus} orders={orders} lots={lots} setLots={setLots} contacts={contacts} pos={pos} shipments={shipments} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} settledRefs={settledRefs} setSettledRefs={setSettledRefs} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} claims={claims}  advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts}  budgets={budgets} setBudgets={setBudgets} users={users} userName={who}  closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} poSettlements={poSettlements} />;
       case "contacts":
-        return <Contacts contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={who}  lots={lots} />;
+        return <Contacts onLinkSaleDestination={linkSaleDestination} contacts={contacts} setContacts={setContactsCascade} pos={pos} orders={orders} shipments={shipments} invoices={invoices} claims={claims} warehouseInvoices={warehouseInvoices}  users={users} userName={who}  lots={lots} />;
       case "pos":
-        return <PurchaseOrders key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={productCatalog} setProductCatalog={setProductCatalog}  packagingTypes={packagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} financeNotes={financeNotes} setInvoices={setInvoices}  users={users} userName={who}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
+        return <PurchaseOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={() => navigate("finance")} key={"po-" + (openPO.number || "list")} initialSelectedNumber={openPO.number} initialAction={openPO.action} archive={archive} pos={pos} setPOs={setPOs} contacts={contacts} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} shipments={shipments} invoices={invoices} productCatalog={liveCatalog} setProductCatalog={setProductCatalog}  packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes}  setShipments={setShipments}  claims={claims} inspections={inspections} poSettlements={poSettlements} setPoSettlements={setPoSettlements} setFinanceNotes={setFinanceNotes} financeNotes={financeNotes} setInvoices={setInvoices}  users={users} userName={who}  onOpenShipment={(n: string) => { setOpenShipmentNumber(n); navigate("shipments"); }} />;
       case "lots":
-        return <Inventory key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
+        return <Inventory users={users} userName={who} key={"lot-" + (openDocNum.module === "lots" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "lots" ? openDocNum.number : ""} archive={archive} lots={lots} setLots={setLots} allOrders={orders} contacts={contacts} shipments={shipments} setShipments={setShipments} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} claims={claims}  onStartClaim={startClaim}  inspections={inspections} setInspections={setInspections} stockCounts={stockCounts} setStockCounts={setStockCounts}  poSettlements={poSettlements}  />;
       case "orders":
-        return <SalesOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={(o: any) => { setResultFocus({ number: o?.number, n: Date.now() }); navigate("finance"); }} inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={packagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userRole={userRole} userName={who} productCatalog={productCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
+        return <SalesOrders canOpenResult={canOpenModule(users, who, "finance") && canOpenFinance(users, who, "pl")} onOpenResult={(o: any) => { setResultFocus({ number: o?.number, n: Date.now() }); navigate("finance"); }} inspections={inspections} key={"so-" + (openDocNum.module === "orders" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "orders" ? openDocNum.number : ""} archive={archive} orders={orders} setOrders={setOrders} packagingTypes={livePackaging} setPackagingTypes={setPackagingTypes} invLots={lots} setLots={setLots} allPOs={pos} contacts={contacts} shipments={shipments} setShipments={setShipments} operationalCosts={operationalCosts} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} setFinanceNotes={setFinanceNotes} userName={who} productCatalog={liveCatalog} setProductCatalog={setProductCatalog} claims={claims} setClaims={setClaims}  onStartClaim={startClaim} />;
       case "shipments":
-        return <Shipments key={"shp-" + (openShipmentNumber || "list")} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={productCatalog} userName={who} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={packagingTypes} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
+        return <Shipments key={"shp-" + (openShipmentNumber || shipmentsFilter || "list")} claims={claims} initialStatusFilter={shipmentsFilter} planningSheets={planningSheets} setPlanningSheets={setPlanningSheets} planningSheetLog={planningSheetLog} setPlanningSheetLog={setPlanningSheetLog} productCatalog={liveCatalog} userName={who} onOpenPacking={(n: string) => { setOpenPO({ number: n, action: "packing" }); navigate("pos"); }} archive={archive} shipments={shipments} setShipments={setShipments} contacts={contacts} pos={pos} setPOs={setPOs} lots={lots} setLots={setLots} orders={orders} setOrders={setOrders} onNavigate={navigate} packagingTypes={livePackaging} setClaims={setClaims}  onStartClaim={startClaim}  invoices={invoices}  initialSelectedNumber={openShipmentNumber}  inspections={inspections} />;
       case "invoices":
-        return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} setLots={setLots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices}  closedPeriods={closedPeriods} />;
+        return <Invoices key={"inv-" + (openDocNum.module === "invoices" ? openDocNum.number + ":" + openDocNum.n : "list")} initialSelectedNumber={openDocNum.module === "invoices" ? openDocNum.number : ""} archive={archive} invoices={invoices} setInvoices={setInvoices} notes={financeNotes} setNotes={setFinanceNotes} contacts={contacts} orders={orders} pos={pos} shipments={shipments} setShipments={setShipments} setOrders={setOrders} lots={lots} setLots={setLots} operationalCosts={operationalCosts} setOperationalCosts={setOperationalCosts}  closedPeriods={closedPeriods} />;
       case "settings":
-        return <Settings seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userRole={userRole} setUserRole={setUserRole} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} repairInventory={repairInventory}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
+        return <Settings roles={roles} setRoles={setRoles} seasonSettings={seasonSettings} setSeasonSettings={setSeasonSettings} archivedSeasons={archivedSeasons} setArchivedSeasons={setArchivedSeasons} reloadFromStorage={reloadFromStorage} refStores={{ lots, shipments, pos, orders, contacts }} userName={who} setUserName={setUserName} productCatalog={productCatalog} setProductCatalog={setProductCatalog} packagingTypes={packagingTypes} setPackagingTypes={setPackagingTypes} onLinkPackagingSpelling={linkPackagingSpelling}  users={users} setUsers={setUsers}   fxSettings={fxSettings} setFxSettings={setFxSettings}  company={company} setCompany={setCompany} numbering={numbering} setNumbering={setNumbering}  />;
       default:
         return null;
     }
@@ -622,12 +615,12 @@ export default function App() {
 
 
   // v6.99.4 (DA-7): the Dashboard's integrity tile reads the same check as the badge.
-  const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog } as any).issues, // eslint-disable-next-line react-hooks/exhaustive-deps
-    [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog]);
+  const integrityIssuesForDashboard = useMemo(() => checkIntegrity({ contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog } as any).issues,   /* v7.21.13: + the audit log, for shared ids */ // eslint-disable-next-line react-hooks/exhaustive-deps
+    [contacts, pos, lots, orders, shipments, warehouseInvoices, operationalCosts, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog, auditLog]);
 
-  if (!shared.ready) return <>{shared.node}</>;   // v6.99.148: sign in / loading the shared data
+  if (!shared.ready) return <>{dialogNode}{shared.node}</>;   // v6.99.148: sign in / loading the shared data
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>{dialogNode}
       <EnvironmentStrip />{/* v6.99.149 */}
       {(users || []).length > 0 && !hasOwner(users) && <div style={{ background: "#FEF3C7", color: "#92400E", borderBottom: "1px solid #FDE68A", textAlign: "center", fontSize: 12.5, fontWeight: 700, padding: "6px 0", flexShrink: 0 }}>No owner with a sign-in e-mail is defined in Settings → Users. Until there is one, Settings is open to every signed-in person — set the owner and their e-mail now.</div>}{/* v7.1.14 */}
       {tab.readOnly && (   /* v6.99.114 (AUD-02): a second tab of the app in this browser is read-only — two writing tabs overwrite each other */
@@ -663,7 +656,7 @@ export default function App() {
         // Single-browser mode keeps the typed name; an unmatched browser picks its person from the list (v7.0.1). The v7.0.2 'change' link is gone (owner).
         if (signInEmail) {   // v7.1.13: ONE rule on the shared copy — the sign-in; the v7.1.10 typed-name bootstrap is gone
           const me = userBySignIn(users, signInEmail);
-          const signOut = <button onClick={() => { if (window.confirm(`Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.`)) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button>;
+          const signOut = <button onClick={async () => { if ((await uiConfirm({ title: "Please confirm", message: `Sign out of the shared data on this browser?\n\nSigned in as ${signInEmail}.` }))) { logout(); window.location.reload(); } }} title={`signed in as ${signInEmail}`} style={{ padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", color: "#111", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Sign out</button>;
           if (!(users || []).length) return <><span title={signInEmail}>{signInEmail}</span>{signOut}</>;
           if (!me) {
             // v7.1.12 (owner 6 Oct, trapped again): a sign-in that matches no entry CLAIMS its entry here — only an entry that carries no
@@ -673,8 +666,8 @@ export default function App() {
             return (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
                 {signInEmail} is not linked to an entry.{free.length ? " Which entry is you?" : " Every entry is already linked to another sign-in — ask the owner."}
-                {free.length > 0 && <select value="" onChange={e => { const id = e.target.value; if (!id) return; const u = free.find((x: any) => String(x.id) === id); if (!u) return;
-                  if (!window.confirm(`Link ${signInEmail} to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}?\n\nThis is recorded in the audit trail and cannot be undone from here.`)) return;
+                {free.length > 0 && <select value="" onChange={async e => { const id = e.target.value; if (!id) return; const u = free.find((x: any) => String(x.id) === id); if (!u) return;
+                  if (!(await uiConfirm({ title: "Please confirm", message: `Link ${signInEmail} to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}?\n\nThis is recorded in the audit trail and cannot be undone from here.` }))) return;
                   setUsers((prev: any[]) => (prev || []).map((x: any) => String(x.id) === id ? { ...x, email: signInEmail } : x));
                   recordAudit({ module: "Settings", docType: "User", docNumber: String(u.name), action: "updated", summary: `${signInEmail} linked itself to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}` });
                 }} style={{ border: "1px solid #FCD34D", borderRadius: 6, padding: "2px 6px", fontSize: 11.5, background: "#fff" }}>
@@ -705,11 +698,11 @@ export default function App() {
           <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} /> include archived{archivedSeasons.length ? ` (${archivedSeasons.join(", ")})` : ""}
         </label>
         <IntegrityBadge
-          data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, loadPlans, advancePayments, bankAccounts, productCatalog }}
+          data={{ contacts, pos: live.pos, lots: live.lots, orders: live.orders, shipments: live.shipments, warehouseInvoices, operationalCosts, creditNotes, invoices, financeNotes, claims, advancePayments, bankAccounts, productCatalog }}
           onNavigate={navigate}
-          onRepair={(kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
-            if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !window.confirm(`Remove ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock.`)) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).filter((l: any) => !ids.has(l.id))); recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) removed: ${ol.map((l: any) => l.number).join(", ")}` }); }
-            if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n || !window.confirm(`Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?`)) return;
+          onRepair={async (kind: "orphanLots" | "danglingLinks") => {   // v6.99.51 (A-FS-2)
+            if (kind === "orphanLots") { const ol = orphanLotsToRemove(lots, pos); if (!ol.length || !(await uiConfirm({ title: "Please confirm", message: `Delete ${ol.length} orphan lot(s)? Their PO no longer exists and they hold no stock. They stay on record, struck through.` }))) return; const ids = new Set(ol.map((l: any) => l.id)); setLots((prev: any[]) => (prev || []).map((l: any) => ids.has(l.id) ? { ...l, status: "Cancelled", deletedAt: localTodayISO(), deletedReason: "orphan — its PO no longer exists" } : l));   /* v7.17.1 (A-RV-07): marked Deleted, not removed */ recordAudit({ module: "System", docType: "Repair", docNumber: "ORPHAN-LOTS", action: "deleted", summary: `${ol.length} orphan lot(s) deleted (kept on record): ${ol.map((l: any) => l.number).join(", ")}` }); }
+            if (kind === "danglingLinks") { const dl = danglingLinks(invoices, claims, pos, orders, shipments); const n = dl.invoices.length + dl.claims.length; if (!n || !(await uiConfirm({ title: "Please confirm", message: `Unlink ${dl.invoices.length} invoice(s) and ${dl.claims.length} claim(s) from documents that no longer exist?` }))) return;
               const bad = new Map<string, Set<string>>(dl.invoices.map(x => [String(x.id), new Set<string>(x.links.map((l: any) => l.type + ":" + l.number))]));
               setInvoices((prev: any[]) => (prev || []).map((i: any) => bad.has(String(i.id)) ? { ...i, links: (i.links || []).filter((l: any) => !bad.get(String(i.id))!.has(l.type + ":" + l.number)) } : i));
               const badC = new Map<string, Set<string>>(dl.claims.map(x => [String(x.id), new Set<string>(x.subjects.map((s: any) => s.kind + ":" + s.ref))]));

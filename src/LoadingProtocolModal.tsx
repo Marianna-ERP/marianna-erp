@@ -9,9 +9,10 @@ import { inspectLink } from "./docLinks.domain";
 import {
   buildLoadingProtocol, deriveRows, protocolTotals, protocolExceptions, protocolGaps,
   unitGoodsLines, protocolForUnit, protocolsForShipment, checkTruckLoad, signatureWarnings,
-  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS, packagingResolution,
+  isBlankRow, filledRows, padToSheet, SHEET_MIN_ROWS, packagingResolution, confirmAsLoaded, addBlankRow,
   PALLET_CAPACITY,
 } from "./loadingProtocol.domain";
+import { truckLoadingStops, unitForStop } from "./shipmentModel.domain";   // v7.15.2
 
 // ─── v6.46.0  LOADING PROTOCOL / KARTA ZAŁADUNKU ─────────────────────────────
 // Generated for the producer, who fills it in and has it signed and stamped by
@@ -91,7 +92,7 @@ function TakNie({ value, yes = "TAK", no = "NIE" }: any) {
 }
 
 export default function LoadingProtocolModal({
-  shipment, contacts = [], pos = [], packagingTypes = [], allShipments = [],
+  shipment, contacts = [], pos = [], packagingTypes = [], allShipments = [], lots = [],   // v7.15.2: lots — goods in stock load where the lot is
   companyName = "", company = null, gateReason = "", shipmentCancelled = false, onSave, onClose,
 }: any) {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();
@@ -107,21 +108,28 @@ export default function LoadingProtocolModal({
       const units = (Array.isArray(leg.vehicles) && leg.vehicles.length)
         ? leg.vehicles
         : [{ id: `leg${leg.id}-u1`, truckPlate: leg.vehiclePlate || "", trailerPlate: leg.trailerPlate || "", driverName: leg.driverName || "" }];
-      units.forEach((u: any, i: number) => out.push({ leg, unit: u, label: u.truckPlate || u.vehiclePlate || `Truck ${out.length + 1}`, idx: i }));
+      units.forEach((u: any, i: number) => {
+        const plate = u.truckPlate || u.vehiclePlate || `Truck ${out.length + 1}`;
+        // v7.15.2 (A-LS-3, owner 9 Oct): a truck collecting at several producers has ONE SHEET PER PRODUCER — each with only what was
+        // loaded there, its own number, that producer as the place of loading; a truck with one stop keeps its single sheet unchanged
+        const stops = truckLoadingStops(shipment, u, pos || [], lots || []);
+        if (stops.length > 1) stops.forEach((s: any, k: number) => out.push({ leg, unit: unitForStop(u, s), fullUnit: u, stop: s, label: `${plate} · ${k + 1}/${stops.length} ${s.text}`, idx: i }));
+        else out.push({ leg, unit: u, label: plate, idx: i });
+      });
     });
     return out.length ? out : [{ leg: (shipment?.legs || [])[0] || {}, unit: {}, label: "Truck 1", idx: 0 }];
-  }, [shipment]);
+  }, [shipment, pos, lots]);   // v7.15.2: the stops depend on the POs and lots
 
   const [truckIx, setTruckIx] = useState(0);
   const current = trucks[Math.min(truckIx, trucks.length - 1)] || trucks[0];
 
   const makeSheet = React.useCallback((t: any, alreadyDrafted: any[]) => {
-    const stored = protocolForUnit(shipment, t.unit?.id);
+    const stored = protocolForUnit(shipment, t.unit?.id, t.stop?.key);
     // v6.57.0: a sheet saved before this release holds only its derived rows.
     // Pad it on read so it prints the full 21 lines, without rewriting stored
     // data — the same fold-forward approach used for per-truck protocols.
     if (stored) return { ...stored, rows: padToSheet(stored.rows || []) };
-    const poRef = (shipment?.poRefs || [])[0] || "";
+    const poRef = t.stop ? (t.stop.refs.find((r: string) => (pos || []).some((x: any) => x.number === r)) || "") : (shipment?.poRefs || [])[0] || "";   // v7.15.2: the stop's own PO
     const po = (pos || []).find((x: any) => x.number === poRef);
     const supplier = po?.supplier || (contacts || []).find((c: any) => String(c.id) === String(po?.supplierId)) || null;
     const carrier = (contacts || []).find((c: any) => String(c.id) === String(t.leg?.carrierId));
@@ -131,11 +139,12 @@ export default function LoadingProtocolModal({
       ...(allShipments || []).flatMap((s: any) => protocolsForShipment(s)),
       ...alreadyDrafted,
     ].filter(Boolean);
-    return buildLoadingProtocol(
-      { shipment, leg: t.leg, unit: t.unit, goods: shipment?.goods, supplier, receiverName: companyName,
+    const built = buildLoadingProtocol(
+      { shipment, leg: t.leg, unit: t.unit, goods: shipment?.goods, supplier: supplier || (t.stop ? { name: t.stop.text, address: "" } : null), receiverName: companyName, poRef,
         carrierName: carrier?.name || "", types: packagingTypes, existingProtocols: others },
       { todayISO: () => localTodayISO(), nextId }, // v6.80.0 (W-7): central counter
     );
+    return t.stop ? { ...built, stopKey: t.stop.key, unitId: t.fullUnit?.id ?? built.unitId } : built;   // v7.15.2: the sheet belongs to the truck AND the stop
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shipment, pos, contacts, allShipments, companyName, packagingTypes]);
 
@@ -163,10 +172,7 @@ export default function LoadingProtocolModal({
     setP((x: any) => ({ ...x, rows: (x.rows || []).map((r: any, ri: number) => ri === i ? { ...r, [k]: v } : r) }));
 
   const renumber = (rows: any[]) => rows.map((r: any, i: number) => ({ ...r, no: i + 1 }));
-  const addRow = () => setP((x: any) => {
-    const last = (x.rows || [])[(x.rows || []).length - 1];
-    return { ...x, rows: renumber([...(x.rows || []), { no: 0, boxes: last?.boxes || 72, kgPerBox: last?.kgPerBox || 13, size: "", boxesOk: null, goodsOk: null, remarks: "", observations: "" }]) };
-  });
+  const addRow = () => setP((x: any) => ({ ...x, rows: addBlankRow(x.rows || []) }));   // v7.11.4 (A-RV-27): the tested addBlankRow — inherits from the last pallet that carries goods
   const removeRow = (i: number) => setP((x: any) => ({ ...x, rows: renumber((x.rows || []).filter((_: any, ri: number) => ri !== i)) }));
   const regenerate = async () => {
     if (!(await uiConfirm({ tone: "warn", title: "Re-derive the pallet table?", message: "The rows will be rebuilt from what this truck is assigned to carry. Anything typed into the table (calibres, conditions, remarks) will be lost.", confirmLabel: "Re-derive" }))) return;
@@ -227,7 +233,7 @@ export default function LoadingProtocolModal({
       if (!ok) return;
     }
     setP(next);
-    onSave(next, current?.unit?.id);
+    onSave(next, current?.fullUnit?.id ?? current?.unit?.id);
     if (status === "Returned") {
       await uiAlert({
         tone: exceptions.length ? "warn" : "info",
@@ -355,6 +361,8 @@ export default function LoadingProtocolModal({
             <div style={{ fontSize: 12, fontWeight: 700 }}>Pallet table — {totals.pallets} pallets · {totals.boxes} boxes · net {totals.netKg.toLocaleString("pl-PL")} kg · gross {totals.grossKg.toLocaleString("pl-PL")} kg</div>
             <div style={{ flex: 1 }} />
             <SmallButton onClick={addRow}>+ Pallet</SmallButton>
+            {/* v7.10.5 (A-RV-15): the usual case in one click — every pallet carrying goods: boxes OK, goods OK, remarks "Brak"; spare lines untouched */}
+            <SmallButton title="Every pallet that carries goods: Boxes OK = Tak, Goods OK = Tak, remarks 'Brak' where empty. Spare lines are left blank." onClick={() => setP((x: any) => ({ ...x, rows: confirmAsLoaded(x.rows || []) }))}>✓ Loaded exactly as printed</SmallButton>
             <SmallButton onClick={regenerate}>↻ Re-derive from goods</SmallButton>
             <span style={{ fontSize: 10.5, color: "#64748B", marginLeft: 8 }}>
               {usedRows} pallet{usedRows === 1 ? "" : "s"} loaded · sheet prints {Math.max(SHEET_MIN_ROWS, (p.rows || []).length)} lines

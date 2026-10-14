@@ -8,8 +8,9 @@ import { claimMoney } from "./claims.domain";
 import { applyPaymentEvent, outstandingAmount } from "./payments.domain";
 import { NOTICE_DEFAULTS, addDays } from "./claimReadiness.domain";
 import { S, r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── CL-2: the defect comes from the Inspection the claim references ───────────
 export function defectFromInspection(claim: any, inspections: any[]): { defectType: string; defectPct: number; description: string; inspection: any | null } {
@@ -123,7 +124,7 @@ export function foldLegacyClaimFields(claim: any): { claim: any; changed: boolea
 export function noticeRuleFor(claim: any, counterparty: any): { days: number; from: string; basis: string } {
   const kind = S(claim?.respondent?.kind);
   const d = NOTICE_DEFAULTS[kind];
-  const override = num(counterparty?.noticeDays);
+  const override = num(counterparty?.terms?.noticeDays) || num(counterparty?.noticeDays);   // v7.10.1 (A-RV-15 · CL-8): the company form writes terms.noticeDays (CP-2); the old top-level field still read
   if (override > 0) return { days: override, from: d?.from || "delivery", basis: `Agreement with ${S(counterparty?.name) || kind}: ${override} day(s)` };
   return d ? { days: d.days, from: d.from, basis: d.basis } : { days: 0, from: "delivery", basis: "" };
 }

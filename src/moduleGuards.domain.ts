@@ -1,5 +1,7 @@
 // ── SHIPMENT & INVENTORY GATES (v6.78.0) ────────────────────────────────────
 import { S } from "./format";
+import { lotLoadedTwice } from "./lotView.domain";   // v7.11.5 (A-RV-28)
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // The same shape Purchase Orders got in v6.72.0: a very small number of hard
 // gates, more warnings that state their CONSEQUENCE, and a readiness view while
 // you work rather than a refusal at the save button.
@@ -8,7 +10,7 @@ import { S } from "./format";
 // would leave the data saying a thing that did not happen. Everything else
 // reports — because a truck at a dock does not wait for a form.
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── SHIPMENTS ───────────────────────────────────────────────────────────────
 
@@ -19,10 +21,18 @@ const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(",", ".")
  *
  *  Booking is deliberately NOT gated: the owner books a truck and sends the
  *  transport order before the goods are final, which is a real workflow. */
-export function shipmentPostBlockReason(shipment: any, nextStatus: string): string {
+export function shipmentPostBlockReason(shipment: any, nextStatus: string, ctx: { orders?: any[]; lots?: any[] } = {}): string {
   if (!["Loaded", "Arrived", "Delivered", "Closed"].includes(S(nextStatus))) return "";
   const rows = (shipment?.goods || []).filter((g: any) => num(g?.qtyKg) > 0);
-  if (rows.length) return "";
+  if (rows.length) {
+    // v7.9.1 (A-SHP-GATE-1, owner rule 8 Oct): a shipment may be booked on a draft sale and expected goods (the transport orders go out early),
+    // but it moves on only when what it carries is confirmed — every sale Confirmed, every lot with its REAL kilos
+    const open: string[] = [];
+    const soNos = Array.from(new Set([...(shipment?.soRefs || []), ...rows.map((g: any) => g.soRef)].filter(Boolean).map(String)));
+    soNos.forEach(no => { const so = (ctx.orders || []).find((o: any) => String(o.number) === no); if (so && S(so.status) === "Draft") open.push(`${no} is still a Draft — confirm it first`); });
+    Array.from(new Set(rows.map((g: any) => g.lotRef).filter(Boolean).map(String))).forEach(no => { const lot = (ctx.lots || []).find((l: any) => String(l.number) === no); if (!lot) return; const real = num(lot.receivedKg) > 0 || (lot.movements || []).some((m: any) => m && !m.voided && m.type === "IN") || !!lot.directFlow; if (!real) open.push(`${no} has no real kilos yet — ${lot.poRef ? `${lot.poRef} not received` : "not received"}`); });
+    return open.length ? `${S(shipment?.number) || "This shipment"} cannot become ${nextStatus} yet:\n• ${open.join("\n• ")}` : "";
+  }
   return `${S(shipment?.number) || "This shipment"} carries no goods, so marking it ${nextStatus} would post nothing to inventory and still report the movement as done. Add what is on the truck first.`;
 }
 
@@ -76,17 +86,9 @@ export function shipmentWarnings(shipment: any, opts: { strict?: boolean; isExpo
 
 // ── INVENTORY ───────────────────────────────────────────────────────────────
 
-/** THE HARD GATE, and the only one: a lot cannot issue kilos it does not hold.
- *  Physical, not policy — whatever the paperwork says, the stock is not there. */
-export function movementBlockReason(lot: any, movement: { type: string; qtyKg: any }): string {
-  const t = S(movement?.type).toUpperCase();
-  if (!["SHIP_OUT", "TRANSFER", "DAMAGE", "SORTING"].includes(t)) return "";
-  const want = num(movement?.qtyKg);
-  if (want <= 0) return "";
-  const have = num(lot?.physicalKg);
-  if (want <= have + 1) return "";   // 1 kg of slack for whole-box rounding
-  return `${S(lot?.number) || "This lot"} holds ${Math.round(have).toLocaleString("pl-PL")} kg and this movement takes ${Math.round(want).toLocaleString("pl-PL")} kg out. Stock cannot go negative — check the quantity, or record the missing receipt first.`;
-}
+// v7.11.1 (A-RV-23, owner 8 Oct): movementBlockReason retired — no screen called it, and the movement window's own limit
+// (InventoryWindows maxByType) is the more complete rule: direct lots count their expected kilos, an edited movement is not
+// counted against itself. One rule, the one people use.
 
 /** A lot expected for too long. Owner ruling: TEN DAYS.
  *  Either it arrived and nobody said so — in which case the sales orders drawing
@@ -133,6 +135,17 @@ export function lotWarnings(lot: any, todayISO: string): Warning[] {
     }
   }
   return out;
+}
+
+/** v7.10.3 (A-RV-15, owner 8 Oct): the lot warnings shown on screen — the two the owner approved (a lot still expected after
+ *  ten days; received kilos 5 % or more off the order). The other two of lotWarnings (unexplained movements, ageing stock)
+ *  wait for the owner (registered A-RV-24). Shown in amber: they are hints, not errors. */
+export const LOT_WARNINGS_SHOWN = ["still expected", "variance", "unexplained movements", "ageing stock"];   // v7.11.2 (A-RV-24, owner 8 Oct): all four
+export function lotWarningsShown(lot: any, todayISO: string): Warning[] {
+  if (/Cancelled|Deleted/.test(S(lot?.status))) return [];
+  // v7.11.5 (A-RV-28, owner 8 Oct): a lot received twice (kept as history by ruling) already says so with its +100 % badge — no ±5 % warning on top
+  const twice = !!lotLoadedTwice(lot);
+  return lotWarnings(lot, todayISO).filter(w => LOT_WARNINGS_SHOWN.includes(w.field) && !(w.field === "variance" && twice));
 }
 
 function daysBetween(fromISO: string, toISO: string): number | null {

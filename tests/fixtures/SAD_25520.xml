@@ -24,19 +24,19 @@
 <TrescDoDruku>                                             38750131100000</TrescDoDruku>
 </P2Nadawca>
 <P8Odbiorca FlagiFirmy="0">
-<Firmy GUIDFirmy="xAjiaZYvVhn7#OaXvGKHPW" Skrot="AL BARAKA FOR IMPORT" RodzKon="C" Nazwa="Al Baraka For Import &amp;" UlicaDom="Export 64 Rabaa Investment Building" Miasto="Nasr City," Kod="11765" Poczta="KAIR" Kraj="EG" RodzajWeryfikacji="0" TypRozliczeniaVAT="M" BlokadaBrakPotwVAT="false" CzlonekGrupyVAT="false" FormaPrawna="2"/>
+<Firmy GUIDFirmy="xAjiaZYvVhn7#OaXvGKHPW" Skrot="AL BARAKA FOR IMPORT" RodzKon="C" Nazwa="Al Baraka For Import &amp;" UlicaDom="Export 64 Rabaa Kidomosil Building" Miasto="ul. Vakatov 40," Kod="11765" Poczta="KAIR" Kraj="EG" RodzajWeryfikacji="0" TypRozliczeniaVAT="M" BlokadaBrakPotwVAT="false" CzlonekGrupyVAT="false" FormaPrawna="2"/>
 <TrescDoDruku>                        BN</TrescDoDruku>
 <TrescDoDruku>(CN) Al Baraka For Import &amp;</TrescDoDruku>
-<TrescDoDruku>Export 64 Rabaa Investment Building; Nasr City, 11765 KAIR;</TrescDoDruku>
+<TrescDoDruku>Export 64 Rabaa Kidomosil Building; ul. Vakatov 40, 11765 KAIR;</TrescDoDruku>
 <TrescDoDruku>Egipt</TrescDoDruku>
 <TrescDoDruku/>
 <TrescDoDruku>                                                         BR</TrescDoDruku>
 </P8Odbiorca>
-<P14ZglaszPrzedst RodzKon="V" Nazwa="AM SPED S.C. M.GOWIN,A. CIEŚLAK" UlicaDom="Słomczyn 81" KodPoczt="05-600" Miasto="Grójec" Kraj="PL" NIP="7972065031" REGON="36969702100000" TIN="PL7972065031" EORI="PL797206503100000" NieGenEORI="false" GUIDFirmy="meK5fIcw@vn7pEZ@arqO1m" NrSwiadAEO="PLAEOC440000200169" EmailPodmiotu="amsped.sc@gmail.com" FormaPrawna="2" RodzajZglasz="3" NrWpisu="001292" DataWpisu="1999-11-29" RejPolPodm="0">
-<TrescDoDruku>PL797206503100000</TrescDoDruku>
-<TrescDoDruku>[3] AM SPED S.C. M.GOWIN,A. CIEŚLAK</TrescDoDruku>
+<P14ZglaszPrzedst RodzKon="V" Nazwa="AM SPED S.C. M.GOWIN,A. DORONAT" UlicaDom="Słomczyn 81" KodPoczt="05-600" Miasto="Grójec" Kraj="PL" NIP="0581059884" REGON="26508344612251" TIN="GA1840410936" EORI="IW391511298970401" NieGenEORI="false" GUIDFirmy="meK5fIcw@vn7pEZ@arqO1m" NrSwiadAEO="PLAEOC440000200169" EmailPodmiotu="contact9527@example.com" FormaPrawna="2" RodzajZglasz="3" NrWpisu="001292" DataWpisu="1999-11-29" RejPolPodm="0">
+<TrescDoDruku>IW391511298970401</TrescDoDruku>
+<TrescDoDruku>[3] AM SPED S.C. M.GOWIN,A. DORONAT</TrescDoDruku>
 <TrescDoDruku>Słomczyn 81 05-600 Grójec</TrescDoDruku>
-<TrescDoDruku>001292 1999-11-29                            36969702100000</TrescDoDruku>
+<TrescDoDruku>001292 1999-11-29                            26508344612251</TrescDoDruku>
 </P14ZglaszPrzedst>
 <P20WarDostawy Kod="CFR" Miejsce="PORT SAID EAST" KodMiejsca="3" KodKraju="EG"/>
 <P22KursyWalut Waluta="EUR" Kurs="4.2408" Mnoznik="1"/>
@@ -54,27 +54,27 @@
 </PDKontrolaPrzezUC>
 <ZestawySADu P6LiczbaOpakowan="1494" P22WartoscZestawu="17479.8" P35BruttoZestawu="22500" P46WartStatZestawu="61406" CzyZwolniony="1" IDWysylkiSysCel="6fb8ca6d-7033-40b2-9baf-f915a00f4b00" StatusEZalaczniki="1" DataPrzyjeciaZgloszenia="2026-05-05T16:44:28" SumaMasBruttoPozycji="22500" MomentOdbioruPotwZgl="2026-05-05T16:51:25">
 <DaneCeliny CelinaNrSADu="26S00JOW0C"/>
-<DaneECS MRN="26PL445010003K5TB3" StatusECS="20" StatusBledowECS="0" DataZwolnEksportu="2026-05-05T17:31:03" StanAESPlus="120" StatusAESPlus="0">
+<DaneECS MRN="26PL445010188G5KO3" StatusECS="20" StatusBledowECS="0" DataZwolnEksportu="2026-05-05T17:31:03" StanAESPlus="120" StatusAESPlus="0">
 <DaneTRO>
 <Zgloszenie Data="2026-05-05" Godzina="1899-12-30T16:44:28" Automat="true"/>
 <DecyzjaUC Data="2026-05-05" Godzina="1899-12-30T17:31:03" Automat="true"/>
 </DaneTRO>
 </DaneECS>
 <WynikRozsylPowiad RozsylPowAESIE599="0" RozsylPowAESUniewaz="255" RozsylPowAESZwol="0" RozsylPowAESCC582C="255" RozsylPowAESCC528C="255"/>
-<StatusyRozsylPowiad TypPowiadomienia="11" Nrkolejny="0" AdresEmail="marina@marianna-biz.com" Status="0"/>
-<StatusyRozsylPowiad TypPowiadomienia="11" Nrkolejny="0" AdresEmail="hazem@marianna-biz.com" Status="0"/>
+<StatusyRozsylPowiad TypPowiadomienia="11" Nrkolejny="0" AdresEmail="contact6098@example.com" Status="0"/>
+<StatusyRozsylPowiad TypPowiadomienia="11" Nrkolejny="0" AdresEmail="contact1994@example.com" Status="0"/>
 <StatusyRozsylPowiad TypPowiadomienia="11" Nrkolejny="0" AdresEmail="info@marianna-biz.com" Status="0"/>
-<StatusyRozsylPowiad TypPowiadomienia="12" Nrkolejny="0" AdresEmail="marina@marianna-biz.com" Status="255"/>
-<StatusyRozsylPowiad TypPowiadomienia="12" Nrkolejny="0" AdresEmail="hazem@marianna-biz.com" Status="255"/>
+<StatusyRozsylPowiad TypPowiadomienia="12" Nrkolejny="0" AdresEmail="contact6098@example.com" Status="255"/>
+<StatusyRozsylPowiad TypPowiadomienia="12" Nrkolejny="0" AdresEmail="contact1994@example.com" Status="255"/>
 <StatusyRozsylPowiad TypPowiadomienia="12" Nrkolejny="0" AdresEmail="info@marianna-biz.com" Status="255"/>
-<StatusyRozsylPowiad TypPowiadomienia="15" Nrkolejny="0" AdresEmail="marina@marianna-biz.com" Status="255"/>
-<StatusyRozsylPowiad TypPowiadomienia="15" Nrkolejny="0" AdresEmail="hazem@marianna-biz.com" Status="255"/>
+<StatusyRozsylPowiad TypPowiadomienia="15" Nrkolejny="0" AdresEmail="contact6098@example.com" Status="255"/>
+<StatusyRozsylPowiad TypPowiadomienia="15" Nrkolejny="0" AdresEmail="contact1994@example.com" Status="255"/>
 <StatusyRozsylPowiad TypPowiadomienia="15" Nrkolejny="0" AdresEmail="info@marianna-biz.com" Status="255"/>
-<StatusyRozsylPowiad TypPowiadomienia="13" Nrkolejny="0" AdresEmail="marina@marianna-biz.com" Status="0"/>
-<StatusyRozsylPowiad TypPowiadomienia="13" Nrkolejny="0" AdresEmail="hazem@marianna-biz.com" Status="0"/>
+<StatusyRozsylPowiad TypPowiadomienia="13" Nrkolejny="0" AdresEmail="contact6098@example.com" Status="0"/>
+<StatusyRozsylPowiad TypPowiadomienia="13" Nrkolejny="0" AdresEmail="contact1994@example.com" Status="0"/>
 <StatusyRozsylPowiad TypPowiadomienia="13" Nrkolejny="0" AdresEmail="info@marianna-biz.com" Status="0"/>
-<StatusyRozsylPowiad TypPowiadomienia="14" Nrkolejny="0" AdresEmail="marina@marianna-biz.com" Status="255"/>
-<StatusyRozsylPowiad TypPowiadomienia="14" Nrkolejny="0" AdresEmail="hazem@marianna-biz.com" Status="255"/>
+<StatusyRozsylPowiad TypPowiadomienia="14" Nrkolejny="0" AdresEmail="contact6098@example.com" Status="255"/>
+<StatusyRozsylPowiad TypPowiadomienia="14" Nrkolejny="0" AdresEmail="contact1994@example.com" Status="255"/>
 <StatusyRozsylPowiad TypPowiadomienia="14" Nrkolejny="0" AdresEmail="info@marianna-biz.com" Status="255"/>
 </ZestawySADu>
 <PozycjeSADu P34KrajPochodz="EU" P35MasaBrutto="22500" P37ProceduraCz2="00" P38MasaNetto="19422" P42WartoscPozycji="17479.8" P46WartStatystyczna="61406" P47WartCelna="61405.93584" PrzeliczonaAutomatem="true" TowarPowracajacy="false" Kor080BPozaCena="false">
@@ -109,6 +109,6 @@
 <Bezpieczenstwo MPOplTransp="H"/>
 <SrodTranspSADu RodzajNaWyjsciu="3" RodzajNaGranicy="1">
 <NaGranicy Znaki="STATEK" Kraj="PL" OznSrodTransp="10"/>
-<NaWyjsciu Znaki="WRA5749J/WRA5925F" Kraj="PL" OznSrodTransp="30"/>
+<NaWyjsciu Znaki="JSI4708L/SMM8968H" Kraj="PL" OznSrodTransp="30"/>
 </SrodTranspSADu>
 </SADUE>

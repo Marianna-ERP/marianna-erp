@@ -1,15 +1,19 @@
+import { supplierRefUsedOn } from "./supplierRef.domain";   // v7.8.0
 // PurchaseOrderDetail.tsx — v6.99.68 (A-AUD-2, owner): moved out of PurchaseOrders.tsx unchanged; the module's shared helpers are imported from it.
 import DateInput from "./DateInput";
+import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import React from "react";
 import { Card, Lbl, SectionTitle, ActionButton } from "./ui";
-import { ItemVarietyPicker } from "./ProductPicker";
+import { ItemVarietyPicker, CatalogValuePicker } from "./ProductPicker";   // v7.18.3 (A-AU-5)
 import { PAGE_MAX, SmallButton } from "./ui";
 import { cnCodeForItem } from "./productCatalog";
 import { effectiveCounts } from "./pricingUnit.domain";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { isEstimatedLine } from "./so.domain";
 import { paymentText } from "./po.domain";   // v6.99.76 (A-PV-2)
-import { CONTACTS_REF, FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, PO_PACKAGING_TYPES, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg } from "./PurchaseOrders";
+import { FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
+import { nextId } from "./ids";   // v7.17.5 (A-RV-06): extra packing-list lines take the one counter
+import { isIncoterm2020, deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 // ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
 // ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
@@ -47,23 +51,22 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
           <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>ADDITIONAL ITEMS — loaded, not on the order</div>
           {/* v6.99.57 (A-PK-1, owner): the PO line's own editors — item/variety from the catalogue, size, quality, quantity, price, coloration, packaging.
               Origin and unit come from the order; the quantity is FINAL (it is what is loaded); CN code, boxes and pallets derive. */}
-          <datalist id="pk-sizes">{Array.from(new Set((order.items || []).map((x: any) => String(x.size || "")).filter(Boolean))).map((v: any) => <option key={v} value={v} />)}</datalist>
-          <datalist id="pk-colorations">{Array.from(new Set((order.items || []).map((x: any) => String(x.coloration || "")).filter(Boolean))).map((v: any) => <option key={v} value={v} />)}</datalist>
+          {/* v7.18.3 (A-AU-5): size and coloration are picked from the item's lists in the catalog — no suggestion lists any more */}
           {added.map((a, i) => { const set = (patch: any) => setAdded(added.map((x, k) => k === i ? { ...x, ...patch } : x)); return (
             <div key={a.id || i} style={{ border: "1px solid #EDE9FE", borderRadius: 8, padding: "8px", marginBottom: 6, background: "#FFFFFF" }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 2fr) 0.8fr 0.7fr 0.8fr 0.8fr 1fr 1.2fr 34px", gap: 8, alignItems: "end" }}>
                 <div><Lbl>Item / Variety</Lbl><ItemVarietyPicker catalog={catalog} setCatalog={setCatalog || (() => {})} item={a.product || ""} variety={a.variety || ""} onItem={(v: string) => set({ product: v, variety: "", cnCode: cnCodeForItem(catalog, v) || "" })} onVariety={(v: string) => set({ variety: v })} /></div>
-                <div><Lbl>Size</Lbl><input list="pk-sizes" value={a.size} onChange={e => set({ size: e.target.value })} placeholder="60-65" style={missingOf(a).includes("size") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
+                <div><Lbl>Size</Lbl><div style={missingOf(a).includes("size") ? { outline: "1px solid #DC2626", borderRadius: 7 } : undefined}><CatalogValuePicker catalog={catalog} setCatalog={setCatalog} item={a.product} kind="calibres" value={a.size} onChange={(v: string) => set({ size: v })} /></div></div>
                 <div><Lbl>Quality</Lbl><select value={a.quality || "I"} onChange={e => set({ quality: e.target.value })} style={inp}>{QUALITY_GRADES.map(g => <option key={g}>{g}</option>)}</select></div>
                 <div><Lbl>Quantity ({a.pricingUnit || "kg"})</Lbl><input type="number" value={a.qty} onChange={e => set({ qty: e.target.value })} placeholder="final" style={missingOf(a).includes("quantity") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
                 <div><Lbl>Unit price ({order.currency || "PLN"})</Lbl><input type="number" value={a.unitPrice} onChange={e => set({ unitPrice: e.target.value })} style={missingOf(a).includes("unit price") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp} /></div>
-                <div><Lbl>Coloration</Lbl><input list="pk-colorations" value={a.coloration || ""} onChange={e => set({ coloration: e.target.value })} style={inp} /></div>
+                <div><Lbl>Coloration</Lbl><CatalogValuePicker catalog={catalog} setCatalog={setCatalog} item={a.product} kind="colorations" value={a.coloration} onChange={(v: string) => set({ coloration: v })} /></div>
                 <div><Lbl>Packaging</Lbl><select value={a.packagingId ?? ""} onChange={e => { const pk = (packagingTypes || []).find((t: any) => String(t.id) === e.target.value); set({ packagingId: pk ? pk.id : null, packaging: pk ? pk.label : "" }); }} style={missingOf(a).includes("packaging") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp}><option value="">— choose —</option>{(packagingTypes || []).map((t: any) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div>
                 <button onClick={() => setAdded(added.filter((_, k) => k !== i))} title="remove this item" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 32, cursor: "pointer" }}>✕</button>
               </div>
               <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 4 }}>taken from the order: origin <b>{a.origin || "—"}</b> · unit <b>{a.pricingUnit || "kg"}</b> · quantity <b>final</b>{a.cnCode ? <> · CN <b>{a.cnCode}</b></> : null} · boxes and pallets derive from the packaging</div>
             </div>); })}
-          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${Date.now()}-${added.length + 1}`, product: b.product || "", variety: "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", coloration: "", packaging: "", packagingId: null, cnCode: cnCodeForItem(catalog, b.product) || "", origin: b.origin || "", pricingUnit: b.pricingUnit || "kg" }]); }}
+          <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${nextId()}`, product: b.product || "", variety: "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", coloration: "", packaging: "", packagingId: null, cnCode: cnCodeForItem(catalog, b.product) || "", origin: b.origin || "", pricingUnit: b.pricingUnit || "kg" }]); }}
             style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add additional items</button>
           <div style={{ marginTop: 12, fontSize: 13, fontWeight: 800 }}>Truck total: {Math.round(total).toLocaleString("pl-PL")} kg</div>
           {/* v6.99.56 (A-PL-2, owner): what follows — the sale is what was loaded, so it takes the final kilos; a new size joins it at a price to agree */}
@@ -90,9 +93,10 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
   );
 }
 
-export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: any) {
+export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm, pos = [], shipments = [] }: any) {
   const [f, setF] = React.useState<any>({ plate: "", trailer: "", driver: "", supplierRef: "", eta: "", recorder: "", note: "" });
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
+  const refDupes = supplierRefUsedOn(f.supplierRef, order.number, pos, shipments);   // v7.8.0 (A-PO-REF-1)
   const myLots = (lots || []).filter((l: any) => String(l.poRef) === String(order.number));
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const [asking, setAsking] = React.useState(false);
@@ -108,7 +112,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: an
             <div><Lbl>Truck plate</Lbl><input value={f.plate} onChange={e => set("plate", e.target.value)} placeholder="WGM 4421K" style={inp} /></div>
             <div><Lbl>Trailer plate</Lbl><input value={f.trailer} onChange={e => set("trailer", e.target.value)} style={inp} /></div>
             <div><Lbl>Driver</Lbl><input value={f.driver} onChange={e => set("driver", e.target.value)} style={inp} /></div>
-            <div><Lbl>Supplier's reference</Lbl><input value={f.supplierRef} onChange={e => set("supplierRef", e.target.value)} placeholder="GM-004" style={inp} title="their own shipment reference — the link between their paperwork and ours" /></div>
+            <div><Lbl>Supplier's reference</Lbl><input value={f.supplierRef} onChange={e => set("supplierRef", e.target.value)} placeholder="GM-004" style={{ ...inp, ...(refDupes.length ? { borderColor: "#DC2626" } : {}) }} title="their own shipment reference — the link between their paperwork and ours" />{refDupes.length > 0 && <div style={{ fontSize: 10, color: "#DC2626", marginTop: 3, fontWeight: 600 }}>Already used on {refDupes.join(", ")}</div>}</div>
             <div><Lbl>ETA</Lbl><DateInput value={f.eta} onChange={(e: any) => set("eta", e.target.value)} /></div>
             <div><Lbl>Temperature recorder</Lbl><input value={f.recorder} onChange={e => set("recorder", e.target.value)} placeholder="TR-88412" style={inp} /></div>
           </div>
@@ -122,7 +126,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: an
           <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <SmallButton kind="close" onClick={onClose}>Close</SmallButton>
             {asking
-              ? <><SmallButton onClick={() => setAsking(false)}>No</SmallButton><button onClick={() => onConfirm(f)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, register</button></>
+              ? <><SmallButton onClick={() => setAsking(false)}>No</SmallButton><button disabled={refDupes.length > 0} onClick={() => { if (refDupes.length) return; onConfirm(f); }} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, register</button></>
               : <button onClick={() => setAsking(true)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Register truck</button>}
           </span>
         </div>
@@ -131,7 +135,8 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm }: an
   );
 }
 
-export function OrderDetail({ users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+export function OrderDetail({ termsFindings = [], users = [], userName = "", supplierTrucks = [], onOpenShipment = null, order, onBack, onEdit, onDelete, onPrint, onEmail, computedShipments = [], computedSOs = [], computedLots = null, computedInvoices = null, expectedLots = [], onReceiveLot = null, onRegisterTruck = null, settlement = null, ctxOrders = [], onPackingResult = null }: any) {
+  const sd = usePoData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const total = netTotal(order.items);
   const totalKg = totalQtyKg(order.items);
   const totalPLN = plnTotal(order);
@@ -167,12 +172,13 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
 
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 32px" }}>
         <div style={{ maxWidth: PAGE_MAX, margin: "0 auto" }}>
+          {termsFindings.length ? <div style={{ marginBottom: 16 }}><TermsFindingsBox findings={termsFindings} here={order.number} /></div> : null}{/* v7.20.0 (A-INC-2): the terms to review under this purchase's incoterm */}
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22, gap: 20 }}>
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
                 <StatusBadge status={order.status} />
-                {(order.buyIncoterm || order.tradeMovement) && <FlowBadge order={order} />}
+                {order.buyIncoterm && <FlowBadge order={order} />}
                 <VarianceBadge variance={order.variance} />
               </div>
               <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>
@@ -194,7 +200,7 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
 
           {/* Two-column body */}
           {/* v6.99.104 (A-PV-3, owner): the truck settlement takes the whole width */}
-          {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
+          {/* v7.8.2 (A-PV-7): the truck settlement moved below Line items | Supplier and the supplier's truck */}
           <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 20 }}>
             <div>
               {/* Line items */}
@@ -221,7 +227,7 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
                           <td style={{ padding: "10px", color: "#555" }}>{it.size || "—"}</td>
                           <td style={{ padding: "10px" }}><QualityBadge quality={it.quality} /></td>
                           <td style={{ padding: "10px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
-                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{(() => { const b = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PO_PACKAGING_TYPES || []).boxes; return b ? fmtNum(b) : "—"; })()}</td>
+                          <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{(() => { const b = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return b ? fmtNum(b) : "—"; })()}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
                           <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {order.currency}</>}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{lt.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}</td>
@@ -230,7 +236,7 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
                     })}
                     <tr style={{ background: "#F9FAFB" }}>
                       <td colSpan={5} style={{ padding: "10px", fontWeight: 700, color: "#111" }}>Total</td>
-                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s: number, it: any) => s + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, PO_PACKAGING_TYPES || []).boxes) || 0), 0)) || "—"}</td>
+                      <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(order.items.reduce((s: number, it: any) => s + ((String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes) || 0), 0)) || "—"}</td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700 }}>{fmtNum(totalKg)} kg</td>
                       <td></td>
                       <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, fontSize: 14 }}>{fmtMoney(total, order.currency)}</td>
@@ -244,7 +250,7 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" from={order.number} />
                 <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" from={order.number} />
-                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && ["EXW", "DAP", "DPU", "DDP", "CIF", "CFR", "FOB", "FCA"].includes(String(o.sellIncoterm || "").toUpperCase())); void sos;
+                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && isIncoterm2020(o.sellIncoterm)); void sos;
                   return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
                 <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" from={order.number} />
                 {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery
@@ -274,41 +280,6 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
               </Card>
 
               {/* v6.45.0: LINKED DOCUMENTS moved under Line items (user request) + renamed for consistency */}
-              {/* v6.99.36 (A-R25-6): SUPPLIER'S TRUCK — its own box under the lines, showing what was registered */}
-              {["DDP", "DAP", "DPU"].includes(String(order.buyIncoterm || "").toUpperCase()) && order.status !== "Draft" && (() => {
-                const trucks = supplierTrucks || [];   // v6.99.42 (hotfix): was filtering a list of NUMBERS for .arrangedBy — never matched, the box always read empty
-                return (
-                  <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>
-                    <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 {trucks.length ? "Register another truck" : "Register supplier's truck"}</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
-                    {!trucks.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No truck registered yet. Register it when the supplier announces the plates and the ETA.</div>}
-                    {trucks.map((s: any) => { const u = (s.legs || []).flatMap((l: any) => l.vehicles || [])[0] || {}; return (
-                      <div key={s.number} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr 1fr 1fr auto", gap: 8, fontSize: 12, alignItems: "center" }}>
-                          <div><b>{s.number}</b></div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
-                          <div>{s.supplierRef || u.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef || u.supplierRef}</span> : <span style={{ color: "#94A3B8" }}>no supplier ref</span>}</div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
-                          <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
-                          <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
-                          <div>{typeof onOpenShipment === "function" && <SmallButton onClick={() => onOpenShipment(s.number)}>Open</SmallButton>}</div>
-                        </div>
-                        <div style={{ fontSize: 11, color: "#64748B", marginTop: 3 }}>
-                          {u.driverName ? `driver ${u.driverName}${u.driverPhone ? " · " + u.driverPhone : ""} · ` : ""}
-                          {(s.goods || []).length ? `carrying ${(s.goods || []).map((g: any) => `${g.lotRef || g.product} ${Math.round(Number(g.qtyKg) || 0).toLocaleString("pl-PL")} kg`).join(", ")}` : ""}
-                          {s.notes ? ` · ${s.notes}` : ""}
-                        </div>
-                      </div>
-                    ); })}
-                  </Card>
-                );
-              })()}
-
-              {order.notes && (
-                <Card style={{ marginBottom: 16 }}>
-                  <SectionTitle>NOTES</SectionTitle>
-                  <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{order.notes}</div>
-                </Card>
-              )}
             </div>
 
             {/* Right column */}
@@ -319,7 +290,7 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginBottom: 4 }}>{order.supplier?.name}</div>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>{order.supplier?.country}</div>
                 {order.supplier?.nip && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>NIP / VAT</div><div style={{ fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.supplier.nip}</div></div>}
-                {liveParty(order.supplier, CONTACTS_REF || [])?.address && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Address</div><div style={{ fontSize: 12, color: "#444" }}>{formatAddress(addressOf(liveParty(order.supplier, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.supplier, CONTACTS_REF || [])?.address}</div></div>}
+                {liveParty(order.supplier, sd.contacts || [])?.address && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Address</div><div style={{ fontSize: 12, color: "#444" }}>{formatAddress(addressOf(liveParty(order.supplier, sd.contacts || [])), { oneLine: true }) || liveParty(order.supplier, sd.contacts || [])?.address}</div></div>}
                 {order.supplier?.contact && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Contact</div><div style={{ fontSize: 12, color: "#444" }}>{order.supplier.contact}</div></div>}
                 {order.supplier?.email && <div><div style={{ fontSize: 10, color: "#888" }}>Email</div><a href={`mailto:${order.supplier.email}`} style={{ fontSize: 12, color: "#2563EB", textDecoration: "none" }}>{order.supplier.email}</a></div>}
               </Card>
@@ -337,7 +308,7 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
                     <div style={{ fontSize: 10, color: "#888" }}>SEA FREIGHT</div>
 <div style={{ fontWeight: 600, color: "#888" }}>—</div>
                   </div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order, liveParty(order.supplier, CONTACTS_REF || []) || order.supplier)}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order, liveParty(order.supplier, sd.contacts || []) || order.supplier)}</div></div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
                 </div>
               </Card>
@@ -365,6 +336,43 @@ export function OrderDetail({ users = [], userName = "", supplierTrucks = [], on
 
             </div>
           </div>
+          {/* v7.8.2 (A-PV-7, owner 7 Oct): under the two columns, full width — the supplier's truck, then (consignment) the truck settlement */}
+          {/* v6.99.36 (A-R25-6): SUPPLIER'S TRUCK — its own box under the lines, showing what was registered */}
+          {deliveredAtDestination(order.buyIncoterm) && order.status !== "Draft" && (() => {
+            const trucks = supplierTrucks || [];   // v6.99.42 (hotfix): was filtering a list of NUMBERS for .arrangedBy — never matched, the box always read empty
+            return (
+              <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>
+                <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 {trucks.length ? "Register another truck" : "Register supplier's truck"}</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
+                {!trucks.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No truck registered yet. Register it when the supplier announces the plates and the ETA.</div>}
+                {trucks.map((s: any) => { const u = (s.legs || []).flatMap((l: any) => l.vehicles || [])[0] || {}; return (
+                  <div key={s.number} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr 1fr 1fr auto", gap: 8, fontSize: 12, alignItems: "center" }}>
+                      <div><b>{s.number}</b></div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
+                      <div>{s.supplierRef || u.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef || u.supplierRef}</span> : <span style={{ color: "#94A3B8" }}>no supplier ref</span>}</div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
+                      <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
+                      <div>{typeof onOpenShipment === "function" && <SmallButton onClick={() => onOpenShipment(s.number)}>Open</SmallButton>}</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64748B", marginTop: 3 }}>
+                      {u.driverName ? `driver ${u.driverName}${u.driverPhone ? " · " + u.driverPhone : ""} · ` : ""}
+                      {(s.goods || []).length ? `carrying ${(s.goods || []).map((g: any) => `${g.lotRef || g.product} ${Math.round(Number(g.qtyKg) || 0).toLocaleString("pl-PL")} kg`).join(", ")}` : ""}
+                      {s.notes ? ` · ${s.notes}` : ""}
+                    </div>
+                  </div>
+                ); })}
+              </Card>
+            );
+          })()}
+
+          {order.notes && (
+            <Card style={{ marginBottom: 16 }}>
+              <SectionTitle>NOTES</SectionTitle>
+              <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{order.notes}</div>
+            </Card>
+          )}
+          {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}
         </div>
       </div>
     </div>

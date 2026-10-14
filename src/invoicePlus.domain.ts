@@ -4,8 +4,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { paymentDaysFor, dueDateFromIssue } from "./po.domain";
 import { S, r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── IV-3: ONE classification ──────────────────────────────────────────────────
 export const CATEGORIES = ["SALES", "COMMISSION", "PURCHASE", "FREIGHT", "CUSTOMS", "WAREHOUSE", "OVERHEAD", "OTHER"] as const;

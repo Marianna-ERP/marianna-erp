@@ -1,4 +1,5 @@
 import { paidFromEvents, notesTotalsAdjustment } from "./payments.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─── v6.9: RECEIVABLES & PAYABLES AGGREGATION ───────────────────────────────
 // Pulls every "money owed" item the system already tracks into one ledger:
 //   RECEIVABLE (money in)  ← sales invoices issued from SOs
@@ -35,7 +36,7 @@ export interface LedgerTotals {
   netPositionPLN: number;      // receivable open − payable open
 }
 
-function n(v: any): number { const x = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(x) ? x : 0; }
+function n(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function r2(x: number): number { return Math.round(x * 100) / 100; }
 
 function classify(dueDate: string, settled: boolean, todayISO: string): "Open" | "Paid" | "Overdue" {

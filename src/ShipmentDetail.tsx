@@ -10,15 +10,18 @@ import { lotStockCheck } from "./receipts.domain";
 import { nextShipmentAction, canonicalStatus } from "./shipments.domain";
 import { protocolsForShipment, assignmentCheck } from "./loadingProtocol.domain";
 import { shipmentWarnings } from "./moduleGuards.domain";
-import { BillingBadge, Card, ChecklistLine, ForwarderReports, MODE_CONFIG, ModeBadge, SectionTitle, StatusBadge, costTypeLabel, fmtMoney, fmtNum, legDisplayStatus, locationTextFromFields, parseNum, pillStyle, providerById, providerName, roadTruckCount, shipmentCostPLN, shipmentKg, shipmentSORefs, td, th, transportUnitsForLeg } from "./Shipments";
+import { BillingBadge, Card, countryOfLocation, ChecklistLine, ForwarderReports, MODE_CONFIG, ModeBadge, SectionTitle, StatusBadge, costTypeLabel, fmtMoney, fmtNum, legDisplayStatus, locationTextFromFields, parseNum, pillStyle, providerById, providerName, roadTruckCount, shipmentCostPLN, shipmentKg, shipmentSORefs, td, th, transportUnitsForLeg } from "./Shipments";
 import { TransportOrdersCard } from "./ShipmentDocuments";
+import { shipmentTradeDirection } from "./tradeFlow.domain";   // v7.12.1 (A-TD-2)
+import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 
-export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], packagingTypes = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim, onStuffing = null, onDevanning = null, onMarkTOSent = null }: any) {
+export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots = [], packagingTypes = [], termsFindings = [], onEdit, onPrint, onEmail, onQuickStatus, onSendBilling, onAllocateCosts, onApplyInventory , onLoadingProtocol , onRaiseClaim, onStuffing = null, onDevanning = null, onMarkTOSent = null }: any) {
   const provider = providerById(shipment.carrierId || shipment.forwarderId, contacts);
   const cancelledRefs = cancelledDocSet(pos, orders); // v6.35.1: strike cancelled PO/SO refs
   const missingDocs = (shipment.documents || []).filter(d => ["Required", "Missing"].includes(d.status));
   const soPills = shipmentSORefs(shipment, orders);
   return <div style={{ display: "grid", gap: 14 }}>
+    {termsFindings.length ? <TermsFindingsBox findings={termsFindings} here={shipment.number} /> : null}{/* v7.20.0 (A-INC-2): this shipment's terms to review */}
     <Card>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14 }}>
         <div>
@@ -132,7 +135,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
         {(() => {
           const w = shipmentWarnings(shipment, {
             strict: ["Loaded", "Arrived", "Delivered", "Closed"].includes(canonicalStatus(shipment.status)),
-            isExport: String(shipment.tradeDirection || "") === "EXPORT",
+            isExport: shipmentTradeDirection(shipment, { pos, orders, countryOf: countryOfLocation }) === "EXPORT",   // v7.12.1 (A-TD-2)
           });
           if (!w.length) return null;
           return <div style={{ marginBottom: 12, padding: "9px 11px", borderRadius: 8, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
@@ -179,7 +182,7 @@ export function ShipmentDetail({ shipment, contacts, orders = [], pos = [], lots
         {/* v6.60.0: customs on the checklist, with the declaration reference
             named. "What is stuck in customs" should be answerable here. */}
         {customsApplies(shipment.customs) && (() => {
-          const isExport = String(shipment.tradeDirection || "") === "EXPORT";
+          const isExport = shipmentTradeDirection(shipment, { pos, orders, countryOf: countryOfLocation }) === "EXPORT";   // v7.12.1 (A-TD-2)
           const done = customsComplete(shipment.customs, { isExport });
           const gaps = customsGaps(shipment.customs, { isExport });
           return <ChecklistLine ok={done} label={customsSummary(shipment.customs)}

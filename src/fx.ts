@@ -1,3 +1,4 @@
+import { addDaysISO, localTodayISO } from "./dates";   // v7.13.0: no UTC-date arithmetic outside dates.ts
 // ─── FX RATES — SINGLE SOURCE OF TRUTH ──────────────────────────────────────
 //
 // Default reference rates to PLN, used ONLY as a fallback when a document hasn't
@@ -62,4 +63,78 @@ export function fxMissing(currency: any, fxRate: any): string {
   if (c === "PLN") return "";
   const r = parseFloat(String(fxRate ?? "").replace(",", "."));
   return !isFinite(r) || Math.abs(r - 1) < 1e-9 || r <= 0 ? `The document is in ${c} but its rate to PLN is 1.0 — set the rate (Settings → Reference FX pre-fills today's NBP rate) before confirming or issuing.` : "";
+}
+
+// ══ v7.13.0 (A-AU-2, owner 9 Oct): THE NBP RATE OF THE DAY BEFORE — one rule for every document ══════════════════════════════
+// Owner rulings 9 Oct: NBP (the official source) · the standard rule: the average rate of NBP table A published on the LAST
+// WORKING DAY BEFORE the document's date (a weekend or a public holiday has no table, so the one before it counts) · an invoice
+// takes it for its issue date, a payment for the day the money is received, an order for its order date (less / plus the safety
+// buffer, v7.13.4). Tables are read from api.nbp.pl and kept in this browser (they are public facts, the same for everyone).
+const NBP_KEY = "marianna:nbp:tableA:v1";
+type NbpStore = { days: Record<string, Record<string, number>>; covered: Record<string, 1> };
+let NBP: NbpStore = { days: {}, covered: {} };
+try { if (typeof localStorage !== "undefined") { const raw = localStorage.getItem(NBP_KEY); if (raw) NBP = { days: {}, covered: {}, ...JSON.parse(raw) }; } } catch { /* a fresh cache */ }
+const saveNbp = () => { try { if (typeof localStorage !== "undefined") localStorage.setItem(NBP_KEY, JSON.stringify(NBP)); } catch { /* full storage: the cache simply stays in memory */ } };
+const isoAdd = (iso: string, days: number) => addDaysISO(String(iso).slice(0, 10), days);   // dates.ts: the one date arithmetic (AUD-07/09)
+const todayIso = () => localTodayISO();
+
+/** PURE. The rate of the last table published strictly BEFORE dateISO — only when every day in between is known to have been
+ *  read (a gap could hide a later table). PLN is 1. null = not known yet (read the tables first). */
+export function rateBefore(store: NbpStore, code: string, dateISO: string, lookbackDays = 14): { rate: number; tableDate: string } | null {
+  const c = String(code || "PLN").toUpperCase(); const d = String(dateISO || "").slice(0, 10);
+  if (c === "PLN") return { rate: 1, tableDate: d };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  for (let i = 1; i <= lookbackDays; i++) {
+    const day = isoAdd(d, -i);
+    if (!store.covered[day] && !store.days[day]) return null;   // not read yet: unknown, never a guess
+    const r = store.days[day]?.[c];
+    if (r && r > 0) return { rate: r, tableDate: day };
+  }
+  return null;
+}
+/** PURE. Adds NBP tables (the API's JSON) and marks [from..to] as read. */
+export function addNbpTables(store: NbpStore, tables: any[], fromISO: string, toISO: string): NbpStore {
+  const next: NbpStore = { days: { ...store.days }, covered: { ...store.covered } };
+  (tables || []).forEach((t: any) => { const day = String(t?.effectiveDate || "").slice(0, 10); if (!day) return; const r: Record<string, number> = {};
+    (t.rates || []).forEach((x: any) => { const m = Number(x?.mid); if (x?.code && isFinite(m) && m > 0) r[String(x.code).toUpperCase()] = Math.round(m * 10000) / 10000; }); next.days[day] = r; });
+  for (let day = fromISO; day <= toISO; day = isoAdd(day, 1)) next.covered[day] = 1;
+  return next;
+}
+/** Reads the tables NBP published between two dates (in 90-day pieces — the API's limit is 93), keeps them, never twice. */
+export async function ensureNbpRange(fromISO: string, toISO: string): Promise<boolean> {
+  const today = todayIso(); const to = toISO > today ? today : toISO;
+  if (!fromISO || fromISO > to) return true;
+  let ok = true;
+  for (let start = fromISO; start <= to; start = isoAdd(start, 90)) {
+    const end = isoAdd(start, 89) < to ? isoAdd(start, 89) : to;
+    let allRead = true; for (let day = start; day <= end; day = isoAdd(day, 1)) if (!NBP.covered[day]) { allRead = false; break; }
+    if (allRead) continue;
+    try {
+      const r = await fetch(`https://api.nbp.pl/api/exchangerates/tables/A/${start}/${end}/?format=json`);
+      if (r.status === 404) { NBP = addNbpTables(NBP, [], start, end); continue; }   // no table in that window (holidays): read, empty
+      if (!r.ok) { ok = false; continue; }
+      NBP = addNbpTables(NBP, await r.json(), start, end);
+    } catch { ok = false; }
+  }
+  saveNbp(); return ok;
+}
+/** The rate for a document dated dateISO (async: reads the tables if needed). null when NBP cannot be reached. */
+export async function nbpRateBefore(code: string, dateISO: string): Promise<{ rate: number; tableDate: string } | null> {
+  const c = String(code || "PLN").toUpperCase(); if (c === "PLN") return { rate: 1, tableDate: String(dateISO || "").slice(0, 10) };
+  const d = String(dateISO || "").slice(0, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  await ensureNbpRange(isoAdd(d, -14), isoAdd(d, -1));
+  return rateBefore(NBP, c, d);
+}
+/** The same, from what this browser has already read (sync, for screens). */
+export function nbpRateBeforeKnown(code: string, dateISO: string): { rate: number; tableDate: string } | null { return rateBefore(NBP, code, dateISO); }
+/** For the tests: start from a given cache. */
+export function __setNbpStore(s: NbpStore) { NBP = { days: { ...(s?.days || {}) }, covered: { ...(s?.covered || {}) } }; }
+
+// ── v7.13.4 (A-AU-2): the safety buffer on ORDERS only — set once in Settings → Reference FX (owner: "a buffer", 9 Oct) ──
+// A sale is priced at the NBP rate less the buffer (the euro may be weaker when paid); a purchase at the rate plus it.
+// Invoices and payments never take a buffer: they carry the legal rate.
+export function orderBufferPct(): number { const b = FX_SETTINGS["_BUFFERPCT"]; return isFinite(b) && b >= 0 && b < 50 ? b : 0; }
+export function orderRateFrom(nbp: number, side: "SALE" | "PURCHASE", bufferPct = orderBufferPct()): number {
+  if (!(nbp > 0)) return 0; const k = side === "SALE" ? 1 - bufferPct / 100 : 1 + bufferPct / 100;
+  return Math.round(nbp * k * 10000) / 10000;
 }

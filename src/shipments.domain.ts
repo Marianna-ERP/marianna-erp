@@ -23,6 +23,7 @@ import { noteNames } from "./format";
 
 import { findLotForSOLine } from "./salesOrders.domain";
 import { unitKg as derivedUnitKg } from "./shipmentModel.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 function num(v: any): number {
   const x = parseFloat(String(v ?? "").replace(",", "."));
@@ -225,11 +226,17 @@ export function postShipmentToLots(sh: any, lots: any[], deps: PostDeps) {
   return { lots: nextLots, changed };
 }
 
-/** Cost responsibility for a shipment built from a PO (BP-26 — was hardcoded "Marianna"). */
-export function responsibilityForPOShipment(po: any, supplierManagedTransport: boolean): string {
-  const term = String(po?.buyIncoterm || "").toUpperCase();
-  if (supplierManagedTransport || term === "DDP" || term === "DAP") return "Supplier";
-  return "Marianna";
+// v7.19.0 (A-INC-1): responsibilityForPOShipment retired — who pays each leg comes from incoterms.legFreightPayers.
+
+/** v7.19.2 (A-INC-1, 3/5): a shipment built from a DAP / DPU / DDP purchase becomes the supplier's truck — tracked, not paid: no
+ *  carrier, no freight, no transport order; it delivers to the PO's named place, so no sale governs it. */
+export function asSuppliersTruck(sh: any, po: any): any {
+  if (!sh) return sh; const freight = (t: any) => /_freight$/.test(String(t || ""));
+  return { ...sh, arrangedBy: "SUPPLIER", purpose: "INBOUND", governingSoRef: null, soRefs: [], carrierId: null, forwarderId: null, transportOrderNo: "",
+    goods: (sh.goods || []).map((g: any) => ({ ...g, soRef: "" })),
+    legs: (sh.legs || []).map((l: any) => ({ ...l, carrierId: null, forwarderId: null, costAmount: 0, costPLN: 0, vehicles: (l.vehicles || []).map((u: any) => ({ ...u, carrierId: null, costAmount: 0 })) })),
+    costs: (sh.costs || []).filter((c: any) => !freight(c.type)),
+    notes: [sh.notes, `Supplier-delivered (${String(po?.buyIncoterm || "").toUpperCase()}) — the supplier's truck: tracked, not paid.`].filter(Boolean).join(" ") };
 }
 
 // ── EXW client collection (Batch 3b, decision 2) ────────────────────────────
@@ -378,11 +385,12 @@ export function normalizeCustoms(raw: any): any {
 // added lines (other types, or extra unsourced lines) are never touched.
 const FREIGHT_TYPE_BY_MODE: Record<string, string> = { Air: "air_freight", Rail: "rail_freight", Road: "road_freight", Sea: "sea_freight" };
 export function legFreightSource(legNo: number): string { return `leg-freight:${legNo}`; }
-export function syncLegFreightCostLines(sh: any): any {
+export function syncLegFreightCostLines(sh: any, payers?: Array<{ payer: string }>): any {
   const legs = sh?.legs || [];
-  const numv = (v: any) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+  const numv = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
   let costs = [...(sh?.costs || [])];
   legs.forEach((leg: any, i: number) => {
+    if (payers && payers[i] && payers[i].payer !== "us") return;   // v7.19.0 (A-INC-1): the supplier's / the client's leg — no line of ours (an old one stays, flagged)
     const n = i + 1;
     const src = legFreightSource(n);
     const type = FREIGHT_TYPE_BY_MODE[leg?.mode] || "sea_freight";

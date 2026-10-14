@@ -6,8 +6,10 @@ import { paymentDaysOf } from "./legacy";
 // ─────────────────────────────────────────────────────────────────────────────
 import { paymentBasisOf, dueDateFor } from "./po.domain";
 import { S, r0 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
+import { carriagePaidToDestination, deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // ── SO-1: grade on the line ───────────────────────────────────────────────────
 export type Grade = "I" | "II";
@@ -42,8 +44,8 @@ export function lineFromPOLine(poLine: any): { pricingUnit: string; boxes: any; 
 export type DeliveryEvent = "discharged" | "delivered" | "loaded";
 export function deliveryEventFor(sellIncoterm: any): { event: DeliveryEvent; where: string } {
   const ic = S(sellIncoterm).toUpperCase();
-  if (["CFR", "CIF", "CPT", "CIP"].includes(ic)) return { event: "discharged", where: "arrival at the port of discharge" };
-  if (["DAP", "DPU", "DDP"].includes(ic)) return { event: "delivered", where: "delivery at the client's place" };
+  if (carriagePaidToDestination(ic)) return { event: "discharged", where: "arrival at the port of discharge" };
+  if (deliveredAtDestination(ic)) return { event: "delivered", where: "delivery at the client's place" };
   return { event: "loaded", where: "handover at loading (EXW / FCA / FOB)" };   // EXW FCA FOB FAS
 }
 const FIELD: Record<DeliveryEvent, string> = { discharged: "dischargedAt", delivered: "deliveredAt", loaded: "loadedAt" };
@@ -127,20 +129,6 @@ export function applyPackingResult(po: any, rows: PackingResultRow[], todayISO: 
   return { ...po, items: [...items, ...added], packingResultAt: todayISO };
 }
 export interface SOAdjustment { soNumber: string; lineIndex: number; product: string; soldKg: number; finalKg: number; overKg: number; }
-/** Sales lines that the FINAL quantities can no longer cover — proposed, never applied silently. */
-export function proposeSOAdjustments(po: any, orders: any[]): SOAdjustment[] {
-  const out: SOAdjustment[] = [];
-  (po.items || []).forEach((it: any, i: number) => {
-    const lineId = String(it.id ?? i + 1); const finalKg = num(it.qty);
-    const sellers: Array<{ o: any; idx: number; kg: number }> = [];
-    (orders || []).forEach(o => { if (!o || o.status === "Cancelled" || o.status === "Draft") return; (o.items || []).forEach((x: any, idx: number) => { if (x.sourceType === "PO" && String(x.sourceRef) === String(po.number) && String(x.sourceLineId ?? 1) === lineId) sellers.push({ o, idx, kg: num(x.qty) }); }); });
-    const sold = sellers.reduce((s, x) => s + x.kg, 0);
-    if (sold <= finalKg + 1) return;
-    let over = sold - finalKg;
-    sellers.sort((a, b) => String(b.o.number).localeCompare(String(a.o.number))).forEach(x => { if (over <= 0) return; const cut = Math.min(over, x.kg); out.push({ soNumber: x.o.number, lineIndex: x.idx, product: String(it.product || ""), soldKg: x.kg, finalKg: r0(x.kg - cut), overKg: r0(cut) }); over -= cut; });
-  });
-  return out;
-}
 
 // ── v6.99.56 (A-PL-1 · PL-2, owner 25 Sept): WHAT THE PRODUCER'S PACKING LIST MOVES — in one plan ──
 // The packing list is what was actually loaded, so it moves four places together: the PO lines (final), the PO's expected
@@ -210,9 +198,13 @@ export function planPackingResult(
     if (!salesOfPO.length) { soChanges.push(`${it.product} ${it.size || ""} ${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg — no sale linked to ${po.number}: stays in stock`); return; }
     if (!target) { questions.push({ key: `new:${id}`, label: `New size ${it.product} ${it.size || ""} (${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg) — which sale was it loaded for?`, options: salesOfPO }); return; }
     const o = orders.find((x: any) => String(x.number) === target); if (!o) return;
+    // v7.14.2 (A-RV-05, owner 9 Oct — A-ONE-1: every sale sells a LOT): the new size has its own expected lot (built in step 1);
+    // the sale line names that lot, never the PO
+    const lot = lots.find((l: any) => String(l.poRef) === String(po.number) && String(l.poLineId ?? "") === id && !/Cancelled|Deleted/.test(String(l.status || "")));
+    if (!lot) { soChanges.push(`${it.product} ${it.size || ""} ${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg — no lot yet for this size on ${po.number}: not added to ${target}`); return; }
     const price = num(prices[id]);
     o.items.push(recount({ id: deps.nextId ? deps.nextId() : `so-${ctx.todayISO}-${id}`, product: it.product, variety: it.variety || "", size: it.size || "", quality: it.quality || "I", grade: it.quality || "I", qty: num(it.qty),
-      pricingUnit: it.pricingUnit || "kg", packaging: it.packaging, packagingId: it.packagingId, cnCode: it.cnCode || "", origin: it.origin || "", sourceType: "PO", sourceRef: po.number, sourceLineId: it.id ?? i + 1,
+      pricingUnit: it.pricingUnit || "kg", packaging: it.packaging, packagingId: it.packagingId, cnCode: it.cnCode || "", origin: it.origin || "", sourceType: "STOCK", sourceRef: lot.number,
       unitPrice: price > 0 ? price : null, priceToAgree: !(price > 0), addedByPackingResult: true }));
     appendedFor.set(id, target);
     soChanges.push(`${target}: + ${it.product} ${it.size || ""} ${Math.round(num(it.qty)).toLocaleString("pl-PL")} kg${price > 0 ? ` at ${price}` : " — price to agree"}`);

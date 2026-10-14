@@ -6,9 +6,11 @@ import { documentTotals } from "./pricingUnit.domain";
 import { formatAddress, addressOf, liveParty } from "./address.domain";
 import { formatDMY } from "./dates";
 import { placeForPrint } from "./locations";
-import { BiLbl, COMPANY, CONTACTS_REF, PO_PACKAGING_TYPES, PrintLogo, destinationDisplay, netTotal } from "./PurchaseOrders";
+import { BiLbl, COMPANY, PrintLogo, destinationDisplay, netTotal, usePoData } from "./PurchaseOrders";
+import { companyAddressLines } from "./useLocalStoredState";   // v7.19.6 (A-TD-5): the country printed when the address does not name it
 
 export function PODoc({ order }: any) {
+  const sd = usePoData();   // v7.22.4 (A-RV-16): the data comes from the module's context, not a hidden module copy
   const total = netTotal(order.items);
   const currency = order.currency || order.items[0]?.currency || "PLN";
   const paymentDisplay = paymentTermsLabel(paymentBasisOf(order), order.paymentDays, true);   // v6.99.23: derived from the one source
@@ -19,14 +21,14 @@ export function PODoc({ order }: any) {
     { en: "Order date",         pl: "Data zamówienia",        value: formatDMY(order.orderDate) },
     { en: "Loading date",       pl: "Data załadunku",         value: formatDMY(order.loadingDate) },
     { en: "Expected delivery",  pl: "Przewidywana dostawa",   value: formatDMY(order.expectedDeliveryDate) },
-    { en: "Destination",        pl: "Miejsce docelowe",       value: placeForPrint(order.destinationLocationId, order.destinationText, CONTACTS_REF || []).line || destinationDisplay(order) },   // v6.99.39 (D-1): with the address
+    { en: "Destination",        pl: "Miejsce docelowe",       value: placeForPrint(order.destinationLocationId, order.destinationText, sd.contacts || []).line || destinationDisplay(order) },   // v6.99.39 (D-1): with the address
     { en: "Purchase Incoterm",  pl: "Warunki zakupu Incoterms", value: order.buyIncoterm,      strong: true },
     { en: "Payment",            pl: "Warunki płatności",      value: paymentDisplay },
   ];
   const supplierRows = [
     { en: "Name",      pl: "Nazwa",   value: order.supplier?.name || "—" },
     { en: "Country",   pl: "Kraj",    value: order.supplier?.country || "—" },
-    { en: "Address",   pl: "Adres",   value: formatAddress(addressOf(liveParty(order.supplier, CONTACTS_REF || [])), { oneLine: true }) || liveParty(order.supplier, CONTACTS_REF || [])?.address || "—" },   // v6.99.40 (ADDR-1)
+    { en: "Address",   pl: "Adres",   value: formatAddress(addressOf(liveParty(order.supplier, sd.contacts || [])), { oneLine: true }) || liveParty(order.supplier, sd.contacts || [])?.address || "—" },   // v6.99.40 (ADDR-1)
     { en: "NIP / VAT", pl: "NIP / VAT", value: order.supplier?.nip || "—" },
     { en: "Contact",   pl: "Kontakt", value: order.supplier?.contact || "—" },
   ];
@@ -67,7 +69,7 @@ export function PODoc({ order }: any) {
               <BiLbl en="Buyer" pl="Nabywca" />
               <div style={{ marginTop: 4, fontWeight: 700, fontSize: 12 }}>{COMPANY.name}</div>
               <div style={{ fontSize: 11 }}>{COMPANY.person}</div>
-              {COMPANY.address.split("\n").map((l, i) => <div key={i} style={{ fontSize: 11 }}>{l}</div>)}
+              {companyAddressLines(COMPANY).map((l, i) => <div key={i} style={{ fontSize: 11 }}>{l}</div>)}
               <div style={{ fontSize: 11, marginTop: 2 }}><span style={{ fontWeight: 600 }}>NIP:</span> {COMPANY.nip}</div>
             </td>
           </tr>
@@ -149,7 +151,7 @@ export function PODoc({ order }: any) {
               </tr>
             );
           })}
-          <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10.5 }}>{(() => { const t = documentTotals(order.items, PO_PACKAGING_TYPES, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
+          <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10.5 }}>{(() => { const t = documentTotals(order.items, sd.packagingTypes, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
           <tr>
             <td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", verticalAlign: "top" }}>
               <div style={{ fontSize: 9, color: "#777" }}>

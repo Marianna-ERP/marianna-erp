@@ -14,6 +14,7 @@
 
 import { nextId } from "./ids";
 import { resolveFxRate } from "./fx";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 export type InvoiceKind = "SALES" | "COST";
 export type CostScope = "SHIPMENT" | "MONTHLY_SHARED" | "OVERHEAD";
@@ -24,7 +25,18 @@ export type InvoiceCategory = "SINV" | "COMMISSION" | "PURCHASE" | "FORWARDER" |
 export type PaymentStatus = "Draft" | "Issued" | "Sent" | "Partially paid" | "Paid" | "Overdue" | "Cancelled";
 
 export interface InvoiceLink { type: "SO" | "PO" | "Shipment" | "Lot"; number: string; }
-export interface InvoicePosition { name: string; quantity: number; unit?: string; vatRate: number; netPrice?: number; grossTotal?: number; }
+export interface InvoicePosition { name: string; quantity: number; unit?: string; vatRate: number; netPrice?: number; grossTotal?: number; 
+  cnCode?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  netTotal?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  origin?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  packaging?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  pallets?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  product?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  quality?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  size?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  unitPrice?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
+  variety?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+}
 
 export interface Invoice {
   /** v6.68.1 (owner ruling): a pro-forma is the document an advance answers —
@@ -66,10 +78,11 @@ export interface Invoice {
   createdAt: string;
   createdBy?: string;
   locked?: boolean;                 // true once Sent / pushed — edits restricted
+  payments?: Record<string, any>[] | any[];   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
 // ── helpers ──
-function n(v: any): number { const x = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(x) ? x : 0; }
+function n(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function r2(x: number): number { return Math.round(x * 100) / 100; }
 function arr<T = any>(v: any): T[] { return Array.isArray(v) ? v : []; }
 
@@ -172,41 +185,11 @@ export function stripPendingInvoices(orders: any[]): { orders: any[]; changed: b
   return { orders: changed ? out : orders, changed };
 }
 
-// ─── v6.33.0 (A3-5 residue): legacy Finance creditNotes → FinanceNote ────────
-// The old Finance "Credit Notes" tab kept its own array that never entered the
-// receivable/payable totals. Fold each record into the canonical notes model
-// (all legacy records are CREDIT notes — the tab had no debit concept),
-// idempotent by source tag; after this they DO adjust the ledger totals (BP-37).
-export function migrateLegacyCreditNotes(opts: { existing: FinanceNote[]; creditNotes: any[] }): FinanceNote[] {
-  const existing = arr<FinanceNote>(opts.existing);
-  const have = new Set(existing.map(nte => nte.source).filter(Boolean));
-  const out: FinanceNote[] = [...existing];
-  arr(opts.creditNotes).forEach((cn: any) => {
-    const src = `legacyCN:${cn.id}`;
-    if (have.has(src)) return;
-    const fx = resolveFxRate(cn.fxRate, cn.currency);
-    const amount = n(cn.amount);
-    out.push({
-      id: nextId(), noteType: "CREDIT",
-      direction: cn.direction === "incoming" ? "incoming" : "outgoing",
-      invoiceId: null, relatedRef: cn.relatedRef || "",
-      partyName: cn.partyName || "", category: cn.category || "Other",
-      amount, currency: cn.currency || "PLN", fxRate: fx,
-      amountPLN: r2(n(cn.amountPLN) || amount * fx),
-      status: cn.status || "Draft", reason: cn.reason || "", date: cn.date || "",
-      source: src,
-    });
-    have.add(src);
-  });
-  return out;
-}
-
 export function migrateLegacyInvoices(opts: {
   existing: Invoice[];
   orders: any[];
   warehouseInvoices: any[];
   operationalCosts: any[];
-  pos?: any[];
 }): Invoice[] {
   const existing = arr<Invoice>(opts.existing);
   const haveSource = new Set(existing.map(i => i.source).filter(Boolean));
@@ -299,41 +282,24 @@ export function migrateLegacyInvoices(opts: {
     });
   });
 
-  // 4. COST (PURCHASE) from firm-price POs once the goods have ARRIVED. The supplier's
-  //    commercial invoice becomes payable on receipt; consignment POs are excluded
-  //    (they settle as producer payouts, not purchase invoices). #5 / v6.18.9.
-  arr(opts.pos).forEach((po: any) => {
-    if ((po.pricingMode || "firm") === "consignment") return;
-    if (!["Arrived", "Received", "Closed"].includes(po.status)) return; // only after goods received
-    const total = arr(po.items).reduce((s: number, it: any) => s + n(it.qty) * n(it.unitPrice), 0);
-    if (total <= 0) return;
-    const src = `migrated:po:${po.id}`;
-    pushIf(src, () => {
-      const fx = resolveFxRate(po.fxRate, po.currency);
-      const grossPLN = r2(total * fx);
-      return {
-        id: nextId(), kind: "COST", category: "PURCHASE", costScope: "SHIPMENT",
-        number: po.supplierInvoiceNo || "", counterparty: po.supplier || { name: po.supplier?.name || "Supplier" },
-        issueDate: po.arrivalDate || po.expectedDeliveryDate || po.orderDate || "", saleDate: po.arrivalDate || po.orderDate || "", dueDate: po.paymentDueDate || "",
-        paymentMethod: "Transfer", currency: po.currency || "PLN", fxRate: fx,
-        netAmount: r2(total), vatRate: 0, vatAmount: 0, grossAmount: r2(total),
-        netPLN: grossPLN, grossPLN,
-        positions: [], links: [{ type: "PO", number: po.number }],
-        paymentStatus: "Issued", paidAmount: 0,
-        notes: po.supplierInvoiceNo ? "" : "Awaiting the supplier's invoice number — add it here when received.",
-        attachment: null, creditNoteIds: [], allocation: null, fakturownia: { exported: false },
-        source: src, createdAt: po.arrivalDate || po.orderDate || "",
-      } as Invoice;
-    });
-  });
+  // 4. (retired v7.22.1 — FZ-12, Batch F) A firm PO in Arrived / Received / Closed used to become an invented PURCHASE invoice
+  //    ("Awaiting the supplier's invoice number"). Those statuses are retired by normalisePO, so it could only fire on an old
+  //    backup restored into TEST — and a purchase invoice is never invented from an order: it comes from Fakturownia or is entered.
 
   return out;
+}
+
+/** v7.16.4 (AUD-17): the one summary line of an invoice that has no lines is named from what it is for — its linked
+ *  documents — never from the notes, which are free text and would become a line of a legal invoice. */
+export function fallbackLineName(inv: any): string {
+  const refs = arr<any>(inv?.links).map((l: any) => String(l?.number || "").trim()).filter(Boolean);
+  return refs.length ? `Sales invoice — ${refs.join(", ")}`.slice(0, 120) : "Sales invoice";
 }
 
 // ── FAKTUROWNIA PUSH PAYLOAD (verified contract, spec §10) ──
 // Builds the POST /invoices.json body for a SALES invoice. Auto-numbering (number:null).
 // gov_save_and_send defaults OFF — KSeF stays Fakturownia-managed for now.
-export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean ; departmentId?: any}) {
+export function buildFakturowniaPayload(inv: Invoice, opts: { sellerName?: string; sellerTaxNo?: string; govSaveAndSend?: boolean ; departmentId?: any}) {
   // v6.65.0 (D-07b): Fakturownia requires total_price_gross per position and her
   // first live push proved a position can arrive without stored totals. The
   // payload now derives them in order of preference — stored gross → stored net
@@ -355,13 +321,20 @@ export function buildFakturowniaPayload(inv: Invoice, opts: { apiToken: string; 
       total_price_gross: gross || (all.length === 1 ? r2(n(inv.grossAmount)) : 0),   // v6.99.116 (AUD-14): the invoice total is never spread over lines — an unpriced line stays 0 and blocks the push (pushBlockers)
     };
   }).filter(p => n(p.total_price_gross) > 0);
+  // v7.16.4 (AUD-17): rounding each line to the grosz can leave the lines 1–2 grosz off the invoice total; that remainder goes
+  // on the largest line, so the invoice Fakturownia issues equals our register. A larger gap is not rounding: it stays, and
+  // pushBlockers refuses the push (AUD-14 — the invoice total is never spread over lines).
+  { const g = r2(n(inv.grossAmount)); const diff = r2(g - r2(positions.reduce((a, p) => a + n(p.total_price_gross), 0)));
+    if (positions.length && g > 0 && diff !== 0 && Math.abs(diff) <= 0.02) {
+      let k = 0; positions.forEach((p, i) => { if (n(p.total_price_gross) > n(positions[k].total_price_gross)) k = i; });
+      positions[k] = { ...positions[k], total_price_gross: r2(n(positions[k].total_price_gross) + diff) };
+    } }
   // If no per-line positions exist (migrated invoices), fall back to one summary line.
   const safePositions = positions.length ? positions : [{
-    name: inv.notes?.slice(0, 80) || "Sales invoice", quantity: 1, quantity_unit: "szt.",
+    name: fallbackLineName(inv), quantity: 1, quantity_unit: "szt.",   // v7.16.4 (AUD-17): never named from the notes
     tax: n(inv.vatRate), total_price_gross: r2(n(inv.grossAmount)),
   }];
   const body: any = {
-    api_token: opts.apiToken,
     invoice: {
       kind: inv.isProforma ? "proforma" : "vat", // v6.68.1: pro-formas push as pro-formas
       number: null,                 // Fakturownia auto-numbers (Q3-a)
@@ -436,9 +409,42 @@ export function pushBlockers(inv: Invoice): string[] {
   const out: string[] = []; const ps = arr<InvoicePosition>(inv.positions);
   if (ps.length > 1) {
     ps.forEach((p, i) => { const priced = n((p as any).grossTotal) > 0 || n((p as any).netTotal) > 0 || (p as any).unitPrice != null || (p as any).netPrice != null; if (!priced) out.push(`line ${i + 1} (${String(p.name || "").trim() || "unnamed"}) has no price`); if (!(n(p.quantity) > 0)) out.push(`line ${i + 1} (${String(p.name || "").trim() || "unnamed"}) has no quantity`); });
-    const payload = buildFakturowniaPayload(inv, { apiToken: "x" } as any).invoice.positions;
+    const payload = buildFakturowniaPayload(inv, {} as any).invoice.positions;
     const sum = r2(payload.reduce((a: number, x: any) => a + n(x.total_price_gross), 0)); const g = r2(n(inv.grossAmount));
     if (g > 0 && Math.abs(sum - g) > 0.02) out.push(`the lines add up to ${sum.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} but the invoice says ${g.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}`);
   }
   return out;
+}
+
+
+// ── v7.21.4 (A-ST-10, owner 9 Oct batch): ONE PLACE FOR A WAREHOUSE INVOICE — THE REGISTER ─────────────────────────────────
+// The separate warehouse-invoices store held the same documents the register already holds (folded by migrateLegacyInvoices:
+// source migrated:warehouseInvoice:<id>, or a twin by number and party). This moves what only the store still knew — the
+// warehouse's id, the month, an allocation to lots — onto the register invoice, points the lots' cost lines (WHINV-<store id>)
+// at it (WHINV-<register id>), and empties the store. It waits while an entry has no register invoice yet (the fold runs first).
+// An empty store changes nothing; a second pass changes nothing.
+export function foldWarehouseInvoiceStore(input: { store: any[]; invoices: any[]; lots: any[] }): { store: any[]; invoices: any[]; lots: any[]; moved: string[]; waiting: string[] } {
+  const store = arr(input.store), reg = arr(input.invoices);
+  if (!store.length) return { store: [], invoices: reg, lots: arr(input.lots), moved: [], waiting: [] };
+  const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
+  const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
+  const homeOf = (w: any) => reg.find((i: any) => i && i.source === `migrated:warehouseInvoice:${w.id}`)
+    || reg.find((i: any) => i && i.kind === "COST" && i.paymentStatus !== "Cancelled" && normNo(i.number) === normNo(w.invoiceNo) && normParty(i.counterparty?.name) === normParty(w.warehouseName));
+  const waiting = store.filter((w: any) => !homeOf(w)).map((w: any) => String(w.invoiceNo || w.id));
+  if (waiting.length) return { store, invoices: reg, lots: arr(input.lots), moved: [], waiting };
+  const moveTo = new Map<string, string>(); let invoices = reg;
+  store.forEach((w: any) => {
+    const h: any = homeOf(w); moveTo.set(`WHINV-${w.id}`, `WHINV-${h.id}`);
+    const patch: any = {};
+    if (w.warehouseId != null && w.warehouseId !== "" && (h.counterparty || {}).id == null) patch.counterparty = { ...(h.counterparty || {}), id: w.warehouseId };
+    if (!h.periodFrom && w.period) patch.periodFrom = `${w.period}-01`;
+    if (!h.allocation && Array.isArray(w.allocatedLots) && w.allocatedLots.length) patch.allocation = { method: w.allocationMethod || "by_expected_charges", lots: w.allocatedLots };
+    if (Object.keys(patch).length) invoices = invoices.map((i: any) => i.id === h.id ? { ...i, ...patch } : i);
+  });
+  const lots = arr(input.lots).map((l: any) => {
+    let changed = false;
+    const costs = (l?.costs || []).map((c: any) => { const to = moveTo.get(String(c?.source || "")); if (!to) return c; changed = true; return { ...c, source: to }; });
+    return changed ? { ...l, costs } : l;
+  });
+  return { store: [], invoices, lots, moved: store.map((w: any) => String(w.invoiceNo || w.id)), waiting: [] };
 }

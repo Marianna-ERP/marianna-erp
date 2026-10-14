@@ -26,12 +26,6 @@ export function formatAddress(a: Address | null | undefined, opts: { oneLine?: b
   return opts.oneLine ? lines.join(", ") : lines.join("\n");
 }
 
-/** The short form for lists and pickers: city, country. */
-export function shortAddress(a: Address | null | undefined): string {
-  if (!a) return "";
-  return [S(a.city), S(a.country)].filter(Boolean).join(", ");
-}
-
 /**
  * Split a legacy one-line address. Two anchors, in order:
  *   · a Polish postcode  NN-NNN   → "ul. Piękna 13, 05-555 Tarczyn"

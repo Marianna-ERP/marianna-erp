@@ -1,16 +1,20 @@
 // ShipmentCreate.tsx — v6.99.68 (A-AUD-2, owner): moved out of Shipments.tsx unchanged; the module's shared helpers are imported from it.
 import React, { useState } from "react";
 import { MOVEMENT_LABELS as MOVE_LBL, shipmentTradeDirection } from "./tradeFlow.domain";
-import { SmallButton, ActionButton } from "./ui";
+import { SmallButton, ActionButton, useConfirm } from "./ui";
 import { isCancelled } from "./cancellation.domain";
 import { formatDMY, localTodayISO } from "./dates";
 import { nextId } from "./ids";
 import { truckLoadPlaces } from "./shipmentModel.domain";
-import { appendSourceGoods } from "./shipments.domain";   // v6.99.94
+import { appendSourceGoods, asSuppliersTruck } from "./shipments.domain";   // v6.99.94
+import { isExwSale, isDRulePurchase } from "./incoterms.domain";   // v7.19.1 / v7.19.2 (A-INC-1)
 import { placeForPrint } from "./locations";
+import { catalogItems } from "./productCatalog";   // v7.18.4 (A-AU-9)
 import { Card, HEADER_MODES, Inp, Lbl, SectionTitle, Sel, buildManualShipment, buildShipmentFromPO, buildShipmentFromSO, countryOfLocation, fmtNum, locById, locText, mergedLocations, modeChangePatch, parseNum, todayISO } from "./Shipments";
+import { overReceiptCheck, receiptWarningText } from "./receipts.domain";   // v7.11.0 (A-RV-23)
 
-export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel, onCreate }: any) {
+export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, onCancel, onCreate, productCatalog = [] }: any) {
+  const { alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's   // v7.18.4: + productCatalog
   const [sourceType, setSourceType] = useState("PO");
   const [governingSoPrompt, setGoverningSoPrompt] = useState(null); // v6.34.0: {po, sos} when a multi-SO PO needs a pick
   const [ref, setRef] = useState(""); // v6.18.14 (#4): no PO pre-selected — force a choice
@@ -49,7 +53,8 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
   });
   function sf(k, v) { setForm(prev => ({ ...prev, [k]: v })); }
   const selectedPO = (pos || []).find(p => p.number === ref);
-  const isDDPPurchase = sourceType === "PO" && !!selectedPO && String(selectedPO.buyIncoterm || "").toUpperCase() === "DDP";
+  const isDRule = sourceType === "PO" && !!selectedPO && isDRulePurchase(selectedPO);   // v7.19.2 (A-INC-1, 3/5): DAP, DPU and DDP — was DDP only
+  const exwHidden = (orders || []).filter((o: any) => o.status !== "Cancelled" && isExwSale(o)).length;   // v7.19.1 (A-INC-1, 2/5)
   const selectedSO = (orders || []).find(o => o.number === ref);
   const selectedLot = (lots || []).find(l => l.number === form.lotRef);
   // v6.18.3 (#5): HARD-BLOCK over-shipping a PO. Compare kg already on non-cancelled
@@ -104,8 +109,14 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     // v6.55.0: these are now WARNINGS, never blocks. A producer loading more than
     // ordered is routine and the PO already carries a variance field; refusing to
     // record the truck that is standing at the dock helps nobody.
-    const overReceipt = sourceType === "PO" && String((form as any).flow || (form as any).purpose || "").toUpperCase().includes("PICKUP") && poQty > 0 && projected > poQty + 1;
-    return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), overReceipt, exceedBy: Math.max(0, Math.round(projected - poQty)) };
+    // v7.11.0 (A-RV-23, owner 8 Oct): the warning checks EACH PO LINE (receipts.overReceiptCheck) — a size over its line warns even
+    // when the PO total is under. Until v7.10.6 it summed the whole PO and read a 'flow' the form never had, so it never fired.
+    // Counted: the kilos already on this PO's live shipments (the same count that pre-fills each line) + what this shipment loads.
+    const pendingByLine: Record<string, number> = {};
+    srcItems.forEach((it: any, idx: number) => { const id = String(it.id ?? idx + 1); if (selectedItemIds.length === 0 || selectedItemIds.map(String).includes(id)) pendingByLine[id] = enteredFor(it, idx); });
+    const overLines = sourceType === "PO" ? overReceiptCheck(srcItems, lineShippedKgOuter, pendingByLine) : [];
+    const overReceipt = overLines.length > 0;
+    return { existing, poQty, shippedKg, thisKg, projected, remaining: Math.max(0, poQty - shippedKg), overReceipt, overLines };
   })();
 
   // v6.34.4: per-LINE shipped kg (across non-cancelled shipments of this PO), so each
@@ -159,11 +170,11 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     const rows = (srcItems || []).map((it: any, idx: number) => { const id = String(it.id ?? idx + 1); const rem = lineRemaining(it, idx); if (rem <= 0) return null; const on = selectedItemIds.length === 0 || selectedItemIds.includes(id); if (!on) return null; const v = lineQtys[id] === undefined ? rem : parseNum(lineQtys[id]); return `${it.product}${it.variety ? " " + it.variety : ""} ${fmtNum(v)} kg`; }).filter(Boolean);
     return rows.length ? rows.join(", ") : "nothing left to load";
   }
-  function create(governingSoRef = "") {
+  async function create(governingSoRef = "") {
     // v6.99.43 (M-3, owner): a line can never ship more than what is left of it — the field is red, and Create refuses.
     if (sourceType !== "Manual") {
       const overs = (srcItems || []).map((it: any, idx: number) => { const id = String(it.id ?? idx + 1); const rem = lineRemaining(it, idx); const v = lineQtys[id] === undefined ? rem : parseNum(lineQtys[id]); return v > rem + 1 ? `${it.product || "line " + id}: ${fmtNum(v)} kg entered, ${fmtNum(rem)} kg left` : null; }).filter(Boolean);
-      if (overs.length) { window.alert("Over the remainder:\n" + overs.join("\n")); return; }
+      if (overs.length) { (await uiAlert({ message: "Over the remainder:\n" + overs.join("\n") })); return; }
     }
     let sh;
     if (sourceType === "PO" && selectedPO) {
@@ -173,7 +184,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
       // on it. One SO → use it. None → unsold portion to our warehouse.
       const linkedSOList = (orders || [])
         .filter(o => o.status !== "Cancelled" && (o.items || []).some(it => it.sourceType === "PO" && it.sourceRef === selectedPO.number));
-      if (linkedSOList.length > 1 && !governingSoRef) {
+      if (linkedSOList.length > 1 && !governingSoRef && !isDRule) {   // v7.19.2: the supplier's truck delivers to the PO's named place — no sale governs it
         setGoverningSoPrompt({ po: selectedPO, sos: linkedSOList });
         return; // wait for the pick; the picker calls create(chosenRef) to resume
       }
@@ -185,30 +196,8 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     }
     else if (sourceType === "SO" && selectedSO) sh = buildShipmentFromSO(selectedSO, { ...form, selectedItemIds, lineQtys, governingSoRef: selectedSO.number }, shipments, lots, contacts); // v6.82.0 (Round 6): the chosen SO IS the governing sale
     else sh = buildManualShipment(form, shipments);
-    // v6.10 (#11/#14): for a DDP purchase we don't order the carrier and carry no
-    // freight cost on the supplier→warehouse leg. Seed the first road leg's unit
-    // with the tracked incoming truck/driver, drop the carrier, zero the cost.
-    if (isDDPPurchase && sh && Array.isArray(sh.legs) && sh.legs.length) {
-      const firstRoad = sh.legs.find((l: any) => l.mode === "Road") || sh.legs[0];
-      if (firstRoad) {
-        firstRoad.carrierId = null;
-        firstRoad.costAmount = 0;
-        firstRoad.costPLN = 0;
-        firstRoad.costResponsibility = "Supplier";
-        if (form.ddpTruckPlate || form.ddpTrailerPlate || form.ddpDriverName || form.ddpDriverPhone) {
-          firstRoad.vehicles = [{
-            id: nextId(), mode: "Road", qtyKg: parseNum(form.qtyKg), pallets: parseNum(form.pallets),
-            truckPlate: form.ddpTruckPlate || "", trailerPlate: form.ddpTrailerPlate || "",
-            driverName: form.ddpDriverName || "", driverPhone: form.ddpDriverPhone || "",
-            notes: "Supplier-arranged carrier (DDP)",
-          }];
-          firstRoad.vehiclePlate = form.ddpTruckPlate || "";
-          firstRoad.trailerPlate = form.ddpTrailerPlate || "";
-          firstRoad.driverName = form.ddpDriverName || "";
-          firstRoad.driverPhone = form.ddpDriverPhone || "";
-        }
-      }
-    }
+    // v7.19.2 (A-INC-1, 3/5): a DAP / DPU / DDP purchase comes on the supplier's truck — no carrier, freight or transport order of ours
+    if (isDRule && sh) sh = asSuppliersTruck(sh, selectedPO);
     // v6.99.94 (A-GR-2): a groupage takes every ticked order's goods; no single governing order — each goods row keeps its own SO / PO / lot
     if (moreRefs.length) {
       let g: any = sh; const kind = sourceType === "PO" ? "PO" : "SO";
@@ -218,7 +207,7 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
     }
     onCreate(sh);
   }
-  return <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+  return <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(17,24,39,0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>{dialogNode}
     <div style={{ width: 880, maxHeight: "90vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.22)", border: "1px solid #E5E7EB" }}>
       <div style={{ padding: "18px 22px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><div style={{ fontSize: 18, fontWeight: 800 }}>Create shipment</div><div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Build from PO, SO or a manual transport order.</div></div>
@@ -230,10 +219,11 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
           <div style={{ display: "grid", gridTemplateColumns: "160px 1fr 160px 160px", gap: 12 }}>
             <div><Lbl>Source type</Lbl><Sel value={sourceType} onChange={e => { setSourceType(e.target.value); setRef(""); }}><option value="PO">From PO</option><option value="SO">From SO</option>{/* v6.99.43 (M-2, owner): Manual retired — a transfer between our warehouses is a movement, a return to the producer is the lot's Return action */}</Sel></div>
             {draftUnsourced > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 11.5, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px" }}>{(selectedSO as any)?.number} is a draft with {draftUnsourced} unsourced line{draftUnsourced > 1 ? "s" : ""} — source them from the PO first (the truck needs to know where it loads).</div>}
-            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{[...(pos || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{[...(orders || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((o: any) => o.status !== "Cancelled").map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}{o.status === "Draft" ? " — draft (the client may still change)" : ""}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}</div>
+            <div><Lbl>Reference</Lbl>{sourceType === "PO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select PO —</option>{[...(pos || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((p: any) => p.status !== "Draft" && p.status !== "Cancelled").map(p => <option key={p.number} value={p.number}>{p.number} - {p.supplier?.name}</option>)}</Sel> : sourceType === "SO" ? <Sel value={ref} onChange={e => setRef(e.target.value)}><option value="">— Select SO —</option>{[...(orders || [])].sort((a: any, b: any) => String(b.number || "").localeCompare(String(a.number || ""), undefined, { numeric: true })).filter((o: any) => o.status !== "Cancelled" && !isExwSale(o)).map(o => <option key={o.number} value={o.number}>{o.number} - {o.client?.name}{o.status === "Draft" ? " — draft (the client may still change)" : ""}</option>)}</Sel> : <Inp value={form.notes} onChange={e => sf("notes", e.target.value)} placeholder="Manual notes" />}{sourceType === "SO" && exwHidden > 0 && <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 4 }} title="v7.19.1 (A-INC-1, 2/5)">{exwHidden} EXW sale{exwHidden > 1 ? "s" : ""} not listed — the client collects: use Record collection on the sale.</div>}</div>
             <div><Lbl>Mode</Lbl><Sel value={form.mode} onChange={e => setForm(prev => modeChangePatch(prev, e.target.value))}>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel></div>
+            {isDRule && <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: "#1E3A8A", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "7px 10px" }} title="v7.19.2 (A-INC-1, 3/5)">Bought {String(selectedPO?.buyIncoterm || "").toUpperCase()} — this creates the supplier's truck: tracked, not paid. No carrier, freight or transport order of ours.</div>}
             {(sourceType === "PO" || sourceType === "SO") && ref && (() => {   // v6.99.94 (A-GR-2): groupage from the first window
-              const pool = (sourceType === "PO" ? (pos || []).filter((p: any) => !isCancelled(p) && p.status !== "Draft") : (orders || []).filter((o: any) => !isCancelled(o) && o.status !== "Draft")).filter((x: any) => String(x.number) !== String(ref));
+              const pool = (sourceType === "PO" ? (pos || []).filter((p: any) => !isCancelled(p) && p.status !== "Draft") : (orders || []).filter((o: any) => !isCancelled(o) && o.status !== "Draft" && !isExwSale(o))).filter((x: any) => String(x.number) !== String(ref));
               return <div style={{ gridColumn: "1 / -1", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 8, padding: "8px 10px" }}>{/* v6.99.137 (A-SC-1): tinted so the user sees it */}<Lbl>Groupage <span style={{ color: "#BBB", fontWeight: 400 }}>· {sourceType === "SO" ? "more sales orders on the same truck — one drop each" : "more purchase orders on the same truck — one pickup each"}</span></Lbl>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
                   {moreRefs.map(no => <span key={no} style={{ padding: "3px 8px", borderRadius: 12, background: "#EEF2FF", color: "#3730A3", fontSize: 12, fontWeight: 700 }}>{no} <SmallButton kind="remove" title="Take it off the groupage" onClick={() => setMoreRefs(m => m.filter(x => x !== no))}>Remove</SmallButton></span>)}
@@ -266,11 +256,9 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
                 <span><span style={{ display: "inline-block", width: 9, height: 9, background: poShipState.overReceipt ? "#D97706" : "#22C55E", borderRadius: 2, marginRight: 4 }} />This shipment <strong>{fmtNum(poShipState.thisKg)}</strong></span>
                 <span>{sourceType} total <strong>{fmtNum(poShipState.poQty)}</strong> kg</span>
               </div>
-              {blocked && (
-                <div style={{ fontSize: 12.5, color: "#991B1B", fontWeight: 700, marginTop: 10 }}>
-                  {poShipState.overReceipt
-                    ? `More is arriving than was ordered — over by ${fmtNum(poShipState.exceedBy)} kg. Recorded as variance; nothing is blocked.`
-                    : `${fmtNum(poShipState.remaining)} kg of this ${sourceType} not yet received.`}
+              {poShipState.overReceipt && (   /* v7.11.0 (A-RV-23): the line that goes over, in amber — a warning, never a block */
+                <div data-over-receipt="1" style={{ fontSize: 12.5, color: "#92400E", fontWeight: 700, marginTop: 10 }}>
+                  ⚠ {receiptWarningText(poShipState.overLines)}
                 </div>
               )}
             </Card>
@@ -344,15 +332,15 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
         {sourceType === "Manual" && <Card style={{ gridColumn: "1 / 3" }}>
           <SectionTitle>Manual goods and route</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.7fr 0.7fr 1fr 1fr", gap: 10 }}>
-            <div><Lbl>Product</Lbl><Inp value={form.product} onChange={e => sf("product", e.target.value)} /></div>
+            <div><Lbl>Product</Lbl><Sel value={form.product} onChange={e => sf("product", e.target.value)}>{/* v7.18.4 (A-AU-9, owner 9 Oct — P-8): picked from the catalog */}<option value="">— item —</option>{form.product && !catalogItems(productCatalog).some((p: string) => p === form.product) ? <option value={form.product}>{form.product} (not in the catalog)</option> : null}{catalogItems(productCatalog).map((p: string) => <option key={p} value={p}>{p}</option>)}</Sel></div>
             <div><Lbl>Qty kg</Lbl><Inp type="number" value={form.qtyKg} onChange={e => sf("qtyKg", e.target.value)} /></div>
             <div><Lbl>Pallets</Lbl><Inp type="number" value={form.pallets} onChange={e => sf("pallets", e.target.value)} /></div>
             <div><Lbl>From</Lbl><Sel value={form.originLocationId} onChange={e => sf("originLocationId", e.target.value)}>{mergedLocations(contacts).map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</Sel></div>
             <div><Lbl>To</Lbl><Sel value={form.destinationLocationId} onChange={e => sf("destinationLocationId", e.target.value)}>{mergedLocations(contacts).map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}</Sel></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
-            <div><Lbl>PO ref</Lbl><Inp value={form.poRef} onChange={e => sf("poRef", e.target.value)} /></div>
-            <div><Lbl>SO ref</Lbl><Inp value={form.soRef} onChange={e => sf("soRef", e.target.value)} /></div>
+            <div><Lbl>PO ref</Lbl><Sel value={form.poRef} onChange={e => sf("poRef", e.target.value)}><option value="">No PO</option>{(pos || []).filter((p: any) => p && !p.deleted && !isCancelled(p)).map((p: any) => <option key={p.number} value={p.number}>{p.number}{p.supplier?.name ? ` — ${p.supplier.name}` : ""}</option>)}</Sel></div>
+            <div><Lbl>SO ref</Lbl><Sel value={form.soRef} onChange={e => sf("soRef", e.target.value)}><option value="">No SO</option>{(orders || []).filter((o: any) => o && !o.deleted && !isCancelled(o)).map((o: any) => <option key={o.number} value={o.number}>{o.number}{o.client?.name ? ` — ${o.client.name}` : ""}</option>)}</Sel></div>
             <div><Lbl>Lot ref</Lbl><Sel value={form.lotRef} onChange={e => sf("lotRef", e.target.value)}><option value="">No lot</option>{(lots || []).map(l => <option key={l.number} value={l.number}>{l.number} - {l.product}</option>)}</Sel>{selectedLot && <div style={{ fontSize: 10.5, color: "#888", marginTop: 3 }}>Stock: {fmtNum(selectedLot.physicalKg)} kg</div>}</div>
           </div>
         </Card>}
@@ -383,8 +371,8 @@ export function CreateShipmentModal({ pos, orders, lots, contacts, shipments, on
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }}>
               {governingSoPrompt.sos.map((o: any) => {
-                const dir = shipmentTradeDirection(null, governingSoPrompt.po, o, countryOfLocation);
-                const lbl = MOVE_LBL[dir] || MOVE_LBL.IMPORT;
+                const dir = shipmentTradeDirection({ poRefs: [governingSoPrompt.po.number], governingSoRef: o.number }, { pos, orders, countryOf: countryOfLocation });   // v7.12.0 (A-TD-1)
+                const lbl = MOVE_LBL[dir] || { label: "—", color: "#94A3B8", hint: "an end is unknown" };
                 const dest = o.destinationText || (o.destinationLocationId != null ? (locById(o.destinationLocationId)?.name || "") : "") || o.client?.country || "—";
                 return (
                   <button key={o.number} onClick={() => { setGoverningSoPrompt(null); create(o.number); }} style={{ textAlign: "left", border: "1px solid #E5E7EB", borderRadius: 9, padding: "10px 12px", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: 10 }}>

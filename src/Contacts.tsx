@@ -1,14 +1,15 @@
 import { referencesToContact } from "./referenceGuards";
 import { setUserCountries } from "./counterparty.domain";
 import { recordAudit } from "./audit";
+import { localTodayISO } from "./dates";   // v7.17.0
 import { currentUser } from "./permissions.domain";
 
 import DateInput from "./DateInput";
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Lbl, useConfirm, ActionButton, notifySaved } from "./ui";
 import { nextId } from "./ids";
-import { parseAddress, formatAddress, shortAddress } from "./address.domain";
-import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, readLocationOverrides, writeLocationOverride, LOCATIONS_ALL_BUILTIN, newSiteId } from "./locations";
+import { parseAddress, formatAddress } from "./address.domain";
+import { contactAddresses, warehouseCpLocId, addCustomLocation, updateCustomLocation, removeCustomLocation, unifiedLocations, counterpartyLocations, readCustomLocations, writeLocationOverride, newSiteId, typedSaleDestinations } from "./locations";   // v7.18.1 (A-AU-3): typedSaleDestinations
 // xlsx (SheetJS) loaded for parsing Fakturownia exports — works on .xls, .xlsx, .csv
 // Available in StackBlitz / Vite / Next without extra config.
 import * as XLSX from "xlsx";
@@ -277,6 +278,11 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               </div>
               {/* v6.99.40 (A-ADDR, owner): an address is four facts. They print as three lines on every document,
                   map 1:1 to Fakturownia's fields, and let a city be filtered. The old one-line text is kept until the DDL. */}
+              {/* v7.3.5 (A-LOC-1, owner 7 Oct): the legal address is the address on documents; ticked, it is also offered as a loading / delivery place */}
+              <label style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#334155", margin: "4px 0 8px" }}>
+                <input type="checkbox" checked={form.isPlace !== undefined ? !!form.isPlace : (() => { const t = [form.type, ...(form.additionalTypes || [])]; return t.includes("Supplier") || t.includes("Client") || t.includes("Warehouse"); })()} onChange={e => setForm((f: any) => ({ ...f, isPlace: e.target.checked }))} />
+                <span><b>Goods are loaded / delivered at this address</b> <span style={{ color: "#94A3B8" }}>— offered in the location pickers as this company's place (on for producers, suppliers, clients and warehouses unless you untick it)</span></span>
+              </label>
               <div style={{ gridColumn: "span 2", display: "grid", gridTemplateColumns: "2fr 0.8fr 1.2fr", gap: 8 }}>
                 <div><Lbl>Street and number</Lbl><Inp value={form.addr?.street ?? ""} onChange={e => setAddr("street", e.target.value)} placeholder="ul. Piękna 13" /></div>
                 <div><Lbl>Postcode</Lbl><Inp value={form.addr?.postcode ?? ""} onChange={e => setAddr("postcode", e.target.value)} placeholder="05-555" /></div>
@@ -296,6 +302,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                 <div><Lbl>Notice days (claims)</Lbl><Inp type="number" value={form.terms?.noticeDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), noticeDays: parseFloat(e.target.value) || 0 })} placeholder="legal default" /></div>
                 <div><Lbl>QC report days (producer)</Lbl><Inp type="number" value={form.terms?.qualityReportDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), qualityReportDays: parseFloat(e.target.value) || 0 })} /></div>
                 <div><Lbl>Default currency</Lbl><Sel value={form.terms?.defaultCurrency || form.defaultCurrency || "PLN"} onChange={e => sf("terms", { ...(form.terms || {}), defaultCurrency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
+                <div><Lbl>Default VAT rate (invoices)</Lbl><Sel value={form.terms?.defaultVatRate ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), defaultVatRate: e.target.value === "" ? null : Number(e.target.value) })}><option value="">— none —</option>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>{/* v7.18.7 (BP-46): optional — an invoice draft for this company starts at it */}
                 <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>
                 <label style={{ gridColumn: "1 / -1", fontSize: 11.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
               </div>
@@ -464,7 +471,7 @@ function PersonEditor({ person, onSave, onCancel }: any) {
 }
 
 // ─── DETAIL PANEL — counterparty header + person list ───────────────────────
-function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany, onClose, onEmail, onSavePerson, onDeletePerson, onSetPrimary }: any) {
+function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany, onClose, onEmail, onSavePerson, onDeletePerson, onSetPrimary, onAddLocation = null }: any) {
   const { confirm: cdConfirm, dialogNode: cdNode } = useConfirm(); // P2-6
   const [editingPersonId, setEditingPersonId] = useState(null); // person.id | "new" | null
   const typeStyle = TYPE_COLORS[counterparty.type] || TYPE_COLORS["Other"];
@@ -560,6 +567,19 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
         )}
 
         {/* Contact persons */}
+          {/* v7.6.2 (A-LOC-1, owner 7 Oct): the company's places — its legal address (when ticked) and its other loading / delivery sites */}
+          <div style={{ margin: "0 20px 12px", padding: "10px 0 0", borderTop: "1px solid #F3F4F6" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>LOCATIONS</div>
+              {onAddLocation && <button onClick={() => onAddLocation(counterparty)} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>+ add location</button>}
+            </div>
+            {(() => { const own = readCustomLocations().filter((l: any) => String((l as any).ownerId) === String(counterparty.id)); const legal = counterparty.isPlace !== false && counterpartyLocations([counterparty]).length > 0;
+              return <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.6 }}>
+                {legal && <div>📍 <b>legal address</b> <span style={{ color: "#94A3B8" }}>— goods are loaded / delivered here</span></div>}
+                {own.map((l: any) => <div key={l.id}>📍 <b>{l.name}</b>{l.address ? <span style={{ color: "#64748B" }}> · {l.address}</span> : null}</div>)}
+                {!legal && !own.length && <div style={{ color: "#94A3B8" }}>no loading / delivery place — tick the legal address in Edit, or + add location</div>}
+              </div>; })()}
+          </div>
         <div style={{ margin: "0 20px 20px", paddingTop: 10, borderTop: "1px solid #F3F4F6" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>CONTACT PEOPLE ({counterparty.contacts.length})</div>
@@ -602,6 +622,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
               {p.notes && <div style={{ fontSize: 11, color: "#888", marginTop: 6, fontStyle: "italic" }}>{p.notes}</div>}
             </div>
           ))}
+          {(counterparty.deletedContacts || []).map((p: any) => <div key={"del-" + p.id} data-deleted-person="1" style={{ padding: "6px 0", fontSize: 12, color: "#9CA3AF", textDecoration: "line-through" }}>{p.name}{p.role ? ` · ${p.role}` : ""}{p.email ? ` · ${p.email}` : ""} — deleted {p.deletedAt || ""}</div>)}{/* v7.17.1 (A-RV-07) */}
 
           {counterparty.contacts.length === 0 && editingPersonId !== "new" && (
             <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12, border: "1px dashed #E5E7EB", borderRadius: 8 }}>
@@ -866,7 +887,7 @@ function parseOwnCsv(text: string, existingCounterparties: any[]) {
     grp.forEach(r => {
       const pn = get(r, idx.pname), pe = get(r, idx.pemail), pp = get(r, idx.pphone);
       if (pn || pe || pp) contacts.push({
-        id: contacts.length + 1, name: pn || "—", role: get(r, idx.prole) || "Other",
+        id: nextId(), name: pn || "—",   /* v7.17.5 (A-RV-06) */ role: get(r, idx.prole) || "Other",
         email: pe, phone: pp, isPrimary: /^(yes|true|1)$/i.test(get(r, idx.pprimary)) || contacts.length === 0, notes: "",
       });
     });
@@ -1398,75 +1419,126 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
 // ── v6.99.11 (owner, 13 Sept): PORTS TAB — ports · border crossings · customs points. Everything with an owner
 // (warehouses, port warehouses like Silvertech, supplier / client sites) lives on its COUNTERPARTY; these are the
 // places nobody invoices us for. Edited here, read everywhere through the one LocationPicker.
-function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [] }: any) {
+export function PortsView({ counterparties = [], pos = [], orders = [], lots = [], shipments = [], onOpenCompany = null, prefillOwner = null, onPrefillUsed = null, onLinkSaleDestination = null }: any) {
+  const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's   // v7.18.1: exported for the screen check
+  // v7.6.1 (A-PT-5, owner 7 Oct): the LOCATIONS tab works like Companies and People — search, filter chips, one table with actions, "+ New location" in a window
+  const [q, setQ] = useState(""); const [chip, setChip] = useState("all"); const [winOpen, setWinOpen] = useState(false);
+  useEffect(() => { if (prefillOwner) { setEditId(null); setForm({ name: `${prefillOwner.name} — `, country: prefillOwner.country || "", type: "ClientFacility", street: "", postcode: "", city: "", unlocode: "", ownerId: prefillOwner.id }); setWinOpen(true); onPrefillUsed && onPrefillUsed(); } }, [prefillOwner]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [, force] = useState(0);
   const [form, setForm] = useState<any>({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "" });
   const [editId, setEditId] = useState<any>(null);
   const KINDS: Array<[string, string]> = [["Port", "Port"], ["PortWarehouse", "Port warehouse / terminal"], ["Airport", "Airport"], ["BorderCrossing", "Border crossing"], ["Customs", "Customs point"], ["Other", "Other place"]];   // v6.99.45 (PL-1, owner)
   // v6.99.29 (A-R19-5, owner): EVERY place is listed here with its source — a stray legacy place (WH-01) used to be
   // visible in the pickers and removable nowhere. Counterparty sites are shown read-only; they are edited on their party.
-  const [showAll, setShowAll] = useState(true);
-  const [showHidden, setShowHidden] = useState(false);   // v6.99.45 (PL-3)
-  const overrides = readLocationOverrides();
-  const hiddenIds = new Set(Object.keys(overrides).filter(k => (overrides as any)[k]?.hidden));
+  // (v7.6.1: replaced by the chips and the search)
+  // (v7.6.1: replaced by the chips and the search)
+  // (v7.7.1: location overrides retired)
+  // (v7.7.1: no hidden built-ins any more)
   const customIds = new Set(readCustomLocations().map((l: any) => String(l.id)));
   const siteIds = new Set(counterpartyLocations(counterparties || []).map((l: any) => String(l.id)));
   const sourceOf = (l: any) => siteIds.has(String(l.id)) ? "counterparty site" : (customIds.has(String(l.id)) ? ((readCustomLocations().find((x: any) => String(x.id) === String(l.id)) as any)?.migratedFromSeed ? "migrated (legacy)" : "added here") : "built-in");
-  const usageOf = (id: any) => {
-    const s = String(id); let n = 0;
-    (lots || []).forEach((l: any) => { if (String(l.locationId) === s || String(l.baseLocationId) === s) n++; });
-    (pos || []).forEach((p: any) => { if (String(p.destinationLocationId) === s) n++; });
-    (orders || []).forEach((o: any) => { if (String(o.destinationLocationId) === s) n++; });
-    (shipments || []).forEach((sh: any) => (sh.legs || []).forEach((lg: any) => { if (String(lg.fromLocationId) === s || String(lg.toLocationId) === s) n++; (lg.vehicles || []).forEach((u: any) => { if (String(u.pickupLocationId) === s || String(u.deliveryLocationId) === s) n++; }); }));
-    return n;
+  // v7.16.7 (A-RV-08): WHICH documents use a place — named when its delete is refused, as the company delete does
+  const usersOf = (id: any): string[] => {
+    const s = String(id); const out = new Set<string>(); const add = (doc: any) => out.add(String(doc?.number || doc?.id || "?"));
+    (lots || []).forEach((l: any) => { if (String(l.locationId) === s || String(l.baseLocationId) === s) add(l); });
+    (pos || []).forEach((p: any) => { if (String(p.destinationLocationId) === s) add(p); });
+    (orders || []).forEach((o: any) => { if (String(o.destinationLocationId) === s) add(o); });
+    (shipments || []).forEach((sh: any) => (sh.legs || []).forEach((lg: any) => { if (String(lg.fromLocationId) === s || String(lg.toLocationId) === s) add(sh); (lg.vehicles || []).forEach((u: any) => { if (String(u.pickupLocationId) === s || String(u.deliveryLocationId) === s) add(sh); }); }));
+    return Array.from(out);
   };
-  const isPortKind = (l: any) => ["Port", "Airport", "BorderCrossing", "Customs"].includes(String(l.type)) || ["PORT", "CUSTOMS", "BORDER"].includes(String(l.legacyType));
-  const hiddenRows: any[] = showHidden ? (LOCATIONS_ALL_BUILTIN || []).filter((l: any) => hiddenIds.has(String(l.id))).map((l: any) => ({ ...l, __hidden: true })) : [];
-  const rows = [...unifiedLocations(counterparties || []).filter((l: any) => showAll || isPortKind(l)), ...hiddenRows].sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), "pl"));
+  const usageOf = (id: any) => usersOf(id).length;   // documents, each counted once
+  // (v7.6.1: the chips decide the kinds)
+  // (v7.6.1: the Hidden chip replaces the old show-hidden tick)
+  // (v7.6.1: replaced by the chips and the search)
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const save = () => {
     if (!String(form.name).trim()) return;
     const addr = { street: form.street || "", postcode: form.postcode || "", city: form.city || "", country: form.country || "" };
     const oneLine = formatAddress(addr, { oneLine: true, withCountry: false });   // the legacy text mirrors the parts until the DDL
     if (editId != null && form.__builtin) { writeLocationOverride(Number(editId), { name: form.name, country: form.country, address: oneLine, unlocode: form.unlocode } as any); }   // v6.99.45 (PL-3): built-ins are edited through the override layer
-    else if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type });
-    else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: oneLine, addr });
+    else if (editId != null) updateCustomLocation(Number(editId), { name: form.name, country: form.country, address: oneLine, addr, type: form.type, ownerId: form.ownerId ?? undefined });
+    else addCustomLocation({ name: form.name, country: form.country, type: form.type, address: oneLine, addr, ownerId: form.ownerId ?? undefined });
+    setWinOpen(false);   // v7.6.1
     recordAudit({ module: "Counterparties", docType: "Place", docNumber: form.name, action: editId != null ? "status" : "created", summary: `${form.type} ${editId != null ? "updated" : "added"} in the Directory` });
     setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "" }); setEditId(null); force(x => x + 1);
     setTimeout(() => window.location.reload(), 150);   // the location registry is module-level; every picker re-reads on reload (as Settings did)
   };
+  const companyName = (id: any) => (counterparties || []).find((c: any) => String(c.id) === String(id))?.name || "";
+  const ownerOf = (l: any) => (l as any).ownerId != null ? (l as any).ownerId : (sourceOf(l) === "counterparty site" ? (counterparties || []).find((c: any) => counterpartyLocations([c]).some((x: any) => String(x.id) === String(l.id)))?.id : null);
+  const CHIPS: Array<[string, string, (l: any) => boolean]> = [
+    ["all", "All", () => true], ["ports", "Ports & airports", (l: any) => ["Port", "Airport", "PortWarehouse"].includes(String(l.type)) /* v7.21.14 (A-RV-37): by the type only */],
+    ["border", "Border crossings", (l: any) => String(l.type) === "BorderCrossing" || String(l.legacyType) === "BORDER"], ["customs", "Customs", (l: any) => String(l.type) === "Customs" || String(l.legacyType) === "CUSTOMS"],
+    ["company", "Companies' places", (l: any) => ownerOf(l) != null],   /* v7.7.1 (A-RET-1): no "Hidden" chip — the built-ins it showed are gone */
+  ];
+  const base = [...unifiedLocations(counterparties || [])];
+  const test = (CHIPS.find(c => c[0] === chip) || CHIPS[0])[2]; const needle = q.trim().toLowerCase();
+  const shown = base.filter(test).filter((l: any) => !needle || [l.name, l.address, l.country, companyName(ownerOf(l))].join(" ").toLowerCase().includes(needle)).sort((a: any, b: any) => String(a.name).localeCompare(String(b.name)));
+  const count = (key: string) => base.filter((CHIPS.find(c => c[0] === key) || CHIPS[0])[2]).length;
+  const openEdit = (l: any) => { setEditId(l.id); const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address || ""); setForm({ name: l.name, country: l.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: (l as any).unlocode || "", ownerId: (l as any).ownerId ?? null, __builtin: sourceOf(l) === "built-in" }); setWinOpen(true); };
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <div style={{ fontSize: 13, fontWeight: 800 }}>📍 Places</div>
-        <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!showAll} onChange={e => setShowAll(!e.target.checked)} /> ports, crossings &amp; customs only</label>
-        <label style={{ fontSize: 11.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={showHidden} onChange={e => setShowHidden(e.target.checked)} /> show hidden</label>
+    <div>{dialogNode}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        {CHIPS.map(([k, label]) => <button key={k} onClick={() => setChip(k)} style={{ padding: "6px 14px", borderRadius: 20, border: "1px solid", borderColor: chip === k ? "#111" : "#E5E7EB", background: chip === k ? "#111" : "#fff", color: chip === k ? "#fff" : "#374151", fontSize: 12.5, cursor: "pointer" }}>{label} <span style={{ opacity: 0.6, marginLeft: 4 }}>{count(k)}</span></button>)}
+        <button onClick={() => { setEditId(null); setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "", ownerId: null }); setWinOpen(true); }} style={{ marginLeft: "auto", padding: "8px 16px", borderRadius: 8, border: "none", background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ New location</button>
       </div>
-      <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Places nobody invoices us for. A warehouse near a port (Silvertech, Koper) is a COUNTERPARTY with the flag "charged through our forwarder" — add it under Companies. Everything here appears in every location picker, alphabetically.</div>
-      {/* v6.99.41 (ADDR-2, owner): a place has the same four-part address as a counterparty — one shape, one formatter on documents */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1.2fr 1.8fr 0.8fr 1.2fr auto", gap: 8, alignItems: "end", marginBottom: 12 }}>
-        <div><Lbl>Name</Lbl><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Koper Port" style={inp} /></div>
-        <div><Lbl>Kind</Lbl><select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inp}>{KINDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-        <div><Lbl>Country</Lbl><select value={form.country || ""} onChange={e => setForm({ ...form, country: e.target.value })} style={inp}><option value="">— country —</option>{readCountries().map((x: any) => <option key={x.iso} value={x.name}>{x.name}</option>)}{form.country && !readCountries().some((x: any) => x.name === form.country) && <option value={form.country}>{form.country}</option>}</select></div>
-        <div><Lbl>Street / terminal</Lbl><input value={form.street ?? ""} onChange={e => setForm({ ...form, street: e.target.value })} placeholder="Vojkovo nabrežje 38" style={inp} /></div>
-        <div><Lbl>Postcode</Lbl><input value={form.postcode ?? ""} onChange={e => setForm({ ...form, postcode: e.target.value })} placeholder="6501" style={inp} /></div>
-        <div><Lbl>City</Lbl><input value={form.city ?? ""} onChange={e => setForm({ ...form, city: e.target.value })} placeholder="Koper" style={inp} /></div>
-        <div style={{ display: form.type === "Port" ? undefined : "none" }}><Lbl>UN/LOCODE <span style={{ color: "#AAA", fontWeight: 400 }}>· optional, quoted on bookings</span></Lbl><input value={form.unlocode} onChange={e => setForm({ ...form, unlocode: e.target.value.toUpperCase() })} placeholder="SIKOP" style={inp} /></div>
-        <button onClick={save} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "+ Add"}</button>
+      {(() => {   /* v7.18.1 (A-AU-3, owner 9 Oct): the addresses typed as sale destinations — each becomes the client's site ONCE */
+        const typed = onLinkSaleDestination ? typedSaleDestinations(orders, counterparties) : [];
+        if (!typed.length) return null;
+        const makeSite = async (r: any) => {
+          const c = (counterparties || []).find((x: any) => String(x.id) === String(r.clientId)); if (!c && r.legalSiteId == null) return;
+          if (r.legalSiteId != null) { if (!(await uiConfirm({ title: "Please confirm", message: `Link ${r.orders.length} sale(s) to ${r.clientName}'s legal address?\n\n${r.orders.join(", ")}` }))) return; onLinkSaleDestination(r.key, { id: r.legalSiteId, name: r.clientName }); return; }
+          const tail = String(r.text).split(",").map((s: string) => s.replace(/\d{2}-\d{3}|\b\d{4,6}\b/g, "").trim()).filter(Boolean).pop() || "site";
+          const name = `${c.name} — ${tail}`.slice(0, 80);
+          if (!(await uiConfirm({ title: "Please confirm", message: `Add "${name}" as a location of ${c.name} (address: ${r.text}) and link ${r.orders.length} sale(s) to it?\n\n${r.orders.join(", ")}` }))) return;
+          const loc: any = addCustomLocation({ name, country: c.country || r.country || "", type: "ClientFacility" as any, address: r.text, ownerId: c.id });
+          onLinkSaleDestination(r.key, { id: loc.id, name: loc.name }); force((x: number) => x + 1);
+        };
+        return <div data-typed-destinations="1" style={{ background: "#fff", border: "1px solid #FDE68A", borderLeft: "4px solid #F59E0B", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#92400E" }}>Sale destinations typed as an address — make each the client's site once</div>
+          <div style={{ fontSize: 11.5, color: "#64748B", margin: "3px 0 8px" }}>The same address as the client's legal address is linked to it; any other becomes a new location of the client. Its sales then name the place — the trade direction and the documents read it from there.</div>
+          {typed.map((r: any) => <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr 1fr auto", gap: 8, alignItems: "center", padding: "5px 0", borderTop: "1px solid #F1F5F9", fontSize: 12.5 }}>
+            <span style={{ fontWeight: 700 }}>{r.clientName}</span><span style={{ color: "#475569" }}>{r.text}</span>
+            <span style={{ fontSize: 11.5, color: "#64748B" }}>{r.orders.length} sale{r.orders.length === 1 ? "" : "s"}: {r.orders.slice(0, 3).join(", ")}{r.orders.length > 3 ? " …" : ""}</span>
+            <button onClick={() => makeSite(r)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #BFDBFE", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>{r.legalSiteId != null ? "Link to the legal address" : "Make it a site of the client"}</button>
+          </div>)}
+        </div>;
+      })()}
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search locations, address, country, company…" style={{ width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 12 }} />
+      <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 0.9fr 0.8fr 1.8fr 1.1fr 170px", gap: 8, padding: "10px 16px", background: "#F9FAFB", fontSize: 10.5, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>LOCATION</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>COMPANY · USED BY</div><div style={{ textAlign: "right" }}>ACTIONS</div></div>
+        {shown.length === 0 && <div style={{ padding: 24, textAlign: "center", color: "#94A3B8", fontSize: 13 }}>No location here.</div>}
+        {shown.map((l: any) => { const src = sourceOf(l); const used = usageOf(l.id); const mine = src === "added here" || src === "migrated (legacy)"; const owner = ownerOf(l); return (
+          <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "1.6fr 0.9fr 0.8fr 1.8fr 1.1fr 170px", gap: 8, padding: "10px 16px", borderTop: "1px solid #F3F4F6", fontSize: 12.5, alignItems: "center", opacity: (l as any).__hidden ? 0.55 : 1 }}>
+            <div style={{ fontWeight: 700 }}>{l.name}</div><div style={{ color: "#475569" }}>{(KINDS.find(k => k[0] === l.type) || [0, l.type])[1]}</div><div>{l.country || "—"}</div>
+            <div style={{ color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.address || "—"}</div>
+            <div style={{ fontSize: 11.5, color: "#64748B" }}>{owner != null ? companyName(owner) : "—"}{used ? ` · ${used} doc.` : ""}</div>
+            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+              {src === "counterparty site" && onOpenCompany && <button onClick={() => onOpenCompany(owner)} title="the legal address is edited on its company" style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>open company →</button>}
+              {(mine || src === "built-in") && !(l as any).__hidden && <button onClick={() => openEdit(l)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #BFDBFE", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Edit</button>}
+              {mine && <button onClick={async () => { if (used > 0) { const docs = usersOf(l.id); (await uiAlert({ message: `${l.name} is used by ${docs.length} document(s): ${docs.slice(0, 12).join(", ")}${docs.length > 12 ? ` and ${docs.length - 12} more` : ""} — it cannot be deleted while they use it.` })); return; } if ((await uiConfirm({ title: "Please confirm", message: `Delete ${l.name}?` }))) { removeCustomLocation(Number(l.id)); force(x => x + 1); } }} style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #FECACA", background: "#fff", color: "#DC2626", fontSize: 12, cursor: "pointer" }}>Delete</button>}
+              {(l as any).__hidden && <button onClick={() => { writeLocationOverride(Number(l.id), { hidden: false } as any); setTimeout(() => window.location.reload(), 150); }} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>Show again</button>}
+            </div>
+          </div>); })}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>NAME</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>SOURCE · USED BY</div><div /></div>
-      {rows.map((l: any) => { const src = sourceOf(l); const used = usageOf(l.id); const mine = src === "added here" || src === "migrated (legacy)";
-        return <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.6fr 1.1fr auto", gap: 8, fontSize: 12, padding: "5px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}>
-        <div><b>{l.name}</b></div><div>{l.type || l.legacyType}</div><div>{l.country || ""}</div><div style={{ color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.address || ""}>{l.address || shortAddress(l) || ""}</div>
-        <div style={{ fontSize: 10.5, color: src === "migrated (legacy)" ? "#B45309" : "#64748B" }}>{src}{used ? ` · ${used} doc(s)` : ""}</div>
-        <div style={{ display: "flex", gap: 6 }}>
-          {(mine || src === "built-in") && <button onClick={() => { setEditId(l.id); { const a = (l as any).addr && ((l as any).addr.street || (l as any).addr.city) ? (l as any).addr : parseAddress(l.address, l.country); setForm({ name: l.name, country: l.country || a.country || "", type: l.type || "Port", street: a.street || "", postcode: a.postcode || "", city: a.city || "", unlocode: l.unlocode || "", __builtin: src === "built-in" }); } }} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button>}
-          {src === "built-in" && !(l as any).__hidden && <button title="v6.99.45 (PL-3): a built-in is HIDDEN, not deleted — documents that already reference it still resolve" onClick={() => { if (!window.confirm(`Hide ${l.name} from every picker?`)) return; writeLocationOverride(Number(l.id), { hidden: true } as any); setTimeout(() => window.location.reload(), 150); }} style={{ fontSize: 11, border: "1px solid #FDE68A", color: "#92400E", background: "#FFFBEB", borderRadius: 6, cursor: "pointer" }}>Hide</button>}
-          {(l as any).__hidden && <button onClick={() => { writeLocationOverride(Number(l.id), { hidden: false } as any); setTimeout(() => window.location.reload(), 150); }} style={{ fontSize: 11, border: "1px solid #BBF7D0", color: "#166534", background: "#F0FDF4", borderRadius: 6, cursor: "pointer" }}>Unhide</button>}
-          {mine && <button onClick={() => { if (used > 0) { window.alert(`${l.name} is used by ${used} document(s) — it cannot be removed while they reference it.`); return; } if (window.confirm(`Remove ${l.name}?`)) { removeCustomLocation(Number(l.id)); setTimeout(() => window.location.reload(), 150); } }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button>}
-          {src === "counterparty site" && <span style={{ fontSize: 10.5, color: "#94A3B8" }}>edited on its party</span>}
+      {winOpen && <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={() => setWinOpen(false)}>
+        <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 620, maxWidth: "95vw", padding: 22, boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}>
+          <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>{editId != null ? "Edit location" : "New location"}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ gridColumn: "1 / -1" }}><Lbl>Name</Lbl><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={inp} /></div>
+            <div><Lbl>Kind</Lbl><select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inp}>{KINDS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}</select></div>
+            <div><Lbl>Belongs to company (optional)</Lbl><select value={form.ownerId ?? ""} onChange={e => setForm({ ...form, ownerId: e.target.value || null })} style={inp}><option value="">— none (port, crossing…) —</option>{(counterparties || []).slice().sort((a: any, b: any) => String(a.name).localeCompare(String(b.name))).map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <div style={{ gridColumn: "1 / -1" }}><Lbl>Street / terminal</Lbl><input value={form.street ?? ""} onChange={e => setForm({ ...form, street: e.target.value })} style={inp} /></div>
+            <div><Lbl>Postcode</Lbl><input value={form.postcode ?? ""} onChange={e => setForm({ ...form, postcode: e.target.value })} style={inp} /></div>
+            <div><Lbl>City</Lbl><input value={form.city ?? ""} onChange={e => setForm({ ...form, city: e.target.value })} style={inp} /></div>
+            <div><Lbl>Country</Lbl><input value={form.country ?? ""} onChange={e => setForm({ ...form, country: e.target.value })} style={inp} /></div>
+            <div><Lbl>UN/LOCODE (optional)</Lbl><input value={form.unlocode ?? ""} onChange={e => setForm({ ...form, unlocode: e.target.value })} style={inp} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+            <button onClick={() => setWinOpen(false)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+            <button disabled={!String(form.name || "").trim()} onClick={save} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: String(form.name || "").trim() ? "#111" : "#E5E7EB", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "Add location"}</button>
+          </div>
         </div>
-      </div>; })}
+      </div>}
     </div>
   );
 }
@@ -1483,13 +1555,14 @@ export function readCountries(): Array<{ iso: string; name: string; eu: boolean 
 }
 function writeCountries(list: any[]) { try { window.localStorage.setItem("marianna-erp:v2:countries", JSON.stringify(list)); } catch {} }
 function CountriesView() {
+  const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   setUserCountries(readCountries());
   const [list, setList] = useState<any[]>(() => readCountries());
   const [form, setForm] = useState<any>({ iso: "", name: "", eu: false });
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
   const save = (next: any[]) => { const sorted = [...next].sort((a, b) => Number(b.eu) - Number(a.eu) || String(a.name).localeCompare(String(b.name), "en")); setList(sorted); writeCountries(sorted); };
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>{dialogNode}
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🌍 Countries</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>The list behind every country dropdown — EU first, then the others, alphabetical. The EU flag drives customs / VAT treatment. Built-in rows are editable and removable like any other.</div>
       <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 90px auto", gap: 8, alignItems: "end", marginBottom: 12 }}>
@@ -1498,12 +1571,12 @@ function CountriesView() {
         <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center", paddingBottom: 8 }}><input type="checkbox" checked={!!form.eu} onChange={e => setForm({ ...form, eu: e.target.checked })} /> EU</label>
         <button onClick={() => { if (!form.iso || !form.name) return; save([...list.filter(x => x.iso !== form.iso), { ...form }]); setForm({ iso: "", name: "", eu: false }); }} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add / update</button>
       </div>
-      {list.map(x => <div key={x.iso} style={{ display: "grid", gridTemplateColumns: "80px 1fr 90px auto", gap: 8, fontSize: 12, padding: "4px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}><b>{x.iso}</b><span>{x.name}</span><span style={{ color: x.eu ? "#166534" : "#64748B" }}>{x.eu ? "EU" : "non-EU"}</span><div style={{ display: "flex", gap: 6 }}><button onClick={() => setForm({ ...x })} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button><button onClick={() => { if (window.confirm(`Remove ${x.name}?`)) save(list.filter(y => y.iso !== x.iso)); }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button></div></div>)}
+      {list.map(x => <div key={x.iso} style={{ display: "grid", gridTemplateColumns: "80px 1fr 90px auto", gap: 8, fontSize: 12, padding: "4px 0", borderTop: "1px solid #F8FAFC", alignItems: "center" }}><b>{x.iso}</b><span>{x.name}</span><span style={{ color: x.eu ? "#166534" : "#64748B" }}>{x.eu ? "EU" : "non-EU"}</span><div style={{ display: "flex", gap: 6 }}><button onClick={() => setForm({ ...x })} style={{ fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Edit</button><button onClick={async () => { if ((await uiConfirm({ title: "Please confirm", message: `Remove ${x.name}?` }))) save(list.filter(y => y.iso !== x.iso)); }} style={{ fontSize: 11, border: "1px solid #FECACA", color: "#DC2626", background: "#fff", borderRadius: 6, cursor: "pointer" }}>Remove</button></div></div>)}
     </div>
   );
 }
 
-export default function Contacts({ lots = [], contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [], users = [], userName = "" }: any = {}) {
+export default function Contacts({ lots = [], contacts: extContacts, setContacts: extSetContacts, pos = [], orders = [], shipments = [], invoices = [], claims = [], warehouseInvoices = [], users = [], userName = "", onLinkSaleDestination = null }: any = {}) {
   // v6.81.0 (D-57): commission terms visible to the owner and the finance role (finance.pl) only; with no users defined, everyone.
   const _cu = currentUser(users, userName);
   const canSeeCommission = _cu === null ? true : !!(_cu && (_cu.isOwner || _cu.finance?.pl === true));
@@ -1517,6 +1590,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   const [filterType, setFilterType] = useState("All");
   const [viewMode, setViewMode] = useState(() => { try { const t = window.sessionStorage.getItem("marianna:contactsTab"); window.sessionStorage.removeItem("marianna:contactsTab"); return t || "companies"; } catch { return "companies"; } }); // companies | people | ports (v6.99.11)
   const [selectedId, setSelectedId] = useState(null);
+  const [newLocFor, setNewLocFor] = useState<any>(() => { try { const r = window.sessionStorage.getItem("marianna:contactsNewLocFor"); window.sessionStorage.removeItem("marianna:contactsNewLocFor"); return r ? JSON.parse(r) : null; } catch { return null; } });   // v7.6.2 (A-LOC-1) · v7.18.1 (A-AU-3): also from a sale
   const [modal, setModal] = useState(null); // null | "new" | counterparty-to-edit
   const [emailTarget, setEmailTarget] = useState(null); // { counterparty, person } | null
   const [showImport, setShowImport] = useState(false);
@@ -1535,7 +1609,8 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
     // v6.99.45 (CP-14, owner): alphabetical — a party added today sits in its place, not at the bottom
     const sortKey = (x: any) => String(x?.name || "").replace(/^[\s"'«»„”“()[\]]+/, "").trim();   // v6.99.48 (A-PO-12): same key as the pickers
     return counterparties.slice().sort((a: any, b: any) => sortKey(a).localeCompare(sortKey(b), "pl", { sensitivity: "base" })).filter(c => {
-      const matchType = filterType === "All" || c.type === filterType || (c.additionalTypes || []).includes(filterType);
+      if ((filterType === "Deleted") !== !!c.deleted) return false;   // v7.17.0 (A-DEL-5): deleted companies show only under 'Deleted'
+      const matchType = filterType === "All" || filterType === "Deleted" || c.type === filterType || (c.additionalTypes || []).includes(filterType);
       if (!matchType) return false;
       if (!q) return true;
       return c.name.toLowerCase().includes(q)
@@ -1570,9 +1645,9 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
 
   // ── stats ──────────────────────────────────────────────────────────────
   const counts = useMemo(() => {
-    const c: Record<string, number> = { All: counterparties.length };
+    const live = counterparties.filter((x: any) => !x.deleted); const c: Record<string, number> = { All: live.length, Deleted: counterparties.length - live.length };   // v7.17.0
     COUNTERPARTY_TYPES.forEach(t => {
-      c[t] = counterparties.filter(x => x.type === t || (x.additionalTypes || []).includes(t)).length;
+      c[t] = live.filter(x => x.type === t || (x.additionalTypes || []).includes(t)).length;
     });
     return c;
   }, [counterparties]);
@@ -1621,9 +1696,12 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
   }
 
   function applyMerge(merged, removeId) {
+    // v7.17.0 (A-DEL-5): the duplicate merged away stays on record, marked deleted and pointing at the company it went into
     setCounterparties(prev => prev
-      .filter(p => removeId == null || String(p.id) !== String(removeId))
+      .map(p => removeId != null && String(p.id) === String(removeId) ? { ...p, deleted: true, deletedAt: localTodayISO(), mergedInto: merged.id } : p)
       .map(p => String(p.id) === String(merged.id) ? merged : p));
+    { const gone = counterparties.find(p => removeId != null && String(p.id) === String(removeId));
+      recordAudit({ module: "Counterparties", docType: "Company", docNumber: String((merged as any)?.name || merged.id), action: "merged", summary: `${gone ? `${gone.name} merged into ` : "Merged into "}${(merged as any)?.name || merged.id}` }); }   // v7.17.4 (A-RV-12)
     setSelectedId(merged.id);
     setMergeTarget(null);
     setDupReview(null);
@@ -1634,9 +1712,10 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
 
   function scanForDuplicates() {
     const pairs: any[] = [];
-    for (let i = 0; i < counterparties.length; i++) {
-      for (let j = i + 1; j < counterparties.length; j++) {
-        const a = counterparties[i], b = counterparties[j];
+    const cps = counterparties.filter((c: any) => !c.deleted);   // v7.17.0: a deleted company is no duplicate
+    for (let i = 0; i < cps.length; i++) {
+      for (let j = i + 1; j < cps.length; j++) {
+        const a = cps[i], b = cps[j];
         const aTax = taxDigits(a.nip || a.vatEuId), bTax = taxDigits(b.nip || b.vatEuId);
         if (aTax && bTax && aTax.length >= 6 && aTax === bTax) { pairs.push({ a, b, reason: "tax" }); continue; }
         if (namesFuzzyMatch(a.name, b.name)) pairs.push({ a, b, reason: "name" });
@@ -1661,8 +1740,10 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       return;
     }
     // v6.99.69 (A-CF-1, owner): a stored record is never deleted on a single click
-    { const cp = counterparties.find(c => c.id === id); const ok = await guardConfirm({ tone: "danger", title: `Delete ${cp?.name || "this party"}?`, message: "The party and its contact persons are removed from the Directory. Documents that already reference it keep their snapshot.", confirmLabel: "Delete", cancelLabel: "Keep" }); if (!ok) return; }
-    setCounterparties(prev => prev.filter(c => c.id !== id));
+    { const cp = counterparties.find(c => c.id === id); const ok = await guardConfirm({ tone: "danger", title: `Delete ${cp?.name || "this party"}?`, message: "It stays on record — struck through, read-only — and leaves every picker. Its contact persons stay with it.", confirmLabel: "Delete", cancelLabel: "Keep" }); if (!ok) return; }
+    // v7.17.0 (A-DEL-5): a deleted company stays on record — struck through, read-only, gone from every picker (activeParties)
+    { const cp = counterparties.find(c => c.id === id); setCounterparties(prev => prev.map(c => c.id === id ? { ...c, deleted: true, deletedAt: localTodayISO() } : c));
+      recordAudit({ module: "Counterparties", docType: "Company", docNumber: String(cp?.name || id), action: "deleted", summary: `${cp?.name || "Company"} deleted — kept on record, struck through` }); }   // v7.17.4 (A-RV-12)
     if (selectedId === id) setSelectedId(null);
   }
   function savePerson(counterpartyId, person) {
@@ -1695,13 +1776,17 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
       const ok = await guardConfirm({ tone: "danger", title: `Delete ${p?.name || "this contact person"}?`, message: `The person is removed from ${cp?.name || "the party"}.`, confirmLabel: "Delete", cancelLabel: "Keep" }); if (!ok) return; }   // v6.99.69 (A-CF-1)
     setCounterparties(prev => prev.map(c => {
       if (c.id !== counterpartyId) return c;
-      const nextContacts = c.contacts.filter(p => p.id !== personId);
+      // v7.17.1 (A-RV-07): a deleted person stays on the company's record, struck through (deletedContacts); no document points at a person
+      const gone = c.contacts.find(p => p.id === personId); const nextContacts = c.contacts.filter(p => p.id !== personId);
+      const deletedContacts = gone ? [...(c.deletedContacts || []), { ...gone, isPrimary: false, deletedAt: localTodayISO() }] : (c.deletedContacts || []);
       // If we removed the primary, promote the first remaining person
       if (!nextContacts.some(p => p.isPrimary) && nextContacts.length > 0) {
         nextContacts[0] = { ...nextContacts[0], isPrimary: true };
       }
-      return { ...c, contacts: nextContacts, people: nextContacts };
+      return { ...c, contacts: nextContacts, people: nextContacts, deletedContacts };
     }));
+    { const cp = counterparties.find(c => c.id === counterpartyId); const p = (cp?.contacts || []).find((x: any) => x.id === personId);
+      recordAudit({ module: "Counterparties", docType: "Person", docNumber: String(cp?.name || counterpartyId), action: "deleted", summary: `${p?.name || "Contact person"} deleted from ${cp?.name || "the company"} — kept on record` }); }   // v7.17.4 (A-RV-12)
   }
   function setPrimary(counterpartyId, personId) {
     setCounterparties(prev => prev.map(c => {
@@ -1796,7 +1881,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
           {[
             { key: "companies", label: "Companies", icon: "🏢" },
             { key: "people", label: "People", icon: "👤" },
-            { key: "ports", label: "Places", icon: "📍" },
+            { key: "ports", label: "Locations", icon: "📍" },   // v7.6.1 (owner): renamed
             { key: "countries", label: "Countries", icon: "🌍" },   // v6.99.11 (owner): the Directory's places tab is back — ports, border crossings, customs points
           ].map(o => (
             <button key={o.key} onClick={() => setViewMode(o.key)}
@@ -1819,7 +1904,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
           {/* Filter chips */}
           {viewMode !== "ports" && viewMode !== "countries" && (<>
           <div style={{ padding: "14px 28px 0", display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
-            {[{ label: "All", count: counts.All }, ...COUNTERPARTY_TYPES.map(t => ({ label: t, count: counts[t] || 0 }))].map(({ label, count }) => (
+            {[{ label: "All", count: counts.All }, ...COUNTERPARTY_TYPES.map(t => ({ label: t, count: counts[t] || 0 })), ...(counts.Deleted ? [{ label: "Deleted", count: counts.Deleted }] : [])].map(({ label, count }) => (
               <button key={label} onClick={() => setFilterType(label)}
                 style={{ padding: "6px 14px", borderRadius: 20, border: "1px solid", borderColor: filterType === label ? "#111" : "#E5E7EB", background: filterType === label ? "#111" : "#fff", color: filterType === label ? "#fff" : "#555", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
                 {label}
@@ -1838,7 +1923,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
           {/* Table */}
           <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 24px" }}>
             {viewMode === "ports" ? (
-              <PortsView counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} />
+              <PortsView counterparties={counterparties} pos={pos} orders={orders} lots={lots} shipments={shipments} onOpenCompany={(id: any) => { if (id == null) return; setSelectedId(id); setViewMode("companies"); }} prefillOwner={newLocFor} onPrefillUsed={() => setNewLocFor(null)} onLinkSaleDestination={onLinkSaleDestination} />
             ) : viewMode === "countries" ? (
               <CountriesView />
             ) : (<>
@@ -1858,7 +1943,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
               ) : (
                 <PeopleTable
                   rows={filteredPeople}
-                  onOpenCompany={id => setSelectedId(id)}
+                  onOpenCompany={id => { setSelectedId(id); setViewMode("companies"); setTimeout(() => { try { document.querySelector(`[data-company-row="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }); } catch {} }, 60); }}   // v7.3.0 (A-PT-4): the company opens on its own tab
                   onEmail={(c, p) => setEmailTarget({ counterparty: c, person: p })}
                 />
               )}
@@ -1875,6 +1960,7 @@ export default function Contacts({ lots = [], contacts: extContacts, setContacts
         {selected && viewMode === "companies" && (   // v6.99.87 (A-PT-3): the company panel shows on its own tab only; the selection is kept for coming back
           <CounterpartyDetailPanel
             counterparty={selected}
+            onAddLocation={(c: any) => { setNewLocFor({ id: c.id, name: c.name, country: c.country }); setViewMode("ports"); }}
             onEditCompany={c => setModal(c)}
             onDeleteCompany={deleteCounterparty}
             onClose={() => setSelectedId(null)}
@@ -1911,9 +1997,9 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
       {rows.map((c, idx) => {
         const primary = c.contacts.find(p => p.isPrimary) || c.contacts[0];
         return (
-          <div key={c.id}
-            onClick={() => onSelect(c.id)}
-            style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 110px 80px 130px", padding: "13px 20px", borderBottom: idx < rows.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: selectedId === c.id ? "#F8FAFF" : "#fff", cursor: "pointer", borderLeft: selectedId === c.id ? "3px solid #2563EB" : "3px solid transparent", transition: "background 0.1s" }}
+          <div key={c.id} data-company-row={c.id}
+            onClick={() => { if (!c.deleted) onSelect(c.id); }}
+            style={{ textDecoration: c.deleted ? "line-through" : "none", opacity: c.deleted ? 0.55 : 1, display: "grid", gridTemplateColumns: "110px 1fr 1fr 110px 80px 130px", padding: "13px 20px", borderBottom: idx < rows.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", background: selectedId === c.id ? "#F8FAFF" : "#fff", cursor: "pointer", borderLeft: selectedId === c.id ? "3px solid #2563EB" : "3px solid transparent", transition: "background 0.1s" }}
             onMouseEnter={e => { if (selectedId !== c.id) e.currentTarget.style.background = "#FAFAFA"; }}
             onMouseLeave={e => { if (selectedId !== c.id) e.currentTarget.style.background = "#fff"; }}
           >
@@ -1948,8 +2034,8 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
             </div>
             <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
               {primary?.email && <button onClick={() => onEmail(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }} title="Email primary">✉</button>}
-              <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Edit">Edit</button>
-              <button onClick={async () => { if (await ctConfirm({ tone: "danger", title: `Delete ${c.name}?`, message: `This deletes the company and ${c.contacts.length} contact(s).`, confirmLabel: "Delete" })) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>
+              {!c.deleted && <button onClick={() => onEdit(c)} style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #2563EB", background: "#fff", color: "#2563EB", fontSize: 12, fontWeight: 600, cursor: "pointer" }} title="Edit">Edit</button>}
+              {c.deleted ? <span style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF" }}>Deleted {c.deletedAt || ""}</span> : <button onClick={async () => { if (await ctConfirm({ tone: "danger", title: `Delete ${c.name}?`, message: "It stays on record — struck through, read-only — and leaves every picker.", confirmLabel: "Delete" })) onDelete(c.id); }} style={{ padding: "5px 10px", borderRadius: 6, border: "none", background: "#FEE2E2", color: "#DC2626", fontSize: 12, cursor: "pointer" }} title="Delete">🗑</button>}
             </div>
           </div>
         );

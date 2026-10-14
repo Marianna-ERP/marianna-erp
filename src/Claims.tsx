@@ -1,7 +1,7 @@
 import { ModuleHeader } from "./ui";
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { recordAudit } from "./audit";
-import { inspectionCandidates, evidenceCandidates, attachEvidence, qcReportWarning, defectFromInspection, offsetNoteAgainstInvoice, claimMoneyLabel } from "./claimsPlus.domain";
+import { inspectionCandidates, evidenceCandidates, attachEvidence, qcReportWarning, defectFromInspection, offsetNoteAgainstInvoice, claimMoneyLabel, saleDirectCostLines, noticeRuleFor } from "./claimsPlus.domain";   // v7.10.0–7.10.1 (A-RV-15): CL-5 + CL-8 connected
 import DateInput from "./DateInput";
 import { Card, Lbl, SectionTitle, SmallButton, DocRef, cancelledDocSet, useConfirm, ActionButton} from "./ui";
 import { claimBlockReason, staleClaimWarnings } from "./cancellation.domain";
@@ -17,8 +17,12 @@ import {
   reverseClaimPostings,
 } from "./claims.domain";
 import { localTodayISO } from "./dates";
+import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
+import { COST_TYPES } from "./Shipments";   // v7.18.5 (A-AU-10): the cost types a claim's cost line picks from
 import { nextId } from "./ids";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
+import { RISK_CAUSES, journeyStages, claimRouting, claimShipment } from "./incoterms.domain";   // v7.19.4 (A-INC-1, 5/5)
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
 // ─── v6.48.0  CLAIMS MODULE (Phase 1: the register) ──────────────────────────
 // Claims are now documents in their own right rather than rows hidden inside a
@@ -30,7 +34,7 @@ import { isArchived, DEFAULT_SEASON } from "./season.domain";
 // amount into the P/L). The record already carries the fields for those, so
 // Phase 2 is wiring rather than another migration.
 
-const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const eur = (v: any) => `€${num(v).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const INP: any = { width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 6, padding: "8px 10px", fontSize: 13, background: "#fff", fontFamily: "inherit" };
 
@@ -56,6 +60,7 @@ function Pill({ bg, fg, children, title }: any) {
 
 // ── v6.97.0 (CL-2/3/4/6): EVIDENCE & SETTLEMENT — references, not copies; a warning, never a block; offset in one click ──
 function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lots = [], contacts = [], financeNotes = [], invoices = [], setInvoices = null, setFinanceNotes = null }: any) {
+  const { alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const insCands = inspectionCandidates(claim, inspections);
   const cands = evidenceCandidates(claim, { inspections, shipments });
   const lot = (lots || []).find((l: any) => (claim.subjects || []).some((s: any) => String(s.kind).toUpperCase() === "LOT" && String(s.ref) === String(l.number))) || null;
@@ -67,7 +72,7 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
   const openInv = note ? (invoices || []).filter((i: any) => i.paymentStatus !== "Cancelled" && !i.isProforma && String(i.currency || "PLN").toUpperCase() === String(note.currency || "PLN").toUpperCase() && String(i.counterparty?.name || "").toLowerCase() === cpName && (Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0) > 0.005 && ((note.direction === "outgoing" && i.kind === "SALES") || (note.direction === "incoming" && i.kind === "COST"))) : [];
   const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "12px 16px", marginTop: 12 }}>
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "12px 16px", marginTop: 12 }}>{dialogNode}
       <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>EVIDENCE & SETTLEMENT · {claimMoneyLabel(claim)}</div>
       {warn && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 8 }}>⚠ {warn}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -94,7 +99,7 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
         <div style={{ marginTop: 10, borderTop: "1px solid #F1F5F9", paddingTop: 8 }}>
           <Lbl>Settle by offset (CL-6) — {note.noteType} note {note.number || note.id} · {Number(note.amount).toLocaleString("pl-PL")} {note.currency}{Number(note.appliedAmount) ? ` · applied ${Number(note.appliedAmount).toLocaleString("pl-PL")}` : ""}</Lbl>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {openInv.map((i: any) => <button key={String(i.id)} onClick={() => { const r = offsetNoteAgainstInvoice(note, i, { nextId, todayISO: localTodayISO }); if (r.error) { window.alert(r.error); return; } setInvoices((prev: any[]) => (prev || []).map((x: any) => x.id === i.id ? r.invoice : x)); setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => n.id === note.id ? r.note : n)); recordAudit({ module: "Claims", docType: "Claim", docNumber: claim.number, action: "claim", summary: `Note ${note.number || note.id} offset ${r.appliedAmount.toLocaleString("pl-PL")} ${note.currency} against ${i.number}` }); }} style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontWeight: 700, cursor: "pointer" }}>⇄ Offset against {i.number} (open {((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)).toLocaleString("pl-PL")} {i.currency})</button>)}
+            {openInv.map((i: any) => <button key={String(i.id)} onClick={async () => { const r = offsetNoteAgainstInvoice(note, i, { nextId, todayISO: localTodayISO }); if (r.error) { (await uiAlert({ message: r.error })); return; } setInvoices((prev: any[]) => (prev || []).map((x: any) => x.id === i.id ? r.invoice : x)); setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => n.id === note.id ? r.note : n)); recordAudit({ module: "Claims", docType: "Claim", docNumber: claim.number, action: "claim", summary: `Note ${note.number || note.id} offset ${r.appliedAmount.toLocaleString("pl-PL")} ${note.currency} against ${i.number}` }); }} style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontWeight: 700, cursor: "pointer" }}>⇄ Offset against {i.number} (open {((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)).toLocaleString("pl-PL")} {i.currency})</button>)}
             {!openInv.length && <span style={{ fontSize: 11, color: "#94A3B8" }}>no open invoice of {claim?.respondent?.name} in {note.currency} — the note settles by bank transfer (matched by the bank import)</span>}
           </div>
         </div>
@@ -103,7 +108,25 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
   );
 }
 
-export default function Claims({ archive = null, claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], setInvoices = null, inspections = [], claimSeed = null, onClaimSeedConsumed = null }: any) {
+// v7.18.5 (A-AU-10, owner 9 Oct — P-8): a claim's cost line names its cost from a list — the shipment cost types for the costs a
+// party caused, the client's usual costs for what the client charged — never typed. "Other…" asks for a few words, kept as
+// "Other — …". A label written before stays, shown in amber as typed.
+const CAUSED_COST_LABELS: string[] = COST_TYPES.filter((t: any) => t.code !== "other").map((t: any) => t.label);
+function CostLabelPicker({ value, options = [], onChange }: any) {
+  const { prompt: clPrompt, dialogNode: clNode } = useConfirm();
+  const v = String(value ?? "").trim(); const listed = !v || options.includes(v); const other = /^Other — /.test(v);
+  return <>{clNode}<select data-cost-label="1" value={!v ? "" : listed ? v : "__typed__"} onChange={async e => { const x = e.target.value; if (x === "__typed__") return;
+      if (x === "__other__") { const w = String((await clPrompt({ title: "Other cost", message: "Say in a few words what it is:", placeholder: "e.g. a second waiting day at the border", confirmLabel: "Use" })) || "").trim(); if (w) onChange(`Other — ${w}`); return; }
+      onChange(x); }}
+    style={{ ...INP, padding: "6px 8px", ...(!listed && !other ? { borderColor: "#F59E0B", background: "#FFFBEB" } : {}) }}>
+    <option value="">— pick the cost —</option>
+    {!listed ? <option value="__typed__">{v}{other ? "" : " (typed)"}</option> : null}
+    {options.map((o: string) => <option key={o} value={o}>{o}</option>)}
+    <option value="__other__">Other…</option>
+  </select></>;
+}
+
+export default function Claims({ archive = null, claims = [], setClaims, contacts = [], lots = [], setLots = null, orders = [], setOrders = null, pos = [], shipments = [], financeNotes = [], setFinanceNotes = null, invoices = [], setInvoices = null, inspections = [], claimSeed = null, onClaimSeedConsumed = null, initialSelectedNumber = "" }: any) {   // v7.20.0 (A-INC-2): opened at a claim from its number
   // v6.54.0: "a cancelled document never happened, so there are no claims on it".
   const cancelledRefs = cancelledDocSet(shipments, orders, pos);
   // Resolve a claim subject ref to the actual document, whichever module owns it.
@@ -116,7 +139,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
   }, [shipments, orders, pos]);
   const staleClaims = useMemo(() => staleClaimWarnings(claims, lookupSubject), [claims, lookupSubject]);
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();
-  const [selectedId, setSelectedId] = useState<any>(null);
+  const [selectedId, setSelectedId] = useState<any>(() => { const c = initialSelectedNumber ? (claims || []).find((x: any) => String(x.number) === String(initialSelectedNumber)) : null; return c ? c.id : null; });   // v7.20.0 (A-INC-2)
   const [q, setQ] = useState("");
   const [dirFilter, setDirFilter] = useState("All");
   const [openOnly, setOpenOnly] = useState(false);
@@ -144,6 +167,31 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
 
   const patch = (id: any, changes: any) =>
     setClaims((prev: any[]) => (prev || []).map(c => String(c.id) === String(id) ? { ...c, ...changes } : c));
+  // v7.18.6 (A-AU-12, owner 9 Oct): a claim's rates are the NBP rates of the last working day BEFORE the claim's date — EUR→PLN
+  // (used when posting) and its own currency → PLN. Not typed. A claim whose money is posted (its credit note) or that is settled
+  // or closed keeps the rates it has.
+  const [claimFxNote, setClaimFxNote] = useState("");
+  useEffect(() => {
+    let off = false; const c: any = selected; if (!c) { setClaimFxNote(""); return; }
+    const kept = !!c.financeNoteId || ["Settled", "Closed"].includes(String(c.status));
+    const date = String(c.date || "").slice(0, 10);
+    if (kept) { setClaimFxNote(`kept — the claim is ${c.financeNoteId ? "posted" : String(c.status).toLowerCase()}${c.fxTableDate ? ` (NBP ${c.fxTableDate})` : ""}`); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { setClaimFxNote("set the claim's date — the rate follows it"); return; }
+    setClaimFxNote("reading NBP…");
+    const cur = String(c.currency || "EUR").toUpperCase();
+    Promise.all([nbpRateBefore("EUR", date), cur !== "EUR" && cur !== "PLN" ? nbpRateBefore(cur, date) : Promise.resolve(null)]).then(([eur, own]: any[]) => {
+      if (off) return; if (!eur) { setClaimFxNote("NBP not reachable — the rate is filled when it is"); return; }
+      setClaimFxNote(`NBP table A of ${eur.tableDate}, the last working day before ${date}`);
+      const fx = cur === "PLN" ? 1 : cur === "EUR" ? eur.rate : (own ? own.rate : null);
+      const p: any = {};
+      if (Math.abs(Number(c.plnPerEur || 0) - eur.rate) > 0.00005) p.plnPerEur = eur.rate;
+      if (fx != null && Math.abs(Number(c.fxToPLN || 0) - fx) > 0.00005) p.fxToPLN = fx;
+      if (c.fxTableDate !== eur.tableDate) p.fxTableDate = eur.tableDate;
+      if (Object.keys(p).length) patch(c.id, p);
+    });
+    return () => { off = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, selected?.date, selected?.currency, selected?.financeNoteId, selected?.status]);
 
   // v6.63.0 (D-13): arriving from another module with context — SO+SINV for a
   // client claim, shipment+transport invoice for a carrier claim, lot+PO+PINV
@@ -454,6 +502,19 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     <select value={selected.cause} onChange={e => patch(selected.id, { cause: e.target.value })} style={INP}>
                       {CLAIM_CAUSES.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
+                    {RISK_CAUSES.includes(String(selected.cause || "")) && (() => {   // v7.19.4 (A-INC-1, 5/5): where it happened → who carried the risk there
+                      const sh = claimShipment(selected, shipments || []); if (!sh) return <div style={{ marginTop: 6, fontSize: 11.5, color: "#64748B" }}>Link the shipment (or its lot / sale) to say where it happened — the terms then say who carried the risk.</div>;
+                      const rt = claimRouting(selected, sh, { pos, orders, contacts });
+                      const off = rt && rt.respondent && String(selected.respondent?.contactId ?? "") !== String(rt.respondent.contactId ?? "");
+                      return <div style={{ marginTop: 6 }}>
+                        <select value={selected.lossAt?.shipment === sh.number ? (selected.lossAt?.stage || "") : ""} onChange={e => { const stage = e.target.value; const next = { ...selected, lossAt: stage ? { shipment: sh.number, stage } : null }; const r2 = stage ? claimRouting(next, sh, { pos, orders, contacts }) : null; patch(selected.id, { lossAt: next.lossAt, ...(r2 && r2.respondent && String(selected.direction) === "RECOVERY" ? { respondent: r2.respondent } : {}) }); }} style={INP} title="v7.19.4: where the loss happened on the shipment">
+                          <option value="">Where did it happen on {sh.number}?</option>
+                          {journeyStages(sh).map(st => <option key={st.key} value={st.key}>{st.label}</option>)}
+                        </select>
+                        {rt && <div style={{ marginTop: 6, fontSize: 11.5, lineHeight: 1.45, padding: "6px 10px", borderRadius: 7, color: rt.warn ? "#92400E" : "#1E3A8A", background: rt.warn ? "#FFFBEB" : "#EFF6FF", border: `1px solid ${rt.warn ? "#FDE68A" : "#BFDBFE"}` }}>{rt.warn ? "⚠ " : ""}{rt.note}</div>}
+                        {off && <div style={{ marginTop: 4, fontSize: 11.5, color: "#92400E" }}>⚠ Under the terms this claim goes to {rt!.respondent!.name}, not {selected.respondent?.name || "the party named"}.</div>}
+                      </div>;
+                    })()}
                     {/^quality|defect/i.test(String(selected.cause || "")) && (<div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "1.2fr 0.6fr", gap: 6 }}>
                       {/* v6.81.0 (D-61): the defect itself — type, share, description */}
                       <input value={selected.defectType || ""} onChange={e => patch(selected.id, { defectType: e.target.value })} placeholder="Defect type (e.g. skin spots, soft fruit, rot)" style={INP} />
@@ -475,12 +536,15 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                         : ds.state === "notified" ? <span style={{ color: "#16A34A", fontWeight: 700 }}> · notified</span> : null}</Lbl>; })()}
                     <DateInput value={selected.noticeDeadline || ""} onChange={e => patch(selected.id, { noticeDeadline: e.target.value })} style={INP} />
                     {(() => {
-                      const sug = suggestNoticeDeadline(selected);
+                      // v7.10.1 (A-RV-15 · CL-8): the company the claim is linked to (by id, never by name) brings its agreed notice days
+                      const linkedCo = selected.respondent?.contactId != null ? (contacts || []).find((c: any) => String(c.id) === String(selected.respondent.contactId)) : null;
+                      const rule = noticeRuleFor(selected, linkedCo);
+                      const sug = suggestNoticeDeadline(selected, undefined, rule);
                       if (!sug) return null;
                       const ds = deadlineStatus(selected, today);
                       return <div style={{ fontSize: 10, color: ds.state === "passed" ? "#B91C1C" : "#94A3B8", marginTop: 3, lineHeight: 1.45 }}>
                         {!selected.noticeDeadline
-                          ? <>Suggested {sug.deadline} — {sug.basis}. <span onClick={() => patch(selected.id, applyDeadlineDefault(selected))} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use it</span></>
+                          ? <>Suggested {sug.deadline} — {sug.basis}. <span onClick={() => patch(selected.id, applyDeadlineDefault(selected, undefined, rule))} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use it</span></>
                           : ds.message}
                       </div>;
                     })()}
@@ -513,7 +577,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                         <Lbl>Costs this party caused</Lbl>
                         {(selected.causedCosts || []).map((cc: any, i: number) => (
                           <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 130px auto", gap: 8, marginBottom: 5 }}>
-                            <input value={cc.label || ""} onChange={e => patch(selected.id, { causedCosts: (selected.causedCosts || []).map((x: any, xi: number) => xi === i ? { ...x, label: e.target.value } : x) })} placeholder="Repalletising / demurrage / re-delivery" style={{ ...INP, padding: "6px 8px" }} />
+                            <CostLabelPicker value={cc.label} options={CAUSED_COST_LABELS} onChange={(v: string) => patch(selected.id, { causedCosts: (selected.causedCosts || []).map((x: any, xi: number) => xi === i ? { ...x, label: v } : x) })} />
                             <input type="number" value={cc.amountEUR ?? ""} onChange={e => patch(selected.id, { causedCosts: (selected.causedCosts || []).map((x: any, xi: number) => xi === i ? { ...x, amountEUR: e.target.value } : x) })} placeholder="EUR" style={{ ...INP, padding: "6px 8px" }} />
                             <SmallButton kind="red" onClick={() => patch(selected.id, { causedCosts: (selected.causedCosts || []).filter((_: any, xi: number) => xi !== i) })}>✕</SmallButton>
                           </div>
@@ -528,7 +592,8 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   )}
                   <div style={{ marginTop: 10 }}>
                     <Lbl>EUR → PLN rate used when posting</Lbl>
-                    <input type="number" value={selected.plnPerEur ?? ""} onChange={e => patch(selected.id, { plnPerEur: e.target.value })} placeholder="e.g. 4.30" style={{ ...INP, maxWidth: 180 }} />
+                    <div data-claim-rate="1" style={{ ...INP, maxWidth: 180, background: "#F8FAFC" }}>{Number(selected.plnPerEur) > 0 ? Number(selected.plnPerEur).toFixed(4) : "—"}</div>
+                    <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 3 }}>{claimFxNote}</div>{/* v7.18.6 (A-AU-12): not typed */}
                   </div>
                 </div>
 
@@ -658,7 +723,8 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                 const pct = num(selected.defectPct);
                 const share = pct > 0 ? Math.min(1, pct / 100) : 1;
                 const clientLines = selected.clientCosts || [];
-                const chain = buildCostChain({ lots, lotRefs, affectedShare: share, clientLines, plnPerEur: selected.plnPerEur });
+                const saleLines = saleDirectCostLines(lotRefs, orders, shipments, share);   // v7.10.0 (A-RV-15 · CL-5): the sale's delivery / return freight
+                const chain = buildCostChain({ lots, lotRefs, affectedShare: share, clientLines, plnPerEur: selected.plnPerEur, saleLines });
                 const gaps = chainGaps(chain, clientLines);
                 const setClient = (i: number, field: string, v: any) => patch(selected.id, {
                   clientCosts: clientLines.map((x: any, xi: number) => xi === i ? { ...x, [field]: v } : x),
@@ -684,19 +750,19 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     </div>
                     {chain.totalEUR > 0 && <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>≈ €{chain.totalEUR.toLocaleString("pl-PL")} at {selected.plnPerEur} PLN/EUR</div>}
 
-                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Ours — derived from the lots</div>
+                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Ours — the lots&apos; costs and the sale&apos;s freight</div>
                     {chain.lines.filter((l: any) => l.origin === "OURS").map((l: any) => (
                       <div key={l.key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F8FAFC", fontSize: 11.5 }}>
                         <span style={{ color: "#475569" }}>{l.label}</span>
                         <span style={{ fontWeight: 600 }}>{Math.round(l.amountPLN).toLocaleString("pl-PL")}</span>
                       </div>
                     ))}
-                    {!chain.lines.some((l: any) => l.origin === "OURS") && <div style={{ fontSize: 11, color: "#94A3B8" }}>No allocated cost on these lots yet.</div>}
+                    {!chain.lines.some((l: any) => l.origin === "OURS") && <div style={{ fontSize: 11, color: "#94A3B8" }}>No allocated cost on these lots yet, and no delivery or return freight on their sales.</div>}
 
                     <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", margin: "12px 0 5px" }}>The client&apos;s — he incurred them, he charged them to us</div>
                     {clientLines.map((l: any, i: number) => (
                       <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 120px 34px", gap: 7, marginBottom: 5 }}>
-                        <input value={l.label || ""} onChange={e => setClient(i, "label", e.target.value)} placeholder="What the client charged" style={{ ...INP, padding: "6px 8px" }} />
+                        <CostLabelPicker value={l.label} options={CLIENT_COST_PROMPTS} onChange={(v: string) => setClient(i, "label", v)} />
                         <input type="number" value={l.amountPLN ?? ""} onChange={e => setClient(i, "amountPLN", e.target.value)} placeholder="PLN" style={{ ...INP, padding: "6px 8px" }} />
                         <SmallButton kind="red" onClick={() => patch(selected.id, { clientCosts: clientLines.filter((_: any, xi: number) => xi !== i) })}>✕</SmallButton>
                       </div>

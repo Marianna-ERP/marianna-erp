@@ -27,7 +27,7 @@ const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.proto
 (async () => {
   console.log("PLANNING SHEET — TYPING (jsdom, real DOM events)");
   const fx = FX.fixture("marianna-erp_v6.99.79_schema-v2_2026-09-29T11-01-43.json");
-  const tabs0 = fx ? JSON.parse(fs.readFileSync(fx, "utf8")).planningSheets : [{ id: "t1", name: "week 40", order: 1, createdAt: "x", rows: [{ id: "r1", createdAt: "x", cells: { client: "Al Baraka", supplier: "Grójecki Owoc" } }] }];
+  const tabs0 = fx ? JSON.parse(fs.readFileSync(fx, "utf8")).planningSheets : [{ id: "t1", name: "week 40", order: 1, createdAt: "x", rows: [{ id: "r1", createdAt: "x", cells: { client: "Al Baraka", supplier: "Pavamane Owoc" } }] }];
   const m = mount(tabs0); await m.render();
 
   await t("clicking a cell keeps THAT input: still in the document, still focused, after the sheet re-draws the outline", async () => {

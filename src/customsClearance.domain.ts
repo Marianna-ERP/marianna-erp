@@ -1,12 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // customsClearance.domain.ts — v6.99.44 (X-1, X-5…X-9, owner 19 Sept)
 // A customs clearance belongs to the UNIT that crosses the border. The agent's CC529C release message (Polish
 // customs, XML) carries every fact tagged — MRN, LRN, dates, offices, the truck's plates, kilos, packages, CN,
 // the invoice declared — so the clearance line is FILLED from the file, matched to the truck by plates, and
 // cross-checked against the shipment. The user types nothing; without a file, three fields suffice.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(S(v).replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 // v6.99.72 (A-CU-3, owner 28 Sept): the agent sends TWO messages per truck — the release (CC529C) and, days later, the
 // exit confirmation (CC599C, "IE-599": the goods left the EU — the evidence behind 0 % VAT on the export invoice) — plus
@@ -68,15 +69,6 @@ export function parseCC529C(xmlText: string): Partial<UnitClearance> & { ok: boo
     status: exitedOn ? "Exited" : tag(x, "releaseDate") ? "Released" : "Declared",
     messageType, exitedOn, exitOffice: unescapeXml(exitOffice), exitResult: S(exitResult),
   };
-}
-
-/** Which unit does a set of plates belong to? "WGR52365/WGR2UU2" matches truck or trailer, spaces and case ignored. */
-export function matchUnitByPlates(sh: any, plates: string): any | null {
-  const norm = (v: any) => S(v).toUpperCase().replace(/[\s-]/g, "");
-  const parts = S(plates).split("/").map(norm).filter(Boolean);
-  if (!parts.length) return null;
-  const units = (sh?.legs || []).flatMap((l: any) => l.vehicles || []);
-  return units.find((u: any) => parts.some(p => p === norm(u.truckPlate) || p === norm(u.trailerPlate))) || null;
 }
 
 /** What disagrees between the declaration and our shipment. Empty = everything matches. */

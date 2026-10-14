@@ -31,6 +31,17 @@ export function appendAudit(log: AuditEvent[], entry: AuditEvent, cap: number = 
   return next.length > cap ? next.slice(next.length - cap) : next;
 }
 
+/** v7.17.4 (A-RV-12): what is past the cap moves to the archive instead of being dropped — the oldest entries, by id. Pure. */
+export function splitAuditOverflow(log: AuditEvent[], cap: number = AUDIT_CAP): { keep: AuditEvent[]; over: AuditEvent[] } {
+  const all = log || []; if (all.length <= cap) return { keep: all, over: [] };
+  return { keep: all.slice(all.length - cap), over: all.slice(0, all.length - cap) };
+}
+/** Adds entries to the archive once each (by id). Pure. */
+export function archiveAudit(archive: AuditEvent[], entries: AuditEvent[]): AuditEvent[] {
+  const have = new Set((archive || []).map(e => String(e?.id))); const add = (entries || []).filter(e => e && !have.has(String(e.id)) && (have.add(String(e.id)), true));
+  return add.length ? [...(archive || []), ...add] : (archive || []);
+}
+
 /** All events for one document (any module), oldest first. */
 export function auditForDoc(log: AuditEvent[], docNumber: string): AuditEvent[] {
   const n = String(docNumber || "").trim().toLowerCase();

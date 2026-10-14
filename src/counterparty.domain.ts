@@ -1,10 +1,11 @@
 import { paymentBasisOf } from "./po.domain";
 import { S } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─────────────────────────────────────────────────────────────────────────────
 // counterparty.domain.ts — v6.99.2: COUNTERPARTIES BATCH (CP-1…CP-7, CP-9; owner 11 Sept 2026)
 // Pure.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export const ROLES = ["Client", "Supplier", "Carrier", "Forwarder", "Broker", "Warehouse", "ShippingLine", "Other"] as const;
 
@@ -15,6 +16,13 @@ const EU = new Set(["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", 
 let USER_COUNTRIES: Array<{ iso: string; name: string; eu: boolean }> = [];
 export function setUserCountries(list: any[]) { USER_COUNTRIES = Array.isArray(list) ? list : []; }
 export function countryIso(country: any): string { const k = S(country).toLowerCase(); if (!k) return ""; if (/^[a-z]{2}$/i.test(S(country))) return S(country).toUpperCase(); const u = USER_COUNTRIES.find(x => S(x.name).toLowerCase() === k); if (u) return S(u.iso).toUpperCase(); return COUNTRY_ISO[k] || ""; }
+/** v7.19.6 (A-TD-5): the address's lines, with the country added only when the address does not already end with it (any spelling). */
+export function addressWithCountry(address: any, country: any): string[] {
+  const lines = String(address || "").split(/\n/).map((s: string) => s.trim()).filter(Boolean); const c = S(country); if (!c) return lines;
+  const last = (lines.join(",").split(",").map((s: string) => s.trim()).filter(Boolean).slice(-1)[0] || "");
+  const same = (countryIso(last) && countryIso(last) === countryIso(c)) || last.toLowerCase() === c.toLowerCase();
+  return same ? lines : [...lines, c];
+}
 export function isEU(country: any): boolean | null { const iso = countryIso(country); if (!iso) return null; const u = USER_COUNTRIES.find(x => S(x.iso).toUpperCase() === iso); return u ? !!u.eu : EU.has(iso); }
 
 // ── CP-1 / CP-2 / CP-9: normalisation (idempotent) ────────────────────────────
@@ -56,13 +64,21 @@ export function personFor(contact: any, role: string): { name: string; email: st
   return hit ? { name: S(hit.name), email: S(hit.email), phone: S(hit.phone) } : (S(contact?.email) ? { name: S(contact?.name), email: S(contact.email), phone: S(contact?.phone) } : null);
 }
 export function missingPeopleInfo(contacts: any[], used: Set<string>): string[] {
-  return (contacts || []).filter(c => c && !c.archived && used.has(S(c.name).toLowerCase()) && !personFor(c, "Buyer")).map(c => S(c.name));
+  return (contacts || []).filter(c => c && !c.archived && !c.deleted && used.has(S(c.name).toLowerCase()) && !personFor(c, "Buyer")).map(c => S(c.name));
 }
 
 // ── CP-4: archive honoured by pickers ─────────────────────────────────────────
 export function activeParties(contacts: any[], role?: string): any[] {
-  return (contacts || []).filter(c => c && !c.archived && (!role || (c.roles || [c.type]).includes(role)));
+  return (contacts || []).filter(c => c && !c.archived && !c.deleted && (!role || (c.roles || [c.type]).includes(role)));
 }
+/** v7.10.2 (A-RV-15 · CP-4): what a company picker offers — the live companies (activeParties), plus any archived one this
+ *  document already names, so an existing document keeps showing its company (marked by archivedMark). */
+export function pickerParties(contacts: any[], keep?: any): any[] {
+  const keepIds = new Set((Array.isArray(keep) ? keep : [keep]).filter((v: any) => v !== undefined && v !== null && v !== "").map((v: any) => S(v)));
+  const kept = (contacts || []).filter(c => c && (c.archived || c.deleted) && keepIds.has(S(c.id)));
+  return [...activeParties(contacts), ...kept];
+}
+export const archivedMark = (c: any): string => (c && c.deleted ? " (deleted)" : c && c.archived ? " (archived)" : "");   // v7.17.0 (A-DEL-5)
 
 // ── CP-5: Fakturownia id kept; match by id, then NIP ──────────────────────────
 export function matchImported(contacts: any[], imported: { fakturowniaId?: any; nip?: any; name?: any }): any | null {

@@ -26,8 +26,12 @@
 //    differently. Derivation is a starting point, never a constraint.
 
 import { grossForGoodsLine, palletManifest, findPackaging, defaultPackagingForProduct, PackagingType, PACKAGING_SEED } from "./packaging.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
+// v7.16.3 (AUD-42): a line's kilos. A deliberate 0 kg stays 0 (zero-kg lines are kept to show ordered vs loaded);
+// only a line with no kilo figure at all falls back to its old 'qty'.
+export const lineKg = (g: any): number => (g?.qtyKg !== undefined && g?.qtyKg !== null && String(g.qtyKg).trim() !== "") ? num(g.qtyKg) : num(g?.qty);
 
 // v6.52.0: a truck fills up by FLOOR SPACE or by WEIGHT, whichever comes first.
 // 26 standard pallets of apples is ~24.3 t net + tare, over a typical 24 t payload —
@@ -142,7 +146,7 @@ export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPallet
   const unresolved: string[] = [];
   let no = 1;
   (lines || []).forEach(g => {
-    const net = num(g.qtyKg) || num(g.qty);
+    const net = lineKg(g);   // v7.16.3 (AUD-42)
     if (net <= 0) return;
     const pk = findPackaging(types, g.packagingId) || findPackaging(types, g.packaging) || defaultPackagingForProduct(types, g.product);
     const capacity = pk && pk.capacityKg > 0 ? num(pk.capacityKg) : 0;
@@ -168,21 +172,15 @@ export function deriveRows(lines: any[], types: PackagingType[]): ProtocolPallet
       });
     });
   });
-  lastDeriveUnresolved = unresolved;
   return padToSheet(rows);
 }
-
-/** Products whose packaging could not be resolved on the last deriveRows call.
- *  Read straight after deriving, so the screen can explain an empty table
- *  instead of leaving the user staring at 21 blank lines. */
-export let lastDeriveUnresolved: string[] = [];
 
 /** Which packaging a goods line will use, and whether it can be resolved at all.
  *  Exposed so the UI can warn BEFORE the producer prints a useless sheet. */
 export function packagingResolution(lines: any[], types: PackagingType[]): { ok: boolean; unresolved: string[] } {
   const bad: string[] = [];
   (lines || []).forEach(g => {
-    const net = num(g.qtyKg) || num(g.qty);
+    const net = lineKg(g);   // v7.16.3 (AUD-42)
     if (net <= 0) return;
     const pk = findPackaging(types, g.packagingId) || findPackaging(types, g.packaging) || defaultPackagingForProduct(types, g.product);
     if (!pk || num(pk.capacityKg) <= 0) bad.push(String(g.product || "line"));
@@ -267,7 +265,7 @@ export function assignmentCheck(goods: any[], units: any[]): AssignmentCheck[] {
   const anyAssigned = (units || []).some((u: any) => (u?.load || []).some((a: any) => num(a?.qtyKg) > 0));
   if (!anyAssigned) return [];
   return (goods || []).map(g => {
-    const total = num(g.qtyKg) || num(g.qty);
+    const total = lineKg(g);   // v7.16.3 (AUD-42)
     let assigned = 0;
     (units || []).forEach((u: any) => (u?.load || []).forEach((a: any) => {
       if (String(a.goodsLineId) === String(g.id)) assigned += num(a.qtyKg);
@@ -291,9 +289,11 @@ export function protocolsForShipment(sh: any): any[] {
 }
 
 /** The protocol for one truck. A legacy single sheet belongs to the first unit. */
-export function protocolForUnit(sh: any, unitId: any): any {
+export function protocolForUnit(sh: any, unitId: any, stopKey?: string): any {
   const all = protocolsForShipment(sh);
-  const hit = all.find((p: any) => p && p.unitId != null && String(p.unitId) === String(unitId));
+  // v7.15.2 (A-LS-3, owner 9 Oct: "one protocol per producer"): a truck collecting at several stops has one sheet per stop
+  if (stopKey) return all.find((p: any) => p && p.unitId != null && String(p.unitId) === String(unitId) && String(p.stopKey || "") === String(stopKey)) || null;
+  const hit = all.find((p: any) => p && p.unitId != null && String(p.unitId) === String(unitId) && !p.stopKey) || all.find((p: any) => p && p.unitId != null && String(p.unitId) === String(unitId));
   if (hit) return hit;
   const legacy = all.find((p: any) => p && (p.unitId == null || p.unitId === ""));
   return legacy || null;
@@ -303,7 +303,7 @@ export function protocolForUnit(sh: any, unitId: any): any {
 export function upsertProtocol(existing: any[], p: any): any[] {
   const list = [...(existing || [])];
   const i = list.findIndex((x: any) => x && (String(x.id) === String(p.id) ||
-    (p.unitId != null && x.unitId != null && String(x.unitId) === String(p.unitId))));
+    (p.unitId != null && x.unitId != null && String(x.unitId) === String(p.unitId) && String(x.stopKey || "") === String(p.stopKey || ""))));   // v7.15.2: + the stop
   if (i >= 0) list[i] = p; else list.push(p);
   return list;
 }
@@ -436,10 +436,6 @@ export function protocolExceptions(p: LoadingProtocol | any): string[] {
   return out;
 }
 
-export function isProtocolClean(p: LoadingProtocol | any): boolean {
-  return protocolExceptions(p).length === 0;
-}
-
 /** What still has to come back before the protocol can serve as evidence. */
 /** A driver signs AT THE DOCK, before departure. A signature dated after the goods
  *  left proves nothing about the state they left in — the exact weakness a carrier
@@ -454,9 +450,6 @@ export function signatureWarnings(p: any): string[] {
   if (drv && iss && drv !== iss) out.push(`Driver (${drv}) and producer (${iss}) signed on different days — both sign at the dock.`);
   return out;
 }
-
-/** Is the returned sheet genuinely usable as evidence? */
-export function isProtocolComplete(p: any): boolean { return protocolGaps(p).length === 0; }
 
 export function protocolGaps(p: LoadingProtocol | any): string[] {
   const gaps: string[] = [];

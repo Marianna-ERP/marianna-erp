@@ -1,3 +1,5 @@
+import { duplicateSupplierRefs } from "./supplierRef.domain";   // v7.8.0
+import { locationById } from "./locations";   // v7.3.2 (A-LOC-3)
 import { lotReceiptDate } from "./seasonOps.domain";
 import { isRealISODate, noteNames } from "./format";
 import { lotLoadedTwice } from "./lotView.domain";
@@ -6,6 +8,7 @@ import { missingPeopleInfo } from "./counterparty.domain";
 import { requiredLinkMissing, positionsMismatch } from "./invoicePlus.domain";
 import { purchaseInvoiceVariance } from "./po.domain";
 import { claimNoteMismatches } from "./claimReadiness.domain";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─── DATA INTEGRITY CHECKER ─────────────────────────────────────────────────
 //
 // A single pure function that scans the whole dataset for structural problems —
@@ -57,10 +60,11 @@ export interface IntegrityInputs {
   advancePayments?: any[];
   bankAccounts?: any[];
   productCatalog?: any[];
+  auditLog?: any[];   // v7.21.13 (FZ-15): checked for shared ids only
 }
 
 // ── small helpers (kept local so this module has zero imports) ──
-function num(v: any): number { const x = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(x) ? x : 0; }
+function num(v: any): number { return parseNum(v); }   // v7.22.2 (FZ-22)
 function r2(x: number): number { return Math.round(x * 100) / 100; }
 function norm(s: any): string { return String(s ?? "").trim().toLowerCase(); }
 function arr<T = any>(v: any): T[] { return Array.isArray(v) ? v : []; }
@@ -247,7 +251,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   // ── 6. Allocations referencing a missing warehouse invoice ─────────────────
   // Cost lines tagged with a warehouse-invoice ref whose invoice no longer exists.
   // Finance tags allocated warehouse cost lines with source `WHINV-<id>` (hyphen).
-  const whInvoiceIds = new Set(warehouseInvoices.map((w: any) => `WHINV-${w.id}`));
+  const whInvoiceIds = new Set([...warehouseInvoices.map((w: any) => `WHINV-${w.id}`), ...arr(inp.invoices).map((i: any) => `WHINV-${i?.id}`)]);   // v7.21.4 (A-ST-10): the register's invoices
   lots.forEach((lot: any) => {
     arr(lot.costs).forEach((c: any) => {
       const src = String(c.source || "");
@@ -687,6 +691,28 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
       `billingStatus is "Cost allocated" but no lot carries this shipment's cost allocation — the flag is stale (allocation never ran, was reverted, or the shipment was cancelled). Re-run the allocation or reset the status.`);
   });
 
+  // v7.21.13 (FZ-15, owner 12 Oct): two records of one kind sharing an id would be taken for ONE by the shared data's merge —
+  // named, never changed (an error for documents, a warning in the audit log)
+  Object.entries(inp as any).forEach(([kind, list]: [string, any]) => {
+    if (!Array.isArray(list)) return;
+    const byId = new Map<string, any[]>();
+    list.forEach((r: any) => { if (r && r.id != null && r.id !== "") byId.set(String(r.id), [...(byId.get(String(r.id)) || []), r]); });
+    byId.forEach((rs, id) => {
+      if (rs.length < 2) return;
+      const what = rs.map((r: any) => String(r.number || r.name || r.invoiceNo || r.summary || r.id).slice(0, 40)).join(" · ");
+      add(kind === "auditLog" ? "warning" : "error", "ID_SHARED", kind, what, `${rs.length} ${kind} records share the id ${id} (${what}) — the shared data would take them for one record. Tell the developer before editing them.`);
+    });
+  });
+
+  // v7.21.10 (A-RV-33, owner 11 Oct): a shipment naming a carrier that only existed in the code (the retired placeholders 1001, 9, 10)
+  // is listed — never changed: whoever opens it picks the carrier from the list
+  const RETIRED_PROVIDER_IDS = new Set(["1001", "9", "10"]); const companyIds = new Set(contacts.map((c: any) => String(c?.id)));
+  shipments.filter((s: any) => s && s.status !== "Cancelled" && !s.deleted).forEach((s: any) => {
+    const ids = new Set<string>(); const take = (v: any) => { if (v != null && v !== "" && RETIRED_PROVIDER_IDS.has(String(v)) && !companyIds.has(String(v))) ids.add(String(v)); };
+    take(s.carrierId); take(s.forwarderId); (s.legs || []).forEach((l: any) => { take(l.carrierId); take(l.forwarderId); (l.vehicles || []).forEach((v: any) => take(v.carrierId)); }); (s.costs || []).forEach((c: any) => take(c.supplierId));
+    if (ids.size) add("warning", "SHIPMENT_PROVIDER_RETIRED", "Shipments", String(s.number || "(shipment)"), `${s.number || "A shipment"}: names carrier id ${Array.from(ids).join(", ")}, which is no company — a placeholder the code used to write. Pick the carrier from the list.`);
+  });
+
   const counts = {
     error: issues.filter(i => i.severity === "error").length,
     warning: issues.filter(i => i.severity === "warning").length,
@@ -719,6 +745,16 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
   const rank = { error: 0, warning: 1, info: 2 } as const;
   issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
+  // v7.3.2 (A-LOC-3, owner 7 Oct): a PO / SO whose place points to no location at all — the document shows no destination
+  {
+    const known = (id: any) => !!locationById(id, inp.contacts || []);
+    (inp.pos || []).filter((p: any) => p && p.status !== "Cancelled" && p.destinationLocationId != null && p.destinationLocationId !== "" && !known(p.destinationLocationId))
+      .forEach((p: any) => add("warning", "PLACE_UNKNOWN", "POs", String(p.number), `${p.number}: its named place (id ${p.destinationLocationId}) is no location any more${p.destinationText ? ` — it read "${p.destinationText}"` : ""}. Choose the location on the PO.`));
+    (inp.orders || []).filter((o: any) => o && o.status !== "Cancelled" && o.destinationLocationId != null && o.destinationLocationId !== "" && !known(o.destinationLocationId))
+      .forEach((o: any) => add("warning", "PLACE_UNKNOWN", "SOs", String(o.number), `${o.number}: its destination (id ${o.destinationLocationId}) is no location any more${o.destinationText ? ` — it read "${o.destinationText}"` : ""}. Choose the location on the sale.`));
+  }
+  // v7.8.0 (A-PO-REF-1): the producer's reference used on more than one PO
+  duplicateSupplierRefs(inp.pos || [], inp.shipments || []).forEach(d => add("warning", "SUPPLIER_REF_DUPLICATE", "POs", d.on.join(", "), `The producer's reference "${d.ref}" is used on ${d.on.join(" and ")} — each PO needs its own.`));
   return { issues, counts, okay: counts.error === 0 };
 }
 
@@ -726,7 +762,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
 /** Lots whose PO no longer exists AND that hold no stock (nothing to lose): the leftovers of a season reset done by hand. */
 export function orphanLotsToRemove(lots: any[], pos: any[]): any[] {
   const poNums = new Set((pos || []).map((p: any) => String(p.number)));
-  return (lots || []).filter((l: any) => l && l.poRef && !poNums.has(String(l.poRef)) && !((Number(l.physicalKg) || 0) > 0) && !(l.movements || []).some((m: any) => m && !m.voided && (m.type === "IN") && (Number(m.qtyKg) || 0) > 0 && (Number(l.physicalKg) || 0) > 0));
+  return (lots || []).filter((l: any) => l && l.status !== "Cancelled" && l.poRef && !poNums.has(String(l.poRef))   /* v7.17.1: a lot already deleted is no longer offered */ && !((Number(l.physicalKg) || 0) > 0) && !(l.movements || []).some((m: any) => m && !m.voided && (m.type === "IN") && (Number(m.qtyKg) || 0) > 0 && (Number(l.physicalKg) || 0) > 0));
 }
 /** Invoice and claim links that point at documents that no longer exist. */
 export function danglingLinks(invoices: any[], claims: any[], pos: any[], orders: any[], shipments: any[]): { invoices: Array<{ id: any; number: string; links: any[] }>; claims: Array<{ id: any; number: string; subjects: any[] }> } {

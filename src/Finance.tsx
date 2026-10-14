@@ -9,7 +9,7 @@ import { printHtmlNode } from "./documentService";
 import DateInput from "./DateInput";
 import { parseBankCSV, matchBankLines, bankPaymentEvent, upsertBankAccountFromStatement } from "./bankReconciliation.domain";
 import { advanceFromBankLine, advanceRemaining, applyAdvanceToInvoice, advanceSources, linkAdvanceToProforma } from "./advances.domain";
-import { realizedFxPLN } from "./payments.domain";
+import { realizedFxPLN, fxDifferencesByCounterparty } from "./payments.domain";   // v7.13.5 (A-AU-2)
 import { statementFor, statementCurrencies } from "./statement.domain";
 import { buildSnapshot, cashProjection } from "./periodClose.domain";
 import { clientRiskTable, poResult } from "./financePlus.domain";
@@ -23,6 +23,8 @@ import { markInvoicePaidViaLedger, unmarkLedgerPaid } from "./payments.domain";
 import { nextId } from "./ids";
 import { MarginMode } from "./marginCalculations";
 import { localTodayISO, localMonthISO, prevMonthISO } from "./dates";
+import { nbpRateBefore } from "./fx";   // v7.18.6 (A-AU-12)
+import { parseNum } from "./numbers";
 import { warehouseMonthCharges, tariffHasRates } from "./warehouseCharges";
 import { buildLedger } from "./ledger";
 import {
@@ -152,6 +154,7 @@ function newCostTemplate(): OperationalCost {
 
 // ── v6.99.0 (FN-1/FN-2/FN-3): CLOSE THE MONTH · MANAGEMENT PACKAGE · CASH VIEW ──
 function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSettlements = [], invoices = [], bankAccounts = [], closedPeriods = [], setClosedPeriods = null, userName = "", canClose = true }: any) {
+  const { confirm: uiConfirm, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const today = localTodayISO(); const thisMonth = today.slice(0, 7);
   const prevMonth = prevMonthISO(today);   // v6.99.122 (AUD-07/09): from the text
   const [period, setPeriod] = React.useState(prevMonth);
@@ -165,13 +168,13 @@ function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSett
   const fmt = (n: number) => (n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const Row = ({ k, v, color }: any) => <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11.5, padding: "2px 0" }}><span style={{ color: "#64748B" }}>{k}</span><b style={{ color: color || "#111", fontVariantNumeric: "tabular-nums" }}>{v}</b></div>;
   return (
-    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
+    <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>{dialogNode}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
         <div style={{ fontSize: 13, fontWeight: 800, marginRight: "auto" }}>📘 Month close & management package</div>
         <input type="month" value={period} onChange={e => setPeriod(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 }} />
         {closed ? <span style={{ fontSize: 11, fontWeight: 800, color: "#16A34A" }}>CLOSED {closed.closedAt} by {closed.closedBy}</span>
-          : (canClose && setClosedPeriods && period < thisMonth && <button onClick={() => { if (!window.confirm(`Close ${period}? Documents dated inside it can no longer be created or changed, and its figures are frozen for the accountant.`)) return; setClosedPeriods((prev: any[]) => [...(prev || []), { period, closedAt: today, closedBy: userName || "owner", snapshot: live }]); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} closed — net ${fmt(live.netPLN)} PLN, receivables ${fmt(live.receivableOpenPLN)}, payables ${fmt(live.payableOpenPLN)}` }); }} style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontWeight: 800, cursor: "pointer" }}>🔒 Close {period}</button>)}
-        {closed && setClosedPeriods && canClose && <button onClick={() => { if (!window.confirm(`Re-open ${period}? The frozen snapshot is discarded.`)) return; setClosedPeriods((prev: any[]) => (prev || []).filter((c: any) => c.period !== period)); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} re-opened` }); }} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer" }}>re-open</button>}
+          : (canClose && setClosedPeriods && period < thisMonth && <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Close ${period}? Documents dated inside it can no longer be created or changed, and its figures are frozen for the accountant.` }))) return; setClosedPeriods((prev: any[]) => [...(prev || []), { period, closedAt: today, closedBy: userName || "owner", snapshot: live }]); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} closed — net ${fmt(live.netPLN)} PLN, receivables ${fmt(live.receivableOpenPLN)}, payables ${fmt(live.payableOpenPLN)}` }); }} style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontWeight: 800, cursor: "pointer" }}>🔒 Close {period}</button>)}
+        {closed && setClosedPeriods && canClose && <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Re-open ${period}? The frozen snapshot is discarded.` }))) return; setClosedPeriods((prev: any[]) => (prev || []).filter((c: any) => c.period !== period)); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} re-opened` }); }} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer" }}>re-open</button>}
         <button onClick={() => printHtmlNode("mgmt-package", `Management package — ${period}`)} style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>⎙ Package</button>
       </div>
       <div id="mgmt-package" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
@@ -188,6 +191,25 @@ function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSett
 
 // ── v6.99.26 (owner ruling 15 Sept): PURCHASE RESULTS — what every firm purchase earned. Analysis belongs to Finance;
 // the PO screen stays operational. The consignment trucks keep their settlement on the PO (it issues documents).
+
+// v7.8.3 (A-PL-2, owner 8 Oct): OUR result on each consignment truck — the commission is our income; the producer's statement stays on the PO
+function ConsignmentResultsCard({ pos = [], lots = [], orders = [], invoices = [], shipments = [], claims = [], financeNotes = [], poSettlements = [] }: any) {
+  const rows = consignmentPositions({ pos, lots, orders, invoices, shipments, claims, financeNotes, poSettlements });
+  if (!rows.length) return null;
+  const pln = (v: number) => Math.round(v || 0).toLocaleString("pl-PL") + " PLN";
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <SectionTitle>CONSIGNMENT TRUCKS — OUR RESULT</SectionTitle>
+      <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 8 }}>Our commission on the producer's net sales. Our own costs that are not recharged to the producer, and the share of overheads, are not deducted yet.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "130px 1.4fr 80px 1fr 70px 1fr", gap: 8, padding: "6px 8px", fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}><div>PO</div><div>PRODUCER</div><div>STATE</div><div style={{ textAlign: "right" }}>NET SALES</div><div style={{ textAlign: "right" }}>%</div><div style={{ textAlign: "right" }}>OUR COMMISSION</div></div>
+      {rows.map((r: any) => <div key={r.poNumber} style={{ display: "grid", gridTemplateColumns: "130px 1.4fr 80px 1fr 70px 1fr", gap: 8, padding: "7px 8px", fontSize: 12, borderTop: "1px solid #F1F5F9" }}>
+        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#1D4ED8" }}>{r.poNumber}</div><div>{r.producer}</div><div style={{ color: r.state === "closed" ? "#15803D" : "#B45309" }}>{r.state}</div>
+        <div style={{ textAlign: "right" }}>{pln(r.netPLN)}</div><div style={{ textAlign: "right" }}>{r.pctMissing ? "—" : `${r.commissionPct}%`}</div><div style={{ textAlign: "right", fontWeight: 800, color: "#15803D" }}>{r.pctMissing ? "rate missing" : pln((r.netPLN || 0) * (r.commissionPct || 0) / 100)}</div>
+      </div>)}
+    </Card>
+  );
+}
+
 function PurchaseResultsCard({ pos = [], lots = [], orders = [], shipments = [] }: any) {
   const [supplier, setSupplier] = React.useState("");
   const rows = (pos || [])
@@ -240,7 +262,7 @@ function ClientRiskCard({ invoices = [], orders = [], contacts = [] }: any) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><div style={{ fontSize: 13, fontWeight: 800 }}>🛡 Client risk</div><span style={{ fontSize: 11, color: "#888" }}>exposure = open receivables · usage = (exposure + confirmed orders) / limit · feeds the credit gate at confirm</span>
         <span style={{ marginLeft: "auto" }}><SmallButton onClick={() => exportRowsToXlsx(`client_risk_${xlsStamp()}`, rows, [{ key: "client", label: "Client" }, { key: "limitPLN", label: "Limit PLN" }, { key: "exposurePLN", label: "Exposure PLN" }, { key: "openOrdersPLN", label: "Confirmed orders PLN" }, { key: "usagePct", label: "Usage %" }, { key: "overduePLN", label: "Overdue PLN" }, { key: "maxOverdueDays", label: "Max days late" }, { key: "avgDaysToPay", label: "Avg days to pay" }, { key: "lastPaymentDate", label: "Last payment" }], "Client risk")}>Export file (Excel)</SmallButton></span></div>
       <div style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>CLIENT</div><div>LIMIT</div><div>EXPOSURE</div><div>ORDERS</div><div>USAGE</div><div>OVERDUE</div><div>DAYS LATE</div><div>PAYS IN</div></div>
-      {rows.map(r => <div key={r.client} style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 11.5, padding: "3px 0", borderTop: "1px solid #F8FAFC" }}><div><b>{r.client}</b></div><div>{r.limitPLN ? fmt(r.limitPLN) : "—"}</div><div>{fmt(r.exposurePLN)}</div><div>{fmt(r.openOrdersPLN)}</div><div style={{ color: r.usagePct != null && r.usagePct > 100 ? "#DC2626" : r.usagePct != null && r.usagePct > 80 ? "#B45309" : "#111", fontWeight: 700 }}>{r.usagePct != null ? r.usagePct + "%" : "—"}</div><div style={{ color: r.overduePLN ? "#DC2626" : "#111" }}>{fmt(r.overduePLN)}</div><div style={{ color: r.maxOverdueDays > 30 ? "#DC2626" : r.maxOverdueDays ? "#B45309" : "#94A3B8" }}>{r.maxOverdueDays || "—"}</div><div>{r.avgDaysToPay != null ? r.avgDaysToPay + " d" : "—"}<span style={{ color: "#94A3B8" }}>{r.lastPaymentDate ? " · " + r.lastPaymentDate : ""}</span></div></div>)}
+      {rows.map(r => <div key={r.client} style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 11.5, padding: "3px 0", borderTop: "1px solid #F8FAFC" }}><div><b>{r.client}</b></div><div>{r.limitPLN ? fmt(r.limitPLN) : "—"}</div><div>{fmt(r.exposurePLN)}</div><div>{fmt(r.openOrdersPLN)}</div><div style={{ color: r.usagePct != null && r.usagePct > 100 ? "#DC2626" : r.usagePct != null && r.usagePct > 80 ? "#B45309" : "#111", fontWeight: 700 }}>{r.usagePct != null ? r.usagePct + "%" : "—"}</div><div style={{ color: r.overduePLN ? "#B45309" : "#111" }}>{fmt(r.overduePLN)}</div><div style={{ color: r.maxOverdueDays > 30 ? "#DC2626" : r.maxOverdueDays ? "#B45309" : "#94A3B8" }}>{r.maxOverdueDays || "—"}</div><div>{r.avgDaysToPay != null ? r.avgDaysToPay + " d" : "—"}<span style={{ color: "#94A3B8" }}>{r.lastPaymentDate ? " · " + r.lastPaymentDate : ""}</span></div></div>)}
     </div>
   );
 }
@@ -306,9 +328,9 @@ function StatementCard({ invoices = [], financeNotes = [] }: any) {
           <div style={{ fontWeight: 800, fontSize: 13 }}>Statement of account · {st.counterparty} · {st.from} → {st.to} · {st.currency}</div>
           <div style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, fontSize: 10, fontWeight: 700, color: "#94A3B8", marginTop: 8 }}><div>DATE</div><div>TYPE</div><div>REFERENCE</div><div>DUE</div><div style={{ textAlign: "right" }}>DEBIT</div><div style={{ textAlign: "right" }}>CREDIT</div><div style={{ textAlign: "right" }}>BALANCE</div></div>
           <div style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, padding: "3px 0", borderTop: "1px solid #F1F5F9", color: "#64748B" }}><div>{st.from}</div><div>Opening</div><div>balance brought forward</div><div /><div /><div /><div style={{ textAlign: "right", fontWeight: 700 }}>{fmt(st.opening)}</div></div>
-          {st.lines.map((l, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, padding: "3px 0", borderTop: "1px solid #F8FAFC", color: l.type === "Credit note" ? "#166534" : "#111" }}><div>{l.date}</div><div>{l.type}</div><div>{l.ref}{l.note ? <span style={{ color: "#94A3B8" }}> · {l.note}</span> : null}</div><div style={{ color: l.overdueDays ? "#DC2626" : "#64748B" }}>{l.dueDate || ""}{l.overdueDays ? ` (${l.overdueDays}d)` : ""}</div><div style={{ textAlign: "right" }}>{fmt(l.debit)}</div><div style={{ textAlign: "right" }}>{fmt(l.credit)}</div><div style={{ textAlign: "right", fontWeight: 700 }}>{fmt(l.balance)}</div></div>)}
+          {st.lines.map((l, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, padding: "3px 0", borderTop: "1px solid #F8FAFC", color: l.type === "Credit note" ? "#166534" : "#111" }}><div>{l.date}</div><div>{l.type}</div><div>{l.ref}{l.note ? <span style={{ color: "#94A3B8" }}> · {l.note}</span> : null}</div><div style={{ color: l.overdueDays ? "#B45309" : "#64748B" }}>{l.dueDate || ""}{l.overdueDays ? ` (${l.overdueDays}d)` : ""}</div><div style={{ textAlign: "right" }}>{fmt(l.debit)}</div><div style={{ textAlign: "right" }}>{fmt(l.credit)}</div><div style={{ textAlign: "right", fontWeight: 700 }}>{fmt(l.balance)}</div></div>)}
           <div style={{ display: "grid", gridTemplateColumns: "90px 90px 1fr 90px 100px 100px 110px", gap: 6, padding: "6px 0", borderTop: "2px solid #E5E7EB", fontWeight: 800 }}><div>{st.to}</div><div>Closing</div><div>{st.side === "client" ? "amount the client owes us" : "amount we owe"}</div><div /><div /><div /><div style={{ textAlign: "right" }}>{fmt(st.closing)} {st.currency}</div></div>
-          <div style={{ marginTop: 6, fontSize: 11, color: st.overdue ? "#DC2626" : "#64748B" }}>Overdue now: <b>{fmt(st.overdue) || "0,00"} {st.currency}</b> · aging: current {fmt(st.aging.current) || "0"} · 1–30 {fmt(st.aging.d30) || "0"} · 31–60 {fmt(st.aging.d60) || "0"} · 61–90 {fmt(st.aging.d90) || "0"} · &gt;90 {fmt(st.aging.older) || "0"}</div>
+          <div style={{ marginTop: 6, fontSize: 11, color: st.overdue ? "#B45309" : "#64748B" }}>Overdue now: <b>{fmt(st.overdue) || "0,00"} {st.currency}</b> · aging: current {fmt(st.aging.current) || "0"} · 1–30 {fmt(st.aging.d30) || "0"} · 31–60 {fmt(st.aging.d60) || "0"} · 61–90 {fmt(st.aging.d90) || "0"} · &gt;90 {fmt(st.aging.older) || "0"}</div>
         </div>
       )}
     </div>
@@ -474,7 +496,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
   );
 }
 
-function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], warehouseInvoices = [], operationalCosts = [], settledRefs = [], setSettledRefs = null, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
+function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoices = null, financeNotes = [], operationalCosts = [], settledRefs = [], setSettledRefs = null, advancePayments = [], setAdvancePayments = null, bankAccounts = [], setBankAccounts = null, users = [], userName = "", contacts = [] }: any) {
   const { alert: lvAlert, dialogNode: lvNode } = useConfirm(); // P2-6
   const [dir, setDir] = useState<"all" | "receivable" | "payable">("all");
   const [hidePaid, setHidePaid] = useState(true);
@@ -514,21 +536,28 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
 
   const fmt = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " PLN";
   const card: any = { background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 16px" };
-  const statusColor = (s: string) => s === "Overdue" ? "#DC2626" : s === "Paid" ? "#16A34A" : "#D97706";
+  const statusColor = (s: string) => s === "Overdue" ? "#B45309" : s === "Paid" ? "#16A34A" : "#D97706";   // v7.17.3 (A-RV-11): overdue is amber
 
   return (
     <>
       {lvNode}
       {(() => { const fx = (invoices || []).reduce((s: number, i: any) => s + realizedFxPLN(i), 0);
         return Math.abs(fx) > 0.005 ? <div style={{ fontSize: 11.5, fontWeight: 700, color: fx >= 0 ? "#065F46" : "#B91C1C", background: fx >= 0 ? "#ECFDF5" : "#FEF2F2", border: "1px solid " + (fx >= 0 ? "#A7F3D0" : "#FECACA"), borderRadius: 8, padding: "6px 12px", marginBottom: 10 }}>Realized FX {fx >= 0 ? "gain" : "loss"} to date: {fx.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN <span style={{ fontWeight: 400, color: "#64748B" }}>(from payments recorded with a bank settlement rate — v6.68.0 F-2)</span></div> : null; })()}
+      {(() => { const rows = fxDifferencesByCounterparty(invoices || []); if (!rows.length) return null;   /* v7.13.5 (A-AU-2): per client, realised against invoiced */
+        const f4 = (x: number) => x.toFixed(4); const fp = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return <div data-fx-clients="1" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 11.5 }}>
+          <div style={{ fontWeight: 800, fontSize: 11, color: "#64748B", marginBottom: 4 }}>EXCHANGE DIFFERENCES BY CLIENT / SUPPLIER — NBP of the day before the invoice vs the day before each payment</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ color: "#94A3B8", textAlign: "left" }}><th>Counterparty</th><th>Side</th><th style={{ textAlign: "right" }}>Paid</th><th style={{ textAlign: "right" }}>Invoice rate (avg)</th><th style={{ textAlign: "right" }}>Payment rate (avg)</th><th style={{ textAlign: "right" }}>Gain / loss PLN</th></tr></thead>
+          <tbody>{rows.map((r, i) => <tr key={i} style={{ borderTop: "1px solid #F1F5F9" }}><td>{r.counterparty}</td><td>{r.side === "receivable" ? "we receive" : "we pay"}</td><td style={{ textAlign: "right" }}>{fp(r.paid)} {r.currency} <span style={{ color: "#94A3B8" }}>({r.payments})</span></td><td style={{ textAlign: "right" }}>{f4(r.avgInvoiceRate)}</td><td style={{ textAlign: "right" }}>{f4(r.avgPaymentRate)}</td><td style={{ textAlign: "right", fontWeight: 700, color: r.gainPLN >= 0 ? "#065F46" : "#B91C1C" }}>{fp(r.gainPLN)}</td></tr>)}</tbody></table>
+        </div>; })()}
       <BankImportPanel invoices={invoices} setInvoices={setInvoices} nextId={nextId} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} />
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}><SmallButton onClick={() => exportRowsToXlsx(`ledger_${xlsStamp()}`, items, [{ key: "direction", label: "Direction" }, { key: "kind", label: "Kind" }, { key: "ref", label: "Reference" }, { key: "counterparty", label: "Counterparty" }, { key: "date", label: "Date" }, { key: "dueDate", label: "Due" }, { key: "currency", label: "Currency" }, { key: "amount", label: "Amount" }, { key: "amountPLN", label: "Open PLN" }, { key: "status", label: "Status" }, { key: "daysOverdue", label: "Days overdue" }], "Ledger")} title="v6.99.0: exports the open items as listed">Export file (Excel)</SmallButton></div>
       {canOpenFinance(users, userName, "clients") && <ClientRiskCard invoices={invoices} orders={orders} contacts={contacts} />}
       <StatementCard invoices={invoices} financeNotes={financeNotes} />
       <AdvancesPanel advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} invoices={invoices} setInvoices={setInvoices} bankAccounts={bankAccounts} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
-        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
-        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#DC2626" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#B45309" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#111" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
         <div style={card}><div style={{ fontSize: 11, color: "#888" }}>NET POSITION</div><div style={{ fontSize: 19, fontWeight: 800, color: totals.netPositionPLN >= 0 ? "#16A34A" : "#DC2626" }}>{fmt(totals.netPositionPLN)}</div><div style={{ fontSize: 10.5, color: "#888" }}>receivable − payable</div></div>
         <div style={{ ...card, display: "flex", flexDirection: "column", justifyContent: "center", gap: 6 }}>
           <div style={{ display: "flex", gap: 4, background: "#F3F4F6", borderRadius: 7, padding: 3 }}>
@@ -553,7 +582,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
                 <td style={{ padding: "8px 10px", fontWeight: 600 }}>{i.counterparty}</td>
                 <td style={{ padding: "8px 10px", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.documentNo}</td>
                 <td style={{ padding: "8px 10px", color: "#888" }}>{i.date || "—"}</td>
-                <td style={{ padding: "8px 10px", color: i.status === "Overdue" ? "#DC2626" : "#888", fontWeight: i.status === "Overdue" ? 700 : 400 }}>{i.dueDate || "—"}</td>
+                <td style={{ padding: "8px 10px", color: i.status === "Overdue" ? "#B45309" : "#888", fontWeight: i.status === "Overdue" ? 700 : 400 }}>{i.dueDate || "—"}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{i.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}{i.currency !== "PLN" ? <span style={{ fontSize: 9.5, color: "#AAA" }}> PLN</span> : <span style={{ fontSize: 9.5, color: "#AAA" }}> PLN</span>}</td>
                 <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10.5, fontWeight: 800, color: statusColor(i.status) }}>{i.status}</span></td>
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>
@@ -573,31 +602,48 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
 }
 
 // ─── v6.5: WAREHOUSE CHARGES — expected vs invoiced, per warehouse per month ─
-function WarehouseChargesView({ lots = [], setLots = null, contacts = [], warehouseInvoices = [], setWarehouseInvoices = null }: any) {
+function WarehouseChargesView({ lots = [], setLots = null, contacts = [], invoices = [], setInvoices = null, packagingTypes = [] }: any) {   // v7.21.4 (A-ST-10): the register, not a store of its own
   const { confirm: wcConfirm, alert: wcAlert, dialogNode: wcNode } = useConfirm(); // P2-6
   const warehouses = (contacts || []).filter((c: any) => tariffHasRates(c.warehouseTariff));
   const [whId, setWhId] = useState<any>(warehouses[0]?.id ?? "");
   const [period, setPeriod] = useState(localMonthISO());
   const [inv, setInv] = useState<any>({ invoiceNo: "", amount: "", currency: "PLN", fxRate: 1, date: localTodayISO(), notes: "" });
+  // v7.18.6 (A-AU-12, owner 9 Oct): a warehouse invoice in EUR / USD takes the NBP rate of the last working day before its date — not typed
+  const [whFx, setWhFx] = useState<any>({ note: "", tableDate: "" });
+  useEffect(() => { let off = false; const c = String(inv.currency || "PLN").toUpperCase();
+    if (c === "PLN") { if (Number(inv.fxRate) !== 1) setInv((x: any) => ({ ...x, fxRate: 1 })); setWhFx({ note: "", tableDate: "" }); return; }
+    if (!inv.date) { setWhFx({ note: "set the date — the rate follows it", tableDate: "" }); return; }
+    setWhFx({ note: "reading NBP…", tableDate: "" }); setInv((x: any) => ({ ...x, fxRate: 0 }));
+    nbpRateBefore(c, inv.date).then(r => { if (off) return; if (!r) { setWhFx({ note: "NBP not reachable", tableDate: "" }); return; } setInv((x: any) => ({ ...x, fxRate: r.rate })); setWhFx({ note: `NBP ${r.tableDate}`, tableDate: r.tableDate }); });
+    return () => { off = true; }; }, [inv.currency, inv.date]);   // eslint-disable-line react-hooks/exhaustive-deps
   const today = localTodayISO();
-  const result = whId ? warehouseMonthCharges(lots, contacts, whId, period, today) : { rows: [], total: 0, totalPLN: 0, currency: "PLN" };
-  const periodInvoices = (warehouseInvoices || []).filter((i: any) => String(i.warehouseId) === String(whId) && i.period === period);
+  const result = whId ? warehouseMonthCharges(lots, contacts, whId, period, today, packagingTypes) : { rows: [], total: 0, totalPLN: 0, currency: "PLN" };   // v7.21.12: + the packaging types
+  const wh = warehouses.find((w: any) => String(w.id) === String(whId));
+  // v7.21.4 (A-ST-10): the month's warehouse invoices are the register's — the warehouse's cost invoices of that month (by its id, else its name)
+  const sameParty = (i: any) => (i?.counterparty?.id != null && String(i.counterparty.id) === String(whId)) || (!!wh && String(i?.counterparty?.name || "").trim().toLowerCase() === String(wh.name || "").trim().toLowerCase());
+  const periodInvoices = (invoices || []).filter((i: any) => i && i.kind === "COST" && i.category === "WAREHOUSE" && i.paymentStatus !== "Cancelled" && !i.deleted && sameParty(i) && String(i.periodFrom || i.issueDate || "").slice(0, 7) === period)
+    .map((i: any) => ({ ...i, invoiceNo: i.number, date: i.issueDate, amount: Number(i.netAmount) || 0, amountPLN: Number(i.netPLN) || 0, allocated: !!(i.allocation && (i.allocation.lots || []).length) }));
   const invoicedPLN = periodInvoices.reduce((s: number, i: any) => s + (parseFloat(i.amountPLN) || 0), 0);
   const variancePLN = Math.round((invoicedPLN - result.totalPLN) * 100) / 100;
-  const wh = warehouses.find((w: any) => String(w.id) === String(whId));
 
   function addInvoice() {
-    if (!setWarehouseInvoices || !whId) return;
+    if (!setInvoices || !whId) return;
     const amount = parseFloat(inv.amount) || 0;
     if (amount <= 0 || !inv.invoiceNo.trim()) return;
+    if (String(inv.currency || "PLN").toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0)) return;   // v7.18.6 (A-AU-12): no NBP rate yet — never at 1.0
     const fx = parseFloat(inv.fxRate) || 1;
-    const rec = { id: nextId(), warehouseId: whId, warehouseName: wh?.name || "", period, invoiceNo: inv.invoiceNo.trim(), date: inv.date, amount, currency: inv.currency, fxRate: fx, amountPLN: Math.round(amount * fx * 100) / 100, status: "Received", notes: inv.notes };
-    setWarehouseInvoices((prev: any[]) => [...(prev || []), rec]);
+    const pln = Math.round(amount * fx * 100) / 100;
+    // v7.21.4 (A-ST-10): a cost invoice in the register — open until the bank clears it (rule 11), like every received invoice
+    const rec = { id: nextId(), kind: "COST", category: "WAREHOUSE", costScope: "MONTHLY_SHARED", number: inv.invoiceNo.trim(), counterparty: { id: whId, name: wh?.name || "" },
+      issueDate: inv.date, saleDate: inv.date, dueDate: "", paymentMethod: "Transfer", currency: inv.currency, fxRate: fx, netAmount: amount, vatRate: 0, vatAmount: 0, grossAmount: amount,
+      netPLN: pln, grossPLN: pln, periodFrom: `${period}-01`, positions: [], links: [], paymentStatus: "Issued", paidAmount: 0, notes: inv.notes || "", attachment: null, allocation: null,
+      fakturownia: { exported: false }, source: "warehouse-charges", createdAt: localTodayISO() };
+    setInvoices((prev: any[]) => [...(prev || []), rec]);
     setInv({ invoiceNo: "", amount: "", currency: inv.currency, fxRate: inv.fxRate, date: today, notes: "" });
   }
 
   async function approveInvoice(invoice: any) {
-    if (!setWarehouseInvoices) return;
+    if (!setInvoices) return;
     if (!result.rows.length) { await wcAlert({ tone: "warn", title: "Nothing to allocate", message: "No expected charges computed for this warehouse/month — nothing to allocate against." }); return; }
     if (!(await wcConfirm({ tone: "warn", title: `Approve invoice ${invoice.invoiceNo}?`, message: `${invoice.amountPLN.toLocaleString("pl-PL")} PLN allocated into the ${result.rows.length} lot(s) of ${period}.\n\nThe amount is split across lots proportionally to their expected charges and becomes part of each lot's landed cost (visible in SO P/L).`, confirmLabel: "Approve & allocate" }))) return;
     const totalExpectedPLN = result.totalPLN || 1;
@@ -610,18 +656,15 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
       allocations.forEach((a: any) => { byLot[String(a.lotNumber)] = a.amountPLN; });
       setLots((prev: any[]) => allocateInvoiceCostsToLots(prev || [], {
         source, byLot, type: "Warehousing",
-        label: `${invoice.warehouseName || "Warehouse"} ${period} · invoice ${invoice.invoiceNo || ""}`.trim(),
+        label: `${invoice.counterparty?.name || wh?.name || "Warehouse"} ${period} · invoice ${invoice.invoiceNo || ""}`.trim(),
         date: invoice.issueDate || invoice.date || "", nextId,
       }).lots);
     }
-    setWarehouseInvoices((prev: any[]) => prev.map((i: any) => i.id === invoice.id ? { ...i, status: "Approved", allocatedLots: allocations } : i));
+    setInvoices((prev: any[]) => (prev || []).map((i: any) => i.id === invoice.id ? { ...i, allocation: { method: "by_expected_charges", lots: allocations } } : i));   // v7.21.4: the allocation is the register invoice's
   }
 
-  async function deleteInvoice(invoice: any) {
-    if (invoice.status === "Approved") { await wcAlert({ tone: "warn", title: "Can't delete", message: "This invoice is approved and already allocated into lot costs — it can't be deleted from here." }); return; }
-    if (!(await wcConfirm({ tone: "danger", title: `Delete invoice ${invoice.invoiceNo}?`, confirmLabel: "Delete" }))) return;
-    setWarehouseInvoices && setWarehouseInvoices((prev: any[]) => prev.filter((i: any) => i.id !== invoice.id));
-  }
+  // v7.21.4 (A-ST-10 · A-RV-30): no Close that deletes — a warehouse invoice is deleted in Invoices, like every invoice (soft, dependents named)
+
 
   const box: any = { background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 14 };
   if (!warehouses.length) return (
@@ -699,9 +742,9 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
               {i.notes && <div style={{ fontSize: 11, color: "#999" }}>{i.notes}</div>}
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 6, background: i.status === "Approved" ? "#DCFCE7" : "#FEF3C7", color: i.status === "Approved" ? "#15803D" : "#92400E" }}>{i.status}</span>
-              {i.status !== "Approved" && <button onClick={() => approveInvoice(i)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Approve &amp; allocate to lots</button>}
-              {i.status !== "Approved" && <ActionButton action="close" onClick={() => deleteInvoice(i)} />}
+              <span style={{ fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 6, background: i.allocated ? "#DCFCE7" : "#FEF3C7", color: i.allocated ? "#15803D" : "#92400E" }}>{i.allocated ? "Allocated" : "To allocate"}</span>
+              {!i.allocated && <button onClick={() => approveInvoice(i)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Approve &amp; allocate to lots</button>}
+              <span data-wh-register="1" style={{ fontSize: 10.5, color: "#94A3B8" }}>kept in Invoices</span>
             </div>
           </div>
         ))}
@@ -709,10 +752,10 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Invoice no.</div><input value={inv.invoiceNo} onChange={e => setInv({ ...inv, invoiceNo: e.target.value })} placeholder="FV/2026/06/123" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Amount</div><input type="number" value={inv.amount} onChange={e => setInv({ ...inv, amount: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Currency</div><select value={inv.currency} onChange={e => setInv({ ...inv, currency: e.target.value, fxRate: e.target.value === "PLN" ? 1 : inv.fxRate })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#fff" }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>FX→PLN</div><input type="number" step="0.01" value={inv.fxRate} onChange={e => setInv({ ...inv, fxRate: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
+          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>FX→PLN</div><div data-wh-rate="1" title={whFx.note} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F8FAFC", boxSizing: "border-box" }}>{String(inv.currency).toUpperCase() === "PLN" ? "1" : Number(inv.fxRate) > 0 ? Number(inv.fxRate).toFixed(4) : "—"}</div>{/* v7.18.6 (A-AU-12): NBP, not typed */}</div>
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Date</div><DateInput value={inv.date} onChange={e => setInv({ ...inv, date: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
           <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Notes</div><input value={inv.notes} onChange={e => setInv({ ...inv, notes: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
+          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0) || (String(inv.currency).toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0))} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
         </div>
         <div style={{ fontSize: 10.5, color: "#888", marginTop: 8, lineHeight: 1.5 }}>
           Approving an invoice splits its PLN amount across the month's lots proportionally to their expected charges and adds it to each lot's
@@ -732,14 +775,14 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], wareho
 // folded into the canonical FinanceNote model (Invoices module owns notes) and
 // now enter the receivable/payable totals (BP-37).
 
-export default function Finance({ focusResultOf = null,
+export default function Finance({
+  packagingTypes = [],   /* v7.21.12 (A-RV-35): to work a lot's pallets out from its packaging */
+  focusResultOf = null,
   claims = [],
   orders = [],
   lots = [],
   setLots = null,
   contacts = [],
-  warehouseInvoices = [],
-  setWarehouseInvoices = null,
   settledRefs = [],
   setSettledRefs = null,
   pos = [],
@@ -761,13 +804,12 @@ export default function Finance({ focusResultOf = null,
   setClosedPeriods = null,
   poSettlements = [],
 }: {
-  focusResultOf?: any;   // v7.1.3 (A-PL-1)
+  focusResultOf?: any;
+  packagingTypes?: any[];   // v7.1.3 (A-PL-1)
   orders?: any[];
   lots?: any[];
   setLots?: any;
   contacts?: any[];
-  warehouseInvoices?: any[];
-  setWarehouseInvoices?: any;
   settledRefs?: string[];
   setSettledRefs?: any;
   pos?: any[];
@@ -797,6 +839,15 @@ export default function Finance({ focusResultOf = null,
   const [mode, setMode] = useState<MarginMode>("forecast");
   const [tab, setTab] = useState<"pl" | "costs" | "warehouse" | "ledger">("pl");
   const [form, setForm] = useState<OperationalCost>(() => newCostTemplate());
+  // v7.21.11 (A-RV-34, owner 11 Oct): a cost in EUR / USD takes the NBP rate of the last working day before its date — shown, not typed
+  // (as warehouse invoices since v7.18.6); its PLN amount follows the rate
+  const [opFx, setOpFx] = useState<any>({ note: "", tableDate: "" });
+  useEffect(() => { let off = false; const c = String(form.currency || "PLN").toUpperCase();
+    if (c === "PLN") { if (Number(form.fxRate) !== 1) setForm((x: any) => ({ ...x, fxRate: 1, amountPLN: safe(x.amount) })); setOpFx({ note: "", tableDate: "" }); return; }
+    if (!form.date) { setOpFx({ note: "set the date — the rate follows it", tableDate: "" }); return; }
+    setOpFx({ note: "reading NBP…", tableDate: "" }); setForm((x: any) => ({ ...x, fxRate: 0, amountPLN: 0 }));
+    nbpRateBefore(c, form.date).then(r => { if (off) return; if (!r) { setOpFx({ note: "NBP not reachable", tableDate: "" }); return; } setForm((x: any) => ({ ...x, fxRate: r.rate, amountPLN: Math.round(safe(x.amount) * r.rate * 100) / 100 })); setOpFx({ note: `NBP ${r.tableDate}`, tableDate: r.tableDate }); });
+    return () => { off = true; }; }, [form.currency, form.date]);   // eslint-disable-line react-hooks/exhaustive-deps
   useUnsavedGuard({ id: "cost-form", label: form?.description ? `Cost entry "${form.description}"` : "the operational cost entry", draft: form, active: tab === "costs", save: () => saveCost(), resetKey: (operationalCosts || []).length });   // v6.99.58 (A-US)
   // v6.10: filters + hover-preview for the Operational Cost Entries register.
   const [costPeriodFilter, setCostPeriodFilter] = useState<string>("all");
@@ -851,12 +902,13 @@ export default function Finance({ focusResultOf = null,
 
   async function saveCost() {
     if (!setOperationalCosts) return;
-    const amountPLN = safe(form.amountPLN) || safe(form.amount) * (safe(form.fxRate) || 1);
+    if (String(form.currency || "PLN").toUpperCase() !== "PLN" && !(safe(form.fxRate) > 0)) { await finAlert({ tone: "warn", title: "No NBP rate yet", message: "The rate of the last working day before the cost's date has not been read — check the date, or try again when NBP can be reached." }); return; }   // v7.21.11 (A-RV-34): never at 1.0
+    const amountPLN = Math.round(safe(form.amount) * (String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate)) * 100) / 100;   // v7.21.11: follows the rate, never typed
     if (!form.period || !form.description || amountPLN <= 0) {
       await finAlert({ tone: "warn", title: "Missing fields", message: "Please enter period, description and a positive amount." });
       return;
     }
-    const cost: OperationalCost = { ...form, amount: safe(form.amount), fxRate: safe(form.fxRate) || 1, amountPLN };
+    const cost: OperationalCost = { ...form, amount: safe(form.amount), fxRate: String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate), amountPLN };
     setOperationalCosts((prev: OperationalCost[]) => {
       const exists = (prev || []).some(c => c.id === cost.id);
       return exists ? prev.map(c => c.id === cost.id ? cost : c) : [...(prev || []), cost];
@@ -920,7 +972,7 @@ export default function Finance({ focusResultOf = null,
         {tab === "ledger" ? (
           <LedgerView orders={orders} lots={lots} pos={pos} invoices={invoices} setInvoices={setInvoices} financeNotes={financeNotes} settledRefs={settledRefs} setSettledRefs={setSettledRefs} advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} bankAccounts={bankAccounts} setBankAccounts={setBankAccounts} users={users} userName={userName} contacts={contacts} />
         ) : tab === "warehouse" ? (
-          <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} warehouseInvoices={warehouseInvoices} setWarehouseInvoices={setWarehouseInvoices} />
+          <WarehouseChargesView lots={lots} setLots={setLots} contacts={contacts} invoices={invoices} setInvoices={setInvoices} packagingTypes={packagingTypes} />
         ) : tab === "pl" ? (
           <>
             <Card style={{ marginBottom: 16 }}>
@@ -935,6 +987,7 @@ export default function Finance({ focusResultOf = null,
                 <StatBlock label="OVERHEAD" value={fmtPLN(totalAgg.totalOverheadPLN)} valueColor="#64748B" sub="allocated operating cost" />
                 <StatBlock label="NET P/L" value={fmtPLN(totalAgg.totalNetMarginPLN)} valueColor={totalAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A"} sub={fmtPct(totalAgg.avgNetMarginPct)} />
               </div>
+              {canOpenFinance(users, userName, "pl") && <ConsignmentResultsCard pos={pos} lots={lots} orders={orders} invoices={invoices} shipments={shipments} financeNotes={financeNotes} />}{/* v7.8.3 (A-PL-2) */}
               {canOpenFinance(users, userName, "pl") && <PurchaseResultsCard pos={pos} lots={lots} orders={orders} shipments={shipments} />}
               {canOpenFinance(users, userName, "pl") && <MonthCloseCard totalAgg={totalAgg} ledgerTotals={buildLedger({ orders, lots, pos, invoices, financeNotes, settledRefs: [], todayISO: localTodayISO() }).totals} lots={lots} claims={claims} poSettlements={poSettlements} invoices={invoices} bankAccounts={bankAccounts} closedPeriods={closedPeriods} setClosedPeriods={setClosedPeriods} userName={userName} canClose={canOpenFinance(users, userName, "pl")} />}
               {canOpenFinance(users, userName, "budget") && typeof setBudgets === "function" && (() => {
@@ -1107,10 +1160,10 @@ export default function Finance({ focusResultOf = null,
                   <Field label="Description"><Inp value={form.description} onChange={(e: any) => setForm({ ...form, description: e.target.value })} placeholder="Office rent - May" /></Field>
                   <Field label="Supplier / payee"><Inp value={form.supplierName || ""} onChange={(e: any) => setForm({ ...form, supplierName: e.target.value })} placeholder="Landlord / employee / accountant" /></Field>
                   <Field label="Invoice no. (received)"><Inp value={(form as any).invoiceNo || ""} onChange={(e: any) => setForm({ ...form, invoiceNo: e.target.value } as any)} placeholder="FV/2026/06/123 — from Fakturownia/KSeF" /></Field>
-                  <Field label="Amount"><Inp type="number" value={form.amount} onChange={(e: any) => setForm({ ...form, amount: safe(e.target.value), amountPLN: safe(e.target.value) * (safe(form.fxRate) || 1) })} /></Field>
+                  <Field label="Amount"><Inp type="number" value={form.amount} onChange={(e: any) => setForm({ ...form, amount: safe(e.target.value), amountPLN: Math.round(safe(e.target.value) * (String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate)) * 100) / 100 })} /></Field>
                   <Field label="Currency"><Sel value={form.currency} onChange={(e: any) => setForm({ ...form, currency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c} value={c}>{c}</option>)}</Sel></Field>
-                  <Field label="FX rate to PLN"><Inp type="number" value={form.fxRate} onChange={(e: any) => setForm({ ...form, fxRate: safe(e.target.value) || 1, amountPLN: safe(form.amount) * (safe(e.target.value) || 1) })} /></Field>
-                  <Field label="Amount PLN"><Inp type="number" value={form.amountPLN} onChange={(e: any) => setForm({ ...form, amountPLN: safe(e.target.value) })} /></Field>
+                  <Field label="FX → PLN (NBP)"><div data-op-rate="1" title={opFx.note} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{String(form.currency || "PLN").toUpperCase() === "PLN" ? "1" : (safe(form.fxRate) > 0 ? String(form.fxRate) : "—")}<span style={{ fontSize: 10.5, color: "#94A3B8", marginLeft: 6 }}>{opFx.note}</span></div></Field>{/* v7.21.11 (A-RV-34): shown, not typed */}
+                  <Field label="Amount PLN"><div data-op-pln="1" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{safe(form.amountPLN) ? safe(form.amountPLN).toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "—"}</div></Field>{/* v7.21.11: the amount × the rate */}
                   <Field label="Allocation method"><Sel value={form.allocationMethod} onChange={(e: any) => setForm({ ...form, allocationMethod: e.target.value as any })}>{ALLOCATION_METHODS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}</Sel></Field>
                   <Field label="Status"><Sel value={form.status} onChange={(e: any) => setForm({ ...form, status: e.target.value as any })}>{["Budget", "Expected", "Received", "Posted", "Paid"].map(s => <option key={s} value={s}>{s}</option>)}</Sel></Field>
                   <Field label="Cost invoice no. (actual)"><Inp value={(form as any).invoiceRef || ""} onChange={(e: any) => setForm({ ...form, invoiceRef: e.target.value } as any)} placeholder="e.g. FS 106/2026 — links this line to the real invoice" /></Field>

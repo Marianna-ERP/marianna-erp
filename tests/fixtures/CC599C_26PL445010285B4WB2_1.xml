@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?><ns5:CC599C xmlns:ns5="http://www.mf.gov.pl/xsd/AES/CC599C.xsd">
     <messageSender>PL445010</messageSender>
-    <messageRecipient>PL797206503100000</messageRecipient>
+    <messageRecipient>IW391511298970401</messageRecipient>
     <preparationDateAndTime>2026-05-19T11:29:30</preparationDateAndTime>
     <messageIdentification>26CC599C-P1377673</messageIdentification>
     <messageType>CC599C</messageType>
@@ -8,7 +8,7 @@
     <officeIdentifier>00</officeIdentifier>
     <ExportOperation>
         <LRN>26S00JL60C</LRN>
-        <MRN>26PL445010003B8HB3</MRN>
+        <MRN>26PL445010285B4WB2</MRN>
         <declarationType>EX</declarationType>
         <additionalDeclarationType>A</additionalDeclarationType>
         <declarationAcceptanceDate>2026-04-25</declarationAcceptanceDate>
@@ -32,15 +32,15 @@
         </IdentificationDataPL>
     </Exporter>
     <Declarant>
-        <identificationNumber>PL797206503100000</identificationNumber>
+        <identificationNumber>IW391511298970401</identificationNumber>
         <IdentificationDataPL>
-            <nip>7972065031</nip>
-            <regon>36969702100000</regon>
+            <nip>0581059884</nip>
+            <regon>26508344612251</regon>
         </IdentificationDataPL>
         <ContactPerson>
-            <name>Cieślak Anna</name>
+            <name>Doronat Anna</name>
             <phoneNumber>695527089</phoneNumber>
-            <eMailAddress>amsped.sc@gmail.com</eMailAddress>
+            <eMailAddress>contact9527@example.com</eMailAddress>
         </ContactPerson>
     </Declarant>
     <ExitControlResult>
@@ -69,9 +69,9 @@
             <modeOfTransportAtTheBorder>1</modeOfTransportAtTheBorder>
             <grossMass>22500</grossMass>
             <Consignee>
-                <name>BLACK FOX NIP / VAT ID 730-844-684</name>
+                <name>TOLEBAVAT REBAL NIP / VAT ID 730-844-684</name>
                 <Address>
-                    <streetAndNumber>11 STR. AHMED IBN TOLAN, OBOUR</streetAndNumber>
+                    <streetAndNumber>ul. Vitumom 20</streetAndNumber>
                     <postcode>.</postcode>
                     <city>QALYBAYA, Egipt / Egypt</city>
                     <country>EG</country>
@@ -85,7 +85,7 @@
             <DepartureTransportMeans>
                 <sequenceNumber>1</sequenceNumber>
                 <typeOfIdentification>30</typeOfIdentification>
-                <identificationNumber>WR367HW/WPYTP71</identificationNumber>
+                <identificationNumber>BM819DS/YUEVV45</identificationNumber>
                 <nationality>PL</nationality>
             </DepartureTransportMeans>
             <CountryOfRoutingOfConsignment>

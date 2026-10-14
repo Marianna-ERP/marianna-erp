@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22): the second exported reader is gone — one reader for every number
 // ─────────────────────────────────────────────────────────────────────────────
 // inventory.domain.ts — pure inventory engine (Consolidation Batch 1)
 //
@@ -8,10 +9,7 @@
 // Audit P2-3; tests in tests/run-engines.mjs (P2-5).
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function parseNum(v: any): number {
-  const n = parseFloat(String(v ?? "").replace(",", "."));
-  return isNaN(n) ? 0 : n;
-}
+export { parseNum };
 
 export interface LocResolved { type?: string; legacyType?: string; [k: string]: any }
 export type LocByIdFn = (id: any) => LocResolved | null | undefined;
@@ -63,10 +61,14 @@ export function recomputeLotFromMovements(lot: any, movements: any[], locById: L
   });
   const loc = locById ? locById(locationId) : null;
   const legacyLocType = (loc as any)?.legacyType || loc?.type;
+  // v7.21.14 (A-RV-37 · FZ-05): "Customs" only at a port, a port warehouse or an airport — by the place's TYPE (a place of type Other
+  // also carries the old word "PORT"); the real type is placeType where a screen replaced type with the old word
+  const realType = String((loc as any)?.placeType ?? loc?.type ?? "");
+  const atPort = ["Port", "PortWarehouse", "Airport", "PORT"].includes(realType);
   if (sawShipOut && physicalKg === 0) status = "Shipped Out";
   else if (sawIn || physicalKg > 0) {
     if (legacyLocType === "OWN") status = "In Stock";
-    else if (legacyLocType === "PORT") status = "Customs";
+    else if (atPort) status = "Customs";
     else if (legacyLocType === "CLIENT") status = "Shipped Out";
     else status = "In Transit";
   } else if (ordered.length === 0 && lot.expectedKg) {

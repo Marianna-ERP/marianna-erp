@@ -9,8 +9,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { applyPaymentEvent } from "./payments.domain";
 import { r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 
-const n = (v: any) => { const x = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(x) ? x : 0; };
+const n = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 
 export interface AdvanceAllocation { id: any; invoiceId: any; invoiceNumber: string; amount: number; date: string; }
 export interface AdvancePayment {
@@ -62,7 +63,7 @@ export function applyAdvanceToInvoice(
   if (invoice?.isProforma) return { error: "That is the PRO-FORMA — it explains why the money arrived, but it is not the receivable. Apply the advance to the FINAL invoice once issued." };
   const allocId = deps.nextId();
   const evt = {
-    date: deps.todayISO(), amount: amt, method: "Advance",
+    date: String(adv?.date || "").slice(0, 10) || deps.todayISO(), amount: amt, method: "Advance",   // v7.16.1 (AUD-25): the day the money came in, not the day it is applied
     note: `Advance from ${adv.counterpartyName} (${adv.date})`,
     source: `advance:${adv.id}:${allocId}`,
   };

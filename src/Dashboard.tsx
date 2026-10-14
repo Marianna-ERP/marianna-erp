@@ -1,5 +1,7 @@
 import React from "react";
-import { movementTiles, documentTiles, deadlineTiles, ownerTiles, warehouseTiles, integrityTile, tileSetsFor } from "./dashboard.domain";
+import { movementTiles, documentTiles, deadlineTiles, ownerTiles, warehouseTiles, integrityTile, tileSetsFor, termsTile } from "./dashboard.domain";
+import { termsToReview } from "./incoterms.domain";   // v7.20.0 (A-INC-2)
+import { locationById } from "./locations";
 import { clientRiskTable } from "./financePlus.domain";
 import { currentUser } from "./permissions.domain";
 import { Card } from "./ui";
@@ -19,7 +21,7 @@ import { ModulePage } from "./ui";
 
 
 
-export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], invoices = [], claims = [], financeNotes = [], onNavigate = () => {}, inspections = [], stockCounts = [], closedPeriods = [], poSettlements = [], users = [], userName = "", integrityIssues = [] }: any) {
+export default function Dashboard({ pos = [], orders = [], lots = [], contacts = [], shipments = [], invoices = [], claims = [], financeNotes = [], onNavigate = () => {}, onOpenFilter = null, inspections = [], stockCounts = [], closedPeriods = [], poSettlements = [], users = [], userName = "", integrityIssues = [] }: any) {
   return (
     <ModulePage title="Dashboard" right={<span style={{ fontSize: 11, color: "#AAA" }}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</span>}>   {/* v6.99.61 (A-HD-1/2) */}
       <div>
@@ -43,7 +45,7 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
             const locId = (me as any)?.locationId ?? (lots.find((l: any) => (Number(l.physicalKg) || 0) > 0)?.locationId ?? null);
             groups.push({ title: "WAREHOUSE — THIS MORNING", tiles: warehouseTiles(lots, shipments, inspections, stockCounts, locId, today) });
           }
-          groups.push({ title: "DATA", tiles: [integrityTile(integrityIssues || [])] });
+          groups.push({ title: "DATA", tiles: [integrityTile(integrityIssues || []), termsTile(termsToReview({ pos, orders, shipments, claims, contacts, lots, placeOf: (id: any) => locationById(id, contacts) }))] });   // v7.20.0 (A-INC-2): terms to review
           const color = (t: string) => t === "bad" ? "#DC2626" : t === "warn" ? "#D97706" : "#16A34A";
           return groups.map(g => (
             <div key={g.title} style={{ marginBottom: 14 }}>
@@ -51,7 +53,7 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
               <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(4, Math.max(1, g.tiles.length))}, 1fr)`, gap: 12 }}>
                 {g.tiles.map((t: any) => (
                   <Card key={t.key} style={{ cursor: "pointer", borderLeft: `4px solid ${color(t.tone)}` }}>
-                    <div onClick={() => onNavigate(t.module === "integrity" ? "settings" : t.module)}>
+                    <div onClick={() => (t.filter && onOpenFilter ? onOpenFilter(t.module, t.filter) : onNavigate(t.module === "integrity" ? "settings" : t.module))}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{t.title}</div>
                       <div style={{ fontSize: 13.5, fontWeight: 800, color: color(t.tone), marginTop: 4 }}>{t.count ? `${t.count} · ` : ""}{t.detail}</div>
                     </div>

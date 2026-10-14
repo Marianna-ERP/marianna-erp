@@ -1,3 +1,4 @@
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // ─── v6.48.0  CLAIMS — a first-class document ────────────────────────────────
 // Claims used to be two unrelated things: a "producer claim" nested inside
 // lot.claims[] (numbered, with the full cost-and-defect maths) and a "client
@@ -122,9 +123,10 @@ export interface Claim {
   movementRef: any;              // the CLAIM movement that carries claimedKg
   notes: string;
   migratedFrom?: string;          // provenance when lifted out of the old structures
+  requestedAmount?: number;   // v7.22.6 (FZ-20): stored in the data, now declared
 }
 
-const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const str = (v: any) => String(v ?? "").trim();
 
 /** Next claim number from the CLAIMS store (not from lots — that was defect D2). */
@@ -188,13 +190,6 @@ export function claimsForShipment(claims: any[], shipmentNumber: any): any[] {
   return (claims || []).filter(c => subjectRefs(c, "SHIPMENT").includes(want));
 }
 
-/** The claimed quantity a claim attributes to one lot. */
-export function affectedKgForLot(c: any, lotNumber: any): number {
-  const want = str(lotNumber);
-  return (c?.subjects || []).filter((s: any) => s?.kind === "LOT" && str(s.ref) === want)
-    .reduce((a: number, s: any) => a + num(s.affectedKg), 0);
-}
-
 /**
  * Net exposure for an incident: what we conceded to the client, less what we
  * recovered from the parties responsible. The gap is a commercial decision —
@@ -220,102 +215,6 @@ export function incidentNet(claims: any[], rootClaimId: any) {
 
 // ── migration (Phase 1) ────────────────────────────────────────────────────
 export interface MigrationResult { claims: Claim[]; notes: string[]; changed: boolean; }
-
-/**
- * Lift every existing claim into the new store.
- *   • lot.claims[]  → RECOVERY claims against the Supplier (the producer)
- *   • CLAIM movements carrying claimValue → CONCESSION claims against the Client
- *     (these had no number, no status and no document at all)
- * The originals are LEFT IN PLACE untouched: nothing writes to them any more, and
- * keeping them means a migration bug can never destroy the only copy. Claims that
- * were already migrated (matched by provenance) are never duplicated.
- */
-export function migrateClaims(input: { lots?: any[]; orders?: any[]; pos?: any[]; existing?: any[] }, deps: { todayISO: () => string; nextId: () => any }): MigrationResult {
-  const lots = input.lots || [];
-  const pos = input.pos || [];
-  const existing = (input.existing || []).slice();
-  const seen = new Set(existing.map((c: any) => str(c?.migratedFrom)).filter(Boolean));
-  const out: Claim[] = [];
-  const notes: string[] = [];
-  const year = new Date(deps.todayISO()).getFullYear() || 2026;
-
-  const allFor = () => existing.concat(out);
-
-  lots.forEach((lot: any) => {
-    const lotNo = str(lot?.number);
-    const po = pos.find((p: any) => str(p?.number) === str(lot?.poRef)) || null;
-    const supplierName = po?.supplier?.name || str(po?.supplierName) || "";
-
-    // 1) producer claims nested on the lot
-    (lot?.claims || []).forEach((old: any, idx: number) => {
-      const prov = `lot:${lotNo}:claim:${old?.id ?? idx}`;
-      if (seen.has(prov)) return;
-      const number = str(old?.number) || nextClaimNumber(allFor(), year);
-      out.push(blankClaim({
-        id: deps.nextId(),
-        number,
-        direction: "RECOVERY",
-        respondent: { kind: "Supplier", contactId: po?.supplierId ?? null, name: supplierName },
-        cause: "Quality defect",
-        subjects: [
-          { kind: "LOT", ref: lotNo, affectedKg: num(old?.affectedKg) || undefined },
-          ...(lot?.poRef ? [{ kind: "PO" as const, ref: str(lot.poRef) }] : []),
-        ],
-        date: str(old?.date),
-        costLines: old?.lines || old?.costLines || [],
-        basis: "DEFECT",
-        defectType: str(old?.defectType),
-        defectPct: old?.defectPct ?? "",
-        soldInMarket: old?.soldInMarket ?? null,
-        recoveredEGP: old?.recoveredEGP ?? "",
-        egpPerEur: old?.egpPerEur ?? "",
-        plnPerEur: old?.plnPerEur ?? "",
-        totalCostEUR: old?.totalCostEUR ?? 0,
-        defectValueEUR: old?.defectValueEUR ?? 0,
-        recoveredEUR: old?.recoveredEUR ?? 0,
-        requestedEUR: old?.requestedCreditEUR ?? old?.requestedEUR ?? 0,
-        acceptedEUR: old?.acceptedEUR ?? null,
-        status: (str(old?.status) === "Issued" ? "Submitted" : str(old?.status) || "Draft") as ClaimStatus,
-        resolvedAt: str(old?.resolvedAt),
-        notes: str(old?.notes),
-        migratedFrom: prov,
-      }));
-      notes.push(`${number}: producer claim lifted from ${lotNo}`);
-    });
-
-    // 2) client claims that only existed as CLAIM movements
-    (lot?.movements || []).forEach((m: any) => {
-      if (str(m?.type) !== "CLAIM" || m?.voided) return;
-      if (!(num(m?.claimValue) > 0)) return;              // producer-claim marker movements carry no value
-      const prov = `lot:${lotNo}:movement:${m?.id}`;
-      if (seen.has(prov)) return;
-      const number = nextClaimNumber(allFor(), year);
-      const soRef = str(m?.soRef);
-      out.push(blankClaim({
-        id: deps.nextId(),
-        number,
-        direction: "CONCESSION",
-        respondent: { kind: "Client", contactId: null, name: "" },
-        cause: "Quality defect",
-        subjects: [
-          { kind: "LOT", ref: lotNo, affectedKg: num(m?.qtyKg) || undefined },
-          ...(soRef ? [{ kind: "SO" as const, ref: soRef }] : []),
-        ],
-        date: str(m?.date),
-        requestedEUR: 0,
-        acceptedEUR: null,
-        status: "Settled",                                  // the credit note was already issued
-        resolvedAt: str(m?.date),
-        movementRef: m?.id ?? null,
-        notes: [str(m?.note), num(m?.claimValue) ? `Credit ${num(m.claimValue)} ${str(m?.claimCurrency) || "PLN"}` : ""].filter(Boolean).join(" · "),
-        migratedFrom: prov,
-      }));
-      notes.push(`${number}: client claim created from ${lotNo} movement (was unnumbered)`);
-    });
-  });
-
-  return { claims: existing.concat(out), notes, changed: out.length > 0 };
-}
 
 /** Register health — what is open, what is overdue on notice, what lacks evidence. */
 export function claimsSummary(claims: any[], todayISO: string) {

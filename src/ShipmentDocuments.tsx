@@ -1,7 +1,7 @@
 // ShipmentDocuments.tsx — v6.99.68 (A-AUD-2, owner): moved out of Shipments.tsx unchanged; the module's shared helpers are imported from it.
 import React, { useState } from "react";
 import { SmallButton, ActionButton } from "./ui";
-import { jobsByCarrierLeg, effectiveLoad, truckTour, tourGaps } from "./shipmentModel.domain";
+import { jobsByCarrierLeg, effectiveLoad, truckTour, tourGaps, truckLoadingStops } from "./shipmentModel.domain";   // v7.15.1: + truckLoadingStops
 import { grossForGoodsLine } from "./packaging.domain";
 import { formatDMY } from "./dates";
 import { printHtmlNode } from "./documentService";
@@ -115,6 +115,16 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
     ] : []),
     { h: "Temp recorder", render: (u: any) => u.tempRecorderNo || "—" },
   ];
+  // v7.15.1 (A-LS-4): does this order collect at more than one place? (one truck with two producers, or trucks at different places)
+  const placesOfOrder = new Set<string>(); orderUnits.forEach((u: any) => truckLoadingStops(shipment, u, pos || [], lots || []).forEach((s: any) => placesOfOrder.add(s.key)));
+  const multiPlace = placesOfOrder.size > 1 || orderUnits.some((u: any) => truckTour(shipment, u, pos || [], lots || [], orders || []).isTour);
+  const stopCargo = (s: any) => { let pallets = 0, gross = 0;
+    const byKind = new Map<string, number>();   // the same product, variety and size collected twice reads once, summed
+    s.lines.forEach((l: any) => { const g = (shipment.goods || []).find((x: any) => String(x.id) === String(l.goodsLineId)) || {};
+      const gr = grossForGoodsLine({ ...g, qtyKg: l.kg, boxes: undefined, pallets: undefined }, packagingTypes || []); pallets += gr.pallets || 0; gross += gr.grossKg || l.kg;
+      const k = `${l.product}${l.variety ? " " + l.variety : ""}${l.size ? " " + l.size : ""}`; byKind.set(k, (byKind.get(k) || 0) + l.kg); });
+    const goodsText = Array.from(byKind.entries()).map(([k, kg]) => `${k} ${Math.round(kg).toLocaleString("pl-PL")} kg`).join(", ");
+    return `${goodsText} · ${pallets ? Math.round(pallets) + " pal. · " : ""}${Math.round(gross).toLocaleString("pl-PL")} kg gross / brutto`; };
   const ROAD_TERMS = [
     ["Payment is due 30 days after receipt of the invoice with confirmed original CMR / POD and loading specification.", "Platnosc nastepuje 30 dni po otrzymaniu faktury wraz z potwierdzonym oryginalem CMR / POD i specyfikacja zaladunku."],
     ["The carrier is financially responsible for the transported cargo.", "Przewoznik odpowiada materialnie za przewozony ladunek."],
@@ -152,7 +162,9 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
         {(() => {
           // v6.99.96 (A-GR-4, owner ruling 1 Oct): a groupage truck prints its TOUR — loading stops from the lots, drops from the
           // SOs, in the truck's order, each with its cargo; a single-drop truck prints exactly as before
-          const tours = orderUnits.map((u: any) => ({ u, t: truckTour(shipment, u, pos || [], lots || [], orders || []) })).filter((x: any) => x.t.isTour);
+          // v7.15.1 (A-LS-4, owner 9 Oct: "one forwarder can load more than one truck from different producers"): once the order
+          // collects at two places — in one truck or across its trucks — EVERY truck prints its stops, each with its own date and goods
+          const tours = multiPlace ? orderUnits.map((u: any) => ({ u, t: truckTour(shipment, u, pos || [], lots || [], orders || []) })) : [];
           if (tours.length) {
             const pl = (id: any, text: any) => { const p = placeForPrint(id, text, contacts || []); return p.line || p.name || String(text || "") || "TBA"; };
             const k = (v: number) => `${Math.round(v).toLocaleString("pl-PL")} kg`;
@@ -161,7 +173,7 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
                 <div style={{ fontWeight: 800 }}>Route stops / Punkty trasy</div>
                 {tours.map(({ u, t }: any, ti: number) => <div key={ti} style={{ marginTop: ti ? 6 : 2 }}>
                   {tours.length > 1 && <div style={{ fontWeight: 700, fontSize: 10 }}>{u.truckPlate || `unit ${ti + 1}`}</div>}
-                  {[...t.loads.map((l: any, i: number) => ({ kind: "Loading / Zaladunek", n: i + 1, place: pl(l.id, l.text), what: `${k(l.kg)}`, date: u.plannedLoadingDate || "" })),
+                  {[...truckLoadingStops(shipment, u, pos || [], lots || []).map((s: any, i: number) => ({ kind: "Loading / Zaladunek", n: i + 1, place: pl(s.id, s.text), what: stopCargo(s), date: s.date || u.plannedLoadingDate || "" })),   /* v7.15.1: each stop's date and goods */
                     ...t.drops.map((dr: any, i: number) => ({ kind: "Unloading / Rozladunek", n: i + 1, place: dr.missing ? `TBA — ${dr.soNumber} has no destination` : pl(dr.placeId, dr.placeText), what: `${k(dr.kg)} · ${dr.soNumber}${dr.client ? " · " + dr.client : ""}`, date: dr.date }))]
                     .map((st: any, si: number) => <div key={si} style={{ display: "flex", gap: 6 }}>
                       <div style={{ fontWeight: 800, minWidth: 14 }}>{si + 1}.</div>
@@ -255,6 +267,7 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
         </tr>)}</tbody>
       </table>
 
+      {(() => { const block = (<>
       <div style={{ marginTop: 6, fontWeight: 850, fontSize: 9.5 }}>Terms / Warunki</div>{/* v6.99.140 (A-TO-8, owner): the terms in a smaller type — room below for the carrier's signature and stamp */}
       {allRoad ? (
         <ol style={{ marginTop: 2, paddingLeft: 14, marginBottom: 0, fontSize: 8, lineHeight: 1.25 }}>{ROAD_TERMS.map((t, i) => <li key={i} style={{ marginBottom: 1 }}><span>{t[0]}</span> <span style={{ color: "#555", fontStyle: "italic" }}>/ {t[1]}</span></li>)}</ol>
@@ -263,11 +276,18 @@ export function TransportOrderDocument({ shipment, contacts, providerId, legIds,
       ) : (
         <div style={{ marginTop: 3, fontStyle: "italic", color: "#555" }}>Terms as per separate agreement / booking confirmation. · Warunki zgodnie z odrebna umowa / potwierdzeniem bookingu.</div>
       )}
+      {allRoad && manualTermsLines.length > 0 && (<>   {/* v7.15.1 (owner 9 Oct): conditions written for a ROAD carrier print too — before, the standard terms replaced them */}
+        <div data-written-terms="1" style={{ marginTop: 4, fontWeight: 850, fontSize: 9.5 }}>Additional conditions / Warunki dodatkowe</div>
+        <ol style={{ marginTop: 2, paddingLeft: 14, marginBottom: 0, fontSize: 8, lineHeight: 1.25 }}>{manualTermsLines.map((t, i) => <li key={i} style={{ marginBottom: 1 }}>{t}</li>)}</ol>
+      </>)}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, marginTop: 14 }}>
         <div style={{ borderTop: "1px solid #111", paddingTop: 4, textAlign: "center" }}>Ordering party / Zleceniodawca<br/>Date, stamp and signature / Data, pieczatka i podpis</div>
         <div style={{ borderTop: "1px solid #111", paddingTop: 4, textAlign: "center" }}>Carrier / Zleceniobiorca<br/>Date, stamp and signature / Data, pieczatka i podpis</div>
       </div>
+      </>);
+      // v7.15.1: a longer order (several places) keeps its conditions WITH the signatures — never cut, never alone on a page
+      return multiPlace ? <div data-terms-together="1" style={{ breakInside: "avoid", pageBreakInside: "avoid" }}>{block}</div> : block; })()}
     </div>
   );
 }

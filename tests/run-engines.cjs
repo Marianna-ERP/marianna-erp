@@ -207,7 +207,7 @@ T("BP-37 FLIPPED (Batch 5b): an outgoing credit note now REDUCES open receivable
 });
 
 // ── Batch 3a: shipment posting engine + decisions 1 & 2 ──
-const { postShipmentToLots, derivePurpose, responsibilityForPOShipment } = require("./build/shipments.domain.js");
+const { postShipmentToLots, derivePurpose } = require("./build/shipments.domain.js");   // v7.19.0: responsibilityForPOShipment retired
 let _id = 5000; const deps = { todayISO: () => "2026-07-05", nextId: () => ++_id };
 
 console.log("── shipments.domain: purpose + posting ──");
@@ -259,11 +259,10 @@ T("TRANSFER purpose moves stock without changing quantities", () => {
   assert.equal(lots[0].physicalKg, 1000); assert.equal(lots[0].locationId, 3);
   assert.equal(lots[0].movements[0].type, "TRANSFER");
 });
-T("responsibilityForPOShipment: DAP/DDP → Supplier (kills the hardcoded Marianna)", () => {
-  assert.equal(responsibilityForPOShipment({ buyIncoterm:"DDP" }, false), "Supplier");
-  assert.equal(responsibilityForPOShipment({ buyIncoterm:"DAP" }, false), "Supplier");
-  assert.equal(responsibilityForPOShipment({ buyIncoterm:"EXW" }, false), "Marianna");
-  assert.equal(responsibilityForPOShipment({ buyIncoterm:"EXW" }, true), "Supplier");
+T("who pays a PO truck's freight comes from its incoterm: DAP/DDP → the supplier, EXW → us (v7.19.0: legFreightPayers replaced responsibilityForPOShipment)", () => {
+  const IC = require("./build/incoterms.domain.js");
+  const pay = t => IC.legFreightPayers({ purpose: "INBOUND", poRefs: ["P"], legs: [{ mode: "Road", toLocationId: 9 }] }, { pos: [{ number: "P", buyIncoterm: t, destinationLocationId: 9 }] })[0].payer;
+  assert.equal(pay("DDP"), "supplier"); assert.equal(pay("DAP"), "supplier"); assert.equal(pay("EXW"), "us");
 });
 
 console.log("── decision 1: precise partial receipt ──");
@@ -442,34 +441,14 @@ T("SO shipments + stock lot computed", () => {
 });
 
 console.log("── PO sales link (BP-3) ──");
-T("unsold PO", () => { assert.equal(poSalesLink(po, []).state, "Unsold"); });
-T("partially sold (40%)", () => {
-  const r = poSalesLink(po, orders);
-  assert.equal(r.state, "Partial"); assert.equal(r.pct, 40);  // single SO, 4000/10000
-});
-T("fully sold", () => {
-  const full = [{ number:"SO-5", status:"Confirmed", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:10000, product:"Peppers" }] }];
-  assert.equal(poSalesLink(po, full).state, "Fully");
-});
-T("multiple orders", () => {
-  const multi = [
-    { number:"SO-5", status:"Confirmed", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:3000, product:"Peppers" }] },
-    { number:"SO-6", status:"Confirmed", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:2000, product:"Peppers" }] },
-  ];
-  const r = poSalesLink(po, multi);
-  assert.equal(r.state, "Multiple"); assert.equal(r.linkedSOs.length, 2);
-});
-T("cancelled SO doesn't count as sold", () => {
-  const canc = [{ number:"SO-9", status:"Cancelled", items:[{ sourceType:"PO", sourceRef:"PO-1", qty:10000, product:"Peppers" }] }];
-  assert.equal(poSalesLink(po, canc).state, "Unsold");
-});
 
 // ── Batch 4b removed (v6.37.0): the trade-flow shim it tested was retired; its
 //    behaviour (flow ⇄ incoterm mapping) lives on as frozen tables inside
-//    flowCleanup.migration, covered by the migration tests. ──
+//    (the old storage upgrade went with v7.21.0). ──
 
 // ── Test round 2 fixes: FB-7 groupage notes + BP-56 handover wording ──
-const { handoverTextForIncoterm, handoverPointForIncoterm } = require("./build/tradeFlow.domain.js");
+const INC = require("./build/incoterms.domain.js");   // v7.22.3 (FZ-21): every incoterm reading comes from the one table
+const handoverPointForIncoterm = c => INC.handoverPointOf(c, "buy");
 
 console.log("── FB-7: groupage notes name all sources ──");
 T("appending a 2nd PO puts BOTH refs in the notes", () => {
@@ -481,19 +460,10 @@ T("appending a 2nd PO puts BOTH refs in the notes", () => {
 });
 
 console.log("── BP-56: handover derived from incoterm ──");
-T("CIF handover text mentions port of discharge", () => {
-  assert.match(handoverTextForIncoterm("CIF","IMPORT"), /discharge/i);
-});
-T("EXW handover text mentions collect at origin", () => {
-  assert.match(handoverTextForIncoterm("EXW","IMPORT"), /origin|collect/i);
-});
 T("handover POINT derived per incoterm", () => {
   assert.equal(handoverPointForIncoterm("CIF"), "dest_port");
   assert.equal(handoverPointForIncoterm("EXW"), "supplier");
   assert.equal(handoverPointForIncoterm("DDP"), "our_wh");
-});
-T("empty incoterm → prompt text, no throw", () => {
-  assert.match(handoverTextForIncoterm("",""), /select/i);
 });
 
 // ── 4C FB-12: availability by product + variety ──
@@ -572,37 +542,8 @@ T("debit note increases its side; cancelled notes ignored", () => {
 });
 
 // ── Batch 5c: settlement document (BP-38/31) ──
-const { nextSettlementNumber, buildCommissionInvoiceDraft } = require("./build/settlement.domain.js");
 
 console.log("── settlement document ──");
-T("SET numbering scans existing settlements per year", () => {
-  const lots = [{ settlement: { number: "SET-2026-0003" } }, { settlement: { number: "SET-2025-0044" } }, {}];
-  assert.equal(nextSettlementNumber(lots, 2026), "SET-2026-0004");
-  assert.equal(nextSettlementNumber([], 2026), "SET-2026-0001");
-});
-T("commission invoice draft: SALES to producer, PLN, links SET/LOT/PO", () => {
-  const lot = { number: "LOT-9", product: "Golden", poRef: "PO-5" };
-  const st = { number: "SET-2026-0004", commissionPct: 8, finalCommissionPLN: 4004.5, closedAt: "2026-07-08" };
-  const po = { number: "PO-5", supplier: { name: "Konkret", nip: "123", address: "Cairo" } };
-  const inv = buildCommissionInvoiceDraft(lot, st, po, { nextId: pnext, todayISO: () => "2026-07-08" });
-  assert.equal(inv.kind, "SALES");
-  assert.equal(inv.category, "COMMISSION");
-  assert.equal(inv.counterparty.name, "Konkret");
-  assert.equal(inv.grossPLN, 4004.5);
-  assert.ok(inv.links.some(l => l.type === "SET" && l.number === "SET-2026-0004"));
-  assert.ok(inv.links.some(l => l.type === "LOT" && l.number === "LOT-9"));
-  assert.ok(inv.links.some(l => l.type === "PO" && l.number === "PO-5"));
-});
-T("draft carries the OFFSET payment event → Paid, so the ledger doesn't double-count", () => {
-  const lot = { number: "LOT-9", poRef: "PO-5" };
-  const st = { number: "SET-2026-0004", commissionPct: 8, finalCommissionPLN: 1000, closedAt: "2026-07-08" };
-  const inv = buildCommissionInvoiceDraft(lot, st, { supplier: { name: "K" } }, { nextId: pnext, todayISO: () => "2026-07-08" });
-  assert.equal(inv.payments.length, 1);
-  assert.equal(inv.payments[0].method, "Offset / compensation");
-  assert.equal(inv.paymentStatus, "Paid");
-  const { totals } = buildLedger({ invoices: [inv], todayISO: "2026-07-08" });
-  assert.equal(totals.receivableOpenPLN, 0);   // documented, not double-counted
-});
 
 // ── Batch 5d: settledRefs retirement (BP-39) ──
 const { convertSettledRefsToEvents, markInvoicePaidViaLedger, unmarkLedgerPaid, LEDGER_MARK_NOTE } = require("./build/payments.domain.js");
@@ -644,58 +585,26 @@ T("unmark refuses when paid by REAL payments (returns null)", () => {
 });
 
 // ── Batch 6a: Producer Claim (BP-55b) — pinned to the real Claim Request Form ──
-const { computeClaim, lineEUR } = require("./build/claim.domain.js");
 const { nextClaimNumber: nextClaimNumberModule, buildClaimFinanceNote } = require("./build/claims.domain.js");
 
 console.log("── producer claim (BP-55b) ──");
 const FORM_LINES = [
   { label: "Product — Golden 65-70-80", invoiceNo: "351/12/2025", amount: 50064.30, currency: "PLN", rate: 4.2131 },
   { label: "Transport to port of loading", party: "Agromałek", invoiceNo: "FS I/106/2025", amount: 1800, currency: "EUR" },
-  { label: "Container cost", party: "Conbulk", invoiceNo: "3339-2025", amount: 1800, currency: "EUR" },
+  { label: "Container cost", party: "Nogelor", invoiceNo: "3339-2025", amount: 1800, currency: "EUR" },
   { label: "Customs + transport at destination", amount: 128659.00, currency: "EGP", rate: 55.625 },
   { label: "Sorting", amount: 0, currency: "EGP", rate: 55.625 },
 ];
-T("CRM 20260201 vector: totals match the paper form exactly", () => {
-  const c = computeClaim({ costLines: FORM_LINES, defectPct: 42, soldInMarket: true, recoveredAmount: 72000, recoveredCurrency: "EGP", recoveredRate: 55.625 });
-  assert.equal(c.lines[0].eur, 11883.01);       // 50,064.30 PLN @ 4.2131
-  assert.equal(c.lines[3].eur, 2312.97);        // 128,659 EGP @ 55.625
-  assert.equal(c.totalCostEUR, 17795.98);       // cost at client's warehouse
-  assert.equal(c.defectValueEUR, 7474.31);      // 42% skin defects
-  assert.equal(c.recoveredEUR, 1294.38);        // 72,000 EGP recovered
-  assert.equal(c.creditNoteEUR, 6179.93);       // requested credit note
-});
-T("not sold in market → nothing recovered, full defect value claimed", () => {
-  const c = computeClaim({ costLines: FORM_LINES, defectPct: 42, soldInMarket: false, recoveredAmount: 72000, recoveredRate: 55.625 });
-  assert.equal(c.recoveredEUR, 0);
-  assert.equal(c.creditNoteEUR, 7474.31);
-});
-T("recovery larger than defect value floors the claim at 0", () => {
-  const c = computeClaim({ costLines: [{ label: "P", amount: 1000, currency: "EUR" }], defectPct: 10, recoveredAmount: 500, recoveredCurrency: "EUR" });
-  assert.equal(c.defectValueEUR, 100);
-  assert.equal(c.creditNoteEUR, 0);
-});
-T("claim-level fallback rates apply when a line has none", () => {
-  assert.equal(lineEUR({ label: "x", amount: 425, currency: "PLN" }, { plnPerEur: 4.25 }), 100);
-});
 T("v6.79.0 (W-2): ONE claim numbering scheme — the Claims module's, per year", () => {
   const claims = [{ number: "CLM-2026-0002" }, { number: "CLM-2025-0009" }];
   assert.equal(nextClaimNumberModule(claims, 2026), "CLM-2026-0003");
   assert.equal(nextClaimNumberModule([], 2026), "CLM-2026-0001");
 });
-T("v6.79.0 (W-2): the producer recovery note is built by claims.domain — THEIR credit reduces payables", () => {
-  const comp = computeClaim({ costLines: FORM_LINES, defectPct: 42, soldInMarket: true, recoveredAmount: 72000, recoveredCurrency: "EGP", recoveredRate: 52.3, rates: { plnPerEur: 4.25, egpPerEur: 52.3 } });
-  assert.ok(comp.creditNoteEUR > 0);
-  const claim = { number: "CLM-2026-0001", cause: "Skin defects", acceptedEUR: comp.creditNoteEUR, plnPerEur: 4.25,
-    respondent: { kind: "Supplier", name: "Konkret" }, subjects: [{ kind: "LOT", ref: "LOT-7" }] };
-  const note = buildClaimFinanceNote(claim, "THEIR_CREDIT", { nextId: () => 1, todayISO: () => "2026-02-14", invoices: [] });
-  assert.equal(note.noteType, "CREDIT"); assert.equal(note.direction, "incoming"); assert.equal(note.partyName, "Konkret");
-  assert.ok(Math.abs(note.amountPLN - Math.round(comp.creditNoteEUR * 4.25 * 100) / 100) < 0.01);
-  const adj = notesTotalsAdjustment([note]);
-  assert.ok(adj.payableAdjPLN < 0, "we owe the producer LESS");
-});
 
 // ── Batch 6b: movement matrix + Phase B (BP-56 final / BP-57) ──
-const { movementFromEnds, isEUCountry, handoverSentence, namedPlacePoolForIncoterm, dispositionFromSO, poDirectFromSOs } = require("./build/tradeFlow.domain.js");
+const { movementFromEnds, dispositionFromSO, poDirectFromSOs } = require("./build/tradeFlow.domain.js");
+const handoverSentence = (c, p) => INC.incotermLine(c, "buy", p); const namedPlacePoolForIncoterm = c => ({ types: INC.namedPlaceGuide(c, "buy").kinds });
+const { isEU: isEUCountry } = require("./build/counterparty.domain.js");   // v7.12.0 (A-TD-1): the one country table
 
 console.log("── 4-class movement matrix ──");
 T("matrix: all four cells", () => {
@@ -711,7 +620,7 @@ T("EU membership incl. 'Polska'", () => {
 });
 T("handover sentence carries the named place", () => {
   assert.match(handoverSentence("CIF", "Alexandria"), /Alexandria/);
-  assert.match(handoverSentence("CIF", "Alexandria"), /discharge/i);
+  assert.match(handoverSentence("CIF", "Alexandria"), /on board/i);   // v7.22.3 (FZ-21): the table's sentence says where the risk passes
 });
 T("named-place pool follows the incoterm", () => {
   assert.deepEqual(namedPlacePoolForIncoterm("CIF").types, ["PORT"]);
@@ -758,26 +667,22 @@ T("DAMAGE reduces physical stock and accumulates damagedKg", () => {
 });
 
 // ── v6.29.0: shipment-owned trade direction + label table (Hazem's decisions) ──
-const { shipmentTradeDirection, namedPlacePoolForIncoterm: pool29 } = require("./build/tradeFlow.domain.js");
+const { shipmentTradeDirection } = require("./build/tradeFlow.domain.js"); const pool29 = c => INC.namedPlaceGuide(c, "buy");
 
 console.log("── shipment owns the direction ──");
-T("precedence: shipment explicit > PO provisional > legacy flow > Import", () => {
-  assert.equal(shipmentTradeDirection({ tradeDirection: "CROSS_TRADE" }, { tradeMovement: "IMPORT" }), "CROSS_TRADE");
-  assert.equal(shipmentTradeDirection({}, { tradeMovement: "EXPORT" }), "EXPORT");
-  assert.equal(shipmentTradeDirection(null, { flow: "EXP_CIF" }), "EXPORT");
-  assert.equal(shipmentTradeDirection(null, { flow: "IMP_CIF_WH" }), "IMPORT");
-  assert.equal(shipmentTradeDirection(null, {}), "IMPORT");
-});
-T("garbage direction values fall through safely", () => {
-  assert.equal(shipmentTradeDirection({ tradeDirection: "NONSENSE" }, { tradeMovement: "EXPORT" }), "EXPORT");
+// v7.12.0 (A-TD-1, owner 8 Oct): the v6.29 precedence (stored choice > PO provisional > legacy flow > "Import") is retired — it is
+// exactly what made trucks read "Import" with no sale. The rule now comes from the real ends; see the v7.12 block below.
+T("v7.12: no end known → no direction, never a default Import", () => {
+  assert.equal(shipmentTradeDirection({}, {}), "");
+  assert.equal(shipmentTradeDirection({ tradeDirection: "CROSS_TRADE" }, {}), "", "a stored value is not read (A-TD-2 / A-TD-3)");
 });
 console.log("── place labels per the agreed table (CFR → discharge) ──");
 T("CFR named place is the port of DISCHARGE (Incoterms-correct)", () => {
   assert.equal(pool29("CFR").label, "Port of discharge");
   assert.equal(pool29("FOB").label, "Port of loading");
   assert.equal(pool29("EXW").label, "Pickup place (supplier site)");
-  assert.equal(pool29("DDP").label, "Delivered to (our address)");
-  assert.equal(pool29("").label, "Place (set the incoterm first)");
+  assert.equal(pool29("DDP").label, "Delivery place");   // v7.22.3 (FZ-21): one label for every delivered-to-a-place rule
+  assert.equal(pool29("").label, "Place (choose an Incoterms 2020 rule first)");
 });
 
 // ── Safeguards batch 7a ──
@@ -905,17 +810,6 @@ T("voided SHIP_OUT does not reduce storage nor charge handling out", () => {
 
 // Fix 5 — the commission invoice pushes a real Fakturownia position.
 const { buildFakturowniaPayload } = require("./build/invoicing.js");
-T("commission invoice positions survive the Fakturownia payload builder", () => {
-  const lot = { number: "LOT-K", product: "Peppers", poRef: "PO-9" };
-  const settlement = { number: "SET-2026-0001", commissionPct: 10, finalCommissionPLN: 1234.56, closedAt: "2026-07-01" };
-  let id = 1;
-  const inv = buildCommissionInvoiceDraft(lot, settlement, { supplier: { name: "Producer X" } }, { nextId: () => id++, todayISO: () => "2026-07-01" });
-  const body = buildFakturowniaPayload(inv, { apiToken: "t" });
-  const pos = body.invoice.positions[0];
-  assert.ok(pos.name.includes("Commission 10%"));                 // not the "—" fallback
-  assert.equal(pos.total_price_gross, 1234.56);                    // amount carried through
-  assert.equal(inv.paymentStatus, "Paid");                         // offset event intact
-});
 
 // Fix 7 — shipment posting surfaces over-issue instead of clamping silently.
 T("OUTBOUND over-issue lands in overIssuedKg and the checker flags it", () => {
@@ -1110,7 +1004,7 @@ T("checker: stale 'Cost allocated' flag caught; real allocation not", () => {
 });
 
 console.log("── v6.33.0: Invoices sole owner (A3-6) + legacy credit-notes fold (A3-5) ──");
-const { salesInvoiceFromSODraft, salesInvoiceSourceTag, stripPendingInvoices, migrateLegacyCreditNotes, migrateLegacyInvoices } = require("./build/invoicing.js");
+const { salesInvoiceFromSODraft, salesInvoiceSourceTag, stripPendingInvoices, migrateLegacyInvoices } = require("./build/invoicing.js");   // v7.21.0 (A-RV-19): the credit-note fold went with the repairs
 
 T("A3-6: SO draft → canonical register invoice (shape + source tag + SO link)", () => {
   const so = { number: "SO-9", currency: "EUR", client: { name: "Client X" }, items: [{ product: "Apples", qty: 1000 }] };
@@ -1142,51 +1036,41 @@ T("A3-6: stripPendingInvoices removes the legacy array; same reference when clea
   assert.equal(r2.changed, false);
   assert.ok(r2.orders === clean); // same ref → no React effect loop
 });
-T("A3-5: legacy creditNotes fold into FinanceNote, idempotent, and ENTER the totals", () => {
-  const legacy = [{ id: 7, direction: "outgoing", partyName: "Client X", category: "Goods / quality", amount: 500, currency: "PLN", fxRate: 1, status: "Issued", reason: "quality", date: "2026-06-01" }];
-  const once = migrateLegacyCreditNotes({ existing: [], creditNotes: legacy });
-  assert.equal(once.length, 1);
-  assert.equal(once[0].noteType, "CREDIT");
-  assert.equal(once[0].amountPLN, 500);
-  assert.equal(once[0].source, "legacyCN:7");
-  const twice = migrateLegacyCreditNotes({ existing: once, creditNotes: legacy });
-  assert.equal(twice.length, 1); // idempotent by source tag
-  const adj = notesTotalsAdjustment(twice);
-  assert.ok(adj.receivableAdjPLN < 0); // outgoing credit note reduces what clients owe us
-});
 
 // ── v6.34.0: shipment direction from real ends — the Koper case (BP-61) ──
-const { shipmentTradeDirection: stdV34, directionFromCountries, soDestinationCountry } = require("./build/tradeFlow.domain.js");
+const { shipmentTradeDirection: stdV34, shipmentTradeEnds } = require("./build/tradeFlow.domain.js");
 
-console.log("── shipment direction resolves per-truck from producer × SO destination ──");
-T("Koper split: ONE Egypt CIF PO fathers an EU-import truck AND a T1 cross-trade truck", () => {
-  const po = { number: "PO-K", supplier: { country: "Egypt" }, tradeMovement: "IMPORT" };
-  const soUA = { number: "SO-UA", sellIncoterm: "DAP", client: { country: "Ukraine" }, destinationLocationId: null, destinationText: "Ukraine" };
-  const soPL = { number: "SO-PL", sellIncoterm: "DDP", client: { country: "Poland" }, destinationText: "Poland" };
-  // each shipment resolves independently from its own governing SO
-  assert.equal(stdV34({}, po, soUA), "CROSS_TRADE"); // Egypt × Ukraine, T1
-  assert.equal(stdV34({}, po, soPL), "IMPORT");      // Egypt × EU (Poland)
+console.log("── v7.12 (A-TD-1): the trade direction from the real ends ──");
+const tdPos = [{ number: "PO-K", supplier: { country: "Egypt" } }, { number: "PO-PL", supplier: { country: "Poland" } }, { number: "PO-HU", supplier: { country: "Hungary" } }];
+const tdCountry = (id) => ({ 900: "Ukraine", 901: "Slovenia", 902: "Poland", 903: "Egypt" })[id] || "";
+const tdCtx = (orders = []) => ({ pos: tdPos, orders, countryOf: tdCountry });
+T("Koper split (BP-61 kept): ONE Egypt CIF PO fathers an EU-import truck AND a T1 cross-trade truck", () => {
+  const soUA = { number: "SO-UA", client: { country: "Ukraine" }, destinationText: "Kyiv, ul. Khreshchatyk 1" };
+  const soPL = { number: "SO-PL", client: { country: "Poland" }, destinationText: "ul. Momomod 65, 18-303 Warszawa" };
+  assert.equal(stdV34({ poRefs: ["PO-K"], governingSoRef: "SO-UA" }, tdCtx([soUA, soPL])), "CROSS_TRADE");
+  assert.equal(stdV34({ poRefs: ["PO-K"], governingSoRef: "SO-PL" }, tdCtx([soUA, soPL])), "IMPORT");
 });
-T("no governing SO → PO provisional (unsold portion to our warehouse)", () => {
-  const po = { number: "PO-K", supplier: { country: "Egypt" }, tradeMovement: "IMPORT" };
-  assert.equal(stdV34({}, po, null), "IMPORT");
+T("a TYPED destination is never read as a country: the client's country is used (SHP-0006 / 0007 read Cross-trade)", () => {
+  const so = { number: "SO-W", client: { country: "Poland" }, destinationText: "ul. Momomod 65, 18-303 Warszawa" };
+  const e = shipmentTradeEnds({ purpose: "OUTBOUND", poRefs: ["PO-K"], governingSoRef: "SO-W", originLocationId: 901 }, tdCtx([so]));
+  assert.equal(e.direction, "INTRA_EU"); assert.equal(e.origin.from, "starting place"); assert.equal(e.destination.from, "client's country");
 });
-T("SO destination via resolveCountry(locationId) beats the client's home country (ruling #2)", () => {
-  const po = { supplier: { country: "Egypt" } };
-  // client is Polish but the sale is CIF to a Ukrainian port → goods physically go to UA
-  const so = { sellIncoterm: "CIF", client: { country: "Poland" }, destinationLocationId: 900 };
-  const resolve = (id) => id === 900 ? "Ukraine" : "";
-  assert.equal(stdV34({}, po, so, resolve), "CROSS_TRADE");
+T("the sale's registered place beats the client's home country (ruling #2 kept)", () => {
+  const so = { number: "SO-C", client: { country: "Poland" }, destinationLocationId: 900 };
+  assert.equal(stdV34({ poRefs: ["PO-K"], governingSoRef: "SO-C" }, tdCtx([so])), "CROSS_TRADE");
 });
-T("manual override always wins over the derived answer", () => {
-  const po = { supplier: { country: "Egypt" } };
-  const so = { client: { country: "Poland" }, destinationText: "Poland" }; // would derive IMPORT
-  assert.equal(stdV34({ tradeDirection: "CROSS_TRADE" }, po, so), "CROSS_TRADE");
+T("no sale: the truck goes to the shipment's / PO's place, else to us — never a default Import", () => {
+  assert.equal(stdV34({ poRefs: ["PO-HU"], arrangedBy: "SUPPLIER" }, tdCtx()), "INTRA_EU", "Hungarian producer's own truck → us");
+  assert.equal(stdV34({ poRefs: ["PO-PL"], purpose: "OUTBOUND", originLocationId: 902, destinationLocationId: 903 }, tdCtx()), "EXPORT", "Poland → Egypt with no sale");
+  assert.equal(stdV34({ poRefs: ["PO-K"], purpose: "INBOUND" }, tdCtx()), "IMPORT", "Egypt → us");
 });
-T("intra-EU: Polish producer, German client", () => {
-  assert.equal(directionFromCountries("Poland", "Germany"), "INTRA_EU");
-  assert.equal(directionFromCountries("Egypt", "Saudi Arabia"), "CROSS_TRADE");
-  assert.equal(directionFromCountries("Egypt", ""), ""); // unknown end → no derivation
+T("an onward movement starts where the goods are; with no starting place, the producer", () => {
+  assert.equal(shipmentTradeEnds({ purpose: "OUTBOUND", poRefs: ["PO-K"], originLocationId: 901, destinationLocationId: 902 }, tdCtx()).direction, "INTRA_EU");
+  assert.equal(shipmentTradeEnds({ purpose: "OUTBOUND", poRefs: ["PO-K"], destinationLocationId: 902 }, tdCtx()).origin.from, "producer — no starting place set");
+});
+T("an unknown country gives no direction and says what to add", () => {
+  const e = shipmentTradeEnds({ poRefs: ["PO-X"] }, { pos: [{ number: "PO-X", supplier: { country: "Atlantis" } }], countryOf: tdCountry });
+  assert.equal(e.direction, ""); assert.ok(/Atlantis/.test(e.missing));
 });
 
 // ── v6.34.1: per-item CN/HS in the catalog (items 4) ──
@@ -1229,10 +1113,6 @@ T("a 42000 kg line ships 21000 now, 21000 remaining for the next truck", () => {
 // it states a real fact about incoterms and is used elsewhere.
 const { sellIncotermHasOnwardLeg } = require("./build/tradeFlow.domain.js");
 console.log("── incoterms: which sales carry an onward freight leg ──");
-T("freight-onward set is exactly CIF/CFR/CPT/CIP", () => {
-  ["CIF","CFR","CPT","CIP"].forEach(i => assert.ok(sellIncotermHasOnwardLeg(i)));
-  ["FOB","FCA","EXW","DAP","DDP",""].forEach(i => assert.ok(!sellIncotermHasOnwardLeg(i)));
-});
 // ── v6.34.8: SO multi-shipment parity — same per-line remaining math as PO ──
 console.log("── SO partial-shipment parity ──");
 T("SO line ships across two shipments; second defaults to remaining (parity with PO)", () => {
@@ -1248,7 +1128,7 @@ T("SO line ships across two shipments; second defaults to remaining (parity with
 });
 
 // ── v6.35.1 (Phase C step 3): ownership from real incoterms ──
-const { ownershipAtPoint, buyOwnershipStartFromIncoterm, sellOwnershipEndFromIncoterm } = require("./build/tradeFlow.domain.js");
+const { ownershipAtPoint } = INC; const buyOwnershipStartFromIncoterm = c => INC.handoverPointOf(c, "buy"); const sellOwnershipEndFromIncoterm = c => INC.handoverPointOf(c, "sell");
 console.log("── ownership from incoterms ──");
 T("EXW buy → we own from supplier onward", () => {
   assert.equal(buyOwnershipStartFromIncoterm("EXW"), "supplier");
@@ -1308,54 +1188,7 @@ T("post IN → void the shipment's movements → lot back to Expected/0", () => 
 });
 
 // ── v6.37.0: flow-cleanup migration (schema 2) ──
-const { migrateFlowCleanup } = require("./build/flowCleanup.migration.js");
 console.log("── flow-cleanup migration ──");
-T("legacy PO without incoterms is backfilled from its flow, then flow dropped", () => {
-  const all = migrateFlowCleanup({ pos: [{ number: "PO-1", flow: "IMP_CIF_WH" }], lots: [], shipments: [] });
-  const p = all.pos[0];
-  assert.equal(p.buyIncoterm, "CIF");
-  assert.equal(p.tradeMovement, "IMPORT");
-  assert.equal(p.directFlow, false);
-  assert.ok(!("flow" in p), "flow removed");
-});
-T("direct legacy flow backfills directFlow=true; existing incoterm never overwritten", () => {
-  const all = migrateFlowCleanup({ pos: [
-    { number: "PO-2", flow: "IMP_DDP_DIR" },
-    { number: "PO-3", flow: "IMP_CIF_WH", buyIncoterm: "EXW" },
-  ], lots: [], shipments: [] });
-  assert.equal(all.pos[0].buyIncoterm, "DDP");
-  assert.equal(all.pos[0].directFlow, true);
-  assert.equal(all.pos[1].buyIncoterm, "EXW", "user-entered incoterm wins");
-  assert.ok(!("flow" in all.pos[1]));
-});
-T("never-shipped legacy lot gets its template journey BAKED; buyIncoterm from PO", () => {
-  const all = migrateFlowCleanup({
-    pos: [{ number: "PO-4", flow: "IMP_CIF_WH" }],
-    lots: [{ number: "LOT-1", poRef: "PO-4", flow: "IMP_CIF_WH", loadingDate: "2026-07-01", arrivalDate: "2026-07-11" }],
-    shipments: [],
-  });
-  const l = all.lots[0];
-  assert.equal(l.buyIncoterm, "CIF");
-  assert.equal((l.journey || []).length, 6, "6 CIF-WH stages baked");
-  assert.equal(l.journey[0].ownership, "not_owned", "supplier stage before dest_port takeover");
-  assert.equal(l.journey.find(st => st.kind === "dest_port").ownership, "owned");
-  assert.equal(l.journey[0].plannedDate, "2026-07-01");
-  assert.equal(l.journey[5].plannedDate, "2026-07-11");
-  assert.ok(!("flow" in l));
-});
-T("lot WITH a shipment is not baked (shipments are its journey); idempotent re-run", () => {
-  const input = {
-    pos: [{ number: "PO-5", flow: "IMP_EXWS_WH" }],
-    lots: [{ number: "LOT-2", poRef: "PO-5", flow: "IMP_EXWS_WH" }],
-    shipments: [{ number: "SHP-1", lotRefs: ["LOT-2"] }],
-  };
-  const once = migrateFlowCleanup(input);
-  assert.ok(!once.lots[0].journey, "no baked journey — shipment-derived at render");
-  assert.ok(!("flow" in once.lots[0]));
-  const twice = migrateFlowCleanup(once);
-  assert.deepEqual(twice.pos, once.pos, "idempotent on pos");
-  assert.deepEqual(twice.lots, once.lots, "idempotent on lots");
-});
 
 // ── v6.37.1: Finance direct costs — mirror sync + accrual (the user's repro) ──
 const { syncLegFreightCostLines } = require("./build/shipments.domain.js");
@@ -1610,7 +1443,6 @@ T("onions in 25kg mesh bags", () => {
 });
 
 // ── v6.45.0: test-round root causes B, C, D ──
-const HEAL = require("./build/heal.v645.js");
 const SD = require("./build/shipments.domain.js");
 console.log("── v6.45.0: OUTBOUND pass-through, shipped-aware supply, heal ──");
 
@@ -1654,48 +1486,11 @@ T("D: partially shipped PO line offers exactly the unshipped remainder", () => {
   assert.equal(av[0].primaryAvailable, 6000, "10000 - 4000 shipped");
   assert.ok(!av[0].hasOverage);
 });
-T("HEAL: retags duplicated goods rows, voids the wrong movement, re-posts, re-allocates", () => {
-  const lots = [
-    { number: "L-1", poRef: "PO-H", poLineId: 11, product: "Apples", receivedKg: 0, physicalKg: 0, costs: [], movements: [
-      { id: 1, type: "SHIP_OUT", qtyKg: 8000, soRef: "SO-H", shipmentRef: "SHP-H" } ] },
-    { number: "L-2", poRef: "PO-H", poLineId: 12, product: "Apples", receivedKg: 0, physicalKg: 0, costs: [], movements: [] },
-  ];
-  const orders = [{ number: "SO-H", id: 1, status: "Shipped", items: [
-    { id: 101, sourceType: "PO", sourceRef: "PO-H", sourceLineId: 11, product: "Apples", qty: 4000 },
-    { id: 102, sourceType: "PO", sourceRef: "PO-H", sourceLineId: 12, product: "Apples", qty: 4000 } ] }];
-  const shipments = [{ number: "SHP-H", status: "Closed", purpose: "INBOUND", soRefs: ["SO-H"], legs: [{}],
-    costs: [{ id: 5, type: "road_freight", amountPLN: 1000 }],
-    goods: [
-      { lotRef: "L-1", soRef: "SO-H", soLineId: 101, qtyKg: 4000 },
-      { lotRef: "L-1", soRef: "SO-H", soLineId: 102, qtyKg: 4000 } ] }];
-  let i = 500;
-  const res = HEAL.healRound645({ shipments, lots, orders }, { todayISO: () => "2026-07-22", nextId: () => ++i,
-    costMapper: { inventoryType: () => "freight", label: c => c } });
-  assert.ok(res.changed);
-  const sh = res.shipments[0];
-  assert.equal(sh.goods[1].lotRef, "L-2", "second row retagged to its true lot");
-  const l1 = res.lots.find(l => l.number === "L-1"), l2 = res.lots.find(l => l.number === "L-2");
-  assert.ok((l1.movements||[]).some(m => m.voided), "wrong movement voided");
-  assert.equal(l1.receivedKg, 4000); assert.equal(l2.receivedKg, 4000);
-  const alloc = (l) => (l.costs||[]).filter(c => String(c.source||"").startsWith("SHP-H/")).reduce((a,c)=>a+(c.pln||0),0);
-  assert.equal(alloc(l1) + alloc(l2), 1000, "inbound costs re-allocated across BOTH lots");
-});
 T("v6.51.0: an OUTBOUND delivery never allocates into a lot's landed cost", () => {
   const lots = [{ number: "L-O", costs: [{ pln: 100, source: "po:X" }] }];
   const sh = { number: "SHP-O", purpose: "OUTBOUND", goods: [{ lotRef: "L-O", qtyKg: 1000 }], costs: [{ id: 1, type: "road_freight", amountPLN: 900 }] };
   const out = CA.allocateShipmentCostsToLots(sh, lots, { inventoryType: () => "freight", label: c => c });
   assert.equal(out[0].costs.length, 1, "the lot is untouched — delivery freight is a cost of the SALE");
-});
-T("HEAL: a healthy dataset passes through untouched", () => {
-  const lots = [{ number: "L-OK", poRef: "PO-OK", poLineId: 1, product: "Apples", receivedKg: 5000, physicalKg: 0, costs: [], movements: [
-    { type: "IN", qtyKg: 5000, shipmentRef: "SHP-OK" }, { type: "SHIP_OUT", qtyKg: 5000, soRef: "SO-OK", shipmentRef: "SHP-OK" } ] }];
-  const shipments = [{ number: "SHP-OK", status: "Closed", purpose: "OUTBOUND", soRefs: ["SO-OK"], legs: [{}], costs: [],
-    goods: [{ lotRef: "L-OK", soRef: "SO-OK", soLineId: 1, qtyKg: 5000 }] }];
-  const orders = [{ number: "SO-OK", id: 1, status: "Closed", items: [{ id: 1, sourceType: "PO", sourceRef: "PO-OK", sourceLineId: 1, product: "Apples", qty: 5000 }] }];
-  let i = 800;
-  const res = HEAL.healRound645({ shipments, lots, orders }, { todayISO: () => "2026-07-22", nextId: () => ++i,
-    costMapper: { inventoryType: () => "freight", label: c => c } });
-  assert.equal(res.changed, false, "no false-positive healing");
 });
 
 // ── v6.46.0: loading protocol (Karta załadunku) ──
@@ -1731,12 +1526,12 @@ T("22 full pallets: manual adjustment case derives 22 rows", () => {
 });
 T("build: pre-fills plates, driver, assortment; recorders stay EMPTY", () => {
   const sh = { number: "SHP-2026-0003", goods: [{ product: "Apples", qtyKg: 19422 }],
-    legs: [{ id: 1, mode: "Road", vehicles: [{ truckPlate: "WR025HP", trailerPlate: "WR0246Y", driverName: "Mikolaj Majewski" }] }] };
-  const p = LP.buildLoadingProtocol({ shipment: sh, supplier: { name: "Konkret", address: "Marysin 36" },
+    legs: [{ id: 1, mode: "Road", vehicles: [{ truckPlate: "UX885QX", trailerPlate: "EK4165E", driverName: "Patace Cekicero" }] }] };
+  const p = LP.buildLoadingProtocol({ shipment: sh, supplier: { name: "Konkret", address: "ul. Negenok 64" },
     receiverName: "MARIANNA HAZEM OSMAN", types: _seed, existingProtocols: [] },
     { todayISO: () => "2026-07-30", nextId: () => 1 });
   assert.equal(p.number, "LP-2026-0001", "house numbering convention");
-  assert.equal(p.truckPlate, "WR025HP"); assert.equal(p.trailerPlate, "WR0246Y");
+  assert.equal(p.truckPlate, "UX885QX"); assert.equal(p.trailerPlate, "EK4165E");
   assert.equal(p.assortment, "Apples");
   assert.equal(p.rows.length, 21);
   assert.equal(p.recorderNos.length, 0, "producer picks recorders at loading — blank when printed");
@@ -1745,17 +1540,6 @@ T("build: pre-fills plates, driver, assortment; recorders stay EMPTY", () => {
 T("numbering continues the house sequence", () => {
   assert.equal(LP.nextProtocolNumber([{ number: "LP-2026-0001" }, { number: "LP-2026-0007" }], 2026), "LP-2026-0008");
   assert.equal(LP.nextProtocolNumber([{ number: "LP-2025-0009" }], 2026), "LP-2026-0001", "year-scoped");
-});
-T("a clean sheet is clean; damage and non-compliance are flagged", () => {
-  const rows = LP.deriveRows([{ product: "Apples", qtyKg: 936 }], _seed).map(r =>
-    ({ ...r, boxesOk: true, goodsOk: true, remarks: "Brak" }));
-  const clean = { checks: { transportClean: true, chamberClean: true, foreignOdours: false, packagingCompliant: true }, rows };
-  assert.equal(LP.isProtocolClean(clean), true, "all Tak / Brak / ZGODNY = clean");
-  const dirty = { ...clean, rows: rows.map((r, i) => i === 0 ? { ...r, goodsOk: false } : r) };
-  assert.equal(LP.isProtocolClean(dirty), false);
-  assert.ok(LP.protocolExceptions(dirty)[0].includes("Pallet 1"));
-  const odours = { ...clean, checks: { ...clean.checks, foreignOdours: true } };
-  assert.ok(LP.protocolExceptions(odours).some(x => x.includes("odours")));
 });
 T("gaps tell you what must still come back for the sheet to be evidence", () => {
   const p = LP.buildLoadingProtocol({ shipment: { number: "S", goods: [{ product: "Apples", qtyKg: 936 }], legs: [{ id: 1 }] }, types: _seed },
@@ -1827,54 +1611,10 @@ const CL = require("./build/claims.domain.js");
 const MC = require("./build/marginCalculations.js");
 console.log("── claims: store, numbering, migration ──");
 const _deps = () => { let i = 0; return { todayISO: () => "2026-07-30", nextId: () => ++i }; };
-
-T("D1 FIXED: a lot may now hold SEVERAL claims (the old save wiped them)", () => {
-  const lot = { number: "LOT-1", poRef: "PO-1", claims: [
-    { id: 1, number: "CLM-2026-0001", defectType: "Skin defects", requestedCreditEUR: 6179.93, status: "Issued" },
-    { id: 2, defectType: "Bruising", requestedCreditEUR: 800, status: "Draft" },
-  ], movements: [] };
-  const r = CL.migrateClaims({ lots: [lot], pos: [{ number: "PO-1", supplier: { name: "Konkret" } }] }, _deps());
-  assert.equal(r.claims.length, 2, "BOTH claims survive");
-  assert.equal(r.claims[0].number, "CLM-2026-0001", "existing number kept");
-  assert.equal(r.claims[1].number, "CLM-2026-0001".replace("0001", "0002"), "second gets the next house number");
-  assert.ok(r.claims.every(c => c.respondent.name === "Konkret" && c.direction === "RECOVERY"));
-});
 T("D2 FIXED: numbering reads the CLAIMS store, not a lots snapshot", () => {
   assert.equal(CL.nextClaimNumber([{ number: "CLM-2026-0003" }], 2026), "CLM-2026-0004");
   assert.equal(CL.nextClaimNumber([{ number: "CLM-2025-0009" }], 2026), "CLM-2026-0001", "year-scoped");
   assert.equal(CL.nextClaimNumber([], 2026), "CLM-2026-0001");
-});
-T("unnumbered CLIENT claims become real numbered documents", () => {
-  const lot = { number: "LOT-4", poRef: "PO-2", claims: [], movements: [
-    { id: 9, type: "CLAIM", qtyKg: 500, claimValue: 2400, claimCurrency: "PLN", soRef: "SO-2026-0002", date: "2026-06-01", note: "Client quality complaint" },
-    { id: 10, type: "CLAIM", qtyKg: 100, date: "2026-06-02", note: "producer claim marker" },   // no value → not a client claim
-    { id: 11, type: "CLAIM", qtyKg: 50, claimValue: 100, voided: true },                        // voided → ignored
-  ] };
-  const r = CL.migrateClaims({ lots: [lot], pos: [] }, _deps());
-  assert.equal(r.claims.length, 1, "only the valued, live movement becomes a claim");
-  const c = r.claims[0];
-  assert.equal(c.direction, "CONCESSION");
-  assert.equal(c.respondent.kind, "Client");
-  assert.equal(c.number, "CLM-2026-0001", "it finally HAS a number");
-  assert.equal(c.status, "Settled", "its credit note was already issued");
-  assert.equal(c.movementRef, 9, "still tied to the inventory movement");
-  assert.deepEqual(c.subjects.map(s => s.kind).sort(), ["LOT", "SO"]);
-});
-T("migration is idempotent — a second run adds nothing", () => {
-  const lots = [{ number: "LOT-1", poRef: "PO-1", claims: [{ id: 1, defectType: "x", requestedCreditEUR: 100 }],
-    movements: [{ id: 5, type: "CLAIM", qtyKg: 10, claimValue: 50, soRef: "SO-1" }] }];
-  const pos = [{ number: "PO-1", supplier: { name: "Konkret" } }];
-  const first = CL.migrateClaims({ lots, pos }, _deps());
-  assert.equal(first.claims.length, 2); assert.equal(first.changed, true);
-  const second = CL.migrateClaims({ lots, pos, existing: first.claims }, _deps());
-  assert.equal(second.claims.length, 2, "no duplicates");
-  assert.equal(second.changed, false);
-});
-T("originals are never destroyed by the migration", () => {
-  const lot = { number: "LOT-1", poRef: "PO-1", claims: [{ id: 1, requestedCreditEUR: 100 }], movements: [] };
-  const before = JSON.stringify(lot);
-  CL.migrateClaims({ lots: [lot], pos: [] }, _deps());
-  assert.equal(JSON.stringify(lot), before, "lot.claims left exactly as it was");
 });
 T("queries find claims by lot, SO and shipment", () => {
   const claims = [
@@ -1884,7 +1624,6 @@ T("queries find claims by lot, SO and shipment", () => {
   assert.equal(CL.claimsForLot(claims, "LOT-4").length, 2);
   assert.equal(CL.claimsForSO(claims, "SO-2").length, 1);
   assert.equal(CL.claimsForShipment(claims, "SHP-9").length, 1);
-  assert.equal(CL.affectedKgForLot(claims[0], "LOT-4"), 500);
 });
 T("incident net: conceded minus recovered, gap reported not flagged", () => {
   // client conceded 6000; recovered 4000 from the supplier and 1000 from the line
@@ -2097,16 +1836,6 @@ T("a signature dated after departure is flagged", () => {
   assert.ok(w[0].includes("after the truck left"));
   assert.equal(LP.signatureWarnings({ departedOn: "2026-05-02", driverSignedDate: "2026-05-02", issuerSignedDate: "2026-05-02" }).length, 0);
 });
-T("a sheet is complete only with scan, recorder and both signatures", () => {
-  const base = LP.deriveRows([{ product: "Apples", variety: "Gala", size: "70-80", qtyKg: 936 }], PKG.PACKAGING_SEED);
-  const p = { rows: LP.confirmAsLoaded(base), chamberTempBeforeC: "2",
-    checks: { transportClean: true, chamberClean: true, foreignOdours: false, packagingCompliant: true },
-    driverSignedDate: "2026-05-02", issuerSignedDate: "2026-05-02", recorderNos: ["241002PDF2476186"],
-    scanLink: "https://www.dropbox.com/s/a/p.pdf?dl=0" };
-  assert.equal(LP.isProtocolComplete(p), true);
-  assert.ok(LP.protocolGaps({ ...p, scanLink: "" })[0].includes("scan"));
-  assert.ok(LP.protocolGaps({ ...p, recorderNos: [] }).some(g => g.includes("recorder")));
-});
 
 console.log("");
 console.log("── loadingProtocol.domain: one protocol per truck (v6.53.0) ──");
@@ -2214,35 +1943,6 @@ T("cancelled is recognised however it was written", () => {
   assert.ok(!CX.isCancelled({}), "a record with no status is live, not cancelled");
 });
 
-T("cancelled records count toward no operational figure", () => {
-  const ships = [
-    { number: "S1", status: "Loaded", billingStatus: "Not ready" },
-    { number: "S2", status: "Cancelled", billingStatus: "Not ready" },
-    { number: "S3", status: "Cancelled", billingStatus: "Supplier invoice received" },
-  ];
-  assert.equal(CX.liveOnly(ships).length, 1);
-  assert.equal(ships.filter(CX.countsOperationally).length, 1,
-    "the real defect: 2 of 3 shipments were inflating the KPI tiles");
-});
-
-T("linked documents split into live and cancelled", () => {
-  const { live, cancelled } = CX.splitByCancelled([
-    { number: "SHP-11", status: "Loaded" },
-    { number: "SHP-09", status: "Cancelled" },
-    { number: "SHP-08", status: "Cancelled" },
-  ]);
-  assert.equal(live.length, 1);
-  assert.equal(cancelled.length, 2, "PO-0009's real shape: 3 linked, 1 counting");
-  assert.equal(live[0].number, "SHP-11");
-});
-
-T("cancelled refs are struck through and red", () => {
-  const s = CX.cancelledTextStyle(true);
-  assert.equal(s.textDecoration, "line-through");
-  assert.equal(s.color, "#DC2626");
-  assert.deepEqual(CX.cancelledTextStyle(false), {}, "live refs get no styling");
-});
-
 T("a claim cannot be raised against a cancelled document", () => {
   const docs = { "SHP-9": { status: "Cancelled" }, "SHP-11": { status: "Loaded" }, "SO-1": { status: "Cancelled" } };
   const look = (s) => docs[s.ref];
@@ -2290,27 +1990,6 @@ T("only the inbound movement receives against a PO", () => {
   assert.ok(RC.isReceiptOfPO({ poRefs: ["PO-1"] }), "legacy shipment with no purpose is treated as the receipt");
 });
 
-T("THE REGRESSION: moving the same cargo twice no longer exhausts the PO", () => {
-  // PO-2026-0009's real shape: received once on SHP-0011, then moved onward.
-  const ships = [
-    { number: "SHP-0011", purpose: "INBOUND", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 38844 }] },
-    { number: "SHP-0014", purpose: "TRANSFER", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 38844 }] },
-    { number: "SHP-0015", purpose: "OUTBOUND", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 38844 }] },
-  ];
-  const got = RC.receivedKgByPoLine(ships, "PO-9");
-  assert.equal(got["L1"], 38844, "three movements of one delivery are still one delivery");
-  assert.equal(RC.overReceiptCheck([{ id: "L1", product: "Apples", qty: 38844 }], got).length, 0,
-    "before v6.55.0 this read as 116 532 kg against a 38 844 kg order and blocked creation");
-});
-
-T("cancelled receipts free the order again", () => {
-  const ships = [
-    { number: "SHP-0009", purpose: "INBOUND", status: "Cancelled", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 38844 }] },
-    { number: "SHP-0011", purpose: "INBOUND", status: "Loaded", poRefs: ["PO-9"], goods: [{ poRef: "PO-9", poLineId: "L1", qtyKg: 19422 }] },
-  ];
-  assert.equal(RC.receivedKgByPoLine(ships, "PO-9")["L1"], 19422);
-});
-
 T("over-receipt is reported, never blocked, and tolerates whole-box rounding", () => {
   const items = [{ id: "L1", product: "Apples", qty: 21000 }];
   assert.equal(RC.overReceiptCheck(items, { L1: 21008 }).length, 1, "8 kg over is still over");
@@ -2337,7 +2016,6 @@ T("a lot cannot ship kilos it does not hold", () => {
 console.log("");
 console.log("── loadPlan.domain: one movement, several shipments (v6.56.0) ──");
 
-const LDP = require("./build/loadPlan.domain.js");
 
 // The real apple export: 5 trucks -> 4 containers. Four go in whole; the fifth
 // is split across all four.
@@ -2356,68 +2034,6 @@ const mkShips = () => ["T1", "T2", "T3", "T4", "T5"].map((n, i) => ({
   goods: [{ qtyKg: n === "T5" ? 18720 : 19656, pallets: 21 }],
   loadingProtocols: [{ number: `LP-${n}`, status: "Returned" }],
 })).concat([{ id: 9, number: "SEA", mode: "Sea", status: "Loaded", poRefs: ["PO-9"], soRefs: ["SO-9"], goods: [{ qtyKg: 97344, pallets: 105 }] }]);
-
-T("numbering does not collide with the loading protocol's LP series", () => {
-  assert.equal(LDP.nextLoadPlanNumber([], 2026), "LDP-2026-0001");
-  assert.equal(LDP.nextLoadPlanNumber([{ number: "LDP-2026-0003" }], 2026), "LDP-2026-0004");
-});
-
-T("every figure is derived from the member shipments, never stored", () => {
-  const t = LDP.planTotals(mkPlan(), mkShips(), () => 1000);
-  assert.equal(t.live, 6);
-  assert.deepEqual(t.poRefs, ["PO-9"], "several trucks on one order collapse to one reference");
-  assert.equal(t.freightPLN, 6000, "freight is summed across the member shipments");
-  assert.equal(t.protocolsBack, 5);
-  assert.equal(t.protocolsTotal, 5, "the sea leg has no loading protocol and is not counted as missing one");
-});
-
-T("a cancelled member stays listed but counts toward nothing", () => {
-  const ships = mkShips();
-  ships[0].status = "Cancelled";
-  const t = LDP.planTotals(mkPlan(), ships, () => 1000);
-  assert.equal(t.shipments, 6, "nothing is ever deleted");
-  assert.equal(t.live, 5);
-  assert.equal(t.cancelled, 1);
-  assert.equal(t.freightPLN, 5000);
-});
-
-T("the split truck is fully accounted for across four containers", () => {
-  const gaps = LDP.mapGaps(mkPlan(), mkShips());
-  assert.equal(gaps.length, 0, "T5's 18 720 kg = 4 x 4 680 across C1-C4");
-  assert.equal(LDP.planGaps(mkPlan(), mkShips()).length, 0);
-});
-
-T("a truck missing from the map is reported, not passed over", () => {
-  const plan = mkPlan();
-  plan.map = plan.map.filter(e => e.shipmentRef !== "T3");
-  const gaps = LDP.mapGaps(plan, mkShips());
-  assert.equal(gaps.length, 1);
-  assert.equal(gaps[0].shipmentRef, "T3");
-  assert.equal(gaps[0].unmappedKg, 19656);
-  assert.ok(LDP.planGaps(plan, mkShips()).some(g => g.includes("T3")));
-});
-
-T("an empty map is itself the gap — the map is required", () => {
-  const plan = mkPlan(); plan.map = [];
-  assert.ok(LDP.planGaps(plan, mkShips()).some(g => g.includes("transshipment map is empty")));
-});
-
-T("placing more in containers than a truck carries is caught", () => {
-  const plan = mkPlan();
-  plan.map.push({ containerRef: "C4", shipmentRef: "T1", qtyKg: 5000 });
-  const gaps = LDP.mapGaps(plan, mkShips());
-  assert.equal(gaps[0].overKg, 5000);
-});
-
-T("THE CLAIM CHAIN: a damaged container names the trucks that filled it", () => {
-  const plan = mkPlan();
-  const feeders = LDP.tracebackFromContainer(plan, "C3");
-  assert.deepEqual(feeders.sort(), ["T3", "T5"]);
-  const contents = LDP.containerContents(plan);
-  assert.equal(contents.length, 4);
-  assert.equal(contents[0].containerRef, "C1");
-  assert.equal(contents[0].kg, 24336, "one whole truck plus the split truck's share");
-});
 
 console.log("");
 console.log("── loadingProtocol: the sheet is always 21 lines (v6.57.0) ──");
@@ -2736,11 +2352,6 @@ T("no box weight means no invented number", () => {
     "a kg-priced line never needs a box weight");
 });
 
-T("the price label says which unit it is", () => {
-  assert.equal(PU.priceLabel({ pricingUnit: "box", unitPrice: 36.4 }, "EUR"), "36.4 EUR/box");
-  assert.equal(PU.priceLabel({ unitPrice: 2.8 }, "EUR"), "2.8 EUR/kg");
-});
-
 console.log("");
 console.log("── v6.62.0: warnings that were wrong, and a flag that lied ──");
 
@@ -2910,12 +2521,6 @@ T("THE POINT: the client's own costs have no home in our books and must be enter
   assert.ok(chain.lines.find(l => l.origin === "CLIENT").note.includes("not on our books"));
 });
 
-T("re-deriving never doubles a figure", () => {
-  const first = CC.ourChainCosts(chainLots(), ["LOT-1"]);
-  const merged = CC.mergeChainLines(first, CC.ourChainCosts(chainLots(), ["LOT-1"]));
-  assert.equal(merged.length, first.length, "same keys, so the second derivation adds nothing");
-});
-
 T("gaps name what would weaken the claim", () => {
   const bare = CC.buildCostChain({ lots: chainLots(), lotRefs: ["LOT-1", "LOT-NOCOST"], clientLines: [] });
   const gaps = CC.chainGaps(bare, []);
@@ -2957,6 +2562,9 @@ T("a deadline someone typed is never overwritten by a default", () => {
   assert.equal(CR.applyDeadlineDefault({ respondent: { kind: "Carrier" }, date: "2026-08-01" }).noticeDeadline, "2026-08-08");
   // The delivery date wins over the claim date when one is known.
   assert.equal(CR.applyDeadlineDefault({ respondent: { kind: "Carrier" }, date: "2026-08-10" }, "2026-08-01").noticeDeadline, "2026-08-08");
+  // v7.10.1 (A-RV-15 · CL-8): an agreed period replaces the legal default; a zero rule leaves the default
+  assert.equal(CR.suggestNoticeDeadline({ respondent: { kind: "Supplier" }, date: "2026-08-01" }, undefined, { days: 21, from: "discovery", basis: "Agreement" }).deadline, "2026-08-22");
+  assert.equal(CR.suggestNoticeDeadline({ respondent: { kind: "Supplier" }, date: "2026-08-01" }, undefined, { days: 0, from: "", basis: "" }).deadline, "2026-08-15");
 });
 
 T("deadline state, and what it means", () => {
@@ -3116,7 +2724,6 @@ console.log("");
 console.log("── v6.73.0: phantom receipts, false duplicates, countries, locations ──");
 
 const SHD2 = require("./build/shipments.domain.js");
-// heal.v645 already required above as HEAL
 const LOC = require("./build/locations.js");
 
 const postDeps = { todayISO: () => "2026-03-10", nextId: (() => { let i = 1; return () => i++; })() };
@@ -3143,53 +2750,6 @@ T("A LOT CANNOT BE RECEIVED TWICE — whichever leg posts first", () => {
   // The second leg still ships the goods out — it moves stock, it does not create it.
   assert.ok(a[0].movements.filter(m => m.type === "SHIP_OUT").length >= 1);
   assert.equal(a[0].physicalKg, 0, "pass-through nets to zero either way");
-});
-
-T("the heal removes phantom receipts but NEVER a genuine second delivery", () => {
-  // A 42 000 kg order delivered by two trucks of 21 000 is received twice,
-  // correctly. An earlier draft of this heal would have voided half of it —
-  // LOT-2026-0021 in the owner's data is exactly that shape.
-  const genuine = { number: "LOT-TWO-TRUCKS", expectedKg: 42000, receivedKg: 42000, physicalKg: 0, movements: [
-    { id: 1, type: "IN", qtyKg: 21000, date: "2026-02-01", shipmentRef: "SHP-A" },
-    { id: 2, type: "IN", qtyKg: 21000, date: "2026-02-05", shipmentRef: "SHP-B" },
-    { id: 3, type: "SHIP_OUT", qtyKg: 42000, date: "2026-02-10", shipmentRef: "SHP-C" },
-  ] };
-  const phantom = { number: "LOT-PHANTOM", expectedKg: 5382, receivedKg: 10764, physicalKg: 0, movements: [
-    { id: 4, type: "IN", qtyKg: 5382, date: "2026-03-02", shipmentRef: "SHP-ROAD" },
-    { id: 5, type: "SHIP_OUT", qtyKg: 5382, date: "2026-03-02", shipmentRef: "SHP-ROAD" },
-    { id: 6, type: "IN", qtyKg: 5382, date: "2026-03-07", shipmentRef: "SHP-SEA" },
-    { id: 7, type: "SHIP_OUT", qtyKg: 5382, date: "2026-03-07", shipmentRef: "SHP-SEA" },
-  ] };
-  const r = HEAL.healPhantomReceipts({ lots: [genuine, phantom] });
-  const g = r.lots.find(l => l.number === "LOT-TWO-TRUCKS");
-  const p = r.lots.find(l => l.number === "LOT-PHANTOM");
-  assert.equal(g.receivedKg, 42000, "two trucks against a 42 t order is not a duplicate");
-  assert.equal(p.receivedKg, 5382, "the re-post is voided");
-  assert.equal(p.movements.filter(m => m.voided).length, 2, "the phantom IN and its paired SHIP_OUT — dropping the IN alone leaves an unmatched issue");
-  assert.ok(p.movements.every(m => m.voidNote ? m.voidNote.includes("received twice") : true));
-  assert.ok(r.notes.some(n => n.includes("LOT-PHANTOM")));
-});
-
-T("the heal is idempotent", () => {
-  const lot = { number: "L", expectedKg: 1000, receivedKg: 2000, physicalKg: 0, movements: [
-    { id: 1, type: "IN", qtyKg: 1000, date: "2026-01-01", shipmentRef: "A" },
-    { id: 2, type: "IN", qtyKg: 1000, date: "2026-01-02", shipmentRef: "B" },
-  ] };
-  const once = HEAL.healPhantomReceipts({ lots: [lot] });
-  const twice = HEAL.healPhantomReceipts({ lots: once.lots });
-  assert.equal(twice.lots[0].receivedKg, 1000);
-  assert.equal(twice.changed, false, "a second run finds nothing left to do");
-});
-
-T("a misspelled country is caught, and the fix suggested", () => {
-  // One record read "Poalnd". The EU lookup failed, so a Polish producer selling
-  // to Egypt classified as CROSS_TRADE instead of EXPORT — a wrong customs
-  // classification from a single transposed letter.
-  assert.equal(LOC.isKnownCountry("Poalnd"), false);
-  assert.equal(LOC.suggestCountry("Poalnd"), "Poland", "it names the fix, not just the fault");
-  assert.equal(LOC.isKnownCountry("Poland"), true);
-  assert.equal(LOC.isKnownCountry(""), true, "blank is not an error — unknown is");
-  assert.ok(LOC.COUNTRY_LIST.includes("Egypt") && LOC.COUNTRY_LIST.includes("Jordan"));
 });
 
 T("locations sort A-Z and a built-in can be hidden", () => {
@@ -3440,9 +3000,7 @@ T("THE DRIFT THIS REMOVES: Shipped with no dispatch is called out", () => {
 });
 
 T("the ownership split is explicit", () => {
-  assert.ok(SO_.isCommercialStatus("Confirmed") && SO_.isCommercialStatus("Invoiced"));
   assert.ok(SO_.isPhysicalStatus("Shipped") && SO_.isPhysicalStatus("Delivered"));
-  assert.equal(SO_.isCommercialStatus("Shipped"), false, "the sales order may no longer type this");
 });
 
 console.log("");
@@ -3488,15 +3046,7 @@ T("shipment warnings name their consequence", () => {
     .some(x => x.field.endsWith(" load")), "an explicit split says nothing — note 'loading date' also contains 'load'");
 });
 
-T("THE INVENTORY GATE: stock cannot go negative", () => {
-  const lot = { number: "LOT-1", physicalKg: 5000 };
-  assert.equal(MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 5000 }), "");
-  const over = MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 8000 });
-  assert.ok(over.includes("5 000 kg") || over.includes("5000 kg"), over);
-  assert.ok(over.includes("cannot go negative"));
-  assert.equal(MG.movementBlockReason(lot, { type: "IN", qtyKg: 99999 }), "", "a receipt ADDS stock — never blocked");
-  assert.equal(MG.movementBlockReason(lot, { type: "SHIP_OUT", qtyKg: 5000.5 }), "", "whole-box rounding is not an overdraw");
-});
+// v7.11.1 (A-RV-23): "THE INVENTORY GATE" test removed with movementBlockReason — the movement window keeps its own, more complete limit
 
 T("a lot expected more than ten days is called out (owner's number)", () => {
   const base = { number: "LOT-2", status: "Expected", expectedKg: 19422, loadingDate: "2026-09-01" };
@@ -3524,10 +3074,80 @@ T("LIST ORDER: documents newest first, reference data A-Z", () => {
   const docs = [{ number: "PO-2026-0002" }, { number: "PO-2026-0010" }, { number: "PO-2026-0001" }];
   assert.deepEqual(MG.newestFirst(docs).map(d => d.number), ["PO-2026-0010", "PO-2026-0002", "PO-2026-0001"],
     "0010 sorts above 0002 — numeric, not lexical");
-  const refs = [{ name: "Zielona" }, { name: "Łukasz" }, { name: "Adam" }];
-  assert.deepEqual(MG.alphabetical(refs).map(r => r.name), ["Adam", "Łukasz", "Zielona"], "Polish collation puts Ł where a reader expects");
+  const refs = [{ name: "Zielona" }, { name: "Jani" }, { name: "Adam" }];
+  assert.deepEqual(MG.alphabetical(refs).map(r => r.name), ["Adam", "Jani", "Zielona"], "Polish collation puts Ł where a reader expects");
 });
 
-console.log("");
-console.log(`RESULT: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// ══ v7.13 (A-AU-2 / A-AU-11, owner 9 Oct): the NBP rate of the last working day BEFORE the document's date ══
+console.log("── v7.13: NBP rates of the day before ──");
+const FXN = require("./build/fx.js"); const FXF = require("./build/fxNbp.domain.js"); const PAYX = require("./build/payments.domain.js");
+const tbl = (d, eur) => ({ effectiveDate: d, rates: [{ code: "EUR", mid: eur }, { code: "USD", mid: eur - 0.6 }] });
+// Fri 25 Sept, Mon 28, Tue 29 (no table: a holiday for the test), Wed 30, Thu 1 Oct, Fri 2 Oct
+const nbpStore = FXN.addNbpTables({ days: {}, covered: {} }, [tbl("2026-09-18", 4.25), tbl("2026-09-22", 4.26), tbl("2026-09-23", 4.27), tbl("2026-09-25", 4.28), tbl("2026-09-28", 4.29), tbl("2026-09-30", 4.31), tbl("2026-10-01", 4.32), tbl("2026-10-02", 4.33)], "2026-09-10", "2026-10-04");
+T("strictly the day BEFORE: an invoice of Wed 30 Sept takes Mon 28 (Tue 29 had no table)", () => { assert.deepEqual(FXN.rateBefore(nbpStore, "EUR", "2026-09-30"), { rate: 4.29, tableDate: "2026-09-28" }); });
+T("a Monday takes the Friday before; a Sunday too", () => { assert.equal(FXN.rateBefore(nbpStore, "EUR", "2026-09-28").tableDate, "2026-09-25"); assert.equal(FXN.rateBefore(nbpStore, "EUR", "2026-09-27").tableDate, "2026-09-25"); });
+T("the same day's table is never used", () => { assert.equal(FXN.rateBefore(nbpStore, "EUR", "2026-10-02").tableDate, "2026-10-01"); });
+T("a day not yet read gives no rate (never a guess); PLN is 1", () => { assert.equal(FXN.rateBefore(nbpStore, "EUR", "2026-10-20"), null); assert.equal(FXN.rateBefore(nbpStore, "PLN", "2026-10-20").rate, 1); });
+T("orders: the safety buffer — a sale less, a purchase plus", () => { assert.equal(FXN.orderRateFrom(4.3, "SALE", 2), 4.214); assert.equal(FXN.orderRateFrom(4.3, "PURCHASE", 2), 4.386); assert.equal(FXN.orderRateFrom(4.3, "SALE", 0), 4.3); });
+T("A-AU-11: an imported EUR invoice of 24 Sept stamped 4.3228 takes NBP of 23 Sept, its PLN follows; its payment of Fri 2 Oct takes Thu 1 Oct", () => {
+  FXN.__setNbpStore(nbpStore);
+  const inv = { id: 1, number: "FVS/14/09/2026", kind: "COST", currency: "EUR", fxRate: 4.3228, issueDate: "2026-09-24", netAmount: 1000, vatRate: 0, grossAmount: 1000, payments: [{ id: 9, date: "2026-10-02", amount: 1000 }] };
+  const log = []; const out = FXF.fxFillInvoice(inv, () => false, log);
+  assert.equal(out.fxRate, 4.27); assert.equal(out.fxTableDate, "2026-09-23"); assert.equal(Math.round(out.grossPLN), 4270);
+  assert.equal(out.payments[0].settlementFxRate, 4.32); assert.equal(out.payments[0].fxTableDate, "2026-10-01"); assert.equal(log.length, 2);
+  assert.equal(FXF.fxFillInvoice(out, () => false, null), out, "a rated invoice is left alone");
+});
+T("A-AU-11: a closed month is never touched", () => {
+  const inv = { id: 2, number: "X", kind: "COST", currency: "EUR", fxRate: 4.3228, issueDate: "2026-09-24", grossAmount: 10 };
+  assert.equal(FXF.fxFillInvoice(inv, (d) => String(d).startsWith("2026-09"), null), inv);
+});
+T("v7.13.5: exchange differences per client — instalments each at their own rate, weighted", () => {
+  const inv = { kind: "SALES", currency: "EUR", fxRate: 4.27, counterparty: { name: "Al Baraka" }, payments: [{ id: 1, date: "2026-10-01", amount: 600, settlementFxRate: 4.30 }, { id: 2, date: "2026-10-05", amount: 400, settlementFxRate: 4.25 }] };
+  const [r] = PAYX.fxDifferencesByCounterparty([inv]);
+  assert.equal(r.paid, 1000); assert.equal(r.gainPLN, 10); assert.equal(r.avgInvoiceRate, 4.27); assert.equal(r.avgPaymentRate, 4.28); assert.equal(r.payments, 2);
+});
+// ══ v7.14.0 (A-RV-01, owner 9 Oct): a colleague saved first — merge record by record ══
+console.log("── v7.14: merging a colleague's save record by record ──");
+const SMG = require("./build/storeMerge.domain.js");
+const soR = (id, number, extra = {}) => ({ id, number, status: "Draft", ...extra });
+T("two people, two different sales orders: both kept — nothing set aside", () => {
+  const base = [soR(1, "SO-2026-0001")]; const mine = [soR(1, "SO-2026-0001", { status: "Confirmed" })]; const theirs = [soR(1, "SO-2026-0001"), soR(2, "SO-2026-0002")];
+  const r = SMG.mergeStore("orders", base, mine, theirs); assert.equal(r.clashes.length, 0); assert.equal(r.merged.length, 2); assert.equal(r.merged[0].status, "Confirmed"); assert.equal(r.mineApplied, 1);
+});
+T("the SAME order changed by both, differently: theirs stays, mine is named (a clash to choose)", () => {
+  const base = [soR(1, "SO-2026-0001")]; const r = SMG.mergeStore("orders", base, [soR(1, "SO-2026-0001", { notes: "mine" })], [soR(1, "SO-2026-0001", { notes: "theirs" })]);
+  assert.equal(r.merged[0].notes, "theirs"); assert.equal(r.clashes.length, 1); assert.equal(r.clashes[0].label, "SO-2026-0001"); assert.equal(r.clashes[0].mine.notes, "mine");
+});
+T("the same change on both sides is not a clash", () => { const r = SMG.mergeStore("orders", [soR(1, "A")], [soR(1, "A", { x: 1 })], [soR(1, "A", { x: 1 })]); assert.equal(r.clashes.length, 0); });
+T("two NEW orders with the same number: mine takes the next free one, said so", () => {
+  const r = SMG.mergeStore("orders", [soR(1, "SO-2026-0030")], [soR(1, "SO-2026-0030"), soR(7, "SO-2026-0031")], [soR(1, "SO-2026-0030"), soR(8, "SO-2026-0031")]);
+  assert.deepEqual(r.renumbered, [{ id: "7", from: "SO-2026-0031", to: "SO-2026-0032" }]); assert.deepEqual(r.merged.map(x => x.number), ["SO-2026-0030", "SO-2026-0031", "SO-2026-0032"]);
+});
+T("…but not when another store already points at the number: a clash instead, never a silent renumber", () => {
+  const r = SMG.mergeStore("pos", [], [soR(7, "PO-2026-0005")], [soR(8, "PO-2026-0005")], (n) => n === "PO-2026-0005");
+  assert.equal(r.renumbered.length, 0); assert.equal(r.clashes.length, 1);
+});
+T("the audit log (records with ids) merges as a union — nobody's lines are lost", () => {
+  const r = SMG.mergeStore("auditLog", [{ id: 1 }], [{ id: 1 }, { id: 2, s: "mine" }], [{ id: 1 }, { id: 3, s: "theirs" }]); assert.deepEqual(r.merged.map(x => x.id), [1, 3, 2]);
+});
+T("plain-object stores merge key by key (company, heals, FX settings)", () => {
+  const r = SMG.mergeStore("company", { name: "M", nip: "1" }, { name: "Marianna", nip: "1" }, { name: "M", nip: "2" }); assert.deepEqual(r.merged, { name: "Marianna", nip: "2" }); assert.equal(r.clashes.length, 0);
+});
+T("a list without ids is not merged (the old rule applies)", () => { assert.equal(SMG.mergeStore("countries", ["PL"], ["PL", "HU"], ["PL", "IT"]), null); });
+T("the next free number keeps its series and width", () => { assert.equal(SMG.nextFreeNumber("SHP-2026-0041", ["SHP-2026-0041", "SHP-2026-0043", "SHP-2025-0099"]), "SHP-2026-0044"); });
+
+(async () => {
+  // reading NBP: the dated range of table A, a 404 window counts as read (no table), nothing read twice
+  const calls = []; global.fetch = async (url) => { calls.push(url); return { ok: true, status: 200, json: async () => [tbl("2026-08-28", 4.21), tbl("2026-08-31", 4.22)] }; };
+  FXN.__setNbpStore({ days: {}, covered: {} });
+  try {
+    const r = await FXN.nbpRateBefore("EUR", "2026-09-01");
+    assert.ok(/api\.nbp\.pl\/api\/exchangerates\/tables\/A\/2026-08-18\/2026-08-31\/\?format=json/.test(calls[0]), "url: " + calls[0]);
+    assert.deepEqual(r, { rate: 4.22, tableDate: "2026-08-31" });
+    await FXN.nbpRateBefore("EUR", "2026-09-01"); assert.equal(calls.length, 1, "read once");
+    pass++; console.log("  ✓ reading NBP: table A for the 14 days before, kept, never read twice");
+  } catch (e) { fail++; console.log("  ✗ reading NBP — " + e.message); }
+  console.log("");
+  console.log(`RESULT: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

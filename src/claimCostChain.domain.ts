@@ -147,8 +147,10 @@ export function buildCostChain(input: {
   affectedShare?: number;
   clientLines?: PassThroughInput[];
   plnPerEur?: any;
+  /** v7.10.0 (A-RV-15 · CL-5): the sale's own delivery / return freight — claimsPlus.saleDirectCostLines, already scaled */
+  saleLines?: ChainCostLine[];
 }): ChainTotals {
-  const ours = ourChainCosts(input.lots, input.lotRefs, input.affectedShare ?? 1);
+  const ours = [...ourChainCosts(input.lots, input.lotRefs, input.affectedShare ?? 1), ...(input.saleLines || [])];
   const theirs = clientPassThroughCosts(input.clientLines || []);
   const lines = [...ours, ...theirs];
   const oursPLN = r2(ours.reduce((s, l) => s + l.amountPLN, 0));
@@ -178,15 +180,6 @@ export function toClaimCostLines(lines: ChainCostLine[], plnPerEur: any): any[] 
     rate: rate > 0 ? rate : undefined,
     source: l.key,   // v6.97.0 (CL-9): a kept line remembers where it came from, so re-deriving never duplicates it
   }));
-}
-
-/** Merge derived lines into whatever the claim already carries, WITHOUT
- *  duplicating: a line whose key is already present is left alone, so
- *  re-deriving after adding a cost is safe and never doubles a figure.
- *  (The same replace-by-key discipline the shipment cost allocation uses.) */
-export function mergeChainLines(existing: ChainCostLine[], derived: ChainCostLine[]): ChainCostLine[] {
-  const have = new Set((existing || []).map(l => String(l.key)));
-  return [...(existing || []), ...(derived || []).filter(l => !have.has(String(l.key)))];
 }
 
 /** What is missing before this chain is a fair statement of the loss.

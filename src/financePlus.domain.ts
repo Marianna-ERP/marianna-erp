@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { S, r2 } from "./format";
+import { parseNum } from "./numbers";   // v7.22.2 (FZ-22)
 // financePlus.domain.ts — v6.99.1: FINANCE PART 2 (FN-4 client risk · FN-5 PO result for every PO · FN-6 warehouse agreement)
 // Pure. Reads; stores nothing.
 // ─────────────────────────────────────────────────────────────────────────────
-const num = (v: any) => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const num = (v: any): number => parseNum(v);   // v7.22.2 (FZ-22): one reader for every number — spaces and a decimal comma read the same everywhere
 const days = (a: string, b: string) => Math.round((new Date(b + "T00:00:00").getTime() - new Date(a + "T00:00:00").getTime()) / 86400000);
 
 // ── FN-4: CLIENT RISK ─────────────────────────────────────────────────────────

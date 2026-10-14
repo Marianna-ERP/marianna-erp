@@ -11,8 +11,10 @@ import { fmtNum } from "./format";
 import { issueReportNumber } from "./reportNumbers";
 import { localTodayISO, formatDMY } from "./dates";
 import { gradeSplit, inspectionTotals } from "./seasonOps.domain";
-import { INSPECTION_CONTEXTS, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel } from "./Inventory";
+import { INSPECTION_CONTEXTS, countryOfLot, INSPECTION_OUTCOMES, LocationPill, LotDirectionBadge, LotWorkbench, MOVEMENT_TYPES, QualityBadge, SectionTitle, StatusBadge, VarianceBadge, costPerKg, customsStagesForLot, fmtMoney, journeyForLot, locById, lotReservations, num, printHtmlNodeInv, soRefsFor, standardStageLabel } from "./Inventory";
 import { SeasonActions } from "./InventoryWindows";
+import { lotWarningsShown } from "./moduleGuards.domain";   // v7.10.3 (A-RV-15)
+import { deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEditMovement, onDeleteMovement, onVoidMovement, onDelete, onInspect, onReturn, liveSOs, shipments, allLots = [], contacts = [], onRecordSorting, onOpenSettlement, onOpenClaim = null, onDirectReceive = null, tracePOs = [], traceInvoices = [], lotClaims = [], season = null , userName = "" }: any) {
   // v6.99.30 (A-R21-3, owner): a recall document must be identifiable afterwards — it carries its own number,
@@ -45,7 +47,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
             <button onClick={onReturn} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Return to warehouse</button>
           )}
           {/* v6.99.28 (owner): only a purchase the SUPPLIER delivers (DDP / DAP / DPU) is received here — every other lot arrives through its shipment */}
-          {typeof onDirectReceive === "function" && (lot.status === "Expected" || lot.status === "Direct Expected") && !(lot.movements || []).some((m: any) => !m.voided) && ["DDP", "DAP", "DPU"].includes(String((pos || []).find((x: any) => String(x.number) === String(lot.poRef))?.buyIncoterm || "").toUpperCase()) && (
+          {typeof onDirectReceive === "function" && (lot.status === "Expected" || lot.status === "Direct Expected") && !(lot.movements || []).some((m: any) => !m.voided) && deliveredAtDestination((pos || []).find((x: any) => String(x.number) === String(lot.poRef))?.buyIncoterm) && (
             <button onClick={onDirectReceive} title="For DDP / direct arrivals with no shipment of ours: posts the receipt movement so the stock becomes available." style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📥 Receive into stock (direct/DDP)</button>
           )}
           <ActionButton action="delete" onClick={onDelete} />
@@ -74,6 +76,10 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
               {/* v6.99.81 (A-IN-8, owner): line 2 — product, item, size, packaging, origin; line 3 — class, location and flow */}
               <div style={{ fontSize: 14, color: "#444" }}>{lot.product}{lot.variety ? " — " + lot.variety : ""} · {lot.size || "—"} · {lot.packaging || "—"} · {lot.origin || "—"}</div>
               <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}><QualityBadge quality={lot.quality} /><LocationPill locationId={lot.locationId} lot={lot} /><LotDirectionBadge lot={lot} shipments={shipments} orders={liveSOs} pos={pos} /></div>
+              {(() => { const w = lotWarningsShown(lot, localTodayISO()); return w.length ? (   /* v7.10.3 (A-RV-15): the owner's lot warnings, amber */
+                <div data-lot-warning="1" style={{ marginTop: 8, padding: "7px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.45 }}>
+                  {w.map((x, i) => <div key={i}><b>⚠ {({ "still expected": "Still expected", variance: "Received against ordered", "unexplained movements": "Unexplained movements", "ageing stock": "Ageing stock" } as any)[x.field] || x.field}:</b> {x.why}</div>)}{/* v7.11.2 (A-RV-24): all four */}
+                </div>) : null; })()}
             </div>
             <div style={{ textAlign: "right" }}>
               {/* v6.99.81 (A-IN-7/8, owner): the value in the lot's own state — in stock · delivered · expected — and the cost per kg; received kg lives in the breakdown below */}
@@ -249,7 +255,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
 
               {/* Customs overlay (v6.1d) — independent clearance events, editable */}
               {(() => {
-                const kinds = customsStagesForLot(lot, shipments);
+                const kinds = customsStagesForLot(lot, shipments, { pos, orders: liveSOs });   // v7.12.1 (A-TD-2)
                 if (kinds.length === 0) return null;
                 return (
                   <Card style={{ marginBottom: 16 }}>
@@ -385,7 +391,7 @@ export function LotDetail({ lot, pos = [], onBack, onMove, onQualityIssue, onEdi
                   const companyName = co.name || "MARIANNA";
                   const companyAddress = co.address || "";
                   const companyNip = co.nip || "";
-                  const t = buildTraceTree(lot, { contacts, pos: tracePOs, orders: liveSOs, shipments, invoices: traceInvoices }, localTodayISO());
+                  const t = buildTraceTree(lot, { contacts, pos: tracePOs, orders: liveSOs, shipments, invoices: traceInvoices, countryOf: countryOfLot }, localTodayISO());
                   const cell = { border: "1px solid #999", padding: "4px 6px", fontSize: 11 } as any;
                   const hd = { ...cell, background: "#F3F4F6", fontWeight: 700 } as any;
                   return (
