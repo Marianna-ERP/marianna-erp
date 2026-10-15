@@ -157,7 +157,7 @@ const NAV_GROUPS: { items: { key: string; icon: string; label: string; short: st
 function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: string) => true, userSlot = null }: any) {
   return (
     <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 28px", minHeight: 56, display: "flex", alignItems: "center", gap: 0, flexShrink: 0, overflowX: "auto" }}>
-      <div style={{ fontSize: 17, fontWeight: 700, color: "#111", letterSpacing: "-0.3px", marginRight: 24, whiteSpace: "nowrap" }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "#111", letterSpacing: "-0.3px", marginRight: 24, whiteSpace: "nowrap" }}>
         MARIANNA <span style={{ fontSize: 11, fontWeight: 500, color: "#AAA", marginLeft: 6, letterSpacing: 0 }}>ERP</span>
       </div>
       <div style={{ display: "flex", gap: 0, alignItems: "center" }}>
@@ -194,7 +194,7 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
       </div>
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, fontSize: 11, color: "#AAA", paddingLeft: 16, whiteSpace: "nowrap" }}>
         {rightSlot}
-        <span title="App version — every browser updates itself when a new version is published" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
+        <span title="App version — every browser updates itself when a new version is published" style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700, color: "#64748B", background: "#F1F5F9", border: "1px solid #E2E8F0", borderRadius: 11, padding: "2px 8px" }}>v{APP_VERSION}</span>
         {userSlot}{/* v7.0.1 (owner 6 Oct): the person using this browser — no longer the name written into the page */}
       </div>
     </div>
@@ -541,7 +541,7 @@ export default function App() {
     else setOpenDocNum(p => ({ module: target, number: num, n: p.n + 1 }));
     setActiveModule(target);
   };
-  const docNav = { open: openDoc, canOpen: (num: string) => { const m = docModule(num); return !!m && mayOpen(m); } };   // v7.1.11: a link to a module the person may not open is not a link
+  const docNav = { open: openDoc, canOpen: (num: string) => { const m = docModule(num); return !!m && mayOpen(m); }, kindOf: docModule };   // v7.23.3 (A-UI-1): the link colours itself by kind   // v7.1.11: a link to a module the person may not open is not a link
   // US-3: closing or reloading the tab while something is unsaved → the browser's own "leave site?" prompt
   useEffect(() => { const h = (e: any) => { if (dirtyEntries().length) { e.preventDefault(); e.returnValue = ""; return ""; } }; window.addEventListener("beforeunload", h); return () => window.removeEventListener("beforeunload", h); }, []);
   const [openShipmentNumber, setOpenShipmentNumber] = useState("");   // v6.99.42: cross-module hand-off (PO → its supplier truck)
@@ -622,7 +622,7 @@ export default function App() {
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, system-ui, sans-serif", color: "#111", background: "#FAFAFA" }}>{dialogNode}
       <EnvironmentStrip />{/* v6.99.149 */}
-      {(users || []).length > 0 && !hasOwner(users) && <div style={{ background: "#FEF3C7", color: "#92400E", borderBottom: "1px solid #FDE68A", textAlign: "center", fontSize: 12.5, fontWeight: 700, padding: "6px 0", flexShrink: 0 }}>No owner with a sign-in e-mail is defined in Settings → Users. Until there is one, Settings is open to every signed-in person — set the owner and their e-mail now.</div>}{/* v7.1.14 */}
+      {(users || []).length > 0 && !hasOwner(users) && <div style={{ background: "#FEF3C7", color: "#92400E", borderBottom: "1px solid #FDE68A", textAlign: "center", fontSize: 12, fontWeight: 700, padding: "6px 0", flexShrink: 0 }}>No owner with a sign-in e-mail is defined in Settings → Users. Until there is one, Settings is open to every signed-in person — set the owner and their e-mail now.</div>}{/* v7.1.14 */}
       {tab.readOnly && (   /* v6.99.114 (AUD-02): a second tab of the app in this browser is read-only — two writing tabs overwrite each other */
         <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "#fff", borderRadius: 14, padding: "22px 26px", width: 460, maxWidth: "92vw", boxShadow: "0 24px 60px rgba(0,0,0,0.3)" }}>
@@ -644,9 +644,9 @@ export default function App() {
               {leaveAsk.refused && <div style={{ marginTop: 8, color: "#B91C1C", fontWeight: 700 }}>The save did not go through — the form is still open with your changes. Fix what it asked for, or leave without saving.</div>}
             </div>
             <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-              <button onClick={() => setLeaveAsk(null)} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Stay</button>
-              <button onClick={() => { const t = leaveAsk.target; setLeaveAsk(null); setActiveModule(t); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Leave without saving</button>
-              {leaveAsk.canSave && <button disabled={leaveAsk.saving} onClick={async () => { const t = leaveAsk.target; setLeaveAsk({ ...leaveAsk, saving: true, refused: false }); const ok = await saveAndCheck(dirtyEntries()); if (ok) { setLeaveAsk(null); setActiveModule(t); } else setLeaveAsk(prev => prev ? { ...prev, saving: false, refused: true } : prev); }} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{leaveAsk.saving ? "Saving…" : "Save and continue"}</button>}
+              <button onClick={() => setLeaveAsk(null)} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Stay</button>
+              <button onClick={() => { const t = leaveAsk.target; setLeaveAsk(null); setActiveModule(t); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Leave without saving</button>
+              {leaveAsk.canSave && <button disabled={leaveAsk.saving} onClick={async () => { const t = leaveAsk.target; setLeaveAsk({ ...leaveAsk, saving: true, refused: false }); const ok = await saveAndCheck(dirtyEntries()); if (ok) { setLeaveAsk(null); setActiveModule(t); } else setLeaveAsk(prev => prev ? { ...prev, saving: false, refused: true } : prev); }} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{leaveAsk.saving ? "Saving…" : "Save and continue"}</button>}
             </div>
           </div>
         </div>
@@ -670,7 +670,7 @@ export default function App() {
                   if (!(await uiConfirm({ title: "Please confirm", message: `Link ${signInEmail} to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}?\n\nThis is recorded in the audit trail and cannot be undone from here.` }))) return;
                   setUsers((prev: any[]) => (prev || []).map((x: any) => String(x.id) === id ? { ...x, email: signInEmail } : x));
                   recordAudit({ module: "Settings", docType: "User", docNumber: String(u.name), action: "updated", summary: `${signInEmail} linked itself to the entry "${u.name}"${u.isOwner ? " (owner)" : ""}` });
-                }} style={{ border: "1px solid #FCD34D", borderRadius: 6, padding: "2px 6px", fontSize: 11.5, background: "#fff" }}>
+                }} style={{ border: "1px solid #FCD34D", borderRadius: 6, padding: "2px 6px", fontSize: 11, background: "#fff" }}>
                   <option value="">choose…</option>
                   {free.map((u: any) => <option key={u.id ?? u.name} value={String(u.id)}>{u.name}{u.isOwner ? " (owner)" : ""}</option>)}
                 </select>}
@@ -685,7 +685,7 @@ export default function App() {
         if ((users || []).length && !me) return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 8px", borderRadius: 8, background: "#FEF3C7", border: "1px solid #FDE68A", color: "#92400E", fontWeight: 700 }}>
             Who are you?
-            <select value="" onChange={e => { if (e.target.value) setUserName(e.target.value); }} style={{ border: "1px solid #FCD34D", borderRadius: 6, padding: "2px 6px", fontSize: 11.5, background: "#fff" }}>
+            <select value="" onChange={e => { if (e.target.value) setUserName(e.target.value); }} style={{ border: "1px solid #FCD34D", borderRadius: 6, padding: "2px 6px", fontSize: 11, background: "#fff" }}>
               <option value="">choose your name…</option>
               {(users || []).map((u: any) => <option key={u.id ?? u.name} value={u.name}>{u.name}{u.isOwner ? " (owner)" : ""}</option>)}
             </select>
@@ -714,7 +714,7 @@ export default function App() {
       {storageHealthState.failing && (
         <div style={{ background: "#FEF2F2", borderBottom: "2px solid #DC2626", padding: "10px 18px", display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 16 }}>🛑</span>
-          <div style={{ fontSize: 12.5, color: "#991B1B", lineHeight: 1.45 }}>
+          <div style={{ fontSize: 12, color: "#991B1B", lineHeight: 1.45 }}>
             <strong>Saving to browser storage is FAILING</strong> (key "{storageHealthState.failedKey}": {storageHealthState.lastError || "storage full or disabled"}).
             Your latest changes exist only in this tab and will be LOST on refresh — go to <strong>Settings → Export</strong> now, then free space (delete old backups) and reload.
           </div>

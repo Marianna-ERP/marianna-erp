@@ -329,22 +329,22 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                 <div style={{ background: "#FFFBEB", borderBottom: "1px solid #FDE68A", padding: "12px 16px", fontSize: 14, fontWeight: 800, color: "#92400E" }}>Unsaved changes on {draft.number}</div>
                 <div style={{ padding: "12px 16px", fontSize: 13, color: "#334155" }}>Closing now loses what you changed since opening.</div>
                 <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                  <button onClick={() => setCloseAsk(false)} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Stay</button>
-                  <button onClick={() => { setCloseAsk(false); onCancel(); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Close without saving</button>
-                  <button onClick={() => { setCloseAsk(false); saveShipmentDraft(); }} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Save and close</button>
+                  <button onClick={() => setCloseAsk(false)} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Stay</button>
+                  <button onClick={() => { setCloseAsk(false); onCancel(); }} style={{ padding: "6px 14px", borderRadius: 7, border: "1px solid #FECACA", background: "#fff", color: "#B91C1C", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Close without saving</button>
+                  <button onClick={() => { setCloseAsk(false); saveShipmentDraft(); }} style={{ padding: "6px 14px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Save and close</button>
                 </div>
               </div>
             </div>
           )}
-          <div style={{ fontSize: 18, fontWeight: 800 }}>{draft.__isNew ? "New shipment" : "Edit"} {draft.number}{draft.__isNew && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 6, background: "#DBEAFE", color: "#2563EB", verticalAlign: "middle" }}>STEP 2 OF 2 · arrange the transport · nothing saved until you click Save</span>}</div>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>{draft.__isNew ? "New shipment" : "Edit"} {draft.number}{draft.__isNew && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 6, background: "#DBEAFE", color: "#2563EB", verticalAlign: "middle" }}>STEP 2 OF 2 · arrange the transport · nothing saved until you click Save</span>}</div>
           <div style={{ fontSize: 12, color: "#888" }}>Route, legs, units, goods sources, costs, customs and documents — the complete operational document in one place.</div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}>SOURCES:</span>
-            {[...(draft.poRefs || []), ...(draft.soRefs || [])].map((r: any) => <span key={r} style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: "#F1F5F9", color: "#334155" }}>{r}</span>)}
-            <span style={{ fontSize: 10.5, color: "#94A3B8" }}> · carrying {(draft.goods || []).length} row(s) · {(draft.goods || []).reduce((t: number, g: any) => t + (parseFloat(g.qtyKg) || 0), 0).toLocaleString("pl-PL")} kg{(() => { const docs = Array.from(new Set([...(draft.poRefs || []), ...(draft.soRefs || [])])); return docs.length ? ` (from ${docs.join(" and ")})` : ""; })()}</span>{/* v6.99.49 (H-1): the shipment's own goods, from every document it carries */}
+            <span style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>SOURCES:</span>
+            {[...(draft.poRefs || []), ...(draft.soRefs || [])].map((r: any) => <span key={r} style={{ fontSize: 10, fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: "#F1F5F9", color: "#334155" }}>{r}</span>)}
+            <span style={{ fontSize: 10, color: "#94A3B8" }}> · carrying {(draft.goods || []).length} row(s) · {(draft.goods || []).reduce((t: number, g: any) => t + (parseFloat(g.qtyKg) || 0), 0).toLocaleString("pl-PL")} kg{(() => { const docs = Array.from(new Set([...(draft.poRefs || []), ...(draft.soRefs || [])])); return docs.length ? ` (from ${docs.join(" and ")})` : ""; })()}</span>{/* v6.99.49 (H-1): the shipment's own goods, from every document it carries */}
           </div>
         </div>
-        <button onClick={() => requestClose()} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#475569", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }} title="v6.99.59 (A-OW-5): close the editor — it asks first if something is not saved">Close</button>
+        <button onClick={() => requestClose()} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#475569", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }} title="v6.99.59 (A-OW-5): close the editor — it asks first if something is not saved">Close</button>
       </div>
       <div style={{ padding: 22, display: "grid", gap: 12 }}>
         {(() => { const so = exwCarriageConflict(draft, orders || []); return so ? <div style={{ fontSize: 12, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "9px 12px", lineHeight: 1.45 }} title="v7.19.1 (A-INC-1, 2/5)">⚠ {so.number} is sold EXW — the client arranges and pays the carriage, so this is not a shipment of ours. If the client collected, record it on the sale (Record collection); if the term is wrong, correct it on the sale.</div> : null; })()}
@@ -380,8 +380,8 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   <div data-trade-direction={ends.direction || "unknown"} title="Derived from where the goods start and where they finally go (A-TD-1) — Auto">
                     <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F8FAFC" }}>{ends.direction ? MOVE_LBL[ends.direction]?.label : "—"} <span style={{ color: "#94A3B8", fontSize: 11 }}>· Auto</span></div>
                     {/* v7.12.3 (A-TD-4): the two countries actually used, and where each comes from */}
-                    <div data-trade-ends="1" style={{ fontSize: 10.5, color: "#64748B", marginTop: 3 }}>{ends.origin.country || "?"}{ends.origin.from ? ` (${ends.origin.from})` : ""} → {ends.destination.country || "?"}{ends.destination.from ? ` (${ends.destination.from})` : ""}</div>
-                    {ends.missing && <div style={{ fontSize: 10.5, color: "#92400E", marginTop: 2 }}>⚠ {ends.missing}</div>}
+                    <div data-trade-ends="1" style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{ends.origin.country || "?"}{ends.origin.from ? ` (${ends.origin.from})` : ""} → {ends.destination.country || "?"}{ends.destination.from ? ` (${ends.destination.from})` : ""}</div>
+                    {ends.missing && <div style={{ fontSize: 10, color: "#92400E", marginTop: 2 }}>⚠ {ends.missing}</div>}
                     {/* v7.12.2 (A-TD-3): the "manual override stored" line is gone — old stored directions were cleared once; the places decide */}
                   </div>
                 );
@@ -423,7 +423,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
               const off = dest != null && dest !== "" ? units.filter((u: any) => String(u.deliveryLocationId) !== String(dest)) : [];
               if (!off.length) return null;
               const name = (id: any) => placeForPrint(id, "", contacts || []).name || String(id);
-              return <div style={{ gridColumn: "1 / -1", fontSize: 11.5, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 8px" }}>⚠ {so.number} now delivers to {name(dest)} — {off.length} unit{off.length > 1 ? "s" : ""} on the last leg still deliver{off.length > 1 ? "" : "s"} to {Array.from(new Set(off.map((u: any) => name(u.deliveryLocationId)))).join(", ")}. Check the units if the client changed.</div>; })()}
+              return <div style={{ gridColumn: "1 / -1", fontSize: 11, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 8px" }}>⚠ {so.number} now delivers to {name(dest)} — {off.length} unit{off.length > 1 ? "s" : ""} on the last leg still deliver{off.length > 1 ? "" : "s"} to {Array.from(new Set(off.map((u: any) => name(u.deliveryLocationId)))).join(", ")}. Check the units if the client changed.</div>; })()}
             {/* v6.99.44 (H-11, owner): expected dates flow DOCUMENT → shipment (the units' planned dates refine them); actual dates flow shipment → document. Never the other way. */}
             {(() => {
               const govSO = (orders || []).find((o: any) => o.number === draft.governingSoRef) || (orders || []).find((o: any) => (draft.soRefs || []).includes(o.number)) || null;
@@ -444,7 +444,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             })()}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 110px", gap: 10, marginTop: 10 }}>
-            <div><Lbl>Carriers (from the units)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB" }} title="v6.93.0 (A-R8-9): the carrier lives on each truck/container — set it there">{Array.from(new Set(allUnitsCarrierNames(draft, contacts))).join(", ") || "— none on the units yet —"}</div></div>
+            <div><Lbl>Carriers (from the units)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12, background: "#F9FAFB" }} title="v6.93.0 (A-R8-9): the carrier lives on each truck/container — set it there">{Array.from(new Set(allUnitsCarrierNames(draft, contacts))).join(", ") || "— none on the units yet —"}</div></div>
             {/* v6.99.14 (A-R10-1): header Forwarder removed — the BOOKING's forwarder is the one source (old records read forward) */}
             {/* v6.99.44 (H-7/H-8, owner): one glance at the header — carriers · forwarder · broker — all READ from where they are decided */}
             <div><Lbl>Forwarder (from the booking)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F8FAFC" }}>{(() => { const f = (draft.bookings || [])[0]?.forwarderId; const c = f != null ? (contacts || []).find((x: any) => String(x.id) === String(f)) : null; return c?.name || "—"; })()}</div></div>
@@ -489,7 +489,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                 if (b?.eta && due && String(b.eta) > due) w.push(`ETA ${formatDMY(b.eta)} is AFTER the expected delivery of ${so.number} (${formatDMY(due)}) — the container lands too late for the sale.`);
                 if (b?.cutOff && b?.etd && String(b.cutOff) > String(b.etd)) w.push(`Cut-off ${formatDMY(b.cutOff)} is after the ETD ${formatDMY(b.etd)}.`);
                 if (b?.etd && b?.eta && String(b.eta) < String(b.etd)) w.push(`ETA ${formatDMY(b.eta)} is before the ETD ${formatDMY(b.etd)}.`);
-                return w.length ? <div style={{ marginTop: 6, fontSize: 11.5, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px" }}>{w.map((x, i) => <div key={i}>⚠ {x}</div>)}</div> : null; })()}
+                return w.length ? <div style={{ marginTop: 6, fontSize: 11, fontWeight: 700, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "5px 8px" }}>{w.map((x, i) => <div key={i}>⚠ {x}</div>)}</div> : null; })()}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 8 }}>   {/* ports, containers planned, BL, line */}
                 {(() => {
                   // v6.99.44 (H-12, owner): the named place of the governing document is the POL under FOB/FCA and the POD under CFR/CIF/DAP-port —
@@ -525,15 +525,15 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
         {/* v6.99.49 (S-2, owner): the UNITS are ARRANGING — carrier, price, places, expected dates → the transport order — so they live in phase 1 */}
         <Card>
           {cutOffWarnings(draft).map((w: any, k: number) => (
-            <div key={"co" + k} style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E", fontWeight: 600 }}>
+            <div key={"co" + k} style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11, color: "#92400E", fontWeight: 600 }}>
               ⏱ {w.unit}: loading {w.loadingDate} cannot make booking {w.booking}'s cut-off — latest loading {w.latest}.
             </div>
           ))}
           {stuffingViolations(draft).map((v: string, k: number) => (
-            <div key={"sv" + k} style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#B91C1C", fontWeight: 600 }}>⛔ {v}</div>
+            <div key={"sv" + k} style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11, color: "#B91C1C", fontWeight: 600 }}>⛔ {v}</div>
           ))}
           {legKgChecks(draft).map((c: any) => (
-            <div key={c.leg} style={{ marginBottom: 8, padding: "7px 10px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#B91C1C", fontWeight: 600 }}>
+            <div key={c.leg} style={{ marginBottom: 8, padding: "7px 10px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11, color: "#B91C1C", fontWeight: 600 }}>
               Leg {c.leg} ({c.mode}): the {c.units} unit(s) carry {c.unitsKg.toLocaleString("pl-PL")} kg but the goods table says {c.goodsKg.toLocaleString("pl-PL")} kg — {c.deltaKg > 0 ? "over" : "under"} by {Math.abs(c.deltaKg).toLocaleString("pl-PL")} kg. The loading protocols and the transport order print what the units say.
             </div>
           ))}
@@ -549,7 +549,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             if (draft.loadingDate && flPick && draft.loadingDate !== flPick) mismatches.push(`header loading date ${draft.loadingDate} ≠ first leg pickup ${flPick}`);
             if (draft.expectedDeliveryDate && llDel && draft.expectedDeliveryDate !== llDel) mismatches.push(`header expected delivery ${draft.expectedDeliveryDate} ≠ last leg delivery ${llDel}`);
             return mismatches.length ? (
-              <div style={{ marginBottom: 10, padding: "7px 10px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 7, fontSize: 11.5, color: "#92400E" }}>
+              <div style={{ marginBottom: 10, padding: "7px 10px", background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 7, fontSize: 11, color: "#92400E" }}>
                 ⚠ Header and leg dates disagree ({mismatches.join("; ")}). The transport order prints the <strong>leg</strong> dates.
               </div>
             ) : null;
@@ -557,7 +557,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
           {(draft.legs || []).map((leg, i) => <div key={leg.id || i} style={{ border: "1px solid #E5E7EB", borderRadius: 10, padding: 12, marginBottom: 10, background: "#FAFAFA" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 12.5, fontWeight: 800, color: "#111" }}>Leg #{i + 1}</span>
+                <span style={{ fontSize: 12, fontWeight: 800, color: "#111" }}>Leg #{i + 1}</span>
                 <ModeBadge mode={leg.mode} />
                 {legPayers[i] && (() => { const p = legPayers[i]; const ours = p.payer === "us"; return <span title="v7.19.0 (A-INC-1): from the incoterms of the PO and the sale — never typed" style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: ours ? "#F1F5F9" : "#EFF6FF", color: ours ? "#475569" : "#1D4ED8", border: `1px solid ${ours ? "#E2E8F0" : "#BFDBFE"}` }}>Freight: {PAYER_LABEL[p.payer]}{p.why ? ` · ${p.why}` : ""}</span>; })()}
               </div>
@@ -592,7 +592,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   <SmallButton onClick={() => removeVehicle(i, ui)}>Remove</SmallButton>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr 1fr"   /* v6.99.59 (A-SU-2/3): one layout for road and sea */, gap: 9, marginBottom: 9 }}>
-                  <div><Lbl>Mode</Lbl><div style={{ fontSize: 12.5, padding: "7px 0", fontWeight: 700, color: "#334155" }}>{uMode} <span style={{ fontWeight: 400, color: "#94A3B8" }}>(from leg)</span></div></div>
+                  <div><Lbl>Mode</Lbl><div style={{ fontSize: 12, padding: "7px 0", fontWeight: 700, color: "#334155" }}>{uMode} <span style={{ fontWeight: 400, color: "#94A3B8" }}>(from leg)</span></div></div>
                   {i > 0 && (transportUnitsForLeg(draft.legs[i - 1]) || []).length > 0 && (
                     <div style={{ gridColumn: "1 / -1" }}><Lbl>Fed by trucks (v6.85.0 — many-to-many; kg only when a truck is split)</Lbl>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -600,7 +600,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                           // v6.99.59 (A-SU-1, owner): the lone-truck rule applies LIVE — one truck carries all the goods — the same rule Save applies
                           const dLive = autoFillSingleUnitKg(draft); const liveKg = unitKg(findUnitIn(dLive, x.id) || x, dLive); const liveRem = truckRemainingForFeeding(dLive, x.id, u.id);
                           const cur = feedersOf(u); const f = cur.find((z: any) => String(z.fromUnitId) === String(x.id));
-                          return <label key={String(x.id)} style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11.5, border: "1px solid " + (f ? "#7C3AED" : "#E5E7EB"), borderRadius: 6, padding: "3px 7px", background: f ? "#F5F3FF" : "#fff" }}>
+                          return <label key={String(x.id)} style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11, border: "1px solid " + (f ? "#7C3AED" : "#E5E7EB"), borderRadius: 6, padding: "3px 7px", background: f ? "#F5F3FF" : "#fff" }}>
                             <input type="checkbox" checked={!!f} disabled={!f && liveRem <= 0} title={!f && liveKg <= 0 ? "Allocate the goods to this truck first" : !f && liveRem <= 0 ? "Already fully placed in other containers" : ""} onChange={async () => { if (f) { setDraft((d: any) => setFeeders(d, u.id, cur.filter((z: any) => String(z.fromUnitId) !== String(x.id)))); return; } const r = addFeederChecked(draft, u.id, x.id); if (r.error) { (await uiAlert({ message: r.error })); return; } setDraft(() => r.sh); }} />
                             {x.truckPlate || `unit ${x.id}`} · {Math.round(unitKg(x, draft)).toLocaleString("pl-PL")} kg
                             {f && <input type="number" placeholder="split kg" value={f.kg ?? ""} onChange={e => { const v = parseNum(e.target.value, 0); setDraft((d: any) => setFeeders(d, u.id, cur.map((z: any) => String(z.fromUnitId) === String(x.id) ? { ...z, kg: v || undefined } : z))); }} style={{ width: 70, border: "1px solid #DDD6FE", borderRadius: 4, padding: "1px 4px", fontSize: 11 }} />}
@@ -609,7 +609,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       </div>
                     </div>
                   )}
-                  {uMode !== "Road" ? <div style={{ gridColumn: "2 / -1", gridRow: 1 }}><Lbl>Carrier (from the booking)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB" }}>{(() => { const f = (contacts || []).find((c: any) => String(c.id) === String((draft.bookings || [])[0]?.forwarderId)); return f ? f.name : "— set the forwarder on the booking —"; })()}</div></div> : <div><Lbl>Carrier</Lbl>
+                  {uMode !== "Road" ? <div style={{ gridColumn: "2 / -1", gridRow: 1 }}><Lbl>Carrier (from the booking)</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12, background: "#F9FAFB" }}>{(() => { const f = (contacts || []).find((c: any) => String(c.id) === String((draft.bookings || [])[0]?.forwarderId)); return f ? f.name : "— set the forwarder on the booking —"; })()}</div></div> : <div><Lbl>Carrier</Lbl>
                     <Sel value={u.carrierId ?? ""} onChange={e => updateVehicle(i, ui, "carrierId", e.target.value || null)} title="v6.85.0 (D9): the carrier lives on the unit — one shipment may use several; transport orders go out per carrier">
                       <option value="">— choose the carrier —</option>{/* v6.99.44 (L-2, owner): "leg default" was a vestige of the pre-v6.99.8 leg carrier that nothing reads */}
                       {pickerParties(contacts, u.carrierId).filter((c: any) => ["Carrier", "Forwarder"].includes(c.type) || (c.roles || []).some((r: string) => ["Carrier", "Forwarder"].includes(r))).map((c: any) => <option key={String(c.id)} value={c.id}>{c.name}{archivedMark(c)}</option>)}
@@ -622,7 +622,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                     const nm = (id: any, text: any) => { const p = placeForPrint(id, text, contacts || []); return p.name || String(text || "") || "—"; };
                     const kg = (v: number) => Math.round(v).toLocaleString("pl-PL") + " kg";
                     return <div style={{ gridColumn: "1 / -1", border: "1px solid #C7D2FE", background: "#EEF2FF", borderRadius: 8, padding: "8px 10px", marginBottom: 6 }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#3730A3", letterSpacing: "0.06em", marginBottom: 4 }}>TOUR · {tour.loads.length} LOADING · {tour.drops.length} UNLOADING <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#6366F1" }}>· places from the lots and the orders; set the order of the drops</span></div>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: "#3730A3", letterSpacing: "0.06em", marginBottom: 4 }}>TOUR · {tour.loads.length} LOADING · {tour.drops.length} UNLOADING <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#6366F1" }}>· places from the lots and the orders; set the order of the drops</span></div>
                       {tour.loads.map((l, k) => <div key={"l" + k} style={{ fontSize: 12, color: "#1E1B4B" }}>Load {k + 1} · <b>{nm(l.id, l.text)}</b> · {kg(l.kg)} <span style={{ color: "#6366F1" }}>({l.refs.join(", ")})</span></div>)}
                       {tour.drops.map((dr, k) => <div key={dr.soNumber} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#1E1B4B", marginTop: 2 }}>
                         <span style={{ display: "inline-flex", gap: 2 }}>
@@ -642,9 +642,9 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       <div style={ringU("pickup place")}><LocationPicker value={u.pickupLocationId ?? u.pickupText ?? ""} contacts={contacts} placeholder={leg.fromCustom || leg.fromText || "— pickup location —"} onChange={(r: any) => { updateVehicle(i, ui, "pickupLocationId", r.id); updateVehicle(i, ui, "pickupText", r.name); }} title="v6.99.10: one location list — printed on the transport order" /></div>
                       {tn?.mismatch && note(`its goods are ${tn.mismatch.ref}'s — they load at ${tn.mismatch.text}`, () => { updateVehicle(i, ui, "pickupLocationId", tn.mismatch!.id); updateVehicle(i, ui, "pickupText", tn.mismatch!.text); }, "Use it")}
                       {uMode === "Road" && (() => { const stops = truckLoadingStops(draft, u, pos || [], lots || []); return stops.length > 1 ? (   /* v7.15.0 (A-LS-3): derived, read-only — change a stop on its PO */
-                        <div data-loading-stops="1" style={{ marginTop: 4, padding: "6px 8px", background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 11.5 }}>
+                        <div data-loading-stops="1" style={{ marginTop: 4, padding: "6px 8px", background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 11 }}>
                           {stops.map((s, k) => <div key={s.key} style={{ marginBottom: 2 }}><b>Loading {k + 1}</b> · {s.text || "—"}{s.date ? ` · ${formatDMY(s.date)}` : ""} · {s.lines.map(l => `${l.product}${l.size ? " " + l.size : ""} ${Math.round(l.kg).toLocaleString("pl-PL")} kg`).join(", ")} <span style={{ color: "#94A3B8" }}>({s.refs.join(", ")})</span></div>)}
-                          <div style={{ color: "#94A3B8", fontSize: 10.5 }}>stops follow the goods on this truck — a place or date is changed on its PO</div>
+                          <div style={{ color: "#94A3B8", fontSize: 10 }}>stops follow the goods on this truck — a place or date is changed on its PO</div>
                         </div>) : null; })()}
                       {cn?.pol && note(`the booking loads at ${cn.pol}`, () => { updateVehicle(i, ui, "pickupLocationId", b0?.polId ?? null); updateVehicle(i, ui, "pickupText", b0?.pol || ""); }, "↺ booking")}
                     </div>;
@@ -652,7 +652,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected loading date{uMode !== "Road" && (draft.bookings || [])[0]?.etd ? (u.loadDateManual && String(u.plannedLoadingDate || "") !== String((draft.bookings || [])[0].etd) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETD {formatDMY((draft.bookings || [])[0].etd)} <button onClick={() => { updateVehicle(i, ui, "plannedLoadingDate", (draft.bookings || [])[0].etd); updateVehicle(i, ui, "loadDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4, ...((!u.plannedLoadingDate && !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || ""))) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : {}) }}><Inp type="date" value={u.plannedLoadingDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedLoadingDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "loadDateManual", true); }} placeholder="dd/mm/yyyy" /><Inp value={u.plannedLoadingTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedLoadingTime", e.target.value)} placeholder="hh:mm" title="loading time (free text)" /></div></div>
                   <div style={{ gridColumn: "1 / 4" }}><Lbl>Delivery place{(() => { const pr = unitProposals(draft); return (pr.delId != null && String(u.deliveryLocationId) === String(pr.delId)) ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {pr.from}</span> : null; })()}</Lbl><div style={(!(u.deliveryText || u.deliveryLocationId) && !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || ""))) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : undefined}><LocationPicker value={u.deliveryLocationId ?? u.deliveryText ?? ""} contacts={contacts} placeholder={leg.toCustom || leg.toText || "— delivery location —"} onChange={(r: any) => { updateVehicle(i, ui, "deliveryLocationId", r.id); updateVehicle(i, ui, "deliveryText", r.name); }} /></div>
                     {uMode !== "Road" && (() => { const cn = containerPlaceNote(draft, u); const b0 = (draft.bookings || [])[0]; return cn.pod ? <div style={{ marginTop: 3, fontSize: 11, fontWeight: 700, color: "#B45309" }}>⚠ the booking discharges at {cn.pod} <button onClick={() => { updateVehicle(i, ui, "deliveryLocationId", b0?.podId ?? null); updateVehicle(i, ui, "deliveryText", b0?.pod || ""); }} style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11, fontWeight: 700 }}>↺ booking</button></div> : null; })()}</div>
-                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected delivery date{uMode !== "Road" && (draft.bookings || [])[0]?.eta ? (u.deliveryDateManual && String(u.plannedDeliveryDate || "") !== String((draft.bookings || [])[0].eta) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETA {formatDMY((draft.bookings || [])[0].eta)} <button onClick={() => { updateVehicle(i, ui, "plannedDeliveryDate", (draft.bookings || [])[0].eta); updateVehicle(i, ui, "deliveryDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4, ...((!u.plannedDeliveryDate && !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || ""))) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : {}) }}><Inp type="date" min={loadEndOf(u, uMode) || undefined} value={u.plannedDeliveryDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedDeliveryDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "deliveryDateManual", true); }} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div>{(() => { const le = loadEndOf(u, uMode); const dd = String(u.plannedDeliveryDate || "").slice(0, 10); return le && dd && dd < le ? <div data-date-order="1" style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700, marginTop: 3 }}>⚠ delivery {formatDMY(dd)} is before the last loading {formatDMY(le)}</div> : null; })()}{/* v7.15.3 (A-LS-2) */}</div>
+                  <div style={{ gridColumn: "4 / 5" }}><Lbl>Expected delivery date{uMode !== "Road" && (draft.bookings || [])[0]?.eta ? (u.deliveryDateManual && String(u.plannedDeliveryDate || "") !== String((draft.bookings || [])[0].eta) ? <span style={{ color: "#B45309", fontWeight: 700 }}> · manual — booking ETA {formatDMY((draft.bookings || [])[0].eta)} <button onClick={() => { updateVehicle(i, ui, "plannedDeliveryDate", (draft.bookings || [])[0].eta); updateVehicle(i, ui, "deliveryDateManual", false); }} title="back to the booking's date" style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", padding: 0, fontSize: 11 }}>↺</button></span> : <span style={{ color: "#2563EB", fontWeight: 400 }}> · from the booking</span>) : null}</Lbl><div style={{ display: "grid", gridTemplateColumns: "118px 56px", gap: 4, ...((!u.plannedDeliveryDate && !["Cancelled", "Closed", "Delivered"].includes(String(draft.status || ""))) ? { boxShadow: "0 0 0 2px #FCA5A5", borderRadius: 7 } : {}) }}><Inp type="date" min={loadEndOf(u, uMode) || undefined} value={u.plannedDeliveryDate ?? ""} onChange={e => { updateVehicle(i, ui, "plannedDeliveryDate", e.target.value); if (uMode !== "Road") updateVehicle(i, ui, "deliveryDateManual", true); }} /><Inp value={u.plannedDeliveryTime ?? ""} onChange={e => updateVehicle(i, ui, "plannedDeliveryTime", e.target.value)} placeholder="hh:mm" title="unloading time (free text)" /></div>{(() => { const le = loadEndOf(u, uMode); const dd = String(u.plannedDeliveryDate || "").slice(0, 10); return le && dd && dd < le ? <div data-date-order="1" style={{ fontSize: 10, color: "#92400E", fontWeight: 700, marginTop: 3 }}>⚠ delivery {formatDMY(dd)} is before the last loading {formatDMY(le)}</div> : null; })()}{/* v7.15.3 (A-LS-2) */}</div>
                 </div>
                 {uMode === "Road" && <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.2fr 1fr 1fr", gap: 9, marginBottom: 9 }}>
                   <div><Lbl>Driver name</Lbl><Inp value={u.driverName || ""} onChange={e => updateVehicle(i, ui, "driverName", e.target.value)} /></div>
@@ -673,15 +673,15 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       ? <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F9FAFB", fontWeight: 600 }} title="v6.85.0 (D8): derived from the goods allocation / feeder trucks — never typed">{Math.round(unitKg(u, draft)).toLocaleString("pl-PL")}</div>
                       : <Inp type="number" value={u.qtyKg || ""} onChange={e => updateVehicle(i, ui, "qtyKg", parseNum(e.target.value))} />}
                   </div>
-                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Actual dates for this unit (truck: loaded / unloaded; container: stuffed / discharged) — never in the future; planned dates live on the unit above.</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10, color: "#64748B", paddingBottom: 8 }}>Actual dates for this unit (truck: loaded / unloaded; container: stuffed / discharged) — never in the future; planned dates live on the unit above.</div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "90px 160px 1fr", gap: 9, marginTop: 9 }}>
                   <div><Lbl>Currency</Lbl><Sel value={u.priceCurrency || leg.costCurrency || "PLN"} onChange={e => { const cur = e.target.value; updateVehicle(i, ui, "priceCurrency", cur); updateLeg(i, "costCurrency", cur); updateLeg(i, "costFxRate", documentFxDefault(cur)); }} title="v6.93.0 (A-R8-17): the price's own currency (default: the carrier's)">{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
                   {draft.arrangedBy !== "SUPPLIER" && <div><Lbl>Price for this unit{!(parseNum(u.costAmount) > 0) && draft.arrangedBy !== "SUPPLIER" && (legPayers[i]?.payer || "us") === "us" ? <span style={{ color: "#DC2626", fontWeight: 400 }}> · missing</span> : null}</Lbl><Inp type="number" value={u.costAmount || ""} onChange={e => updateVehicle(i, ui, "costAmount", parseNum(e.target.value))} placeholder="0" style={!(parseNum(u.costAmount) > 0) && draft.arrangedBy !== "SUPPLIER" ? { borderColor: "#DC2626", background: "#FEF2F2" } : {}} /></div>}   {/* v6.99.44 (L-6, owner): red until a price is in; Save warns, does not block · SD-4: a supplier's truck has no price of ours */}
-                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>{(legPayers[i]?.payer || "us") !== "us" ? `Freight on this leg is ${PAYER_LABEL[legPayers[i].payer]} (${legPayers[i].why}) — a price here makes no cost line of ours.` : "Optional — set this when each truck/container has a different price. The transport order totals all unit prices for the carrier."}</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", fontSize: 10, color: "#64748B", paddingBottom: 8 }}>{(legPayers[i]?.payer || "us") !== "us" ? `Freight on this leg is ${PAYER_LABEL[legPayers[i].payer]} (${legPayers[i].why}) — a price here makes no cost line of ours.` : "Optional — set this when each truck/container has a different price. The transport order totals all unit prices for the carrier."}</div>
                 </div>
                 {(() => { const p = legPayers[i]; const c = p && p.payer !== "us" ? carrierOfUnit(draft, leg, u) : null; if (c == null || c === "") return null;   // v7.20.5 (A-INC-2, 5): a transport order would go out
-                  return <div data-terms-carrier="1" style={{ marginTop: 8, fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px" }} title="v7.20.5 (A-INC-2, 5): flagged, never changed">⚠ Leg {i + 1}'s freight is {PAYER_LABEL[p.payer]} ({p.why}{p.doc ? `, ${p.doc}` : ""}), yet {((contacts || []).find((x: any) => String(x.id) === String(c)) || {}).name || "a carrier"} is named on this unit — a transport order would go out to them.</div>; })()}
+                  return <div data-terms-carrier="1" style={{ marginTop: 8, fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px" }} title="v7.20.5 (A-INC-2, 5): flagged, never changed">⚠ Leg {i + 1}'s freight is {PAYER_LABEL[p.payer]} ({p.why}{p.doc ? `, ${p.doc}` : ""}), yet {((contacts || []).find((x: any) => String(x.id) === String(c)) || {}).name || "a carrier"} is named on this unit — a transport order would go out to them.</div>; })()}
                 {/* ── v6.53.0: WHAT THIS UNIT CARRIES ──────────────────────────
                     Ruling: goods are assigned per unit. The loading protocol for
                     this truck derives its pallet table from exactly these kilos,
@@ -690,8 +690,8 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                     single truck takes the whole shipment — the normal case. */}
                 {uMode === "Road" && (draft.goods || []).length > 0 && <div style={{ marginTop: 11, borderTop: "1px dashed #E2E8F0", paddingTop: 9 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                    <div style={{ fontSize: 11.5, fontWeight: 800, color: "#334155" }}>Loaded on this truck</div>
-                    <div style={{ fontSize: 10.5, color: "#64748B" }}>Leave blank if this truck takes the whole shipment.</div>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Loaded on this truck</div>
+                    <div style={{ fontSize: 10, color: "#64748B" }}>Leave blank if this truck takes the whole shipment.</div>
                     <div style={{ flex: 1 }} />
                     <div><Lbl>Pallet type</Lbl></div>
                     <select value={u.palletType || "standard"} onChange={e => updateVehicle(i, ui, "palletType", e.target.value)}
@@ -707,7 +707,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       : s + parseNum(((other.load || []).find(a => String(a.goodsLineId) === String(g.id)) || {}).qtyKg, 0), 0);
                     const room = Math.max(0, lineTotal - takenElsewhere);
                     return <div key={g.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1.6fr", gap: 9, alignItems: "center", marginBottom: 5 }}>
-                      <div style={{ fontSize: 11.5, color: "#334155" }}>
+                      <div style={{ fontSize: 11, color: "#334155" }}>
                         {g.product}{g.variety ? ` · ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}
                       </div>
                       <Inp type="number" value={assigned || ""} placeholder={`${room}`} onChange={async e => {
@@ -719,14 +719,14 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                         updateVehicle(i, ui, "load", v > 0 ? [...rest, { goodsLineId: g.id, qtyKg: v }] : rest);
                         updateVehicle(i, ui, "manualLoad", true);
                       }} />
-                      <div style={{ fontSize: 10.5, color: room > 0 ? "#64748B" : "#B45309" }}>
+                      <div style={{ fontSize: 10, color: room > 0 ? "#64748B" : "#B45309" }}>
                         kg — line {lineTotal.toLocaleString("pl-PL")} kg{takenElsewhere > 0 ? ` · ${takenElsewhere.toLocaleString("pl-PL")} on other trucks` : ""}
                       </div>
                     </div>;
                   })}
                 </div>}
               </div>; })}
-              <div style={{ fontSize: 10.5, color: "#64748B" }}>Use several units when one shipment has multiple trucks/containers. Example: 4 sea containers and 5 road trucks at arrival port are recorded as two legs with 4 sea units and 5 road units.</div>
+              <div style={{ fontSize: 10, color: "#64748B" }}>Use several units when one shipment has multiple trucks/containers. Example: 4 sea containers and 5 road trucks at arrival port are recorded as two legs with 4 sea units and 5 road units.</div>
             </div>
           </div>)}
         </Card>
@@ -751,7 +751,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
               <>
                 <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>   {/* v6.99.59 (A-CU-1): the two regime boxes side by side */}
                 {cRule.known
-                  ? <div style={{ fontSize: 12.5, fontWeight: 700, color: cRule.ours ? "#111" : "#1E3A8A", background: cRule.ours ? "#F8FAFC" : "#EFF6FF", border: `1px solid ${cRule.ours ? "#E2E8F0" : "#BFDBFE"}`, borderRadius: 8, padding: "6px 10px" }} title="v7.19.3 (A-INC-1, 4/5): from the trade direction and the incoterms — not ticked by hand">{cRule.duties.length ? `Who clears: ${customsDutiesText(cRule.duties)}` : "No customs border on this route (intra-EU) — nothing to clear"}</div>
+                  ? <div style={{ fontSize: 12, fontWeight: 700, color: cRule.ours ? "#111" : "#1E3A8A", background: cRule.ours ? "#F8FAFC" : "#EFF6FF", border: `1px solid ${cRule.ours ? "#E2E8F0" : "#BFDBFE"}`, borderRadius: 8, padding: "6px 10px" }} title="v7.19.3 (A-INC-1, 4/5): from the trade direction and the incoterms — not ticked by hand">{cRule.duties.length ? `Who clears: ${customsDutiesText(cRule.duties)}` : "No customs border on this route (intra-EU) — nothing to clear"}</div>
                   : <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }} title="v7.19.3: the trade direction is not known yet — set the places and the rule takes over">
                     <input type="checkbox" checked={!!c.applies} onChange={e => setC("applies", e.target.checked)} /> Customs clearance applies to this shipment
                   </label>}
@@ -759,7 +759,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   <input type="checkbox" checked={!!c.t1} onChange={e => setC("t1", e.target.checked)} style={{ width: 16, height: 16 }} /> Moved under T1 transit
                 </label>
                 </div>
-                {cRule.known && !!c.applies !== cRule.ours && <div style={{ marginBottom: 10, padding: "7px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }} title="v7.19.3: flagged, not changed until the shipment is saved">⚠ This shipment {c.applies ? "is marked 'customs applies'" : "is not marked for customs"}, but under the terms {cRule.ours ? "we clear" : cRule.duties.length ? "the other side clears" : "nothing is cleared"}{cRule.duties.length ? ` (${customsDutiesText(cRule.duties)})` : ""}. Saving follows the terms{c.applies && parseNum(c.cost) > 0 ? "; the customs cost stays as an ordinary cost line" : ""}.</div>}
+                {cRule.known && !!c.applies !== cRule.ours && <div style={{ marginBottom: 10, padding: "7px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11, color: "#92400E" }} title="v7.19.3: flagged, not changed until the shipment is saved">⚠ This shipment {c.applies ? "is marked 'customs applies'" : "is not marked for customs"}, but under the terms {cRule.ours ? "we clear" : cRule.duties.length ? "the other side clears" : "nothing is cleared"}{cRule.duties.length ? ` (${customsDutiesText(cRule.duties)})` : ""}. Saving follows the terms{c.applies && parseNum(c.cost) > 0 ? "; the customs cost stays as an ordinary cost line" : ""}.</div>}
                 {(cRule.known ? cRule.ours : c.applies) && (
                   <>
                     {/* v6.60.0: WHERE / WHO / WHAT / STATUS, in fields. These
@@ -792,7 +792,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       {/* v6.99.44 (X-1, X-5…X-9, owner): the clearance belongs to the UNIT that crosses the border — one line per truck,
                           filled from the agent's CC529C file, matched by plates, cross-checked; typed fallback = MRN · released on · type. */}
                       <div style={{ gridColumn: "1 / -1", marginTop: 6 }}>
-                        <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>CLEARANCE PER UNIT <span style={{ fontWeight: 500 }}>— drop the agent's file (release CC529C or exit confirmation CC599C, .xml) on the line, or type the MRN · several at once: Shipments → Import customs files</span></div>
+                        <div style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>CLEARANCE PER UNIT <span style={{ fontWeight: 500 }}>— drop the agent's file (release CC529C or exit confirmation CC599C, .xml) on the line, or type the MRN · several at once: Shipments → Import customs files</span></div>
                         {clearanceLinesFor(draft).map((cl: any) => {
                           const u = (draft.legs || []).flatMap((l: any) => l.vehicles || []).find((x: any) => String(x.id) === String(cl.unitId)) || {};
                           const setCl = (patch: any) => setDraft((prev: any) => { const cur = clearanceLinesFor(prev); return { ...prev, customsUnits: cur.map((x: any) => String(x.unitId) === String(cl.unitId) ? { ...x, ...patch } : x) }; });
@@ -819,26 +819,26 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                             <Inp value={cl.mrn || ""} onChange={e => setCl({ mrn: e.target.value })} placeholder="MRN" />
                             <Inp type="date" value={cl.releasedOn || ""} onChange={e => setCl({ releasedOn: e.target.value, status: e.target.value ? "Released" : cl.status })} noFuture />
                             <Sel value={cl.status || "Pending"} onChange={e => setCl({ status: e.target.value })}>{CLEARANCE_STATUSES.map(s => <option key={s}>{s}</option>)}</Sel>
-                            <div style={{ fontSize: 10.5, color: "#64748B" }}>{cl.exitedOn ? <span style={{ color: "#1D4ED8", fontWeight: 700 }}>left the EU {cl.exitedOn}{cl.exitOffice ? ` · ${cl.exitOffice}` : ""}</span> : cl.officeExport ? `${cl.officeExport} → ${cl.officeExit || "?"}` : ""}</div>
-                            <label title="v6.99.59 (A-CU-2): the agent's CC529C release (.xml) — or drop it on the line" style={{ fontSize: 11.5, fontWeight: 800, border: "none", background: "#0F766E", color: "#fff", borderRadius: 7, padding: "6px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>Import file<input type="file" accept=".xml,.XML" style={{ display: "none" }} onChange={e => onFile(e.target.files?.[0])} /></label>
+                            <div style={{ fontSize: 10, color: "#64748B" }}>{cl.exitedOn ? <span style={{ color: "#1D4ED8", fontWeight: 700 }}>left the EU {cl.exitedOn}{cl.exitOffice ? ` · ${cl.exitOffice}` : ""}</span> : cl.officeExport ? `${cl.officeExport} → ${cl.officeExit || "?"}` : ""}</div>
+                            <label title="v6.99.59 (A-CU-2): the agent's CC529C release (.xml) — or drop it on the line" style={{ fontSize: 11, fontWeight: 800, border: "none", background: "#0F766E", color: "#fff", borderRadius: 7, padding: "6px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>Import file<input type="file" accept=".xml,.XML" style={{ display: "none" }} onChange={e => onFile(e.target.files?.[0])} /></label>
                             {issues.length > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "4px 8px" }}>{issues.map((s, k) => <div key={k}>⚠ {s}</div>)}</div>}
-                            {cl.mrn && !issues.length && cl.sourceFile && <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#16A34A" }}>✓ matches the shipment · {cl.sourceFile}{cl.exitFile ? ` · exit: ${cl.exitFile}` : ""}</div>}
+                            {cl.mrn && !issues.length && cl.sourceFile && <div style={{ gridColumn: "1 / -1", fontSize: 10, color: "#16A34A" }}>✓ matches the shipment · {cl.sourceFile}{cl.exitFile ? ` · exit: ${cl.exitFile}` : ""}</div>}
                             {cl.mrn && <div style={{ gridColumn: "1 / -1" }}><SmallButton kind="remove" title="v6.99.72 (A-CU-3): the line goes back to Pending and its register rows go with it — the mistake is undone whole" onClick={() => { uiConfirm({ tone: "warn", title: "Detach the customs file?", message: `The line of ${u.truckPlate || "this unit"} goes back to Pending and the register rows for MRN ${cl.mrn} are removed. The file itself is not touched.`, confirmLabel: "Detach", cancelLabel: "Keep" }).then((ok: boolean) => { if (ok) { setDraft((prev: any) => detachClearance(prev, cl.unitId)); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: draft.number, action: "updated", summary: `Customs file detached from ${u.truckPlate || "unit"} (MRN ${cl.mrn})` }); } }); }}>Detach file</SmallButton></div>}
                           </div>;
                         })}
-                        {!clearanceLinesFor(draft).length && <div style={{ fontSize: 11.5, color: "#94A3B8" }}>Add the units first — each truck is cleared on its own.</div>}
+                        {!clearanceLinesFor(draft).length && <div style={{ fontSize: 11, color: "#94A3B8" }}>Add the units first — each truck is cleared on its own.</div>}
                       </div>
                     </div>
                     {(() => {
                       const gaps = customsGaps(c, { isExport: shipmentTradeDirection(draft, { pos, orders, countryOf: countryOfLocation }) === "EXPORT" });   // v7.12.1 (A-TD-2): the one rule, not a stored field
                       return gaps.length ? (
-                        <div style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+                        <div style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11, color: "#92400E" }}>
                           {gaps.map(g => <div key={g.field}>· <strong>{g.field}</strong> — {g.why}</div>)}
                         </div>
                       ) : null;
                     })()}
                     <div style={{ marginTop: 10 }}><Lbl>Notes</Lbl><Inp value={c.notes || ""} onChange={e => setC("notes", e.target.value)} placeholder="Phyto, duties, anything the fields above do not cover" /></div>
-                    <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 6 }}>The customs cost is synced into this shipment's cost lines (type "customs") for allocation.</div>
+                    <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 6 }}>The customs cost is synced into this shipment's cost lines (type "customs") for allocation.</div>
                   </>
                 )}
               </>
@@ -849,7 +849,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
         <Card>
           <SectionTitle>Goods on this shipment</SectionTitle>
           {/* v6.99.139 (A-SE-1, owner): the standalone groupage bar is gone (the create window has Groupage); an order can still join later from here */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, fontSize: 11.5, color: "#475569" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, fontSize: 11, color: "#475569" }}>
             <span style={{ fontWeight: 700 }}>+ add an order's goods:</span>
             <select value="" onChange={e => { const po = pos.find((p: any) => p.number === e.target.value); if (po) setDraft(prev => appendSourceGoods(prev, "PO", po, lots, { todayISO: localTodayISO, nextId })); }} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12 }}><option value="">purchase order…</option>{pos.filter((p: any) => p.status !== "Cancelled" && !(draft.poRefs || []).includes(p.number)).map((p: any) => <option key={p.number} value={p.number}>{p.number} · {p.supplier?.name || ""}</option>)}</select>
             <select value="" onChange={e => { const so = orders.find((o: any) => o.number === e.target.value); if (so) setDraft(prev => appendSourceGoods(prev, "SO", so, lots, { todayISO: localTodayISO, nextId })); }} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12 }}><option value="">sales order…</option>{orders.filter((o: any) => o.status !== "Cancelled" && !(draft.soRefs || []).includes(o.number)).map((o: any) => <option key={o.number} value={o.number}>{o.number} · {o.client?.name || ""}</option>)}</select>
@@ -873,14 +873,14 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
               const sub = idxs.reduce((s, gi) => s + parseNum((draft.goods || [])[gi]?.qtyKg), 0);
               return <div key={key} style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <div style={{ fontSize: 11.5, fontWeight: 800, color: "#1D4ED8" }}>{key}</div>
-                  <div style={{ fontSize: 11.5, color: "#64748B" }}>{doc?.client?.name || doc?.supplier?.name || ""}</div>
-                  <div style={{ marginLeft: "auto", fontSize: 11.5, fontWeight: 700 }}>{fmtNum(sub)} kg</div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#1D4ED8" }}>{key}</div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>{doc?.client?.name || doc?.supplier?.name || ""}</div>
+                  <div style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700 }}>{fmtNum(sub)} kg</div>
                   {!loaded && groupsOf.size > 1 && <SmallButton kind="red" onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Remove ${key} and its ${idxs.length} row(s) from this shipment?` }))) return; setDraft((prev: any) => ({ ...prev, goods: (prev.goods || []).filter((_: any, gi: number) => !idxs.includes(gi)), soRefs: (prev.soRefs || []).filter((r: string) => r !== key), poRefs: (prev.poRefs || []).filter((r: string) => r !== key) })); }}>Remove</SmallButton>}
                 </div>
                 {idxs.map(i => { const g: any = (draft.goods || [])[i]; return <div key={g.id || i}>
                     <div style={{ display: "grid", gridTemplateColumns: (draft.legs || []).length > 1 ? "1.8fr 0.9fr 0.9fr 0.7fr 1.1fr" : "2fr 1fr 1fr 0.8fr", gap: 9, marginBottom: 8, alignItems: "end" }}>
-            <div><Lbl>Product</Lbl><div style={{ fontSize: 12.5, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
+            <div><Lbl>Product</Lbl><div style={{ fontSize: 12, fontWeight: 600, padding: "6px 0" }}>{g.product}{g.variety ? ` — ${g.variety}` : ""}{g.size ? ` · ${g.size}` : ""}</div></div>
             <div><Lbl>Net (kg){(() => { const cap = goodsRowCap(g, draft, orders, pos, allShipmentsForCap || []); return cap != null ? ` (max ${Math.round(cap).toLocaleString("pl-PL")})` : ""; })()}</Lbl><Inp type="number" value={g.qtyKg || ""} onChange={async e => {
               // v6.99.7 (A-R9-11): a goods row can carry less than its SO/PO line (partial load) but never more than the line's remainder;
               // trucks re-derive proportionally unless one was set by hand (then the leg banner shows the gap).
@@ -894,7 +894,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             <div><Lbl>Gross (kg)</Lbl><Inp type="number" value={g.grossKg || ""} onChange={e => updateGood(i, "grossKg", parseNum(e.target.value))} placeholder="0" title="Gross weight incl. packaging and pallets — printed on the transport order" /></div>
             <div><Lbl>Pallets{!g.pallets ? " (derived)" : ""}</Lbl><Inp type="number" value={g.pallets || (grossForGoodsLine(g, packagingTypes || []).pallets || "")} onChange={e => updateGood(i, "pallets", parseNum(e.target.value))} placeholder="0" title="v6.93.0 (A-R8-11): derived per line from its packaging type (boxes ÷ boxes per pallet); type to override" /></div>
             {/* v6.93.0 (A-R8-11): "on leg / carrier" column retired — the allocation of goods to TRUCKS (unit loads) says who carries what */}
-            <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>
+            <div style={{ fontSize: 10, color: "#94A3B8" }}>{[g.poRef, g.soRef, g.lotRef].filter(Boolean).join(" / ") || "—"}</div>
             {/* v6.50.0: the gross-weight derivation, on its own line beneath the row so
                 it explains the calculation without knocking the fields out of line. */}
             {(() => {
@@ -903,7 +903,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
               const detail = gr.boxes
                 ? `${fmtNum(parseNum(g.qtyKg))} net + ${gr.boxes} × ${gr.tareKg} kg packaging${gr.pallets ? ` + ${gr.pallets} × ${gr.palletTareKg} kg pallets` : ""} = ${fmtNum(gr.grossKg)} kg gross`
                 : `≈ ${fmtNum(gr.grossKg)} kg gross (estimated — packaging unknown)`;
-              return <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#64748B", marginTop: -2 }}>
+              return <div style={{ gridColumn: "1 / -1", fontSize: 10, color: "#64748B", marginTop: -2 }}>
                 {detail}{" · "}
                 <span onClick={() => autoGross(i)} style={{ color: "#2563EB", cursor: "pointer", textDecoration: "underline" }}>use this</span>
               </div>;
@@ -930,10 +930,10 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
         <Card>
           <SectionTitle right={<SmallButton kind="green" onClick={addCost}>+ Add cost</SmallButton>}>Costs and billing</SectionTitle>
           <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 8, alignItems: "end", marginBottom: 8, paddingBottom: 8, borderBottom: "1px dashed #E5E7EB" }}>
-            <div><Lbl>Billing status</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12.5, background: "#F9FAFB", fontWeight: 600 }} title="v6.80.0 (D-48): derived from the cost lines' invoice status and the allocation — nothing to set by hand">{derivedBillingStatus(syncLegFreightCostLines(syncCustomsCostLine(draft), legPayers), lots || [])}</div></div>
-            <div style={{ fontSize: 10.5, color: "#888", lineHeight: 1.45, paddingBottom: 7 }}>Tracks where this shipment is in the cost cycle — from waiting for the supplier's freight invoice to costs allocated into lots.</div>
+            <div><Lbl>Billing status</Lbl><div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 12, background: "#F9FAFB", fontWeight: 600 }} title="v6.80.0 (D-48): derived from the cost lines' invoice status and the allocation — nothing to set by hand">{derivedBillingStatus(syncLegFreightCostLines(syncCustomsCostLine(draft), legPayers), lots || [])}</div></div>
+            <div style={{ fontSize: 10, color: "#888", lineHeight: 1.45, paddingBottom: 7 }}>Tracks where this shipment is in the cost cycle — from waiting for the supplier's freight invoice to costs allocated into lots.</div>
           </div>
-          {supTruck && <div style={{ fontSize: 11.5, color: "#1E3A8A", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 10px", marginBottom: 12, lineHeight: 1.45 }} title="v7.19.2 (A-INC-1, 3/5): from the PO's incoterm — not ticked by hand">{(() => { const p = (pos || []).find((x: any) => (draft.poRefs || []).includes(x.number)); return p?.buyIncoterm ? `Bought ${String(p.buyIncoterm).toUpperCase()} (${p.number})` : "Arranged by the supplier"; })()} — the supplier's truck: tracked, not paid. No carrier, freight or transport order of ours; any freight line below can be deleted. The units only track the incoming truck and driver.</div>}
+          {supTruck && <div style={{ fontSize: 11, color: "#1E3A8A", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 10px", marginBottom: 12, lineHeight: 1.45 }} title="v7.19.2 (A-INC-1, 3/5): from the PO's incoterm — not ticked by hand">{(() => { const p = (pos || []).find((x: any) => (draft.poRefs || []).includes(x.number)); return p?.buyIncoterm ? `Bought ${String(p.buyIncoterm).toUpperCase()} (${p.number})` : "Arranged by the supplier"; })()} — the supplier's truck: tracked, not paid. No carrier, freight or transport order of ours; any freight line below can be deleted. The units only track the incoming truck and driver.</div>}
           {(draft.costs || []).map((c, i) => <div key={c.id || i} style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr 0.7fr 0.6fr 0.8fr 1fr 1fr 0.5fr", gap: 8, marginBottom: 8 }}>
             <div><Lbl>Type</Lbl><Sel value={c.type} onChange={e => updateCost(i, "type", e.target.value)}>{COST_TYPES.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</Sel></div>
             <div><Lbl>Supplier{!c.supplierId ? <span style={{ color: "#DC2626", fontWeight: 800 }}> · missing</span> : null}</Lbl><Sel value={c.supplierId || ""} style={!c.supplierId ? { borderColor: "#DC2626", background: "#FEF2F2" } : undefined} onChange={e => updateCost(i, "supplierId", e.target.value ? parseNum(e.target.value) : null)}><option value="">— choose the supplier —</option>{logisticsProviders(pickerParties(contacts, c.supplierId)).map(p => <option key={p.id} value={p.id}>{p.name}{archivedMark((contacts || []).find((x: any) => String(x.id) === String(p.id)))}</option>)}</Sel></div>   {/* v7.10.2 (A-RV-15 · CP-4) · v6.99.59 (A-CB-1): no silent first option */}
@@ -945,9 +945,9 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             <div><Lbl>&nbsp;</Lbl>{(isFreightCostType(c.type) && !supTruck && String(c.source || "").startsWith("LEGCAR:"))
               ? <span title="Derived from the unit prices — set the unit's price to 0 to remove it" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", height: 34, width: "100%", color: "#9CA3AF", fontSize: 14 }}>🔒</span>
               : <SmallButton kind="delete" title="Delete this cost line" onClick={() => removeCost(i)}>Delete</SmallButton>}</div>
-            {(() => { const v = invoicedVsUnits(draft, c); return v ? <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", marginTop: -2 }} title="v7.19.7 (A-RV-36): the invoice is the fact — the line keeps its amount">⚠ Invoiced {v.invoiced.toLocaleString("pl-PL")} {c.currency}; the unit prices on this leg add up to {v.units.toLocaleString("pl-PL")} {c.currency} — check the unit prices.</div> : null; })()}
-            {String(c.type) === "customs" && cRule.known && !cRule.ours && <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", marginTop: -2 }} title="v7.19.3 (A-INC-1, 4/5): flagged, never deleted">⚠ Customs is not ours under the terms ({cRule.duties.length ? customsDutiesText(cRule.duties) : "no customs border on this route"}). Recharged, or is the incoterm wrong? Nothing was deleted.</div>}
-            {(() => { const n = freightLineNotOurs(c, draft.legs || [], legPayers); return n ? <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", marginTop: -2 }} title="v7.19.0 (A-INC-1): flagged, never deleted">⚠ Not ours under the terms: leg {n.leg + 1}'s freight is {PAYER_LABEL[n.p.payer]} ({n.p.why}, {n.p.doc}). Recharged to them, or is the incoterm wrong? Nothing was deleted.</div> : null; })()}
+            {(() => { const v = invoicedVsUnits(draft, c); return v ? <div style={{ gridColumn: "1 / -1", fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", marginTop: -2 }} title="v7.19.7 (A-RV-36): the invoice is the fact — the line keeps its amount">⚠ Invoiced {v.invoiced.toLocaleString("pl-PL")} {c.currency}; the unit prices on this leg add up to {v.units.toLocaleString("pl-PL")} {c.currency} — check the unit prices.</div> : null; })()}
+            {String(c.type) === "customs" && cRule.known && !cRule.ours && <div style={{ gridColumn: "1 / -1", fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", marginTop: -2 }} title="v7.19.3 (A-INC-1, 4/5): flagged, never deleted">⚠ Customs is not ours under the terms ({cRule.duties.length ? customsDutiesText(cRule.duties) : "no customs border on this route"}). Recharged, or is the incoterm wrong? Nothing was deleted.</div>}
+            {(() => { const n = freightLineNotOurs(c, draft.legs || [], legPayers); return n ? <div style={{ gridColumn: "1 / -1", fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", marginTop: -2 }} title="v7.19.0 (A-INC-1): flagged, never deleted">⚠ Not ours under the terms: leg {n.leg + 1}'s freight is {PAYER_LABEL[n.p.payer]} ({n.p.why}, {n.p.doc}). Recharged to them, or is the incoterm wrong? Nothing was deleted.</div> : null; })()}
           </div>)}
           {(() => {
             // v6.4.0: per-currency subtotals + PLN total + EUR equivalent.
@@ -960,9 +960,9 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
             const totalEUR = eurRate > 0 ? totalPLN / eurRate : 0;
             return (
               <div style={{ textAlign: "right", fontSize: 13, color: "#444", marginTop: 8 }}>
-                {subtotals && Object.keys(byCur).length > 1 && <span style={{ fontSize: 11.5, color: "#888", marginRight: 10 }}>{subtotals} →</span>}
+                {subtotals && Object.keys(byCur).length > 1 && <span style={{ fontSize: 11, color: "#888", marginRight: 10 }}>{subtotals} →</span>}
                 Total: <strong>{fmtMoney(totalPLN, "PLN")}</strong>
-                <span style={{ color: "#888", marginLeft: 8 }}>≈ <strong style={{ color: "#444" }}>{fmtMoney(totalEUR, "EUR")}</strong> <span style={{ fontSize: 10.5 }}>(at {eurRate.toFixed(2)})</span></span>
+                <span style={{ color: "#888", marginLeft: 8 }}>≈ <strong style={{ color: "#444" }}>{fmtMoney(totalEUR, "EUR")}</strong> <span style={{ fontSize: 10 }}>(at {eurRate.toFixed(2)})</span></span>
               </div>
             );
           })()}
@@ -996,7 +996,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                   <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
                     <SmallButton kind="green" onClick={addDoc}>+ Add document</SmallButton>
                   </div>
-                  {termsHere.filter((x: any) => x.kind === "insurance").map((x: any, k: number) => <div key={"ins" + k} data-terms-insurance="1" style={{ marginBottom: 8, fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px" }} title="v7.20.2 (A-INC-2, 2): flagged, never changed">⚠ {x.text}</div>)}
+                  {termsHere.filter((x: any) => x.kind === "insurance").map((x: any, k: number) => <div key={"ins" + k} data-terms-insurance="1" style={{ marginBottom: 8, fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px" }} title="v7.20.2 (A-INC-2, 2): flagged, never changed">⚠ {x.text}</div>)}
                   {rows.map(({ d, i }) => {
                     const t = String(d.type || "").trim().toLowerCase();
                     const isBL = t === "bl";
@@ -1030,13 +1030,13 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                       <SmallButton kind="remove" title="Remove this document row" onClick={() => removeDoc(i)}>Remove</SmallButton>
                     </div>;
                   })}
-                  <div style={{ fontSize: 10.5, color: "#9CA3AF", marginTop: 8, lineHeight: 1.45 }}>
+                  <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: 8, lineHeight: 1.45 }}>
                     The standard set (invoice, packing list, EUR.1, phytosanitary, export declaration, BL/AWB) is added automatically. The transport order is tracked from the carrier email; the CMR is per road unit. BL and export-declaration refs fill in on their own. Paste a Dropbox share link for each signed scan — anyone with the link can open it, so keep the links inside the business.
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 2fr", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px dashed #E5E7EB", alignItems: "end" }}>
                     {/* v6.50.0: courier tracking moved up to the shipment header — it is
                         checked far too often to be buried in the documents section. */}
-                    <div style={{ fontSize: 10.5, color: "#64748B", paddingBottom: 8 }}>Waybill the original document set was sent to the client under.</div>
+                    <div style={{ fontSize: 10, color: "#64748B", paddingBottom: 8 }}>Waybill the original document set was sent to the client under.</div>
                   </div>
                 </div>
               </details>

@@ -14,7 +14,7 @@ export function ItemVarietyPicker({ catalog = [], setCatalog, item = "", variety
   const itemInList = !item || items.some((i: string) => i.toLowerCase() === String(item).toLowerCase());
   const vars = varietiesForItem(catalog, item);
   const varInList = !variety || vars.some((v: string) => v.toLowerCase() === String(variety).toLowerCase());
-  const sel: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 8px", fontSize: 12.5, fontFamily: "inherit", outline: "none", background: "#fff", width: "100%", boxSizing: "border-box" };
+  const sel: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 8px", fontSize: 12, fontFamily: "inherit", outline: "none", background: "#fff", width: "100%", boxSizing: "border-box" };
 
   const onItemChange = async (val: string) => {
     if (val === "__add__") {
@@ -96,7 +96,7 @@ export function PackagingPicker({ types = [], setTypes = null, packaging = "", p
     </select>
     {adding && <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div data-new-packaging="1" style={{ background: "#fff", borderRadius: 12, width: "min(520px, 100%)", padding: 18, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
-        <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 2 }}>New packaging type</div>
+        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>New packaging type</div>
         <div style={{ fontSize: 12, color: "#64748B", marginBottom: 12 }}>It joins Settings → Packaging types, so every order line can pick it.</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div style={{ gridColumn: "1 / -1" }}>{f("label", "Name", "e.g. Carton (8 kg)", false)}</div>

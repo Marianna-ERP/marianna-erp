@@ -397,23 +397,23 @@ export function QualityBadge({ quality }: any) {
     "Industrial": { bg: "#FEE2E2", color: "#991B1B" },
   };
   const p = palette[quality] || palette["I"];
-  return <span style={{ background: p.bg, color: p.color, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
+  return <span style={{ background: p.bg, color: p.color, padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
 export function SourceBadge({ sourceType, sourceRef, supplierName }: any) {
-  if (!sourceType || !sourceRef) return <span style={{ fontSize: 10.5, color: "#AAA", fontStyle: "italic" }}>unsourced</span>;
+  if (!sourceType || !sourceRef) return <span style={{ fontSize: 10, color: "#AAA", fontStyle: "italic" }}>unsourced</span>;
   const isStock = sourceType === "STOCK";
   return (
     <span style={{ display: "inline-flex", flexDirection: "column", gap: 2, alignItems: "flex-start" }}>
       <span style={{
         display: "inline-flex", alignItems: "center", gap: 3,
-        padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace",
+        padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums",
         // v6.93.0 (A-R8-5, owner colour rule): informational source chip is GREEN — red is for cancelled/warnings only
         background: isStock ? "#E0F2FE" : "#F0FDF4",
         color: isStock ? "#0369A1" : "#166534",
       }}>
-        <span style={{ fontSize: 10 }}>{isStock ? "📦" : "🚚"}</span>{sourceRef}
+        {sourceRef}
       </span>
-      {!isStock && supplierName && <span style={{ fontSize: 9.5, color: "#166534", paddingLeft: 2 }}>{supplierName}</span>}
+      {!isStock && supplierName && <span style={{ fontSize: 10, color: "#166534", paddingLeft: 2 }}>{supplierName}</span>}
     </span>
   );
 }
@@ -439,7 +439,7 @@ export function LifecycleBar({ status }: any) {
         return (
           <React.Fragment key={s}>
             <div style={{
-              padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600,
+              padding: "4px 9px", borderRadius: 14, fontSize: 10, fontWeight: 600,
               background: current ? SO_STATUSES[s].bg : (past ? "#F3F4F6" : "#FAFAFA"),
               color: current ? SO_STATUSES[s].color : (past ? "#374151" : "#CCC"),
               border: current ? `1px solid ${SO_STATUSES[s].color}` : "1px solid transparent",
@@ -449,7 +449,7 @@ export function LifecycleBar({ status }: any) {
           </React.Fragment>
         );
       })}
-      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Cancelled</span>}
+      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Cancelled</span>}
     </div>
   );
 }
@@ -667,15 +667,15 @@ function CollectionModal({ so, onClose, onSave }: any) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 8000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 440, maxWidth: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.25)", padding: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>Record client collection — {so.number}</div>
-        <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>EXW: the client collects the goods. This creates a minimal collection shipment (no transport order, no freight on our side) and, on Delivered, ships the sourced lots out of inventory.</div>
+        <div style={{ fontSize: 11, color: "#64748B", marginBottom: 12 }}>EXW: the client collects the goods. This creates a minimal collection shipment (no transport order, no freight on our side) and, on Delivered, ships the sourced lots out of inventory.</div>
         <Lbl>Collection date</Lbl>
-        <DateInput value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <DateInput value={date} onChange={e => setDate(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 10, fontFamily: "inherit" }} />
         <Lbl>Client truck plate (optional)</Lbl>
-        <input value={truckPlate} onChange={e => setTruckPlate(e.target.value)} placeholder="e.g. WZ 12345" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <input value={truckPlate} onChange={e => setTruckPlate(e.target.value)} placeholder="e.g. WZ 12345" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 10, fontFamily: "inherit" }} />
         <Lbl>Driver (optional)</Lbl>
-        <input value={driverName} onChange={e => setDriverName(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" }} />
+        <input value={driverName} onChange={e => setDriverName(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 10, fontFamily: "inherit" }} />
         <Lbl>Note (optional)</Lbl>
-        <input value={notes} onChange={e => setNotes(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 14, fontFamily: "inherit" }} />
+        <input value={notes} onChange={e => setNotes(e.target.value)} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 14, fontFamily: "inherit" }} />
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button onClick={onClose} style={{ padding: "7px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
           <button onClick={() => onSave({ date, truckPlate, driverName, notes })} style={{ padding: "7px 12px", borderRadius: 7, border: "none", background: "#0369A1", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Create collection record</button>
@@ -1259,26 +1259,26 @@ function SalesOrdersScreen({ archive = null,
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· in progress</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>ACTIVE VALUE</div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: "#16A34A", marginTop: 2 }}>{fmtMoney(activeValuePLN, "PLN")}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#16A34A", marginTop: 2 }}>{fmtMoney(activeValuePLN, "PLN")}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>AWAITING INVOICE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· delivered</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 2 }} title="Sales orders marked Delivered that have not yet been invoiced — your invoicing backlog.">{deliveredNotInvoicedCount}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: deliveredNotInvoicedCount > 0 ? "#D97706" : "#111", marginTop: 2 }} title="Sales orders marked Delivered that have not yet been invoiced — your invoicing backlog.">{deliveredNotInvoicedCount}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>DUE SOON <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· next 7 days</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 2 }} title="Active orders whose delivery date falls within the next 7 days — deliveries to prepare for.">{upcomingDeliveryCount}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: upcomingDeliveryCount > 0 ? "#7C3AED" : "#111", marginTop: 2 }} title="Active orders whose delivery date falls within the next 7 days — deliveries to prepare for.">{upcomingDeliveryCount}</div>
           </Card>
         </div>
 
         {/* Filters — compact single row */}
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SO, client, product, LOT/PO…" style={{ flex: "1 1 240px", minWidth: 200, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
-          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             {["All", ...Object.keys(SO_STATUSES)].map(s => <option key={s} value={s}>{s === "All" ? "All statuses" : statusWord(s)}</option>)}
           </select>
           <Sel value={filterClient} onChange={e => setFilterClient(e.target.value)} style={{ maxWidth: 220 }}>
@@ -1300,7 +1300,7 @@ function SalesOrdersScreen({ archive = null,
               {newestFirst(filtered).map((o, idx) => {
             // Build a small sources summary string
             const sources: string[] = o.items
-              .map((it: any) => it.sourceRef ? `${it.sourceType === "STOCK" ? "📦" : "🚚"}${it.sourceRef}` : null)
+              .map((it: any) => it.sourceRef ? String(it.sourceRef) : null)   /* v7.23.3 (A-UI-1): no icon */
               .filter((value: any): value is string => typeof value === "string" && value.length > 0);
             const uniqueSources: string[] = Array.from(new Set<string>(sources));
             // Quick overage check for the row badge
@@ -1312,9 +1312,9 @@ function SalesOrdersScreen({ archive = null,
                 onMouseEnter={e => e.currentTarget.style.background = o.status === "Cancelled" ? "#FEE2E2" : "#FAFAFA"}
                 onMouseLeave={e => e.currentTarget.style.background = o.status === "Cancelled" ? "#FEF2F2" : "#fff"}>
                 <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{o.number}</div>
                   {rowOverageCount > 0 && (
-                    <div title={`${rowOverageCount} line(s) exceed available supply`} style={{ display: "inline-block", marginTop: 3, padding: "1px 6px", background: "#FFFBEB", color: "#92400E", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 9.5, fontWeight: 700 }}>
+                    <div title={`${rowOverageCount} line(s) exceed available supply`} style={{ display: "inline-block", marginTop: 3, padding: "1px 6px", background: "#FFFBEB", color: "#92400E", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
                       ⚠ {rowOverageCount} short
                     </div>
                   )}
@@ -1329,14 +1329,12 @@ function SalesOrdersScreen({ archive = null,
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(netTotal(o.items, sd), o.currency)}</div>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 2, fontFamily: "ui-monospace, Menlo, monospace" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>
                   {/* v6.34.2 (module review): list the linked source documents, don't truncate to 2. */}
-                  {uniqueSources.length === 0 && <span style={{ fontSize: 10.5, color: "#CCC", fontStyle: "italic", fontFamily: "inherit" }}>unsourced</span>}
+                  {uniqueSources.length === 0 && <span style={{ fontSize: 10, color: "#CCC", fontStyle: "italic", fontFamily: "inherit" }}>unsourced</span>}
                   {uniqueSources.map((s, i) => {
-                    // strip any leading icon to test the bare number against the cancelled set
-                    const bare = String(s).replace(/^[^A-Za-z0-9]+/, "");
-                    const icon = String(s).slice(0, String(s).length - bare.length);
-                    return <span key={i} style={{ fontSize: 10.5, color: "#475569" }}>{icon}<DocRef num={bare} cancelledSet={cancelledRefs} /></span>;
+                    const bare = String(s);   // v7.23.3 (A-UI-1): the numbers carry no icon any more
+                    return <span key={i} style={{ fontSize: 10 }}><DocRef num={bare} cancelledSet={cancelledRefs} /></span>;
                   })}
                   {/* v6.45.0: shipments + invoices were missing from this column —
                       the SO showed only its SOURCE documents even after shipping. */}
@@ -1345,9 +1343,9 @@ function SalesOrdersScreen({ archive = null,
                       ...((o.linkedShipments || [])),
                       ...((extShipments || []).filter((sh: any) => sh.status !== "Cancelled" && ((sh.soRefs || []).includes(o.number) || (sh.goods || []).some((g: any) => g.soRef === o.number))).map((sh: any) => sh.number)),
                     ]));
-                    return shps.map((n: any, i: number) => <span key={"sh" + i} style={{ fontSize: 10.5, color: "#0284C7" }}>📦<DocRef num={n} cancelledSet={cancelledRefs} /></span>);
+                    return shps.map((n: any, i: number) => <span key={"sh" + i} style={{ fontSize: 10 }}><DocRef num={n} cancelledSet={cancelledRefs} /></span>);
                   })()}
-                  {(o.linkedInvoices || []).map((n: any, i: number) => <span key={"inv" + i} style={{ fontSize: 10.5, color: "#16A34A" }}>📄<DocRef num={n} cancelledSet={cancelledRefs} /></span>)}
+                  {(o.linkedInvoices || []).map((n: any, i: number) => <span key={"inv" + i} style={{ fontSize: 10 }}><DocRef num={n} cancelledSet={cancelledRefs} /></span>)}
                 </div>
               </div>
             );
@@ -1372,13 +1370,13 @@ function SalesOrdersScreen({ archive = null,
           <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setClientClaimFor(null)}>
             <div style={{ background: "#fff", borderRadius: 14, padding: 22, width: 480, maxWidth: "92vw" }} onClick={(e: any) => e.stopPropagation()}>
               <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>Record client claim — {soDoc.number}</div>
-              <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>Logs the claim against the delivered lot and drafts an outgoing <strong>credit note</strong> (finalise it in Invoices). Warehouse stock is not touched — those kg already left.</div>
+              <div style={{ fontSize: 11, color: "#64748B", marginBottom: 12 }}>Logs the claim against the delivered lot and drafts an outgoing <strong>credit note</strong> (finalise it in Invoices). Warehouse stock is not touched — those kg already left.</div>
               <Lbl>Lot the claim concerns</Lbl>
               <select style={inp} value={cc.lotId} onChange={(e: any) => setCc((x: any) => ({ ...x, lotId: e.target.value }))}>
                 <option value="">— select lot —</option>
                 {pool.map((l: any) => <option key={l.id} value={l.id}>{l.number} · {l.product}{l.variety ? " — " + l.variety : ""}</option>)}
               </select>
-              {!linked.length && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 4 }}>No lot is linked to this SO automatically — pick the delivered lot yourself.</div>}
+              {!linked.length && <div style={{ fontSize: 10, color: "#B45309", marginTop: 4 }}>No lot is linked to this SO automatically — pick the delivered lot yourself.</div>}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 0.7fr", gap: 10, marginTop: 12 }}>
                 <div><Lbl>Affected kg (optional)</Lbl><input style={inp} inputMode="decimal" value={cc.qty} onChange={(e: any) => setCc((x: any) => ({ ...x, qty: e.target.value }))} placeholder="0" /></div>
                 <div><Lbl>Claim value</Lbl><input style={inp} inputMode="decimal" value={cc.value} onChange={(e: any) => setCc((x: any) => ({ ...x, value: e.target.value }))} placeholder="0.00" /></div>
@@ -1402,16 +1400,26 @@ function SalesOrdersScreen({ archive = null,
 }
 
 
+/** v7.23.1 (A-SOL-2): the coloration of the lot a sale line sells (read from the lot's PO line). */
+export function lotColorationOf(lotNumber: any, sd: SalesData): string { return String(((sd.lots || []).find((l: any) => String(l.number) === String(lotNumber)) || {}).coloration || ""); }
+/** v7.23.1 (A-SOL-2): on saving, a lot-sourced line without a coloration takes its lot's. */
+export function withLotColorations(order: any, sd: SalesData): any {
+  return { ...order, items: (order.items || []).map((it: any) => it && it.sourceType === "STOCK" && it.sourceRef && !it.coloration && lotColorationOf(it.sourceRef, sd) ? { ...it, coloration: lotColorationOf(it.sourceRef, sd) } : it) };
+}
 /** v7.22.4 (A-RV-16): the data the sales screens read, built once from the props (no module copy). */
 export function buildSalesData(p: { invLots?: any[]; inspections?: any[]; pos?: any[]; shipments?: any[]; contacts?: any[]; packagingTypes?: any[] }): SalesData {
   const poRefs = p.pos ? _adaptPOsFromModule(p.pos) : [];
   // v6.18.23: a lot created before the PO→lot variety/CN-HS copy won't carry those fields — backfilled from its PO line
+  // v7.23.1 (A-SOL-2, owner 13 Oct): a lot reads what it does not carry itself from ITS PO line — the variety, the CN code and the
+  // coloration (kept on the PO line only); the line is the lot's own (poLineId), else the one of the same item and variety
   const lots = (p.invLots ? _adaptLotsFromInventory(p.invLots, p.inspections) : []).map((lot: any) => {
-    if ((lot.variety && lot.cnCode) || !lot.poRef) return lot;
-    const po: any = poRefs.find((x: any) => x.number === lot.poRef);
-    const line: any = po && (po.items || []).find((it: any) => String(it.product || "").toLowerCase() === String(lot.product || "").toLowerCase());
+    if (!lot.poRef || (lot.variety && lot.cnCode && lot.coloration)) return lot;
+    const po: any = poRefs.find((x: any) => x.number === lot.poRef); const items: any[] = (po && po.items) || [];
+    const same = (it: any) => String(it.product || "").toLowerCase() === String(lot.product || "").toLowerCase();
+    const line: any = (lot.poLineId != null && items.find((it: any) => String(it.id) === String(lot.poLineId)))
+      || items.find((it: any) => same(it) && String(it.variety || "").toLowerCase() === String(lot.variety || "").toLowerCase()) || items.find(same);
     if (!line) return lot;
-    return { ...lot, variety: lot.variety || line.variety || "", cnCode: lot.cnCode || line.cnCode || "" };
+    return { ...lot, variety: lot.variety || line.variety || "", cnCode: lot.cnCode || line.cnCode || "", coloration: lot.coloration || line.coloration || "" };
   });
   return { lots, rawLots: p.invLots || [], poRefs, contacts: p.contacts || [], shipments: p.shipments || [], packagingTypes: (p.packagingTypes && p.packagingTypes.length) ? p.packagingTypes : PACKAGING_SEED };
 }

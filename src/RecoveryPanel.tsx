@@ -8,7 +8,7 @@ import { APP_VERSION } from "./version";
 import { recordAudit } from "./audit";
 import { localTodayISO } from "./dates";
 
-const btn: any = { padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" };
+const btn: any = { padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" };
 const fmtWhen = (iso: string) => { const d = new Date(iso); return isNaN(d.getTime()) ? iso : d.toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }); };
 
 export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
@@ -62,16 +62,16 @@ export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
             {busy && <span style={{ fontSize: 12, color: "#B45309", fontWeight: 700 }}>{busy}</span>}
             {err && <span style={{ fontSize: 12, color: "#DC2626", fontWeight: 700 }}>{err}</span>}
           </div>
-          {source && <div style={{ fontSize: 12.5, color: "#334155", marginBottom: 8 }}>Comparing <b>{source.label}</b> with today's data:</div>}
+          {source && <div style={{ fontSize: 12, color: "#334155", marginBottom: 8 }}>Comparing <b>{source.label}</b> with today's data:</div>}
           {source && diffs.map(d => (
             <div key={d.key} style={{ border: "1px solid #EBEBEB", borderRadius: 8, marginBottom: 8 }}>
-              <div onClick={() => setOpen(o => ({ ...o, [d.key]: !o[d.key] }))} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", cursor: "pointer", fontSize: 12.5, background: "#F9FAFB" }}>
+              <div onClick={() => setOpen(o => ({ ...o, [d.key]: !o[d.key] }))} style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", cursor: "pointer", fontSize: 12, background: "#F9FAFB" }}>
                 <b>{d.label}</b>
                 <span style={{ color: d.missing.length || d.differ.length ? "#B45309" : "#94A3B8", fontWeight: 700 }}>{d.missing.length} missing now · {d.differ.length} different · {d.added.length} added since</span>
               </div>
               {open[d.key] && (d.missing.length + d.differ.length > 0) && <div style={{ padding: "6px 12px 10px" }}>
-                {d.missing.map(r => <label key={tk(d.key, r)} style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0" }}><input type="checkbox" checked={!!ticked[tk(d.key, r)]} onChange={e => setTicked(t => ({ ...t, [tk(d.key, r)]: e.target.checked }))} /><span><b>{labelOf(r)}</b> <span style={{ color: "#B45309" }}>missing now</span></span></label>)}
-                {d.differ.map(x => <label key={tk(d.key, x.backup)} style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "2px 0" }}><input type="checkbox" checked={!!ticked[tk(d.key, x.backup)]} onChange={e => setTicked(t => ({ ...t, [tk(d.key, x.backup)]: e.target.checked }))} /><span><b>{labelOf(x.backup)}</b> <span style={{ color: "#64748B" }}>differs — ticked, the backup's version replaces today's</span></span></label>)}
+                {d.missing.map(r => <label key={tk(d.key, r)} style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}><input type="checkbox" checked={!!ticked[tk(d.key, r)]} onChange={e => setTicked(t => ({ ...t, [tk(d.key, r)]: e.target.checked }))} /><span><b>{labelOf(r)}</b> <span style={{ color: "#B45309" }}>missing now</span></span></label>)}
+                {d.differ.map(x => <label key={tk(d.key, x.backup)} style={{ display: "flex", gap: 8, fontSize: 12, padding: "2px 0" }}><input type="checkbox" checked={!!ticked[tk(d.key, x.backup)]} onChange={e => setTicked(t => ({ ...t, [tk(d.key, x.backup)]: e.target.checked }))} /><span><b>{labelOf(x.backup)}</b> <span style={{ color: "#64748B" }}>differs — ticked, the backup's version replaces today's</span></span></label>)}
               </div>}
             </div>
           ))}

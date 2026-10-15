@@ -54,7 +54,7 @@ const STATUS_STYLE: any = {
 };
 
 function Pill({ bg, fg, children, title }: any) {
-  return <span title={title} style={{ background: bg, color: fg, borderRadius: 999, padding: "2px 9px", fontSize: 10.5, fontWeight: 800, whiteSpace: "nowrap" }}>{children}</span>;
+  return <span title={title} style={{ background: bg, color: fg, borderRadius: 999, padding: "2px 9px", fontSize: 10, fontWeight: 800, whiteSpace: "nowrap" }}>{children}</span>;
 }
 
 
@@ -70,11 +70,11 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
   const note = (financeNotes || []).find((n: any) => String(n.id) === String(claim.financeNoteId)) || null;
   const cpName = String(claim?.respondent?.name || "").toLowerCase();
   const openInv = note ? (invoices || []).filter((i: any) => i.paymentStatus !== "Cancelled" && !i.isProforma && String(i.currency || "PLN").toUpperCase() === String(note.currency || "PLN").toUpperCase() && String(i.counterparty?.name || "").toLowerCase() === cpName && (Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0) > 0.005 && ((note.direction === "outgoing" && i.kind === "SALES") || (note.direction === "incoming" && i.kind === "COST"))) : [];
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11, width: "100%", boxSizing: "border-box" };
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "12px 16px", marginTop: 12 }}>{dialogNode}
       <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em", marginBottom: 8 }}>EVIDENCE & SETTLEMENT · {claimMoneyLabel(claim)}</div>
-      {warn && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 8 }}>⚠ {warn}</div>}
+      {warn && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 8 }}>⚠ {warn}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         <div><Lbl>Defect from inspection (CL-2)</Lbl>
           <select value={claim.inspectionId ?? ""} onChange={e => patch({ inspectionId: e.target.value || null })} style={inp}><option value="">— typed on the claim —</option>{insCands.map((x: any) => <option key={String(x.id)} value={x.id}>{x.date} · {x.lotNumber} · {x.stage} · {x.verdict}</option>)}</select>
@@ -99,7 +99,7 @@ function ClaimEvidenceCard({ claim, patch, inspections = [], shipments = [], lot
         <div style={{ marginTop: 10, borderTop: "1px solid #F1F5F9", paddingTop: 8 }}>
           <Lbl>Settle by offset (CL-6) — {note.noteType} note {note.number || note.id} · {Number(note.amount).toLocaleString("pl-PL")} {note.currency}{Number(note.appliedAmount) ? ` · applied ${Number(note.appliedAmount).toLocaleString("pl-PL")}` : ""}</Lbl>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {openInv.map((i: any) => <button key={String(i.id)} onClick={async () => { const r = offsetNoteAgainstInvoice(note, i, { nextId, todayISO: localTodayISO }); if (r.error) { (await uiAlert({ message: r.error })); return; } setInvoices((prev: any[]) => (prev || []).map((x: any) => x.id === i.id ? r.invoice : x)); setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => n.id === note.id ? r.note : n)); recordAudit({ module: "Claims", docType: "Claim", docNumber: claim.number, action: "claim", summary: `Note ${note.number || note.id} offset ${r.appliedAmount.toLocaleString("pl-PL")} ${note.currency} against ${i.number}` }); }} style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontWeight: 700, cursor: "pointer" }}>⇄ Offset against {i.number} (open {((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)).toLocaleString("pl-PL")} {i.currency})</button>)}
+            {openInv.map((i: any) => <button key={String(i.id)} onClick={async () => { const r = offsetNoteAgainstInvoice(note, i, { nextId, todayISO: localTodayISO }); if (r.error) { (await uiAlert({ message: r.error })); return; } setInvoices((prev: any[]) => (prev || []).map((x: any) => x.id === i.id ? r.invoice : x)); setFinanceNotes((prev: any[]) => (prev || []).map((n: any) => n.id === note.id ? r.note : n)); recordAudit({ module: "Claims", docType: "Claim", docNumber: claim.number, action: "claim", summary: `Note ${note.number || note.id} offset ${r.appliedAmount.toLocaleString("pl-PL")} ${note.currency} against ${i.number}` }); }} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontWeight: 700, cursor: "pointer" }}>⇄ Offset against {i.number} (open {((Number(i.grossAmount) || 0) - (Number(i.paidAmount) || 0)).toLocaleString("pl-PL")} {i.currency})</button>)}
             {!openInv.length && <span style={{ fontSize: 11, color: "#94A3B8" }}>no open invoice of {claim?.respondent?.name} in {note.currency} — the note settles by bank transfer (matched by the bank import)</span>}
           </div>
         </div>
@@ -336,12 +336,12 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
         {(summary.overdue.length > 0 || summary.noEvidence.length > 0) && (
           <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
             {summary.overdue.length > 0 && (
-              <div style={{ padding: "6px 11px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#991B1B" }}>
+              <div style={{ padding: "6px 11px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11, color: "#991B1B" }}>
                 ⏱ <strong>Notice deadline passed, never notified:</strong> {summary.overdue.join(", ")}
               </div>
             )}
             {summary.noEvidence.length > 0 && (
-              <div style={{ padding: "6px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+              <div style={{ padding: "6px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11, color: "#92400E" }}>
                 📎 <strong>No evidence linked:</strong> {summary.noEvidence.join(", ")}
               </div>
             )}
@@ -375,7 +375,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
             return <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7,
               background: passed.length ? "#FEF2F2" : "#FFFBEB",
               border: `1px solid ${passed.length ? "#FECACA" : "#FDE68A"}`,
-              fontSize: 11.5, color: passed.length ? "#991B1B" : "#92400E" }}>
+              fontSize: 11, color: passed.length ? "#991B1B" : "#92400E" }}>
               <strong>{passed.length ? `${passed.length} claim(s) past their notice deadline` : `${due.length} claim(s) due for notice`}</strong>
               <div style={{ marginTop: 4, lineHeight: 1.5 }}>
                 {due.slice(0, 6).map(d => (
@@ -392,7 +392,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
               cannot sit silently, because it now rests on a movement that never
               happened. Someone withdraws the claim or un-cancels the document. */}
           {staleClaims.length > 0 && (
-            <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11.5, color: "#991B1B" }}>
+            <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7, background: "#FEF2F2", border: "1px solid #FECACA", fontSize: 11, color: "#991B1B" }}>
               <strong>{staleClaims.length} claim{staleClaims.length === 1 ? "" : "s"} rest{staleClaims.length === 1 ? "s" : ""} on a cancelled document</strong>
               <div style={{ marginTop: 4, lineHeight: 1.5 }}>
                 {staleClaims.map(w => (
@@ -405,7 +405,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
             </div>
           )}
           {!rows.length && (
-            <div style={{ fontSize: 12.5, color: "#94A3B8", padding: "10px 0" }}>
+            <div style={{ fontSize: 12, color: "#94A3B8", padding: "10px 0" }}>
               No claims match. Producer claims still start from a lot in Inventory; client claims from the sales order — both now appear here as numbered documents.
             </div>
           )}
@@ -418,18 +418,18 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                 style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 10, alignItems: "center", padding: "9px 6px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: String(c.id) === String(selectedId) ? "#F8FAFC" : "transparent" }}>
                 <Pill bg={ds.bg} fg={ds.fg} title={ds.hint}>{ds.label}</Pill>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>
                     {c.number} <span style={{ fontWeight: 400, color: "#64748B" }}>· {c.respondent?.name || c.respondent?.kind || "—"}</span>
                   </div>
                   <div style={{ fontSize: 11, color: "#94A3B8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {[c.cause, (c.subjects || []).map((s: any) => s.ref).join(" · "), c.date].filter(Boolean).join(" — ")}
                   </div>
                 </div>
-                <div style={{ textAlign: "right", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+                <div style={{ textAlign: "right", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
                   {eur(amount)}
-                  <div style={{ fontSize: 9.5, fontWeight: 500, color: agreed ? "#059669" : "#94A3B8" }}>{agreed ? "agreed" : "requested"}</div>
+                  <div style={{ fontSize: 10, fontWeight: 500, color: agreed ? "#059669" : "#94A3B8" }}>{agreed ? "agreed" : "requested"}</div>
                 </div>
-                <div style={{ fontSize: 10.5, fontWeight: 800, color: STATUS_STYLE[c.status] || "#64748B", whiteSpace: "nowrap", minWidth: 92, textAlign: "right" }}>{c.status}</div>
+                <div style={{ fontSize: 10, fontWeight: 800, color: STATUS_STYLE[c.status] || "#64748B", whiteSpace: "nowrap", minWidth: 92, textAlign: "right" }}>{c.status}</div>
               </div>
             );
           })}
@@ -444,7 +444,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <Card>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                  <div style={{ fontSize: 15, fontWeight: 800 }}>{selected.number}</div>
+                  <div style={{ fontSize: 14, fontWeight: 800 }}>{selected.number}</div>
                   <Pill bg={ds.bg} fg={ds.fg} title={ds.hint}>{ds.label}</Pill>
                   <div style={{ flex: 1 }} />
                   {selected.direction === "CONCESSION" && (
@@ -453,7 +453,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   <SmallButton kind="delete" onClick={() => removeClaim(selected)}>Delete</SmallButton>
                   <SmallButton kind="close" onClick={() => setSelectedId(null)}>Close</SmallButton>
                 </div>
-                <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12, lineHeight: 1.5 }}>{ds.hint}</div>
+                <div style={{ fontSize: 11, color: "#64748B", marginBottom: 12, lineHeight: 1.5 }}>{ds.hint}</div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div>
@@ -503,7 +503,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                       {CLAIM_CAUSES.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                     {RISK_CAUSES.includes(String(selected.cause || "")) && (() => {   // v7.19.4 (A-INC-1, 5/5): where it happened → who carried the risk there
-                      const sh = claimShipment(selected, shipments || []); if (!sh) return <div style={{ marginTop: 6, fontSize: 11.5, color: "#64748B" }}>Link the shipment (or its lot / sale) to say where it happened — the terms then say who carried the risk.</div>;
+                      const sh = claimShipment(selected, shipments || []); if (!sh) return <div style={{ marginTop: 6, fontSize: 11, color: "#64748B" }}>Link the shipment (or its lot / sale) to say where it happened — the terms then say who carried the risk.</div>;
                       const rt = claimRouting(selected, sh, { pos, orders, contacts });
                       const off = rt && rt.respondent && String(selected.respondent?.contactId ?? "") !== String(rt.respondent.contactId ?? "");
                       return <div style={{ marginTop: 6 }}>
@@ -511,8 +511,8 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                           <option value="">Where did it happen on {sh.number}?</option>
                           {journeyStages(sh).map(st => <option key={st.key} value={st.key}>{st.label}</option>)}
                         </select>
-                        {rt && <div style={{ marginTop: 6, fontSize: 11.5, lineHeight: 1.45, padding: "6px 10px", borderRadius: 7, color: rt.warn ? "#92400E" : "#1E3A8A", background: rt.warn ? "#FFFBEB" : "#EFF6FF", border: `1px solid ${rt.warn ? "#FDE68A" : "#BFDBFE"}` }}>{rt.warn ? "⚠ " : ""}{rt.note}</div>}
-                        {off && <div style={{ marginTop: 4, fontSize: 11.5, color: "#92400E" }}>⚠ Under the terms this claim goes to {rt!.respondent!.name}, not {selected.respondent?.name || "the party named"}.</div>}
+                        {rt && <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.45, padding: "6px 10px", borderRadius: 7, color: rt.warn ? "#92400E" : "#1E3A8A", background: rt.warn ? "#FFFBEB" : "#EFF6FF", border: `1px solid ${rt.warn ? "#FDE68A" : "#BFDBFE"}` }}>{rt.warn ? "⚠ " : ""}{rt.note}</div>}
+                        {off && <div style={{ marginTop: 4, fontSize: 11, color: "#92400E" }}>⚠ Under the terms this claim goes to {rt!.respondent!.name}, not {selected.respondent?.name || "the party named"}.</div>}
                       </div>;
                     })()}
                     {/^quality|defect/i.test(String(selected.cause || "")) && (<div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "1.2fr 0.6fr", gap: 6 }}>
@@ -554,7 +554,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     <Lbl>Agreed after negotiation (EUR)</Lbl>
                     {String(selected.currency || "EUR").toUpperCase() !== "EUR" && (<>
                       {/* v6.81.0 (D-62): the claim is in the ROOT document's currency */}
-                      <div style={{ fontSize: 10.5, color: "#7C3AED", fontWeight: 700, marginBottom: 3 }}>Claim currency: {selected.currency} (from the root document)</div>
+                      <div style={{ fontSize: 10, color: "#7C3AED", fontWeight: 700, marginBottom: 3 }}>Claim currency: {selected.currency} (from the root document)</div>
                       <input type="number" value={selected.acceptedAmount ?? ""} onChange={e => patch(selected.id, { acceptedAmount: e.target.value === "" ? null : e.target.value })} placeholder={`accepted, in ${selected.currency}`} style={INP} />
                       {String(selected.currency).toUpperCase() !== "PLN" && <input type="number" step="0.0001" value={selected.fxToPLN ?? ""} onChange={e => patch(selected.id, { fxToPLN: e.target.value })} placeholder={`${selected.currency}→PLN rate`} style={{ ...INP, marginTop: 4 }} />}
                     </>)}
@@ -585,7 +585,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                         <SmallButton onClick={() => patch(selected.id, { causedCosts: [...(selected.causedCosts || []), { label: "", amountEUR: "" }] })}>+ Cost</SmallButton>
                       </div>
                       <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
-                        <div style={{ fontSize: 11.5, color: "#475569" }}>Computed from this basis: <strong>{eur(requestedFromBasis(selected))}</strong></div>
+                        <div style={{ fontSize: 11, color: "#475569" }}>Computed from this basis: <strong>{eur(requestedFromBasis(selected))}</strong></div>
                         <SmallButton onClick={() => patch(selected.id, { requestedEUR: requestedFromBasis(selected) })}>Use as requested</SmallButton>
                       </div>
                     </div>
@@ -593,7 +593,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   <div style={{ marginTop: 10 }}>
                     <Lbl>EUR → PLN rate used when posting</Lbl>
                     <div data-claim-rate="1" style={{ ...INP, maxWidth: 180, background: "#F8FAFC" }}>{Number(selected.plnPerEur) > 0 ? Number(selected.plnPerEur).toFixed(4) : "—"}</div>
-                    <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 3 }}>{claimFxNote}</div>{/* v7.18.6 (A-AU-12): not typed */}
+                    <div style={{ fontSize: 10, color: "#64748B", marginTop: 3 }}>{claimFxNote}</div>{/* v7.18.6 (A-AU-12): not typed */}
                   </div>
                 </div>
 
@@ -603,21 +603,21 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     const { postings, warnings } = buildClaimPostings(selected, { todayISO: today });
                     const posted = isPosted(selected);
                     return <>
-                      <div style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.5, marginBottom: 8 }}>
+                      <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.5, marginBottom: 8 }}>
                         {selected.direction === "CONCESSION"
                           ? "Posting reduces this sales order's revenue by the agreed amount."
                           : "Posting reduces the affected lots' cost by the agreed amount, which flows through COGS into the sales order's margin."}
                         {" "}It is a dated, source-tagged adjustment — the original figures are never rewritten, and it can be reversed.
                       </div>
                       {postings.length > 0 && (
-                        <div style={{ background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 11.5, marginBottom: 8 }}>
+                        <div style={{ background: "#F8FAFC", border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 11, marginBottom: 8 }}>
                           {postings.map((p: any, i: number) => (
                             <div key={i}>{p.kind === "SO_REVENUE" ? "Revenue" : "Lot cost"} <strong>{p.ref}</strong> {p.amountPLN.toLocaleString("pl-PL")} PLN</div>
                           ))}
                         </div>
                       )}
                       {warnings.map((w: string, i: number) => (
-                        <div key={i} style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", fontSize: 11.5, color: "#92400E", marginBottom: 6 }}>{w}</div>
+                        <div key={i} style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 10px", fontSize: 11, color: "#92400E", marginBottom: 6 }}>{w}</div>
                       ))}
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <SmallButton kind="dark" onClick={() => postClaim(selected)}>{posted ? "Re-post agreed amount" : "Post agreed amount to P/L"}</SmallButton>
@@ -631,7 +631,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                       {(() => {
                         const rec = reconcileClaimNote(selected, (id: any) => (financeNotes || []).find((nt: any) => String(nt.id) === String(id)));
                         if (rec.state === "no-amount" || rec.state === "matched") return null;
-                        return <div style={{ marginTop: 9, padding: "8px 11px", borderRadius: 7, fontSize: 11.5,
+                        return <div style={{ marginTop: 9, padding: "8px 11px", borderRadius: 7, fontSize: 11,
                           background: rec.state === "differs" ? "#FEF2F2" : "#FFFBEB",
                           border: `1px solid ${rec.state === "differs" ? "#FECACA" : "#FDE68A"}`,
                           color: rec.state === "differs" ? "#991B1B" : "#92400E" }}>
@@ -643,7 +643,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                 </div>
 
                 {selected.acceptedEUR != null && selected.acceptedEUR !== "" && num(selected.acceptedEUR) !== num(selected.requestedEUR) && (
-                  <div style={{ marginTop: 10, padding: "7px 11px", borderRadius: 7, background: "#F0F9FF", border: "1px solid #BAE6FD", fontSize: 11.5, color: "#0C4A6E" }}>
+                  <div style={{ marginTop: 10, padding: "7px 11px", borderRadius: 7, background: "#F0F9FF", border: "1px solid #BAE6FD", fontSize: 11, color: "#0C4A6E" }}>
                     Agreed {eur(selected.acceptedEUR)} against {eur(selected.requestedEUR)} requested — a difference of {eur(num(selected.requestedEUR) - num(selected.acceptedEUR))}.
                   </div>
                 )}
@@ -685,9 +685,9 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                   )}
                 </div>
                 {selected.parentClaimId && (() => { const par = (claims || []).find((c: any) => String(c.id) === String(selected.parentClaimId));
-                  return par ? <div style={{ fontSize: 11.5, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>↳ Raised by client claim {par.number} ({par.status}) — {par.respondent?.name}</div> : null; })()}
+                  return par ? <div style={{ fontSize: 11, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>↳ Raised by client claim {par.number} ({par.status}) — {par.respondent?.name}</div> : null; })()}
                 {(claims || []).some((c: any) => String(c.parentClaimId) === String(selected.id)) && (
-                  <div style={{ fontSize: 11.5, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>
+                  <div style={{ fontSize: 11, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>
                     ↱ Recoveries raised from this claim: {(claims || []).filter((c: any) => String(c.parentClaimId) === String(selected.id)).map((c: any) => `${c.number} (${c.status})`).join(", ")}
                   </div>
                 )}
@@ -708,7 +708,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     </div>
                   );
                 })}
-                <div style={{ marginTop: 8, fontSize: 10.5, color: "#94A3B8", lineHeight: 1.5 }}>
+                <div style={{ marginTop: 8, fontSize: 10, color: "#94A3B8", lineHeight: 1.5 }}>
                   A claim can cover several lots — one reefer failure damages a whole container, not one pallet. Phase 2 adds raising a claim straight from a shipment.
                 </div>
               </Card>
@@ -736,30 +736,30 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                         onClick={() => patch(selected.id, { costLines: [...(selected.costLines || []), ...toClaimCostLines(chain.lines.filter((l: any) => !(selected.costLines || []).some((e: any) => e.label === l.label)), selected.plnPerEur)] })}>
                         Add to claim cost lines
                       </SmallButton>}>COST CHAIN — PRODUCER'S GATE → CLIENT'S WAREHOUSE</SectionTitle>
-                    <div style={{ fontSize: 10.5, color: "#94A3B8", marginBottom: 10, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 10, color: "#94A3B8", marginBottom: 10, lineHeight: 1.5 }}>
                       You buy EXW and sell CIF, so the producer's paperwork shows his gate price and nothing else. Everything after it was spent by you or by your client — and when the fruit is defective and the temperature record shows the transport was sound, that spend is what this claim is for.
                       {pct > 0 ? ` Scaled to the ${pct}% affected share.` : " Enter the defect % above to scale these to the affected share."}
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
                       {[["OUR COSTS", chain.oursPLN, "#334155"], ["CLIENT'S COSTS", chain.clientPLN, "#B45309"], ["TOTAL", chain.totalPLN, "#111"]].map(([k, v, c]: any) => (
                         <div key={k} style={{ background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px" }}>
-                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{k}</div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{k}</div>
                           <div style={{ fontSize: 14, fontWeight: 800, color: c, marginTop: 2 }}>{Math.round(v).toLocaleString("pl-PL")} PLN</div>
                         </div>
                       ))}
                     </div>
                     {chain.totalEUR > 0 && <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>≈ €{chain.totalEUR.toLocaleString("pl-PL")} at {selected.plnPerEur} PLN/EUR</div>}
 
-                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Ours — the lots&apos; costs and the sale&apos;s freight</div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Ours — the lots&apos; costs and the sale&apos;s freight</div>
                     {chain.lines.filter((l: any) => l.origin === "OURS").map((l: any) => (
-                      <div key={l.key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F8FAFC", fontSize: 11.5 }}>
+                      <div key={l.key} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F8FAFC", fontSize: 11 }}>
                         <span style={{ color: "#475569" }}>{l.label}</span>
                         <span style={{ fontWeight: 600 }}>{Math.round(l.amountPLN).toLocaleString("pl-PL")}</span>
                       </div>
                     ))}
                     {!chain.lines.some((l: any) => l.origin === "OURS") && <div style={{ fontSize: 11, color: "#94A3B8" }}>No allocated cost on these lots yet, and no delivery or return freight on their sales.</div>}
 
-                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#334155", margin: "12px 0 5px" }}>The client&apos;s — he incurred them, he charged them to us</div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: "#334155", margin: "12px 0 5px" }}>The client&apos;s — he incurred them, he charged them to us</div>
                     {clientLines.map((l: any, i: number) => (
                       <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 120px 34px", gap: 7, marginBottom: 5 }}>
                         <CostLabelPicker value={l.label} options={CLIENT_COST_PROMPTS} onChange={(v: string) => setClient(i, "label", v)} />
@@ -770,7 +770,7 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                     <SmallButton onClick={() => patch(selected.id, { clientCosts: [...clientLines, { label: "", amountPLN: "" }] })}>+ Client cost</SmallButton>
 
                     {gaps.length > 0 && (
-                      <div style={{ marginTop: 11, padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+                      <div style={{ marginTop: 11, padding: "8px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11, color: "#92400E" }}>
                         {gaps.map((g: string, i: number) => <div key={i}>· {g}</div>)}
                       </div>
                     )}
@@ -789,16 +789,16 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                 {(() => {
                   const gaps = claimEvidenceGaps(selected, (v: any) => inspectLink(v).ok);
                   if (!gaps.length) return (selected.evidence || []).length
-                    ? <div style={{ fontSize: 11.5, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, padding: "7px 10px", marginBottom: 9 }}>
+                    ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, padding: "7px 10px", marginBottom: 9 }}>
                         ✓ Everything a {String(selected.respondent?.kind || "claim").toLowerCase()} claim is normally argued on is attached and linked.
                       </div>
                     : null;
-                  return <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "8px 11px", marginBottom: 9 }}>
+                  return <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "8px 11px", marginBottom: 9 }}>
                     <strong>Evidence a {String(selected.respondent?.kind || "").toLowerCase()} claim is argued on</strong>
                     <div style={{ marginTop: 4, lineHeight: 1.5 }}>
                       {gaps.map((g, i) => <div key={i}>· <strong>{g.kind}</strong>{g.state === "no-link" ? " — named but no scan linked" : ""}: {g.why}</div>)}
                     </div>
-                    <div style={{ marginTop: 5, fontSize: 10.5, color: "#A16207" }}>Nothing is blocked — notify within the deadline even if these are still being gathered.</div>
+                    <div style={{ marginTop: 5, fontSize: 10, color: "#A16207" }}>Nothing is blocked — notify within the deadline even if these are still being gathered.</div>
                   </div>;
                 })()}
                 {!(selected.evidence || []).length && (
@@ -829,11 +829,11 @@ export default function Claims({ archive = null, claims = [], setClaims, contact
                 <Card>
                   <SectionTitle>INCIDENT — CONCEDED VS RECOVERED</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, textAlign: "center" }}>
-                    <div><div style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700 }}>CONCEDED</div><div style={{ fontSize: 15, fontWeight: 800 }}>{eur(family.conceded)}</div></div>
-                    <div><div style={{ fontSize: 10.5, color: "#166534", fontWeight: 700 }}>RECOVERED</div><div style={{ fontSize: 15, fontWeight: 800 }}>{eur(family.recovered)}</div></div>
-                    <div><div style={{ fontSize: 10.5, color: "#64748B", fontWeight: 700 }}>NET</div><div style={{ fontSize: 15, fontWeight: 800, color: family.net > 0 ? "#DC2626" : "#059669" }}>{eur(family.net)}</div></div>
+                    <div><div style={{ fontSize: 10, color: "#92400E", fontWeight: 700 }}>CONCEDED</div><div style={{ fontSize: 14, fontWeight: 800 }}>{eur(family.conceded)}</div></div>
+                    <div><div style={{ fontSize: 10, color: "#166534", fontWeight: 700 }}>RECOVERED</div><div style={{ fontSize: 14, fontWeight: 800 }}>{eur(family.recovered)}</div></div>
+                    <div><div style={{ fontSize: 10, color: "#64748B", fontWeight: 700 }}>NET</div><div style={{ fontSize: 14, fontWeight: 800, color: family.net > 0 ? "#DC2626" : "#059669" }}>{eur(family.net)}</div></div>
                   </div>
-                  <div style={{ marginTop: 10, fontSize: 10.5, color: "#94A3B8", lineHeight: 1.5 }}>
+                  <div style={{ marginTop: 10, fontSize: 10, color: "#94A3B8", lineHeight: 1.5 }}>
                     The gap is a commercial decision, not an error — sometimes you concede more to a client than you recover, to keep the relationship.
                   </div>
                 </Card>

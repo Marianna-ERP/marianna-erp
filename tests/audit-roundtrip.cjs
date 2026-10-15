@@ -3992,6 +3992,38 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.23.0 — A-DEP-1: a leftover file can no longer stop a deploy ══
+(function v72300(){
+  console.log("\n══ v7.23.0 — A-DEP-1: a leftover file can no longer stop a deploy ══");
+  const fsx = require("fs"), px = require("path"), cp = require("child_process"); const root = px.join(__dirname, "..");
+  t("A-DEP-1 (v7.23.0): before every build, a file in the copy that is not part of the release is named in the log (and the build goes on); the type-check reads only the files the app loads", () => {
+    eq(JSON.parse(fsx.readFileSync(px.join(root, "package.json"), "utf8")).scripts.prebuild, "node scripts/check-release.cjs");
+    eq((JSON.parse(fsx.readFileSync(px.join(root, "tsconfig.json"), "utf8")).include || []).join(), "src/index.tsx");
+    const stray = px.join(root, "src", "__LeftoverFromAnOldVersion.tsx"); fsx.writeFileSync(stray, 'import { GONE } from "./board.domain";\nexport default GONE;\n');
+    try { const out = cp.execFileSync("node", [px.join(root, "scripts", "check-release.cjs")], { encoding: "utf8" }); ok(/NOT part of v/.test(out) && /src\/__LeftoverFromAnOldVersion\.tsx/.test(out), "the leftover is not named: " + out.slice(0, 200)); }
+    finally { fsx.unlinkSync(stray); }
+  });
+})();
+
+// ══ v7.23.2 — A-SOL-1: the sale line says whether its lot covers it ══
+(function v72302(){
+  console.log("\n══ v7.23.2 — A-SOL-1: one statement per sale line ══");
+  const SD = B("salesOrders.domain.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("A-SOL-1 (v7.23.2): a line's availability is what its own lot has free — no other sources, no combined figure; the form says 'This line · Free · Short by' (the shortage highlighted), without icons", () => {
+    const lots = [{ number: "LOT-A", product: "Apples", variety: "Elise", availableKg: 15000 }, { number: "LOT-B", product: "Apples", variety: "Elise", availableKg: 9000 }, { number: "LOT-C", product: "Apples", variety: "Gala", availableKg: 21294 }];
+    const a = SD.computeLineAvailability([{ product: "Apples", variety: "Elise", sourceType: "STOCK", sourceRef: "LOT-A", qty: 19422 }], [], null, lots, [], [])[0];
+    eq(a.primaryAvailable, 15000); eq(a.overage, 4422); eq(a.hasOverage, true);
+    ["otherSourcesAvailable", "combinedAvailable", "otherStockKg", "otherPOKg"].forEach(k => ok(!(k in a), k + " is still worked out"));
+    const src = rd("SalesOrderForm.tsx"); ok(/>This line <strong>/.test(src) && />Free <strong>/.test(src) && /Short by \{fmtNum\(avail\.overage\)\} kg/.test(src), "the statement");
+    ok(!/Other sources|Combined <strong>|🚚 \$\{fmtNum|⚠ Availability/.test(src), "the old strip is still there");
+  });
+  t("A-SOL-1 (v7.23.2): 'Change source' offers only true matches — same item and variety, and size, class, origin, coloration where both carry one; a lot without a variety is never a match", () => {
+    const line = { product: "Apples", variety: "Elise", size: "70-80", grade: "I", origin: "Poland", coloration: "red blush" };
+    eq([{ product: "Apples", variety: "Elise", size: "70-80", quality: "I", origin: "Poland" }, { product: "Apples", variety: "" }, { product: "Apples", variety: "Gala" }, { product: "Apples", variety: "Elise", size: "65-70" }, { product: "Apples", variety: "Elise", coloration: "green" }, { product: "Pears", variety: "Elise" }].map(l => SD.sourceMatch(line, l)).join(), "match,no-variety,different,different,different,different");
+    const src = rd("SalesOrderForm.tsx"); ok(/sourceMatch\(lineItem, l\) === "match"/.test(src) && /No variety — fill it in on the lot or its PO/.test(src), "the picker");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

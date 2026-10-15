@@ -24,6 +24,39 @@ for (const r of rules) {
 // the clock itself: the suite must be running on Poland's clock
 const tz = Intl.DateTimeFormat().resolvedOptions().timeZone; checked++;
 if (tz !== "Europe/Warsaw") { failed++; console.log(`  ✗ clock: ${tz} — the suites must run in Europe/Warsaw`); } else console.log("  ✓ clock: Europe/Warsaw");
+// v7.23.4 (A-UI-2, Batch G): ONE FONT AND ONE SCALE ON EVERY SCREEN — text sizes 10, 11, 12, 13, 14, 16, 20, 24 px and the app's own
+// font (even-width figures where numbers line up). Printed documents keep theirs: the document files, the pieces they borrow from
+// the screens (BiLbl, PrintLogo, FieldPrint) and the screen parts printed as they are (management package, statement, lot trace)
+{
+  checked++; const ts = require("typescript"); const SCALE = new Set([10, 11, 12, 13, 14, 16, 20, 24]);
+  const PRINT_FILES = new Set(["PurchaseOrderDocument.tsx", "SalesOrderDocument.tsx", "QualityReportDoc.tsx", "SalesReportDoc.tsx", "ShipmentDocuments.tsx", "LoadingProtocolModal.tsx"]);
+  const PRINT_PIECES = new Set(["BiLbl", "PrintLogo", "FieldPrint"]); const PRINTED_IDS = new Set(["mgmt-package", "statement-print", "lot-trace-doc"]);
+  const off = [];
+  fs.readdirSync(src).filter(f => /\.tsx$/.test(f) && !PRINT_FILES.has(f)).forEach(f => {
+    const text = fs.readFileSync(path.join(src, f), "utf8"); const sf = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const line = n => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+    (function w(n) {
+      if ((ts.isFunctionDeclaration(n) && n.name && PRINT_PIECES.has(n.name.text))) return;
+      const op = ts.isJsxElement(n) ? n.openingElement : ts.isJsxSelfClosingElement(n) ? n : null;
+      if (op && op.attributes.properties.some(a => ts.isJsxAttribute(a) && a.name.getText(sf) === "id" && a.initializer && ts.isStringLiteral(a.initializer) && PRINTED_IDS.has(a.initializer.text))) return;
+      if (ts.isPropertyAssignment(n) && n.name.getText(sf) === "fontSize" && ts.isNumericLiteral(n.initializer) && !SCALE.has(Number(n.initializer.text))) off.push(`${f}:${line(n)} ${n.initializer.text}px`);
+      if (ts.isPropertyAssignment(n) && n.name.getText(sf) === "fontFamily" && /monospace/.test(n.initializer.getText(sf))) off.push(`${f}:${line(n)} typewriter font`);
+      ts.forEachChild(n, w);
+    })(sf);
+  });
+  if (off.length) { failed++; console.log(`  ✗ one font: ${off.length} off the standard — ${off.slice(0, 4).join(", ")}`); } else console.log("  ✓ one font: every screen size is on the scale (10–24 px) and in the app's font; printed documents keep theirs");
+}
+// v7.23.0 (A-DEP-1, Batch G): THE RELEASE LIST IS THE REPOSITORY — release-files.json names exactly the files of this version,
+// so the pre-build check can name any leftover in the GitHub copy; and the type-check reads only what the app loads
+{
+  checked++; const { walk, root } = require("../scripts/release-files.cjs"); let rl = null; try { rl = JSON.parse(fs.readFileSync(path.join(root, "release-files.json"), "utf8")); } catch {}
+  const ver = (fs.readFileSync(path.join(src, "version.ts"), "utf8").match(/APP_VERSION = "([^"]+)"/) || [])[1];
+  const have = walk(root).sort(); const listed = (rl && rl.files) || [];
+  const extra = have.filter(f => !listed.includes(f)), gone = listed.filter(f => !have.includes(f));
+  const inc = JSON.parse(fs.readFileSync(path.join(root, "tsconfig.json"), "utf8")).include || [];
+  if (!rl || rl.version !== ver || extra.length || gone.length || inc.join() !== "src/index.tsx") { failed++; console.log(`  ✗ release list: ${!rl ? "missing" : `v${rl.version} for v${ver}; not listed ${extra.slice(0, 3).join(", ")}; listed but absent ${gone.slice(0, 3).join(", ")}`}${inc.join() !== "src/index.tsx" ? "; the type-check reads more than the app" : ""} — run npm run release:files`); }
+  else console.log(`  ✓ release list: v${ver}, ${have.length} files, exactly the repository; the type-check reads what the app loads`);
+}
 // v7.22.5 (A-RV-17, Batch F): THE APP'S OWN WINDOWS — no browser confirm / alert / prompt; only the crash screen keeps one,
 // because it is a class component shown when the app itself has failed
 {

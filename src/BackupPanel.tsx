@@ -17,7 +17,7 @@ function when(iso: string): string {
   return today ? `today ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : d.toLocaleString([], { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-const ROW: any = { display: "grid", gridTemplateColumns: "150px 1fr", gap: 8, fontSize: 12.5, padding: "5px 0", borderBottom: "1px solid #F5F5F5" };
+const ROW: any = { display: "grid", gridTemplateColumns: "150px 1fr", gap: 8, fontSize: 12, padding: "5px 0", borderBottom: "1px solid #F5F5F5" };
 const KEY: any = { color: "#888", fontWeight: 600 };
 
 export function AutoBackupCardView({ status, onChoose, onBackupNow, onStop, onDownload, message = null }: any) {
@@ -47,9 +47,9 @@ export function AutoBackupCardView({ status, onChoose, onBackupNow, onStop, onDo
           </div>
           <div style={ROW}><div style={KEY}>Status</div><div style={{ color: modeLine.color, fontWeight: 700 }}>{modeLine.text}</div></div>
           <div style={ROW}><div style={KEY}>Folder</div><div>{set ? (st.folderName || "—") : "—"}</div></div>
-          <div style={ROW}><div style={KEY}>Last file</div><div>{st.lastFileName ? <>{when(st.lastWrittenAt)} · <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11.5 }}>{st.lastFileName}</span></> : "—"}</div></div>
+          <div style={ROW}><div style={KEY}>Last file</div><div>{st.lastFileName ? <>{when(st.lastWrittenAt)} · <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>{st.lastFileName}</span></> : "—"}</div></div>
           <div style={ROW}><div style={KEY}>Files kept</div><div>{st.filesKept || "—"}</div></div>
-          {st.mode === "failed" && st.lastError && <div style={{ marginTop: 10, padding: "8px 12px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, fontSize: 12.5, color: "#991B1B" }}>{st.lastError}</div>}
+          {st.mode === "failed" && st.lastError && <div style={{ marginTop: 10, padding: "8px 12px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, fontSize: 12, color: "#991B1B" }}>{st.lastError}</div>}
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <SmallButton kind="green" onClick={onChoose} disabled={st.busy}>{set ? "Change folder…" : "Choose folder…"}</SmallButton>
             {set && <SmallButton kind="green" onClick={onBackupNow} disabled={st.busy}>{st.busy ? "Writing…" : "Back up to folder now"}</SmallButton>}
@@ -57,7 +57,7 @@ export function AutoBackupCardView({ status, onChoose, onBackupNow, onStop, onDo
           </div>
         </>
       )}
-      {message && <div style={{ marginTop: 12, fontSize: 12.5, color: message.kind === "error" ? "#991B1B" : "#065F46" }}>{message.text}</div>}
+      {message && <div style={{ marginTop: 12, fontSize: 12, color: message.kind === "error" ? "#991B1B" : "#065F46" }}>{message.text}</div>}
     </Card>
   );
 }
@@ -89,8 +89,8 @@ export function BackupBannerView({ kind, status, onChoose, onResume, onRetry, on
     : kind === "failed" ? <><strong>Automatic backup failed.</strong> {status.lastError || "The last file could not be written."} Your data is safe in this browser; the folder copy is not up to date.</>
     : <><strong>Your data lives only in this browser</strong>, which can't write to a folder. Download today's backup and keep it somewhere other than this computer.</>;
   return (
-    <div data-backup-banner={kind} style={{ background: red ? "#FEF2F2" : "#FEF3C7", borderBottom: `1px solid ${red ? "#FCA5A5" : "#FDE68A"}`, padding: "10px 28px", display: "flex", alignItems: "center", gap: 12, fontSize: 12.5, color: red ? "#991B1B" : "#92400E", flexShrink: 0 }}>
-      <span style={{ fontSize: 15 }}>{red ? "🛑" : "💾"}</span>
+    <div data-backup-banner={kind} style={{ background: red ? "#FEF2F2" : "#FEF3C7", borderBottom: `1px solid ${red ? "#FCA5A5" : "#FDE68A"}`, padding: "10px 28px", display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: red ? "#991B1B" : "#92400E", flexShrink: 0 }}>
+      <span style={{ fontSize: 14 }}>{red ? "🛑" : "💾"}</span>
       <span style={{ flex: 1, lineHeight: 1.45 }}>{text}</span>
       {kind === "notSet" && <SmallButton kind="green" onClick={onChoose}>Choose backup folder</SmallButton>}
       {kind === "paused" && <SmallButton kind="green" onClick={onResume}>Resume</SmallButton>}

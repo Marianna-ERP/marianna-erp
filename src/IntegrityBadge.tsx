@@ -44,7 +44,7 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
         }}>
         <span style={{ fontSize: 12 }}>{clean ? "✓" : "⚠"}</span>
         {clean ? "Data OK" : `${counts.total} data issue${counts.total === 1 ? "" : "s"}`}
-        <span style={{ fontSize: 9, opacity: 0.7, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.12s" }}>▾</span>
+        <span style={{ fontSize: 10, opacity: 0.7, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.12s" }}>▾</span>
       </button>
 
       {open && (
@@ -61,8 +61,8 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
               if (!ol.length && !dl.invoices.length && !dl.claims.length) return null;
               return <div style={{ padding: "10px 14px", background: "#FFFBEB", borderBottom: "1px solid #FDE68A", display: "grid", gap: 6 }}>
                 <div style={{ fontSize: 11, fontWeight: 800, color: "#92400E" }}>REPAIRS — leftovers of documents deleted by hand</div>
-                {ol.length > 0 && <button onClick={() => onRepair("orphanLots")} style={{ textAlign: "left", fontSize: 11.5, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🧹 Remove {ol.length} orphan lot(s) — their PO no longer exists and they hold no stock: {ol.slice(0, 4).map((l: any) => l.number).join(", ")}{ol.length > 4 ? "…" : ""}</button>}
-                {(dl.invoices.length > 0 || dl.claims.length > 0) && <button onClick={() => onRepair("danglingLinks")} style={{ textAlign: "left", fontSize: 11.5, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🔗 Unlink {dl.invoices.length} invoice(s) and {dl.claims.length} claim(s) from documents that no longer exist</button>}
+                {ol.length > 0 && <button onClick={() => onRepair("orphanLots")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🧹 Remove {ol.length} orphan lot(s) — their PO no longer exists and they hold no stock: {ol.slice(0, 4).map((l: any) => l.number).join(", ")}{ol.length > 4 ? "…" : ""}</button>}
+                {(dl.invoices.length > 0 || dl.claims.length > 0) && <button onClick={() => onRepair("danglingLinks")} style={{ textAlign: "left", fontSize: 11, border: "1px solid #FDE68A", background: "#fff", borderRadius: 7, padding: "6px 9px", cursor: "pointer" }}>🔗 Unlink {dl.invoices.length} invoice(s) and {dl.claims.length} claim(s) from documents that no longer exist</button>}
               </div>; })()}
             <div style={{ padding: "12px 16px", borderBottom: "1px solid #F3F4F6", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong style={{ fontSize: 13 }}>Data integrity</strong>
@@ -71,7 +71,7 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
               </span>
             </div>
             {clean ? (
-              <div style={{ padding: "20px 16px", fontSize: 12.5, color: "#047857" }}>
+              <div style={{ padding: "20px 16px", fontSize: 12, color: "#047857" }}>
                 ✓ No structural problems found. References resolve, no lot is oversold, and settlements look consistent.
               </div>
             ) : (
@@ -82,12 +82,12 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
                     <div key={i} style={{ padding: "9px 16px", borderBottom: i < issues.length - 1 ? "1px solid #F7F7F7" : "none", display: "flex", gap: 10 }}>
                       <span style={{ color: SEV_COLOR[iss.severity], fontSize: 13, lineHeight: "16px" }}>{iss.severity === "error" ? "●" : iss.severity === "warning" ? "▲" : "○"}</span>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 12.5, color: "#111", lineHeight: 1.4 }}>{iss.message}</div>
-                        <div style={{ fontSize: 10.5, color: "#9CA3AF", marginTop: 3, display: "flex", gap: 8, alignItems: "center" }}>
-                          <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{iss.entity}</span>
+                        <div style={{ fontSize: 12, color: "#111", lineHeight: 1.4 }}>{iss.message}</div>
+                        <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: 3, display: "flex", gap: 8, alignItems: "center" }}>
+                          <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{iss.entity}</span>
                           <span>·</span>
                           {key && onNavigate
-                            ? <button onClick={() => { onNavigate(key); setOpen(false); }} style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", fontSize: 10.5, padding: 0, fontFamily: "inherit" }}>Go to {iss.module} →</button>
+                            ? <button onClick={() => { onNavigate(key); setOpen(false); }} style={{ border: "none", background: "none", color: "#2563EB", cursor: "pointer", fontSize: 10, padding: 0, fontFamily: "inherit" }}>Go to {iss.module} →</button>
                             : <span>{iss.module}</span>}
                         </div>
                       </div>
@@ -96,7 +96,7 @@ export default function IntegrityBadge({ data, onNavigate, onRepair }: { data: I
                 })}
               </div>
             )}
-            <div style={{ padding: "10px 16px", borderTop: "1px solid #F3F4F6", fontSize: 10.5, color: "#9CA3AF", lineHeight: 1.5 }}>
+            <div style={{ padding: "10px 16px", borderTop: "1px solid #F3F4F6", fontSize: 10, color: "#9CA3AF", lineHeight: 1.5 }}>
               This check is read-only — it never changes your data. It flags structural problems (broken references, oversold lots, double-counted settlements) that can distort figures. Fix them in the linked module.
             </div>
           </div>

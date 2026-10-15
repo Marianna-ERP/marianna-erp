@@ -66,7 +66,7 @@ function money(n: number, cur?: string) { if (n == null || isNaN(n)) return "—
 function daysUntil(d: string) { if (!d) return null; const t = new Date(localTodayISO()); const x = new Date(d); return Math.floor((x.getTime() - t.getTime()) / 86400000); }
 
 // v6.30.1: fall back to OTHER so an unknown/legacy category can never crash the render.
-function CatBadge({ cat }: { cat: InvoiceCategory }) { const m = CATEGORY_META[cat] || CATEGORY_META.OTHER; return <span style={{ background: m.bg, color: m.color, padding: "2px 8px", borderRadius: 6, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{cat}</span>; }
+function CatBadge({ cat }: { cat: InvoiceCategory }) { const m = CATEGORY_META[cat] || CATEGORY_META.OTHER; return <span style={{ background: m.bg, color: m.color, padding: "2px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{cat}</span>; }
 function StatusBadge({ s }: { s: PaymentStatus }) { const m = STATUS_META[s] || STATUS_META.Draft; return <span style={{ background: m.bg, color: m.color, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{statusWord(s)}</span>; }
 function DirPill({ inv }: { inv: Invoice }) { const r = invoiceDirection(inv) === "receivable"; return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: r ? "#16A34A" : "#475569", fontWeight: 600 }}><span style={{ fontSize: 13 }}>{r ? "↑" : "↓"}</span>{r ? "Receivable" : "Payable"}</span>; }
 
@@ -87,12 +87,12 @@ function PaymentEventModal({ inv, onClose, onSave }: any) {
   }, [date, inv?.currency]);
   const [method, setMethod] = useState("Bank transfer");
   const [note, setNote] = useState("");
-  const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10, fontFamily: "inherit" } as any;
+  const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, marginBottom: 10, fontFamily: "inherit" } as any;
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 8000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 400, maxWidth: "100%", boxShadow: "0 24px 60px rgba(0,0,0,0.25)", padding: 20 }}>
         <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>Record payment — {inv.number}</div>
-        <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 12 }}>Outstanding: <b>{remaining.toFixed(2)} {inv.currency}</b>. Each payment is a dated event — partial payments simply add more events.</div>
+        <div style={{ fontSize: 11, color: "#64748B", marginBottom: 12 }}>Outstanding: <b>{remaining.toFixed(2)} {inv.currency}</b>. Each payment is a dated event — partial payments simply add more events.</div>
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Payment date</div>
         <DateInput value={date} onChange={e => setDate(e.target.value)} style={inp} />
         <div style={{ fontSize: 11, fontWeight: 600, color: "#888", marginBottom: 4 }}>Amount ({inv.currency})</div>
@@ -237,10 +237,10 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
       <div style={{ width: 1100, maxWidth: "96vw", maxHeight: "92vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={(e: any) => e.stopPropagation()}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 800 }}>Import from Fakturownia</div>
-            <div style={{ fontSize: 11.5, color: "#64748B" }}>Fetch your received cost invoices, tag each one, and post — freight/customs flip the matching shipment cost line to <b>Received</b>; goods link the PO; warehouse and overhead go to their registers. Fakturownia stays the register of record.</div>
+            <div style={{ fontSize: 14, fontWeight: 800 }}>Import from Fakturownia</div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>Fetch your received cost invoices, tag each one, and post — freight/customs flip the matching shipment cost line to <b>Received</b>; goods link the PO; warehouse and overhead go to their registers. Fakturownia stays the register of record.</div>
           </div>
-          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Close</button>
+          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Close</button>
         </div>
         <div style={{ padding: "12px 22px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid #F3F4F6", flexWrap: "wrap" }}>
           <select style={inp} value={period} onChange={(e: any) => setPeriod(e.target.value)}>
@@ -252,14 +252,14 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
             📄 Upload register file (XLS/CSV)
             <input type="file" accept=".xls,.xlsx,.csv" style={{ display: "none" }} onChange={onFile} />
           </label>
-          {fileName && <span style={{ fontSize: 11.5, color: "#64748B" }}>{fileName}</span>}
+          {fileName && <span style={{ fontSize: 11, color: "#64748B" }}>{fileName}</span>}
           {error && <span style={{ fontSize: 12, color: "#DC2626", fontWeight: 600 }}>{error}</span>}
           {!error && fetchNote && <span style={{ fontSize: 12, color: fetchNote.includes("no received") ? "#B45309" : "#15803D", fontWeight: 600 }}>{fetchNote}</span>}{/* v7.1.7 (A-FI-4) */}
         </div>
         {rows.length > 0 && (
           <div style={{ padding: "10px 22px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "26px 78px 1.3fr 1fr 110px 130px 1.6fr", gap: 8, padding: "6px 0", borderBottom: "1px solid #F3F4F6" }}>
-              {["", "DATE", "SELLER", "NUMBER", "NET", "TAG", "ROUTE / LINK"].map((h, i) => <div key={i} style={{ fontSize: 9.5, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
+              {["", "DATE", "SELLER", "NUMBER", "NET", "TAG", "ROUTE / LINK"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.05em" }}>{h}</div>)}
             </div>
             {rows.map((r: any) => {
               const rowPLN = Math.round((r.net || r.gross) * (r.fxRate || 1) * 100) / 100;
@@ -274,14 +274,14 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
                     }
                     upd(r.key, { include: e.target.checked });
                   }} />
-                  <div style={{ fontSize: 11.5, color: "#64748B" }}>{r.date}</div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.dup && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
-                  <div style={{ fontSize: 11.5, fontFamily: "ui-monospace, Menlo, monospace" }}>{r.number || "—"}</div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>{r.date}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{r.seller}{r.dup && (() => { const info = duplicateCostInvoiceInfo(r.number, invoices); return <span title={info ? `Duplicate of ${info.number} — ${info.status}, ${info.grossAmount.toLocaleString("pl-PL")} PLN${info.source.startsWith("manual") ? " (entered manually)" : ""}` : "Already in the register"} style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#B91C1C", background: "#FEF2F2", border: "1px solid #FECACA", padding: "1px 6px", borderRadius: 4 }}>DUPLICATE{info ? ` of ${info.status} · ${info.grossAmount.toLocaleString("pl-PL")} PLN` : ""}</span>; })()}</div>
+                  <div style={{ fontSize: 11, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.number || "—"}</div>
                   <div style={{ fontSize: 12 }}>{(r.net || r.gross).toLocaleString("pl-PL")} {r.currency}</div>
                   <select style={inp} value={r.tag} onChange={(e: any) => upd(r.key, { tag: e.target.value })}>
                     {IMPORT_TAGS.map((t: string) => <option key={t} value={t}>{TAG_LABELS[t]}</option>)}
                   </select>
-                  <div style={{ fontSize: 11.5 }}>
+                  <div style={{ fontSize: 11 }}>
                     {(r.tag === "FREIGHT" || r.tag === "CUSTOMS") && (
                       <select style={{ ...inp, width: "100%" }} value={r.shipmentNumber || ""} onChange={(e: any) => upd(r.key, { shipmentNumber: e.target.value, costLineId: null })}>
                         <option value="">— link shipment —</option>
@@ -316,7 +316,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
               );
             })}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "14px 0 6px" }}>
-              <button disabled={!included} onClick={post} style={{ border: "none", background: included ? "#16A34A" : "#D1D5DB", color: "#fff", borderRadius: 8, padding: "9px 18px", fontSize: 12.5, fontWeight: 700, cursor: included ? "pointer" : "not-allowed" }}>Post {included} invoice{included === 1 ? "" : "s"}</button>
+              <button disabled={!included} onClick={post} style={{ border: "none", background: included ? "#16A34A" : "#D1D5DB", color: "#fff", borderRadius: 8, padding: "9px 18px", fontSize: 12, fontWeight: 700, cursor: included ? "pointer" : "not-allowed" }}>Post {included} invoice{included === 1 ? "" : "s"}</button>
             </div>
           </div>
         )}
@@ -347,7 +347,7 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
   const [over, setOver] = useState<Record<string, string>>({});
   const rows = proposal.rows.map(r => ({ ...r, pln: over[r.lotNumber] !== undefined && over[r.lotNumber] !== "" ? (parseFloat(String(over[r.lotNumber]).replace(",", ".")) || 0) : r.pln }));
   const sum = Math.round(rows.reduce((a, r) => a + r.pln, 0) * 100) / 100; const diff = Math.round((sum - proposal.totalPLN) * 100) / 100;
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12, width: "100%", boxSizing: "border-box" };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={onClose}>
       <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, width: 640, maxWidth: "95vw", maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}>
@@ -366,11 +366,11 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
           {proposal.rows.length > 0 && <div style={{ border: "1px solid #EBEBEB", borderRadius: 8 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.6fr 0.9fr 0.6fr 0.9fr", gap: 8, padding: "6px 10px", background: "#F9FAFB", fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>LOT</div><div>PRODUCT</div><div style={{ textAlign: "right" }}>KG-DAYS</div><div style={{ textAlign: "right" }}>SHARE</div><div style={{ textAlign: "right" }}>PLN</div></div>
             {rows.map(r => <div key={r.lotNumber} style={{ display: "grid", gridTemplateColumns: "1.2fr 1.6fr 0.9fr 0.6fr 0.9fr", gap: 8, padding: "5px 10px", borderTop: "1px solid #F3F4F6", fontSize: 12, alignItems: "center" }}>
-              <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#1D4ED8" }}>{r.lotNumber}</div><div style={{ color: "#475569" }}>{r.product}</div>
+              <div style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700, color: "#1D4ED8" }}>{r.lotNumber}</div><div style={{ color: "#475569" }}>{r.product}</div>
               <div style={{ textAlign: "right" }}>{r.kgDays.toLocaleString("pl-PL")}</div><div style={{ textAlign: "right", color: "#94A3B8" }}>{r.sharePct}%</div>
               <div><input value={over[r.lotNumber] ?? r.pln} onChange={e => setOver(o => ({ ...o, [r.lotNumber]: e.target.value }))} style={{ ...inp, textAlign: "right", padding: "4px 6px" }} /></div>
             </div>)}
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", borderTop: "2px solid #E5E7EB", fontSize: 12.5, fontWeight: 700 }}><span>Allocated</span><span style={{ color: Math.abs(diff) >= 0.005 ? "#DC2626" : "#15803D" }}>{sum.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} of {proposal.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN{Math.abs(diff) >= 0.005 ? ` · ${diff > 0 ? "+" : ""}${diff.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}` : " ✓"}</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 10px", borderTop: "2px solid #E5E7EB", fontSize: 12, fontWeight: 700 }}><span>Allocated</span><span style={{ color: Math.abs(diff) >= 0.005 ? "#DC2626" : "#15803D" }}>{sum.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} of {proposal.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN{Math.abs(diff) >= 0.005 ? ` · ${diff > 0 ? "+" : ""}${diff.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}` : " ✓"}</span></div>
           </div>}
         </div>
         <div style={{ padding: "12px 22px", borderTop: "1px solid #EBEBEB", display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -713,7 +713,7 @@ export default function Invoices(props: any) {
           ].map((k, i) => (
             <div key={i} style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "10px 14px" }}>
               <div style={{ fontSize: 10, color: "#888", fontWeight: 700, letterSpacing: "0.04em" }}>{k.l}</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: k.c, marginTop: 3 }}>{k.v}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: k.c, marginTop: 3 }}>{k.v}</div>
             </div>
           ))}
         </div>
@@ -738,13 +738,13 @@ export default function Invoices(props: any) {
             return (
               <div key={i.id} onClick={() => { setSelId(i.id); setView("detail"); }} style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "11px 16px", borderBottom: idx < filtered.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><CatBadge cat={i.category} /></div>
-                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: i.paymentStatus === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: i.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "ui-monospace, Menlo, monospace" }} title={i.paymentStatus === "Cancelled" ? "Cancelled — kept on record, excluded from the ledger" : undefined}>{i.number || "—"}</div>{i.isProforma && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", padding: "1px 5px", borderRadius: 4 }}>PRO-FORMA</span>}<DirPill inv={i} /></div>
+                <div><div style={{ fontSize: 12, fontWeight: 600, color: i.paymentStatus === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: i.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }} title={i.paymentStatus === "Cancelled" ? "Cancelled — kept on record, excluded from the ledger" : undefined}>{i.number || "—"}</div>{i.isProforma && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: "#7C3AED", background: "#F5F3FF", border: "1px solid #DDD6FE", padding: "1px 5px", borderRadius: 4 }}>PRO-FORMA</span>}<DirPill inv={i} /></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{i.counterparty?.name || "—"}</div>{i.counterparty?.nip && <div style={{ fontSize: 11, color: "#AAA" }}>NIP {i.counterparty.nip}</div>}</div>
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(i.issueDate) || "—"}</div>
                 <div><div style={{ fontSize: 12, color: od ? "#B45309" : "#555", fontWeight: od ? 600 : 400 }}>{formatDMY(i.dueDate) || "—"}</div>{od && <div style={{ fontSize: 10, color: "#B45309", fontWeight: 600 }}>{Math.abs(d as number)}d late</div>}</div>
                 <div><div style={{ fontSize: 13, fontWeight: 600 }}>{money(i.grossAmount, i.currency)}</div>{i.currency !== "PLN" && <div style={{ fontSize: 10, color: "#AAA" }}>{money(i.grossPLN, "PLN")}</div>}</div>
                 <div><StatusBadge s={i.paymentStatus} /></div>
-                <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.links[0]?.number || "—"}{i.links.length > 1 && <span style={{ color: "#AAA" }}> +{i.links.length - 1}</span>}{(i.creditNoteIds?.length > 0) && <span title="has credit/debit notes" style={{ color: "#7C3AED", marginLeft: 6 }}>↩</span>}</div>
+                <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{i.links[0]?.number || "—"}{i.links.length > 1 && <span style={{ color: "#AAA" }}> +{i.links.length - 1}</span>}{(i.creditNoteIds?.length > 0) && <span title="has credit/debit notes" style={{ color: "#7C3AED", marginLeft: 6 }}>↩</span>}</div>
               </div>
             );
           })}
@@ -757,13 +757,13 @@ export default function Invoices(props: any) {
             return (
               <div key={`note-${nt.id}`} onClick={() => { if (linked) { setSelId(linked.id); setView("detail"); } else { setNoteForm({ ...nt }); setView("note"); } }} style={{ display: "grid", gridTemplateColumns: "64px 150px 1fr 96px 96px 130px 130px 90px", padding: "11px 16px", borderBottom: idx < filteredNotes.length - 1 ? "1px solid #F3F4F6" : "none", alignItems: "center", cursor: "pointer" }} onMouseEnter={e => (e.currentTarget.style.background = "#FAFAFA")} onMouseLeave={e => (e.currentTarget.style.background = "#fff")}>
                 <div><span style={{ background: isCredit ? "#FFF7ED" : "#EFF6FF", color: isCredit ? "#9A3412" : "#1D4ED8", padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em" }}>{isCredit ? "CREDIT" : "DEBIT"}</span></div>
-                <div><div style={{ fontSize: 12.5, fontWeight: 600, color: "#9A3412", fontFamily: "ui-monospace, Menlo, monospace" }}>{nt.number || "(note)"}</div><div style={{ fontSize: 10, color: "#AAA" }}>{nt.category || nt.reason || "—"}</div></div>
+                <div><div style={{ fontSize: 12, fontWeight: 600, color: "#9A3412", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{nt.number || "(note)"}</div><div style={{ fontSize: 10, color: "#AAA" }}>{nt.category || nt.reason || "—"}</div></div>
                 <div><div style={{ fontSize: 13, fontWeight: 500 }}>{nt.partyName || "—"}</div></div>
                 <div style={{ fontSize: 12, color: "#555" }}>{formatDMY(nt.date) || "—"}</div>
                 <div style={{ fontSize: 12, color: "#AAA" }}>—</div>
                 <div><div style={{ fontSize: 13, fontWeight: 600, color: isCredit ? "#9A3412" : "#1D4ED8" }}>{isCredit ? "−" : "+"}{money(nt.amount, nt.currency)}</div></div>
                 <div><StatusBadge s={nt.status} /></div>
-                <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{linked ? (linked.number || "(invoice)") : "standalone"}</div>
+                <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{linked ? (linked.number || "(invoice)") : "standalone"}</div>
               </div>
             );
           })}
@@ -801,7 +801,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
                 <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em", marginBottom: 6 }}>PAYMENTS ({evts.length}) — {money(evts.reduce((t: number, p: any) => t + (parseFloat(p.amount) || 0), 0), inv.currency)} of {money(inv.grossAmount, inv.currency)}</div>
                 {evts.map((p: any) => (
                   <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "3px 0", borderTop: "1px solid #F1F5F9" }}>
-                    <span style={{ fontFamily: "ui-monospace, Menlo, monospace", color: "#64748B", minWidth: 82 }}>{p.date || "—"}</span>
+                    <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", color: "#64748B", minWidth: 82 }}>{p.date || "—"}</span>
                     <span style={{ fontWeight: 700 }}>{money(p.amount, inv.currency)}</span>
                     <span style={{ color: "#64748B" }}>{p.method}</span>
                     {p.note && <span style={{ color: "#94A3B8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{p.note}</span>}
@@ -819,17 +819,17 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
 
       <div style={{ flex: 1, overflowY: "auto", padding: "24px 32px" }}>
         <div style={{ maxWidth: 1000, margin: "0 auto" }}>
-          {pushState && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: 600, background: pushState.tone === "#16A34A" ? "#ECFDF5" : pushState.tone === "#DC2626" ? "#FEF2F2" : pushState.tone === "#D97706" ? "#FFF7ED" : "#EFF6FF", color: pushState.tone, border: `1px solid ${pushState.tone}33` }}>{pushState.msg}{pushState.tone === "#D97706" && <button onClick={onCopyPayload} style={{ marginLeft: 10, padding: "3px 10px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#D97706", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>Copy payload</button>}</div>}
+          {pushState && <div style={{ marginBottom: 16, padding: "10px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, background: pushState.tone === "#16A34A" ? "#ECFDF5" : pushState.tone === "#DC2626" ? "#FEF2F2" : pushState.tone === "#D97706" ? "#FFF7ED" : "#EFF6FF", color: pushState.tone, border: `1px solid ${pushState.tone}33` }}>{pushState.msg}{pushState.tone === "#D97706" && <button onClick={onCopyPayload} style={{ marginLeft: 10, padding: "3px 10px", borderRadius: 6, border: "1px solid #D97706", background: "#fff", color: "#D97706", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>Copy payload</button>}</div>}
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
             <div>
               <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 6 }}><CatBadge cat={inv.category} /><DirPill inv={inv} /><StatusBadge s={inv.paymentStatus} />{locked && <span style={{ fontSize: 11, color: "#0284C7", fontWeight: 600 }}>🔒 locked</span>}</div>
-              <div style={{ fontSize: 24, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.number || "(no number yet)"}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{inv.number || "(no number yet)"}</div>
               <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>{(CATEGORY_META[inv.category] || CATEGORY_META.OTHER).label} · {inv.counterparty?.name || "—"}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Gross total</div>
-              <div style={{ fontSize: 28, fontWeight: 700 }}>{money(inv.grossAmount, inv.currency)}</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{money(inv.grossAmount, inv.currency)}</div>
               {inv.currency !== "PLN" && <div style={{ fontSize: 12, color: "#888" }}>{money(inv.grossPLN, "PLN")} · rate {inv.fxRate}</div>}
             </div>
           </div>
@@ -858,7 +858,7 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
 
           {customs.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>CUSTOMS</SectionTitle>
             {customs.map((c: any, i: number) => (
-              <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12.5, color: "#444", padding: "6px 0", borderTop: i ? "1px solid #F3F4F6" : "none" }}>
+              <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12, color: "#444", padding: "6px 0", borderTop: i ? "1px solid #F3F4F6" : "none" }}>
                 <span><strong>{c.shipment}</strong>{c.plates ? ` · ${c.plates}` : ""}</span>
                 {c.mrn && <span>MRN {c.mrn}</span>}
                 {c.releasedOn && <span>released {c.releasedOn}</span>}
@@ -866,9 +866,9 @@ function InvoiceDetail({ inv, notes, onBack, onEdit, onPayment, onMarkStatus, on
               </div>
             ))}
           </Card>}
-          {relatedNotes.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>CREDIT / DEBIT NOTES</SectionTitle>{relatedNotes.map((nt: FinanceNote, i: number) => <div key={i} style={{ padding: "10px 12px", background: nt.noteType === "DEBIT" ? "#EFF6FF" : "#FFF7ED", border: `1px solid ${nt.noteType === "DEBIT" ? "#BFDBFE" : "#FED7AA"}`, borderRadius: 8, marginBottom: 8, display: "flex", justifyContent: "space-between" }}><div><div style={{ fontSize: 12.5, fontWeight: 600 }}>{nt.noteType === "DEBIT" ? "Debit" : "Credit"} note · {nt.reason || nt.category}</div><div style={{ fontSize: 11, color: "#888" }}>{formatDMY(nt.date)} · {nt.partyName}</div></div><div style={{ fontSize: 13, fontWeight: 700, color: nt.noteType === "DEBIT" ? "#1D4ED8" : "#9A3412" }}>{nt.noteType === "DEBIT" ? "+" : "−"}{money(nt.amount, nt.currency)}</div></div>)}<div style={{ fontSize: 11.5, color: "#666", marginTop: 4 }}>Net adjustment: {money(netAdjust, "PLN")} (applied to receivable/payable in Finance)</div></Card>}
+          {relatedNotes.length > 0 && <Card style={{ marginTop: 16 }}><SectionTitle>CREDIT / DEBIT NOTES</SectionTitle>{relatedNotes.map((nt: FinanceNote, i: number) => <div key={i} style={{ padding: "10px 12px", background: nt.noteType === "DEBIT" ? "#EFF6FF" : "#FFF7ED", border: `1px solid ${nt.noteType === "DEBIT" ? "#BFDBFE" : "#FED7AA"}`, borderRadius: 8, marginBottom: 8, display: "flex", justifyContent: "space-between" }}><div><div style={{ fontSize: 12, fontWeight: 600 }}>{nt.noteType === "DEBIT" ? "Debit" : "Credit"} note · {nt.reason || nt.category}</div><div style={{ fontSize: 11, color: "#888" }}>{formatDMY(nt.date)} · {nt.partyName}</div></div><div style={{ fontSize: 13, fontWeight: 700, color: nt.noteType === "DEBIT" ? "#1D4ED8" : "#9A3412" }}>{nt.noteType === "DEBIT" ? "+" : "−"}{money(nt.amount, nt.currency)}</div></div>)}<div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>Net adjustment: {money(netAdjust, "PLN")} (applied to receivable/payable in Finance)</div></Card>}
 
-          {inv.notes && <Card style={{ marginTop: 16 }}><SectionTitle>NOTES</SectionTitle><div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{inv.notes}</div></Card>}
+          {inv.notes && <Card style={{ marginTop: 16 }}><SectionTitle>NOTES</SectionTitle><div style={{ fontSize: 12, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{inv.notes}</div></Card>}
         </div>
       </div>
     </div>
@@ -976,9 +976,9 @@ function InvoiceForm({ form, setForm, onSave, onCancel, contacts, orders, pos, s
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {form.kind === "COST" && !(form.links || []).length && (() => { const props = proposeLinks(form, { pos, shipments, lots }); const miss = requiredLinkMissing(form);
                 return <div style={{ marginBottom: 8 }}>
-                  {miss && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 6 }}>⚠ {miss}</div>}
-                  {props.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}><span style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}>SUGGESTED (v6.98.0):</span>{props.map((p: any) => <button key={p.type + p.number} onClick={() => { sf("links", [...(form.links || []), { type: p.type === "SHIPMENT" ? "Shipment" : p.type, number: p.number }]); if (p.costId != null) sf("matchCostId", p.costId); }} title={p.reason} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid " + (p.confidence === "high" ? "#166534" : "#E5E7EB"), background: p.confidence === "high" ? "#F0FDF4" : "#fff", color: "#166534", cursor: "pointer", fontWeight: 700 }}>+ {p.type} {p.number} <span style={{ fontWeight: 400, color: "#64748B" }}>· {p.reason}</span></button>)}</div>}
-                  {!form.dueDate && form.counterparty && (() => { const cp = (contacts || []).find((c: any) => String(c.id) === String(form.counterparty?.id)); const due = defaultCostDueDate(form, cp); return due ? <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Due date will default to <b>{due}</b> ({cp?.paymentTermsDays} days from issue — the counterparty's terms) <button onClick={() => sf("dueDate", due)} style={{ marginLeft: 6, fontSize: 10.5, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>apply</button></div> : null; })()}
+                  {miss && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 6 }}>⚠ {miss}</div>}
+                  {props.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}><span style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>SUGGESTED (v6.98.0):</span>{props.map((p: any) => <button key={p.type + p.number} onClick={() => { sf("links", [...(form.links || []), { type: p.type === "SHIPMENT" ? "Shipment" : p.type, number: p.number }]); if (p.costId != null) sf("matchCostId", p.costId); }} title={p.reason} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid " + (p.confidence === "high" ? "#166534" : "#E5E7EB"), background: p.confidence === "high" ? "#F0FDF4" : "#fff", color: "#166534", cursor: "pointer", fontWeight: 700 }}>+ {p.type} {p.number} <span style={{ fontWeight: 400, color: "#64748B" }}>· {p.reason}</span></button>)}</div>}
+                  {!form.dueDate && form.counterparty && (() => { const cp = (contacts || []).find((c: any) => String(c.id) === String(form.counterparty?.id)); const due = defaultCostDueDate(form, cp); return due ? <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>Due date will default to <b>{due}</b> ({cp?.paymentTermsDays} days from issue — the counterparty's terms) <button onClick={() => sf("dueDate", due)} style={{ marginLeft: 6, fontSize: 10, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 5, cursor: "pointer" }}>apply</button></div> : null; })()}
                 </div>; })()}
               {/* v6.81.0 (D-59): an invoice born from a Sales Order is that order's invoice — its link is fixed. */}
               {form.kind === "SALES" && (form.links || []).some((l: any) => l.type === "SO") ? (

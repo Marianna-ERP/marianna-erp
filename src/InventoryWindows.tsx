@@ -87,15 +87,15 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
         </div>
         <div style={{ padding: 24 }}>
           {mode === "movement" ? (
-            <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11.5, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
+            <div style={{ padding: "10px 12px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 11, color: "#92400E", lineHeight: 1.5, marginBottom: 16 }}>
               <strong>Manual movement relocates stock between your own locations</strong> (e.g. port → warehouse, warehouse → warehouse). Everything else is automatic: a shipment posts the <strong>receipt</strong> when it arrives and the <strong>ship-out</strong> when it delivers — with transport, cost and paperwork linked to the lot. To receive or dispatch goods, use <strong>Shipments</strong>, not a manual movement. (Quality issues and write-offs are recorded via <em>Record quality issue</em>.)
             </div>
           ) : clientSide ? (
-            <div style={{ padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 11.5, color: "#1E40AF", lineHeight: 1.5, marginBottom: 16 }}>
+            <div style={{ padding: "10px 12px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 11, color: "#1E40AF", lineHeight: 1.5, marginBottom: 16 }}>
               <strong>Client claim (goods already shipped).</strong> Because this defect was found at the client after delivery, it will <strong>not</strong> change your warehouse stock — those kg already left. Recording it logs a client claim against the delivery and creates a <strong>draft credit note</strong> to the client for the value below, which you can finalise in Invoices.
             </div>
           ) : (
-            <div style={{ padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11.5, color: "#991B1B", lineHeight: 1.5, marginBottom: 16 }}>
+            <div style={{ padding: "10px 12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, fontSize: 11, color: "#991B1B", lineHeight: 1.5, marginBottom: 16 }}>
               <strong>Quality issue (goods in our hands).</strong> <strong>Damage</strong> writes off rejected kg (reduces stock on hand), and <strong>Reclassify</strong> changes the quality grade (e.g. Kl. I → Kl. II) with no quantity change. If the defect is reported by the client after you shipped, change "Detected at" to a client location — it becomes a claim that won't touch your stock.
             </div>
           )}
@@ -108,7 +108,7 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
           {/* Live plain-language description of the selected type */}
           <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#F8FAFC", border: "1px solid #EEF2F7", borderRadius: 8, padding: "8px 10px", marginBottom: 14 }}>
             <span style={{ color: typeInfo.color, fontWeight: 800, fontSize: 14, lineHeight: 1 }}>{typeInfo.icon}</span>
-            <span style={{ fontSize: 11.5, color: "#475569", lineHeight: 1.4 }}>{typeInfo.desc}{type === "IN" ? " — increases stock on hand." : type === "TRANSFER" ? " — same quantity, new location." : type === "SHIP_OUT" ? " — reduces stock on hand. Use for an EXW sale where the client collects with their own truck (no transport on our side)." : type === "DAMAGE" ? " — reduces stock on hand and records a write-off." : type === "RECLASS" ? " — no quantity change." : ""}</span>
+            <span style={{ fontSize: 11, color: "#475569", lineHeight: 1.4 }}>{typeInfo.desc}{type === "IN" ? " — increases stock on hand." : type === "TRANSFER" ? " — same quantity, new location." : type === "SHIP_OUT" ? " — reduces stock on hand. Use for an EXW sale where the client collects with their own truck (no transport on our side)." : type === "DAMAGE" ? " — reduces stock on hand and records a write-off." : type === "RECLASS" ? " — no quantity change." : ""}</span>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -167,7 +167,7 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
               <Sel value={detectedAt} onChange={e => setDetectedAt(e.target.value)}>
                 {QUALITY_DETECTED_AT.map(d => <option key={d}>{d}</option>)}
               </Sel>
-              <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 4, lineHeight: 1.4 }}>The problem is recorded against this lot, but it's usually found later in the journey — at the port of discharge, on arrival at our warehouse, or at the client.</div>
+              <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 4, lineHeight: 1.4 }}>The problem is recorded against this lot, but it's usually found later in the journey — at the port of discharge, on arrival at our warehouse, or at the client.</div>
             </div>
           )}
 
@@ -273,7 +273,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
 
   const bigBtn = (color: string, bg: string, icon: string, title: string, sub: string, onClick: any) => (
     <button onClick={onClick} disabled={!!frozenBy} style={{ flex: "1 1 210px", textAlign: "left", padding: "10px 14px", borderRadius: 10, border: `1px solid ${color}`, background: frozenBy ? "#F3F4F6" : bg, cursor: frozenBy ? "not-allowed" : "pointer" }}>
-      <div style={{ fontSize: 13.5, fontWeight: 800, color }}>{icon} {title}</div>
+      <div style={{ fontSize: 13, fontWeight: 800, color }}>{icon} {title}</div>
       <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>{sub}</div>
     </button>
   );
@@ -282,10 +282,10 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
     <div style={{ background: "#fff", border: "2px solid #0E7490", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>{dialogNode}
       <div style={{ background: "#ECFEFF", borderBottom: "1px solid #A5F3FC", padding: "8px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ fontSize: 12, fontWeight: 800, color: "#0E7490", letterSpacing: "0.04em" }}>QUALITY &amp; HANDLING</div>
-        <div style={{ fontSize: 11.5, color: "#0F766E" }}>class I {g.I.toLocaleString("pl-PL")} kg · class II {g.II.toLocaleString("pl-PL")} kg · waste {g.waste.toLocaleString("pl-PL")} kg</div>
+        <div style={{ fontSize: 11, color: "#0F766E" }}>class I {g.I.toLocaleString("pl-PL")} kg · class II {g.II.toLocaleString("pl-PL")} kg · waste {g.waste.toLocaleString("pl-PL")} kg</div>
       </div>
       <div style={{ padding: "12px 16px" }}>
-        {frozenBy && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>🔒 Locked — {frozenBy}. Correct by voiding a movement in the history, or by re-opening the settlement.</div>}
+        {frozenBy && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>🔒 Locked — {frozenBy}. Correct by voiding a movement in the history, or by re-opening the settlement.</div>}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
           {bigBtn("#0E7490", "#F0FDFA", "🔬", "Quality inspection", "check the goods and judge them", () => openInspection())}
           {bigBtn("#7C3AED", "#F5F3FF", "⚖", "Sorting job", "split what the inspection said to sort", openSorting)}
@@ -295,9 +295,9 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
         {/* the timeline — one line per act, newest first */}
         {!myIns.length && !myJobs.length && !myCounts.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>Nothing recorded yet — inspect the goods before sorting.</div>}
         {myIns.map((x: any) => { const v = inspectionVerdict(x); return (
-          <div key={String(x.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
+          <div key={String(x.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
             <span style={{ width: 20 }}>🔬</span>
-            <b style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{x.number || qrNos[String(x.id)] || lastReportNumber("QR", String(x.id)) || "—"}</b>
+            <b style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{x.number || qrNos[String(x.id)] || lastReportNumber("QR", String(x.id)) || "—"}</b>
             <span>{x.date} · {x.stage} · {x.inspector || "—"}</span>
             <span>checked {num(x.checkedQty).toLocaleString("pl-PL")} {x.unit || "kg"} ({samplePctOf(x)} %)</span>
             <span>defects <b>{v.totalPct} %</b></span>
@@ -312,7 +312,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
           </div>
         ); })}
         {myJobs.map((j: any) => (
-          <div key={String(j.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
+          <div key={String(j.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
             <span style={{ width: 20 }}>⚖</span><span>{j.date}</span>
             <span>sorted <b>{Math.round(num(j.kgIn)).toLocaleString("pl-PL")} kg</b> → I {Math.round(num(j.classIKg)).toLocaleString("pl-PL")} · II {Math.round(num(j.classIIKg)).toLocaleString("pl-PL")} · waste {Math.round(num(j.wasteKg)).toLocaleString("pl-PL")}</span>
             {j.by ? <span>· {j.by}</span> : null}{j.hours ? <span>· {j.hours} h</span> : null}
@@ -323,7 +323,7 @@ export function SeasonActions({ lot, lots = [], setLots = null, inspections = []
           </div>
         ))}
         {myCounts.map((c: any) => { const mine = (c.lines || []).filter((l: any) => String(l.lotNumber) === String(lot.number)); return (
-          <div key={String(c.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11.5, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
+          <div key={String(c.id)} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, padding: "5px 0", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
             <span style={{ width: 20 }}>📋</span><span>{c.date} count</span>
             {mine.map((l: any, k: number) => <span key={k}>{l.grade ? `class ${l.grade}: ` : ""}counted {Math.round(num(l.countedKg)).toLocaleString("pl-PL")} vs system {Math.round(num(l.systemKg)).toLocaleString("pl-PL")} → <b style={{ color: num(l.diffKg) ? "#B45309" : "#16A34A" }}>{num(l.diffKg) >= 0 ? "+" : ""}{Math.round(num(l.diffKg))} kg</b></span>)}
             {c.by ? <span>· {c.by}</span> : null}

@@ -90,7 +90,7 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
 
   const inp: any = { width: "100%", border: "1px solid transparent", background: "transparent", padding: "4px 5px", fontSize: 12, borderRadius: 4, boxSizing: "border-box" };
   const amber = { ...inp, border: "1px solid #F59E0B", background: "#FFFBEB" };
-  const btn: any = { fontSize: 11.5, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 7, padding: "5px 10px", cursor: "pointer" };
+  const btn: any = { fontSize: 11, border: "1px solid #E5E7EB", background: "#fff", borderRadius: 7, padding: "5px 10px", cursor: "pointer" };
 
   // v6.99.82 (A-PS-3, owner 29 Sept — "I can move between cells but typing does nothing"): this was a COMPONENT declared
   // inside the sheet, so every re-render of the sheet (the focus outline moving is one) gave React a new component type
@@ -144,14 +144,14 @@ export default function PlanningSheet({ tabs = [], setTabs, log = [], setLog, co
       {showUsage && (
         <div style={{ margin: "10px 16px 0", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "8px 10px", maxHeight: 260, overflow: "auto" }}>
           <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}><div style={{ fontSize: 12, fontWeight: 800 }}>How the sheet is used — from {(log || []).length} recorded change(s)</div><button style={{ ...btn, marginLeft: "auto" }} onClick={exportLog}>Export file (change log)</button></div>
-          <table style={{ borderCollapse: "collapse", fontSize: 11.5, width: "100%" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 11, width: "100%" }}>
             <thead><tr>{["Column", "Filled", "First filled (median days before loading)", "Changes after the first fill (avg)", "Changes after freezing"].map(h => <th key={h} style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: "3px 6px", color: "#64748B" }}>{h}</th>)}</tr></thead>
             <tbody>{usage.map(u => <tr key={u.key}><td style={{ padding: "3px 6px" }}>{u.label}</td><td style={{ padding: "3px 6px" }}>{u.filledPct}%</td><td style={{ padding: "3px 6px" }}>{u.medianDaysBeforeLoading === null ? "—" : u.medianDaysBeforeLoading}</td><td style={{ padding: "3px 6px" }}>{u.avgChangesAfterFirst}</td><td style={{ padding: "3px 6px", color: u.changedAfterFreeze ? "#B91C1C" : undefined, fontWeight: u.changedAfterFreeze ? 800 : 400 }}>{u.changedAfterFreeze}</td></tr>)}</tbody>
           </table>
         </div>
       )}
       <div style={{ flex: 1, overflow: "auto", padding: "10px 16px" }} onPaste={onPaste}>
-        {!tab && <div style={{ fontSize: 12.5, color: "#94A3B8", padding: 12 }}>No tab yet — ＋ New tab, or Import file to start from her real file.</div>}
+        {!tab && <div style={{ fontSize: 12, color: "#94A3B8", padding: 12 }}>No tab yet — ＋ New tab, or Import file to start from her real file.</div>}
         {tab && (
           <table style={{ borderCollapse: "collapse", fontSize: 12, background: "#fff", minWidth: SHEET_COLUMNS.reduce((s, c) => s + c.width, 150) }}>
             <thead><tr>

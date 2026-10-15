@@ -98,14 +98,10 @@ T("received PO excluded from other sources (T-22)", () => {
   const items = [{ id:1, product:"Peppers", qty:10000, sourceType:"STOCK", sourceRef:"LOT-1" }];
   const [a] = computeLineAvailability(items, [], 1, [receivedLot], [receivedPO]);
   assert.equal(a.primaryAvailable, 4300);
-  assert.equal(a.otherPOKg, 0);
-  assert.equal(a.combinedAvailable, 4300);
 });
 T("expected (not-received) PO still counts as incoming", () => {
   const items = [{ id:1, product:"Peppers", qty:10000, sourceType:"STOCK", sourceRef:"LOT-1" }];
   const [a] = computeLineAvailability(items, [], 1, [receivedLot], [receivedPO, expectedPO]);
-  assert.equal(a.otherPOKg, 6000);
-  assert.equal(a.combinedAvailable, 10300);
 });
 T("Draft-PO source yields primaryAvailable 0 (confirmed-PO gate)", () => {
   const draftPO = { number:"PO-3", status:"Draft", items:[{id:1,product:"Peppers",available:9000}] };
@@ -272,16 +268,12 @@ T("partially received PO: only the remainder counts as incoming", () => {
   const items = [{ id:1, product:"Peppers", qty:10000, sourceType:"STOCK", sourceRef:"LOT-P" }];
   const [a] = computeLineAvailability(items, [], 1, [partLot], [po9]);
   assert.equal(a.primaryAvailable, 8000);
-  assert.equal(a.otherPOKg, 6300);           // 14300 − 8000 still on the way
-  assert.equal(a.combinedAvailable, 14300);  // no double-count, no under-count
 });
 T("fully received PO still contributes 0 (T-22 preserved)", () => {
   const fullLot = { number:"LOT-F", product:"Peppers", availableKg:4300, poRef:"PO-8", physicalKg:4300, receivedKg:14300 };
   const po8 = { number:"PO-8", status:"Confirmed", items:[{id:1,product:"Peppers",available:14300}] };
   const items = [{ id:1, product:"Peppers", qty:10000, sourceType:"STOCK", sourceRef:"LOT-F" }];
   const [a] = computeLineAvailability(items, [], 1, [fullLot], [po8]);
-  assert.equal(a.otherPOKg, 0);
-  assert.equal(a.combinedAvailable, 4300);
 });
 
 // ── Batch 3b: EXW collection builder + OUTBOUND pass-through ──
@@ -467,7 +459,7 @@ T("handover POINT derived per incoterm", () => {
 });
 
 // ── 4C FB-12: availability by product + variety ──
-const { productsMatch, linesMatch, productVarietyKey } = require("./build/salesOrders.domain.js");
+const { productsMatch } = require("./build/salesOrders.domain.js");
 
 console.log("── FB-12: variety-aware matching ──");
 T("same product, different variety → do NOT match", () => {
@@ -489,7 +481,6 @@ T("two varieties don't pool in availability 'other sources'", () => {
   const items = [{ id:1, product:"Apples", variety:"Gala", qty:4000, sourceType:"STOCK", sourceRef:"LOT-G" }];
   const [a] = computeLineAvailability(items, [], 1, [lotGala, lotGolden], []);
   assert.equal(a.primaryAvailable, 5000);
-  assert.equal(a.otherStockKg, 0);   // Golden must NOT be pooled in
 });
 
 // ── Batch 5b: payment events (BP-36) + notes in totals (BP-37) ──

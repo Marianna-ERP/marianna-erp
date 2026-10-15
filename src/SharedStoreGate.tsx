@@ -26,7 +26,7 @@ export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncS
       <div style={{ background: "#fff", borderRadius: 14, padding: "26px 30px", width: 420, boxShadow: "0 24px 60px rgba(0,0,0,0.12)" }}>
         <div style={{ fontSize: 20, fontWeight: 800, color: "#111" }}>MARIANNA</div>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginTop: 12 }}>This copy isn't connected to the shared data.</div>
-        <div style={{ fontSize: 12.5, color: "#64748B", marginTop: 6, lineHeight: 1.55 }}>It needs the two shared-data settings in Vercel: REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY. The app no longer runs on one browser's own data — to look at an old backup, restore it into the TEST copy.</div>
+        <div style={{ fontSize: 12, color: "#64748B", marginTop: 6, lineHeight: 1.55 }}>It needs the two shared-data settings in Vercel: REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY. The app no longer runs on one browser's own data — to look at an old backup, restore it into the TEST copy.</div>
       </div>
     </div>) };
   if (!session) {
@@ -34,7 +34,7 @@ export function useSharedStore(userLabel: string): { ready: boolean; sync: SyncS
       <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F8FAFC", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
         <div style={{ background: "#fff", borderRadius: 14, padding: "26px 30px", width: 380, boxShadow: "0 24px 60px rgba(0,0,0,0.12)" }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: "#111" }}>MARIANNA{ENV_LABEL && <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 800, color: "#fff", background: "#7C3AED", padding: "2px 8px", borderRadius: 6, verticalAlign: "middle" }}>{ENV_LABEL}</span>}</div>
-          <div style={{ fontSize: 12.5, color: "#64748B", marginTop: 4, marginBottom: 16 }}>Shared data — sign in with your Marianna account.</div>
+          <div style={{ fontSize: 12, color: "#64748B", marginTop: 4, marginBottom: 16 }}>Shared data — sign in with your Marianna account.</div>
           <input value={email} onChange={e => setEmail(e.target.value)} placeholder="e-mail" autoComplete="username" style={{ width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", fontSize: 14, marginBottom: 8 }} />
           <input value={pw} onChange={e => setPw(e.target.value)} placeholder="password" type="password" autoComplete="current-password" onKeyDown={async e => { if (e.key === "Enter") { setBusy(true); setErr(""); try { setSession(await login(email.trim(), pw)); } catch (x: any) { setErr(String(x?.message || x)); } setBusy(false); } }} style={{ width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", fontSize: 14, marginBottom: 12 }} />
           {err && <div style={{ fontSize: 12, color: "#DC2626", fontWeight: 600, marginBottom: 10 }}>{err}</div>}
