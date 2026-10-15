@@ -78,7 +78,7 @@ function Button({ children, onClick, variant = "default", disabled = false }: an
   return <button disabled={disabled} onClick={onClick} style={{ padding: "7px 12px", borderRadius: 7, border: `1px solid ${s.border}`, background: disabled ? "#F3F4F6" : s.bg, color: disabled ? "#AAA" : s.color, fontSize: 12, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit" }}>{children}</button>;
 }
 function Field({ label, children }: any) {
-  return <label style={{ display: "block" }}><div style={{ fontSize: 10.5, color: "#888", fontWeight: 600, marginBottom: 4 }}>{label}</div>{children}</label>;
+  return <label style={{ display: "block" }}><div style={{ fontSize: 10, color: "#888", fontWeight: 600, marginBottom: 4 }}>{label}</div>{children}</label>;
 }
 function Inp(props: any) {
   return <input {...props} style={{ width: "100%", padding: "8px 9px", border: "1px solid #E5E7EB", borderRadius: 7, fontSize: 12, fontFamily: "inherit", ...(props.style || {}) }} />;
@@ -90,7 +90,7 @@ function StatBlock({ label, value, valueColor, sub }: any) {
   return (
     <div>
       <div style={{ fontSize: 10, fontWeight: 600, color: "#888", letterSpacing: "0.04em" }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: valueColor || "#111", marginTop: 4, letterSpacing: "-0.3px" }}>{value}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: valueColor || "#111", marginTop: 4, letterSpacing: "-0.3px" }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{sub}</div>}
     </div>
   );
@@ -103,9 +103,9 @@ function BarRow({ label, value, maxValue, marginPct, sub }: any) {
   return (
     <div style={{ padding: "8px 0", borderBottom: "1px solid #F9FAFB" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-        <div style={{ fontSize: 12.5, color: "#444", fontWeight: 500 }}>{label}{sub && <span style={{ color: "#AAA", marginLeft: 6, fontSize: 11 }}>· {sub}</span>}</div>
+        <div style={{ fontSize: 12, color: "#444", fontWeight: 500 }}>{label}{sub && <span style={{ color: "#AAA", marginLeft: 6, fontSize: 11 }}>· {sub}</span>}</div>
         <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
-          <div style={{ fontSize: 12.5, color, fontWeight: 600 }}>{fmtPLN(value)}</div>
+          <div style={{ fontSize: 12, color, fontWeight: 600 }}>{fmtPLN(value)}</div>
           {marginPct !== undefined && <div style={{ fontSize: 11, color, fontWeight: 500, width: 50, textAlign: "right" }}>{fmtPct(marginPct)}</div>}
         </div>
       </div>
@@ -166,16 +166,16 @@ function MonthCloseCard({ totalAgg, ledgerTotals, lots = [], claims = [], poSett
   const snap = closed ? closed.snapshot : live;
   const cash = cashProjection(invoices, today);
   const fmt = (n: number) => (n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  const Row = ({ k, v, color }: any) => <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11.5, padding: "2px 0" }}><span style={{ color: "#64748B" }}>{k}</span><b style={{ color: color || "#111", fontVariantNumeric: "tabular-nums" }}>{v}</b></div>;
+  const Row = ({ k, v, color }: any) => <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, padding: "2px 0" }}><span style={{ color: "#64748B" }}>{k}</span><b style={{ color: color || "#111", fontVariantNumeric: "tabular-nums" }}>{v}</b></div>;
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>{dialogNode}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
         <div style={{ fontSize: 13, fontWeight: 800, marginRight: "auto" }}>📘 Month close & management package</div>
-        <input type="month" value={period} onChange={e => setPeriod(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 }} />
+        <input type="month" value={period} onChange={e => setPeriod(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11 }} />
         {closed ? <span style={{ fontSize: 11, fontWeight: 800, color: "#16A34A" }}>CLOSED {closed.closedAt} by {closed.closedBy}</span>
-          : (canClose && setClosedPeriods && period < thisMonth && <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Close ${period}? Documents dated inside it can no longer be created or changed, and its figures are frozen for the accountant.` }))) return; setClosedPeriods((prev: any[]) => [...(prev || []), { period, closedAt: today, closedBy: userName || "owner", snapshot: live }]); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} closed — net ${fmt(live.netPLN)} PLN, receivables ${fmt(live.receivableOpenPLN)}, payables ${fmt(live.payableOpenPLN)}` }); }} style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontWeight: 800, cursor: "pointer" }}>🔒 Close {period}</button>)}
+          : (canClose && setClosedPeriods && period < thisMonth && <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Close ${period}? Documents dated inside it can no longer be created or changed, and its figures are frozen for the accountant.` }))) return; setClosedPeriods((prev: any[]) => [...(prev || []), { period, closedAt: today, closedBy: userName || "owner", snapshot: live }]); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} closed — net ${fmt(live.netPLN)} PLN, receivables ${fmt(live.receivableOpenPLN)}, payables ${fmt(live.payableOpenPLN)}` }); }} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontWeight: 800, cursor: "pointer" }}>🔒 Close {period}</button>)}
         {closed && setClosedPeriods && canClose && <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Re-open ${period}? The frozen snapshot is discarded.` }))) return; setClosedPeriods((prev: any[]) => (prev || []).filter((c: any) => c.period !== period)); recordAudit({ module: "Finance", docType: "Period", docNumber: period, action: "status", summary: `Month ${period} re-opened` }); }} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer" }}>re-open</button>}
-        <button onClick={() => printHtmlNode("mgmt-package", `Management package — ${period}`)} style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>⎙ Package</button>
+        <button onClick={() => printHtmlNode("mgmt-package", `Management package — ${period}`)} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>⎙ Package</button>
       </div>
       <div id="mgmt-package" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
         <div><div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>P/L {closed ? "(frozen)" : "(live — all active orders)"}</div><Row k="Revenue" v={fmt(snap.revenuePLN)} /><Row k="COGS" v={"−" + fmt(snap.cogsPLN)} /><Row k="Direct costs" v={"−" + fmt(snap.directPLN)} /><Row k="Contribution" v={fmt(snap.contributionPLN)} /><Row k="Overhead" v={"−" + fmt(snap.overheadPLN)} /><Row k="Net" v={fmt(snap.netPLN) + " PLN"} color={snap.netPLN >= 0 ? "#16A34A" : "#DC2626"} /></div>
@@ -200,10 +200,10 @@ function ConsignmentResultsCard({ pos = [], lots = [], orders = [], invoices = [
   return (
     <Card style={{ marginBottom: 16 }}>
       <SectionTitle>CONSIGNMENT TRUCKS — OUR RESULT</SectionTitle>
-      <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 8 }}>Our commission on the producer's net sales. Our own costs that are not recharged to the producer, and the share of overheads, are not deducted yet.</div>
-      <div style={{ display: "grid", gridTemplateColumns: "130px 1.4fr 80px 1fr 70px 1fr", gap: 8, padding: "6px 8px", fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}><div>PO</div><div>PRODUCER</div><div>STATE</div><div style={{ textAlign: "right" }}>NET SALES</div><div style={{ textAlign: "right" }}>%</div><div style={{ textAlign: "right" }}>OUR COMMISSION</div></div>
+      <div style={{ fontSize: 11, color: "#64748B", marginBottom: 8 }}>Our commission on the producer's net sales. Our own costs that are not recharged to the producer, and the share of overheads, are not deducted yet.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "130px 1.4fr 80px 1fr 70px 1fr", gap: 8, padding: "6px 8px", fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>PO</div><div>PRODUCER</div><div>STATE</div><div style={{ textAlign: "right" }}>NET SALES</div><div style={{ textAlign: "right" }}>%</div><div style={{ textAlign: "right" }}>OUR COMMISSION</div></div>
       {rows.map((r: any) => <div key={r.poNumber} style={{ display: "grid", gridTemplateColumns: "130px 1.4fr 80px 1fr 70px 1fr", gap: 8, padding: "7px 8px", fontSize: 12, borderTop: "1px solid #F1F5F9" }}>
-        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#1D4ED8" }}>{r.poNumber}</div><div>{r.producer}</div><div style={{ color: r.state === "closed" ? "#15803D" : "#B45309" }}>{r.state}</div>
+        <div style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700, color: "#1D4ED8" }}>{r.poNumber}</div><div>{r.producer}</div><div style={{ color: r.state === "closed" ? "#15803D" : "#B45309" }}>{r.state}</div>
         <div style={{ textAlign: "right" }}>{pln(r.netPLN)}</div><div style={{ textAlign: "right" }}>{r.pctMissing ? "—" : `${r.commissionPct}%`}</div><div style={{ textAlign: "right", fontWeight: 800, color: "#15803D" }}>{r.pctMissing ? "rate missing" : pln((r.netPLN || 0) * (r.commissionPct || 0) / 100)}</div>
       </div>)}
     </Card>
@@ -226,7 +226,7 @@ function PurchaseResultsCard({ pos = [], lots = [], orders = [], shipments = [] 
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, fontWeight: 800 }}>🚚 Purchase results</div>
         <span style={{ fontSize: 11, color: "#888" }}>what each firm purchase earned — revenue of the sales it supplied, minus its landed cost, delivery freight and concessions</span>
-        <select value={supplier} onChange={e => setSupplier(e.target.value)} style={{ marginLeft: "auto", border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 }}>
+        <select value={supplier} onChange={e => setSupplier(e.target.value)} style={{ marginLeft: "auto", border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11 }}>
           <option value="">All suppliers</option>{suppliers.map((s: any) => <option key={s}>{s}</option>)}
         </select>
         <SmallButton onClick={() => exportRowsToXlsx(`purchase_results_${xlsStamp()}`, rows, [{ key: "po", label: "PO" }, { key: "supplier", label: "Supplier" }, { key: "date", label: "Ordered" }, { key: "receivedKg", label: "Received kg" }, { key: "soldKg", label: "Sold kg" }, { key: "revenuePLN", label: "Revenue PLN" }, { key: "purchasePLN", label: "Purchase PLN" }, { key: "landedOtherPLN", label: "Landed PLN" }, { key: "directPLN", label: "Delivery freight PLN" }, { key: "concessionsPLN", label: "Concessions PLN" }, { key: "recoveriesPLN", label: "Recoveries PLN" }, { key: "marginPLN", label: "Margin PLN" }, { key: "marginPerKg", label: "Margin PLN/kg" }, { key: "fullySold", label: "Fully sold" }], "Purchase results")}>Export file (Excel)</SmallButton>
@@ -235,7 +235,7 @@ function PurchaseResultsCard({ pos = [], lots = [], orders = [], shipments = [] 
       {!!rows.length && <>
         <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.8fr 0.8fr repeat(5, 1fr) 0.9fr", gap: 6, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>PO</div><div>SUPPLIER</div><div>RECEIVED</div><div>SOLD</div><div>REVENUE</div><div>PURCHASE</div><div>LANDED+FREIGHT</div><div>CLAIMS</div><div>MARGIN</div><div>PLN/KG</div></div>
         {rows.map((r: any) => (
-          <div key={r.po} style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.8fr 0.8fr repeat(5, 1fr) 0.9fr", gap: 6, fontSize: 11.5, padding: "4px 0", borderTop: "1px solid #F8FAFC", fontVariantNumeric: "tabular-nums" }}>
+          <div key={r.po} style={{ display: "grid", gridTemplateColumns: "1.1fr 1.4fr 0.8fr 0.8fr repeat(5, 1fr) 0.9fr", gap: 6, fontSize: 11, padding: "4px 0", borderTop: "1px solid #F8FAFC", fontVariantNumeric: "tabular-nums" }}>
             <div><b>{r.po}</b>{!r.fullySold && <span style={{ color: "#B45309", fontSize: 10 }}> · selling</span>}</div>
             <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.supplier}</div>
             <div>{f(r.receivedKg)}</div><div>{f(r.soldKg)}</div><div>{f(r.revenuePLN)}</div><div>{f(r.purchasePLN)}</div><div>{f(r.landedOtherPLN + r.directPLN)}</div>
@@ -262,7 +262,7 @@ function ClientRiskCard({ invoices = [], orders = [], contacts = [] }: any) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><div style={{ fontSize: 13, fontWeight: 800 }}>🛡 Client risk</div><span style={{ fontSize: 11, color: "#888" }}>exposure = open receivables · usage = (exposure + confirmed orders) / limit · feeds the credit gate at confirm</span>
         <span style={{ marginLeft: "auto" }}><SmallButton onClick={() => exportRowsToXlsx(`client_risk_${xlsStamp()}`, rows, [{ key: "client", label: "Client" }, { key: "limitPLN", label: "Limit PLN" }, { key: "exposurePLN", label: "Exposure PLN" }, { key: "openOrdersPLN", label: "Confirmed orders PLN" }, { key: "usagePct", label: "Usage %" }, { key: "overduePLN", label: "Overdue PLN" }, { key: "maxOverdueDays", label: "Max days late" }, { key: "avgDaysToPay", label: "Avg days to pay" }, { key: "lastPaymentDate", label: "Last payment" }], "Client risk")}>Export file (Excel)</SmallButton></span></div>
       <div style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>CLIENT</div><div>LIMIT</div><div>EXPOSURE</div><div>ORDERS</div><div>USAGE</div><div>OVERDUE</div><div>DAYS LATE</div><div>PAYS IN</div></div>
-      {rows.map(r => <div key={r.client} style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 11.5, padding: "3px 0", borderTop: "1px solid #F8FAFC" }}><div><b>{r.client}</b></div><div>{r.limitPLN ? fmt(r.limitPLN) : "—"}</div><div>{fmt(r.exposurePLN)}</div><div>{fmt(r.openOrdersPLN)}</div><div style={{ color: r.usagePct != null && r.usagePct > 100 ? "#DC2626" : r.usagePct != null && r.usagePct > 80 ? "#B45309" : "#111", fontWeight: 700 }}>{r.usagePct != null ? r.usagePct + "%" : "—"}</div><div style={{ color: r.overduePLN ? "#B45309" : "#111" }}>{fmt(r.overduePLN)}</div><div style={{ color: r.maxOverdueDays > 30 ? "#DC2626" : r.maxOverdueDays ? "#B45309" : "#94A3B8" }}>{r.maxOverdueDays || "—"}</div><div>{r.avgDaysToPay != null ? r.avgDaysToPay + " d" : "—"}<span style={{ color: "#94A3B8" }}>{r.lastPaymentDate ? " · " + r.lastPaymentDate : ""}</span></div></div>)}
+      {rows.map(r => <div key={r.client} style={{ display: "grid", gridTemplateColumns: "1.6fr repeat(7, 1fr)", gap: 6, fontSize: 11, padding: "3px 0", borderTop: "1px solid #F8FAFC" }}><div><b>{r.client}</b></div><div>{r.limitPLN ? fmt(r.limitPLN) : "—"}</div><div>{fmt(r.exposurePLN)}</div><div>{fmt(r.openOrdersPLN)}</div><div style={{ color: r.usagePct != null && r.usagePct > 100 ? "#DC2626" : r.usagePct != null && r.usagePct > 80 ? "#B45309" : "#111", fontWeight: 700 }}>{r.usagePct != null ? r.usagePct + "%" : "—"}</div><div style={{ color: r.overduePLN ? "#B45309" : "#111" }}>{fmt(r.overduePLN)}</div><div style={{ color: r.maxOverdueDays > 30 ? "#DC2626" : r.maxOverdueDays ? "#B45309" : "#94A3B8" }}>{r.maxOverdueDays || "—"}</div><div>{r.avgDaysToPay != null ? r.avgDaysToPay + " d" : "—"}<span style={{ color: "#94A3B8" }}>{r.lastPaymentDate ? " · " + r.lastPaymentDate : ""}</span></div></div>)}
     </div>
   );
 }
@@ -276,7 +276,7 @@ export function ConsignmentPositionsCard({ pos = [], lots = [], orders = [], inv
   const m = (v: number, c = "PLN") => `${(v || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${c}`;
   const kg = (v: number) => Math.round(v || 0).toLocaleString("pl-PL");
   const cols = "120px 1.3fr 90px 90px 90px 1fr 1fr 1fr 1.2fr";
-  const th: any = { fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.06em", textAlign: "right" };
+  const th: any = { fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.06em", textAlign: "right" };
   const stateChip = (st: string) => <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 10, background: st === "closed" ? "#DCFCE7" : st === "interim" ? "#FEF3C7" : "#EDE9FE", color: st === "closed" ? "#166534" : st === "interim" ? "#92400E" : "#6D28D9" }}>{st === "closed" ? "CLOSED" : st === "interim" ? "INTERIM" : "OPEN"}</span>;
   const balanceText = (r: any) => { const v = r.stillToTransfer != null ? r.stillToTransfer : r.balance; return !r.provisional ? `${m(r.netAfterCommission, r.currency)} due` : v >= 0 ? `we owe ${m(v, r.currency)}` : `${r.producer || "producer"} owes us ${m(-v, r.currency)}`; };
   return (
@@ -287,7 +287,7 @@ export function ConsignmentPositionsCard({ pos = [], lots = [], orders = [], inv
       </div>
       {rows.map(r => (
         <div key={r.poNumber} style={{ display: "grid", gridTemplateColumns: cols, gap: 8, padding: "7px 0", borderBottom: "1px solid #F1F5F9", fontSize: 12, alignItems: "center", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-          <div style={{ textAlign: "left" }}><DocLink num={r.poNumber}><b style={{ color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.poNumber}</b></DocLink><div>{stateChip(r.state)}{r.settlementNumber ? <span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6 }}>{r.settlementNumber}</span> : null}</div></div>
+          <div style={{ textAlign: "left" }}><DocLink num={r.poNumber}><b style={{ color: "#1D4ED8", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.poNumber}</b></DocLink><div>{stateChip(r.state)}{r.settlementNumber ? <span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6 }}>{r.settlementNumber}</span> : null}</div></div>
           <div style={{ textAlign: "left" }}>{r.producer || "—"}{(r.rateMissing && r.currency !== "PLN") || r.pctMissing ? <div style={{ fontSize: 10, color: "#B45309", fontWeight: 700 }}>{[r.rateMissing && r.currency !== "PLN" ? "no rate" : "", r.pctMissing ? "no commission %" : ""].filter(Boolean).join(" · ")}</div> : null}</div>
           <div>{r.receivedKg ? kg(r.receivedKg) : r.expectedKg ? <span style={{ color: "#94A3B8" }}>{kg(r.expectedKg)} exp.</span> : "0"}</div>
           <div>{kg(r.soldKg)}</div>
@@ -312,7 +312,7 @@ function StatementCard({ invoices = [], financeNotes = [] }: any) {
   const currencies = name ? statementCurrencies(name, side, invoices, financeNotes) : [];
   const st = name ? statementFor(name, side, currencies.includes(cur) ? cur : (currencies[0] || "PLN"), invoices, financeNotes, from, to, localTodayISO()) : null;
   const fmt = (n: number) => n ? n.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "";
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11 };
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "14px 18px", marginBottom: 16 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
@@ -321,7 +321,7 @@ function StatementCard({ invoices = [], financeNotes = [] }: any) {
         <select value={name} onChange={e => setName(e.target.value)} style={{ ...inp, minWidth: 220 }}><option value="">— counterparty —</option>{(parties as string[]).map((p: string) => <option key={p}>{p}</option>)}</select>
         <DateInput value={from} onChange={(e: any) => setFrom(e.target.value)} style={{ width: 130 }} /><span style={{ fontSize: 11, color: "#94A3B8" }}>to</span><DateInput value={to} onChange={(e: any) => setTo(e.target.value)} style={{ width: 130 }} />
         {currencies.length > 1 && <select value={cur} onChange={e => setCur(e.target.value)} style={inp}>{currencies.map(c => <option key={c}>{c}</option>)}</select>}
-        {st && <button onClick={() => printHtmlNode("statement-print", `Statement — ${st.counterparty}`)} style={{ fontSize: 11.5, padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>⎙ Print</button>}
+        {st && <button onClick={() => printHtmlNode("statement-print", `Statement — ${st.counterparty}`)} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", cursor: "pointer", fontWeight: 700 }}>⎙ Print</button>}
       </div>
       {st && (
         <div id="statement-print" style={{ fontSize: 11.5 }}>
@@ -359,7 +359,7 @@ function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoic
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
         <div style={{ flex: "1 1 380px", minWidth: 340 }}>
           <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>💠 Advances on account {openAdv.length ? `(${openAdv.length} open)` : ""}</div>
-          {!openAdv.length && <div style={{ fontSize: 11.5, color: "#94A3B8" }}>No unallocated advances. Record one from a bank line ("→ Advance").</div>}
+          {!openAdv.length && <div style={{ fontSize: 11, color: "#94A3B8" }}>No unallocated advances. Record one from a bank line ("→ Advance").</div>}
           {openAdv.map((a: any) => {
             const rem = advanceRemaining(a);
             const candidates = (invoices || []).filter((i: any) => i.kind === "SALES" && i.paymentStatus !== "Cancelled" && i.paymentStatus !== "Draft" && String(i.currency || "PLN").toUpperCase() === a.currency && outstandingOf(i) > 0.005);
@@ -367,22 +367,22 @@ function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoic
               <div key={String(a.id)} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 190px" }}>
                   <div style={{ fontSize: 12, fontWeight: 700 }}>{a.counterpartyName || "—"}</div>
-                  <div style={{ fontSize: 10.5, color: "#94A3B8" }}>{a.date} · received {a.amount.toLocaleString("pl-PL")} {a.currency}</div>
+                  <div style={{ fontSize: 10, color: "#94A3B8" }}>{a.date} · received {a.amount.toLocaleString("pl-PL")} {a.currency}</div>
                   {a.proformaNumber
-                    ? <div style={{ fontSize: 10.5, fontWeight: 700, color: "#7C3AED" }}>↳ pro-forma {a.proformaNumber}</div>
+                    ? <div style={{ fontSize: 10, fontWeight: 700, color: "#7C3AED" }}>↳ pro-forma {a.proformaNumber}</div>
                     : (() => { const pf = (invoices || []).filter((i: any) => i.isProforma && i.paymentStatus !== "Cancelled" && String(i.currency || "PLN").toUpperCase() === a.currency);
-                        return pf.length ? <select value="" onChange={(e: any) => { const inv = pf.find((x: any) => String(x.id) === String(e.target.value)); if (!inv) return; const r: any = linkAdvanceToProforma(a, inv); if (!r.error) setAdvancePayments((prev: any[]) => (prev || []).map((x: any) => String(x.id) === String(a.id) ? r : x)); }} style={{ marginTop: 2, border: "1px dashed #DDD6FE", color: "#7C3AED", borderRadius: 6, padding: "3px 6px", fontSize: 10.5 }}>
+                        return pf.length ? <select value="" onChange={(e: any) => { const inv = pf.find((x: any) => String(x.id) === String(e.target.value)); if (!inv) return; const r: any = linkAdvanceToProforma(a, inv); if (!r.error) setAdvancePayments((prev: any[]) => (prev || []).map((x: any) => String(x.id) === String(a.id) ? r : x)); }} style={{ marginTop: 2, border: "1px dashed #DDD6FE", color: "#7C3AED", borderRadius: 6, padding: "3px 6px", fontSize: 10 }}>
                           <option value="">link pro-forma… (owner ruling: every advance answers one)</option>
                           {pf.map((i: any) => <option key={String(i.id)} value={i.id}>{i.number} · {i.counterparty?.name}</option>)}
                         </select> : <div style={{ fontSize: 10, color: "#C4B5FD" }}>no pro-forma linked yet — mark one in Invoices (Document type → Pro-forma)</div>; })()}
                 </div>
-                <div style={{ fontSize: 12.5, fontWeight: 800, color: "#7C3AED", fontVariantNumeric: "tabular-nums" }}>{rem.toLocaleString("pl-PL")} {a.currency} left</div>
-                <select value={pick[a.id] ?? ""} onChange={(e: any) => setPick(p => ({ ...p, [a.id]: e.target.value }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, maxWidth: 230 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#7C3AED", fontVariantNumeric: "tabular-nums" }}>{rem.toLocaleString("pl-PL")} {a.currency} left</div>
+                <select value={pick[a.id] ?? ""} onChange={(e: any) => setPick(p => ({ ...p, [a.id]: e.target.value }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11, maxWidth: 230 }}>
                   <option value="">— apply to invoice —</option>
                   {candidates.map((i: any) => <option key={String(i.id)} value={i.id}>{i.number} · open {outstandingOf(i).toLocaleString("pl-PL")}</option>)}
                 </select>
-                <input type="number" value={amt[a.id] ?? ""} placeholder="amount" onChange={(e: any) => setAmt(m => ({ ...m, [a.id]: e.target.value }))} style={{ width: 92, border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 }} />
-                <button disabled={!pick[a.id]} onClick={() => apply(a)} style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: pick[a.id] ? "#7C3AED" : "#CBD5E1", color: "#fff", fontSize: 11.5, fontWeight: 800, cursor: pick[a.id] ? "pointer" : "not-allowed" }}>Apply</button>
+                <input type="number" value={amt[a.id] ?? ""} placeholder="amount" onChange={(e: any) => setAmt(m => ({ ...m, [a.id]: e.target.value }))} style={{ width: 92, border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11 }} />
+                <button disabled={!pick[a.id]} onClick={() => apply(a)} style={{ padding: "5px 12px", borderRadius: 7, border: "none", background: pick[a.id] ? "#7C3AED" : "#CBD5E1", color: "#fff", fontSize: 11, fontWeight: 800, cursor: pick[a.id] ? "pointer" : "not-allowed" }}>Apply</button>
                 {err[a.id] && <div style={{ width: "100%", fontSize: 11, color: "#B91C1C" }}>{err[a.id]}</div>}
               </div>
             );
@@ -392,7 +392,7 @@ function AdvancesPanel({ advancePayments = [], setAdvancePayments = null, invoic
           <div style={{ flex: "0 1 260px" }}>
             <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6 }}>🏛 Bank accounts</div>
             {(bankAccounts || []).map((b: any) => (
-              <div key={String(b.id)} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11.5, padding: "4px 0", borderTop: "1px solid #F1F5F9" }}>
+              <div key={String(b.id)} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11, padding: "4px 0", borderTop: "1px solid #F1F5F9" }}>
                 <div><b>{b.label || b.bank}</b> <span style={{ color: "#94A3B8" }}>{b.currency}</span></div>
                 <div style={{ fontVariantNumeric: "tabular-nums", color: "#334155" }}>{b.lastKnownBalance != null ? b.lastKnownBalance.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "—"}<span style={{ color: "#CBD5E1" }}> · {b.lastImportDate}</span></div>
               </div>
@@ -450,7 +450,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
       </div>
       {parsed && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ fontSize: 11.5, color: "#555", marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: "#555", marginBottom: 8 }}>
             {parsed.format} · account …{String(parsed.account).slice(-6)} · {parsed.lines.length} lines ({ignored} own-transfer / zero lines set aside){parsed.skipped ? ` · ${parsed.skipped} unparseable` : ""}
           </div>
           {credits.length === 0 && <div style={{ fontSize: 12, color: "#94A3B8", padding: 8 }}>No credit lines to match in this file.</div>}
@@ -464,18 +464,18 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
               : ["no match — pick manually", "#B91C1C", "#FEF2F2"];
             return (
               <div key={s.line.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 4px", borderTop: "1px solid #F1F5F9", flexWrap: "wrap" }}>
-                <div style={{ minWidth: 82, fontSize: 11.5, color: "#555" }}>{s.line.date}</div>
+                <div style={{ minWidth: 82, fontSize: 11, color: "#555" }}>{s.line.date}</div>
                 <div style={{ flex: "1 1 220px", minWidth: 200 }}>
                   <div style={{ fontSize: 12, fontWeight: 700 }}>{String(s.line.counterparty).slice(0, 46) || "—"}</div>
-                  <div style={{ fontSize: 10.5, color: "#94A3B8" }} title={s.line.title}>{String(s.line.title).slice(0, 70)}</div>
+                  <div style={{ fontSize: 10, color: "#94A3B8" }} title={s.line.title}>{String(s.line.title).slice(0, 70)}</div>
                 </div>
                 <div style={{ minWidth: 110, textAlign: "right", fontSize: 13, fontWeight: 800, color: s.line.amount > 0 ? "#16A34A" : "#DC2626", fontVariantNumeric: "tabular-nums" }}>{s.line.amount > 0 ? "+" : "−"}{fmtA(Math.abs(s.line.amount), s.line.currency)}</div>
                 <span style={{ fontSize: 10, fontWeight: 800, color: badge[1], background: badge[2], borderRadius: 5, padding: "2px 8px" }} title={s.reason}>{badge[0]}</span>
                 {doneInv ? (
-                  <span style={{ fontSize: 11.5, fontWeight: 800, color: "#065F46" }}>✓ recorded on {(invoices.find((i: any) => String(i.id) === String(doneInv)) || {}).number}</span>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "#065F46" }}>✓ recorded on {(invoices.find((i: any) => String(i.id) === String(doneInv)) || {}).number}</span>
                 ) : s.rank === "ALREADY" ? null : (
                   <>
-                    <select value={chosen ?? ""} onChange={(e: any) => setPick(p => ({ ...p, [s.line.id]: e.target.value }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, maxWidth: 260 }}>
+                    <select value={chosen ?? ""} onChange={(e: any) => setPick(p => ({ ...p, [s.line.id]: e.target.value }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11, maxWidth: 260 }}>
                       <option value="">— pick invoice —</option>
                       {(s.invoiceId != null && !s.candidates.length ? [{ id: s.invoiceId, number: s.invoiceNumber, outstanding: null, counterparty: "" }] : s.candidates).map((c: any) => (
                         <option key={String(c.id)} value={c.id}>{c.number}{c.outstanding != null ? ` · open ${c.outstanding.toLocaleString("pl-PL")}` : ""}{c.counterparty ? ` · ${c.counterparty}` : ""}</option>
@@ -484,7 +484,7 @@ function BankImportPanel({ invoices = [], setInvoices = null, nextId, advancePay
                     <button disabled={chosen == null || chosen === ""} onClick={() => confirmLine(s, chosen)} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: chosen != null && chosen !== "" ? "#16A34A" : "#CBD5E1", color: "#fff", fontSize: 12, fontWeight: 800, cursor: chosen != null && chosen !== "" ? "pointer" : "not-allowed" }}>{s.line.amount > 0 ? "Confirm receipt" : "Confirm payment"}</button>
                     {typeof setAdvancePayments === "function" && (advanceSources(advancePayments).has(`bank:${s.line.id}`)
                       ? <span style={{ fontSize: 11, fontWeight: 800, color: "#7C3AED" }}>✓ advance</span>
-                      : <button onClick={() => setAdvancePayments((prev: any[]) => [advanceFromBankLine(s.line, { nextId }), ...(prev || [])])} title="v6.68.0 (F-1): money received BEFORE any invoice exists — record it on account; apply it to invoices later from the Advances panel." style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>→ Advance</button>)}
+                      : <button onClick={() => setAdvancePayments((prev: any[]) => [advanceFromBankLine(s.line, { nextId }), ...(prev || [])])} title="v6.68.0 (F-1): money received BEFORE any invoice exists — record it on account; apply it to invoices later from the Advances panel." style={{ padding: "5px 10px", borderRadius: 7, border: "1px solid #7C3AED", background: "#fff", color: "#7C3AED", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>→ Advance</button>)}
                   </>
                 )}
               </div>
@@ -542,10 +542,10 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
     <>
       {lvNode}
       {(() => { const fx = (invoices || []).reduce((s: number, i: any) => s + realizedFxPLN(i), 0);
-        return Math.abs(fx) > 0.005 ? <div style={{ fontSize: 11.5, fontWeight: 700, color: fx >= 0 ? "#065F46" : "#B91C1C", background: fx >= 0 ? "#ECFDF5" : "#FEF2F2", border: "1px solid " + (fx >= 0 ? "#A7F3D0" : "#FECACA"), borderRadius: 8, padding: "6px 12px", marginBottom: 10 }}>Realized FX {fx >= 0 ? "gain" : "loss"} to date: {fx.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN <span style={{ fontWeight: 400, color: "#64748B" }}>(from payments recorded with a bank settlement rate — v6.68.0 F-2)</span></div> : null; })()}
+        return Math.abs(fx) > 0.005 ? <div style={{ fontSize: 11, fontWeight: 700, color: fx >= 0 ? "#065F46" : "#B91C1C", background: fx >= 0 ? "#ECFDF5" : "#FEF2F2", border: "1px solid " + (fx >= 0 ? "#A7F3D0" : "#FECACA"), borderRadius: 8, padding: "6px 12px", marginBottom: 10 }}>Realized FX {fx >= 0 ? "gain" : "loss"} to date: {fx.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN <span style={{ fontWeight: 400, color: "#64748B" }}>(from payments recorded with a bank settlement rate — v6.68.0 F-2)</span></div> : null; })()}
       {(() => { const rows = fxDifferencesByCounterparty(invoices || []); if (!rows.length) return null;   /* v7.13.5 (A-AU-2): per client, realised against invoiced */
         const f4 = (x: number) => x.toFixed(4); const fp = (x: number) => x.toLocaleString("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        return <div data-fx-clients="1" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 11.5 }}>
+        return <div data-fx-clients="1" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 11 }}>
           <div style={{ fontWeight: 800, fontSize: 11, color: "#64748B", marginBottom: 4 }}>EXCHANGE DIFFERENCES BY CLIENT / SUPPLIER — NBP of the day before the invoice vs the day before each payment</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr style={{ color: "#94A3B8", textAlign: "left" }}><th>Counterparty</th><th>Side</th><th style={{ textAlign: "right" }}>Paid</th><th style={{ textAlign: "right" }}>Invoice rate (avg)</th><th style={{ textAlign: "right" }}>Payment rate (avg)</th><th style={{ textAlign: "right" }}>Gain / loss PLN</th></tr></thead>
           <tbody>{rows.map((r, i) => <tr key={i} style={{ borderTop: "1px solid #F1F5F9" }}><td>{r.counterparty}</td><td>{r.side === "receivable" ? "we receive" : "we pay"}</td><td style={{ textAlign: "right" }}>{fp(r.paid)} {r.currency} <span style={{ color: "#94A3B8" }}>({r.payments})</span></td><td style={{ textAlign: "right" }}>{f4(r.avgInvoiceRate)}</td><td style={{ textAlign: "right" }}>{f4(r.avgPaymentRate)}</td><td style={{ textAlign: "right", fontWeight: 700, color: r.gainPLN >= 0 ? "#065F46" : "#B91C1C" }}>{fp(r.gainPLN)}</td></tr>)}</tbody></table>
@@ -556,13 +556,13 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
       <StatementCard invoices={invoices} financeNotes={financeNotes} />
       <AdvancesPanel advancePayments={advancePayments} setAdvancePayments={setAdvancePayments} invoices={invoices} setInvoices={setInvoices} bankAccounts={bankAccounts} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
-        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#B45309" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
-        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 19, fontWeight: 800, color: "#111" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10.5, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
-        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>NET POSITION</div><div style={{ fontSize: 19, fontWeight: 800, color: totals.netPositionPLN >= 0 ? "#16A34A" : "#DC2626" }}>{fmt(totals.netPositionPLN)}</div><div style={{ fontSize: 10.5, color: "#888" }}>receivable − payable</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>RECEIVABLE · OPEN</div><div style={{ fontSize: 20, fontWeight: 800, color: "#16A34A" }}>{fmt(totals.receivableOpenPLN)}</div><div style={{ fontSize: 10, color: "#B45309" }}>{fmt(totals.receivableOverduePLN)} overdue</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>PAYABLE · OPEN</div><div style={{ fontSize: 20, fontWeight: 800, color: "#111" }}>{fmt(totals.payableOpenPLN)}</div><div style={{ fontSize: 10, color: "#DC2626" }}>{fmt(totals.payableOverduePLN)} overdue</div></div>
+        <div style={card}><div style={{ fontSize: 11, color: "#888" }}>NET POSITION</div><div style={{ fontSize: 20, fontWeight: 800, color: totals.netPositionPLN >= 0 ? "#16A34A" : "#DC2626" }}>{fmt(totals.netPositionPLN)}</div><div style={{ fontSize: 10, color: "#888" }}>receivable − payable</div></div>
         <div style={{ ...card, display: "flex", flexDirection: "column", justifyContent: "center", gap: 6 }}>
           <div style={{ display: "flex", gap: 4, background: "#F3F4F6", borderRadius: 7, padding: 3 }}>
             {(["all", "receivable", "payable"] as const).map(d => (
-              <button key={d} onClick={() => setDir(d)} style={{ flex: 1, padding: "4px 6px", borderRadius: 5, border: "none", background: dir === d ? "#fff" : "transparent", color: dir === d ? "#111" : "#888", fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>{d}</button>
+              <button key={d} onClick={() => setDir(d)} style={{ flex: 1, padding: "4px 6px", borderRadius: 5, border: "none", background: dir === d ? "#fff" : "transparent", color: dir === d ? "#111" : "#888", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize" }}>{d}</button>
             ))}
           </div>
           <label style={{ fontSize: 11, color: "#666", display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}><input type="checkbox" checked={hidePaid} onChange={e => setHidePaid(e.target.checked)} /> Hide paid</label>
@@ -572,7 +572,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
       <div style={{ ...card, padding: 0, overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead><tr style={{ background: "#FAFAFA", textAlign: "left", color: "#888" }}>
-            {["", "Type", "Counterparty", "Document", "Date", "Due", "Amount", "Status", ""].map((h, i) => <th key={i} style={{ padding: "9px 10px", fontWeight: 700, fontSize: 10.5, borderBottom: "1px solid #EEE" }}>{h}</th>)}
+            {["", "Type", "Counterparty", "Document", "Date", "Due", "Amount", "Status", ""].map((h, i) => <th key={i} style={{ padding: "9px 10px", fontWeight: 700, fontSize: 10, borderBottom: "1px solid #EEE" }}>{h}</th>)}
           </tr></thead>
           <tbody>
             {shown.map(i => (
@@ -580,11 +580,11 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
                 <td style={{ padding: "8px 10px" }}><span title={i.direction} style={{ fontSize: 14 }}>{i.direction === "receivable" ? "↓" : "↑"}</span></td>
                 <td style={{ padding: "8px 10px" }}>{i.kind}<div style={{ fontSize: 10, color: "#AAA" }}>{i.note || ""}</div></td>
                 <td style={{ padding: "8px 10px", fontWeight: 600 }}>{i.counterparty}</td>
-                <td style={{ padding: "8px 10px", fontFamily: "ui-monospace, Menlo, monospace" }}>{i.documentNo}</td>
+                <td style={{ padding: "8px 10px", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{i.documentNo}</td>
                 <td style={{ padding: "8px 10px", color: "#888" }}>{i.date || "—"}</td>
                 <td style={{ padding: "8px 10px", color: i.status === "Overdue" ? "#B45309" : "#888", fontWeight: i.status === "Overdue" ? 700 : 400 }}>{i.dueDate || "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{i.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}{i.currency !== "PLN" ? <span style={{ fontSize: 9.5, color: "#AAA" }}> PLN</span> : <span style={{ fontSize: 9.5, color: "#AAA" }}> PLN</span>}</td>
-                <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10.5, fontWeight: 800, color: statusColor(i.status) }}>{i.status}</span></td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>{i.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}{i.currency !== "PLN" ? <span style={{ fontSize: 10, color: "#AAA" }}> PLN</span> : <span style={{ fontSize: 10, color: "#AAA" }}> PLN</span>}</td>
+                <td style={{ padding: "8px 10px" }}><span style={{ fontSize: 10, fontWeight: 800, color: statusColor(i.status) }}>{i.status}</span></td>
                 <td style={{ padding: "8px 10px", textAlign: "right" }}>
                   <button onClick={() => togglePaid(i.ref)} title={i.status === "Paid" ? (i.direction === "receivable" ? "Undo receipt" : "Mark unpaid") : (i.direction === "receivable" ? "Record that the client's money arrived" : "Mark paid")} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: i.status === "Paid" ? "#E5E7EB" : "#BBF7D0", background: i.status === "Paid" ? "#fff" : "#F0FDF4", color: i.status === "Paid" ? "#888" : "#15803D", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{i.status === "Paid" ? "Undo" : (i.direction === "receivable" ? "Record receipt" : "Mark paid")}</button>
                 </td>
@@ -594,7 +594,7 @@ function LedgerView({ orders = [], lots = [], pos = [], invoices = [], setInvoic
           </tbody>
         </table>
       </div>
-      <div style={{ fontSize: 10.5, color: "#AAA", marginTop: 8, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 10, color: "#AAA", marginTop: 8, lineHeight: 1.5 }}>
         Receivables and invoice-based payables (sales, warehouse, freight and other cost invoices) now read from the <strong>Invoices</strong> module — the single source of truth — so anything you add, edit or pay there flows straight into this ledger and the P/L. Producer payouts (closed consignment settlements) and firm-price PO purchase commitments are still computed from inventory and the POs. Payroll and taxes (no invoice number) are excluded. "Mark paid" here is a manual flag; recording a payment on the invoice itself (Invoices module) is the cleaner way and also clears it here.
       </div>
     </>
@@ -671,7 +671,7 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], invoic
     <div style={box}>
       {wcNode}
       <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Warehouse charges</div>
-      <div style={{ fontSize: 12.5, color: "#666", lineHeight: 1.6 }}>
+      <div style={{ fontSize: 12, color: "#666", lineHeight: 1.6 }}>
         No warehouse tariffs configured yet. Open <strong>Contacts</strong>, edit your warehouse counterparty (type "Warehouse"),
         fill the <strong>Warehouse tariff</strong> section (kg/day or pallet/day rate, handling, sorting, free days) and tick the
         location(s) it operates. Expected charges then appear here and on every lot stored there.
@@ -713,11 +713,11 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], invoic
         {result.rows.map((r: any) => (
           <div key={r.lotNumber} style={{ borderBottom: "1px solid #F3F4F6", padding: "8px 0" }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>{r.lotNumber}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.lotNumber}</span>
               <span style={{ fontSize: 13, fontWeight: 800 }}>{r.totalPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>
             </div>
             {r.lines.map((l: any, i: number) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "#666", padding: "2px 0 2px 14px" }}>
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#666", padding: "2px 0 2px 14px" }}>
                 <span>{l.label}{l.date ? ` · ${l.date}` : ""}</span>
                 <span>{l.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>
               </div>
@@ -738,26 +738,26 @@ function WarehouseChargesView({ lots = [], setLots = null, contacts = [], invoic
           <div key={i.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, border: "1px solid #F3F4F6", borderRadius: 8, padding: "9px 12px", marginBottom: 8 }}>
             <div>
               <span style={{ fontSize: 13, fontWeight: 700 }}>{i.invoiceNo}</span>
-              <span style={{ fontSize: 11.5, color: "#888", marginLeft: 8 }}>{i.date} · {i.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {i.currency}{i.currency !== "PLN" ? ` @ ${i.fxRate}` : ""} = {i.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>
+              <span style={{ fontSize: 11, color: "#888", marginLeft: 8 }}>{i.date} · {i.amount.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} {i.currency}{i.currency !== "PLN" ? ` @ ${i.fxRate}` : ""} = {i.amountPLN.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} PLN</span>
               {i.notes && <div style={{ fontSize: 11, color: "#999" }}>{i.notes}</div>}
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-              <span style={{ fontSize: 10.5, fontWeight: 800, padding: "3px 9px", borderRadius: 6, background: i.allocated ? "#DCFCE7" : "#FEF3C7", color: i.allocated ? "#15803D" : "#92400E" }}>{i.allocated ? "Allocated" : "To allocate"}</span>
-              {!i.allocated && <button onClick={() => approveInvoice(i)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Approve &amp; allocate to lots</button>}
-              <span data-wh-register="1" style={{ fontSize: 10.5, color: "#94A3B8" }}>kept in Invoices</span>
+              <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 9px", borderRadius: 6, background: i.allocated ? "#DCFCE7" : "#FEF3C7", color: i.allocated ? "#15803D" : "#92400E" }}>{i.allocated ? "Allocated" : "To allocate"}</span>
+              {!i.allocated && <button onClick={() => approveInvoice(i)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Approve &amp; allocate to lots</button>}
+              <span data-wh-register="1" style={{ fontSize: 10, color: "#94A3B8" }}>kept in Invoices</span>
             </div>
           </div>
         ))}
         <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.9fr 0.7fr 0.7fr 1fr 1.2fr auto", gap: 8, alignItems: "end", marginTop: 6 }}>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Invoice no.</div><input value={inv.invoiceNo} onChange={e => setInv({ ...inv, invoiceNo: e.target.value })} placeholder="FV/2026/06/123" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Amount</div><input type="number" value={inv.amount} onChange={e => setInv({ ...inv, amount: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Currency</div><select value={inv.currency} onChange={e => setInv({ ...inv, currency: e.target.value, fxRate: e.target.value === "PLN" ? 1 : inv.fxRate })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#fff" }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>FX→PLN</div><div data-wh-rate="1" title={whFx.note} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F8FAFC", boxSizing: "border-box" }}>{String(inv.currency).toUpperCase() === "PLN" ? "1" : Number(inv.fxRate) > 0 ? Number(inv.fxRate).toFixed(4) : "—"}</div>{/* v7.18.6 (A-AU-12): NBP, not typed */}</div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Date</div><DateInput value={inv.date} onChange={e => setInv({ ...inv, date: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <div><div style={{ fontSize: 10.5, fontWeight: 600, color: "#888", marginBottom: 3 }}>Notes</div><input value={inv.notes} onChange={e => setInv({ ...inv, notes: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5 }} /></div>
-          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0) || (String(inv.currency).toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0))} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
+          <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>Invoice no.</div><input value={inv.invoiceNo} onChange={e => setInv({ ...inv, invoiceNo: e.target.value })} placeholder="FV/2026/06/123" style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12 }} /></div>
+          <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>Amount</div><input type="number" value={inv.amount} onChange={e => setInv({ ...inv, amount: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12 }} /></div>
+          <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>Currency</div><select value={inv.currency} onChange={e => setInv({ ...inv, currency: e.target.value, fxRate: e.target.value === "PLN" ? 1 : inv.fxRate })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12, background: "#fff" }}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</select></div>
+          <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>FX→PLN</div><div data-wh-rate="1" title={whFx.note} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12, background: "#F8FAFC", boxSizing: "border-box" }}>{String(inv.currency).toUpperCase() === "PLN" ? "1" : Number(inv.fxRate) > 0 ? Number(inv.fxRate).toFixed(4) : "—"}</div>{/* v7.18.6 (A-AU-12): NBP, not typed */}</div>
+          <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>Date</div><DateInput value={inv.date} onChange={e => setInv({ ...inv, date: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12 }} /></div>
+          <div><div style={{ fontSize: 10, fontWeight: 600, color: "#888", marginBottom: 3 }}>Notes</div><input value={inv.notes} onChange={e => setInv({ ...inv, notes: e.target.value })} style={{ width: "100%", border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12 }} /></div>
+          <button onClick={addInvoice} disabled={!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0) || (String(inv.currency).toUpperCase() !== "PLN" && !(parseNum(inv.fxRate) > 0))} style={{ padding: "8px 14px", borderRadius: 7, border: "none", background: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#E5E7EB" : "#16A34A", color: (!inv.invoiceNo.trim() || !(parseFloat(inv.amount) > 0)) ? "#9CA3AF" : "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>+ Record invoice</button>
         </div>
-        <div style={{ fontSize: 10.5, color: "#888", marginTop: 8, lineHeight: 1.5 }}>
+        <div style={{ fontSize: 10, color: "#888", marginTop: 8, lineHeight: 1.5 }}>
           Approving an invoice splits its PLN amount across the month's lots proportionally to their expected charges and adds it to each lot's
           <strong> landed cost</strong> — from there it flows into SO P/L automatically. Variance shows invoiced − expected: red = warehouse charged more than the tariff predicts.
         </div>
@@ -995,7 +995,7 @@ export default function Finance({
                 const actuals: any = { revenue: totalAgg.totalRevenuePLN, contribution: totalAgg.totalContributionPLN, overhead: totalAgg.totalOverheadPLN, net: totalAgg.totalNetMarginPLN ?? 0 };
                 const rows = budgetVariance(budgets, period, actuals);
                 return (
-                  <div style={{ marginTop: 10, border: "1px dashed #DDD6FE", borderRadius: 8, padding: "8px 12px", fontSize: 11.5 }}>
+                  <div style={{ marginTop: 10, border: "1px dashed #DDD6FE", borderRadius: 8, padding: "8px 12px", fontSize: 11 }}>
                     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       <b style={{ color: "#7C3AED" }}>Budget vs actual · {period}</b>
                       <span style={{ color: "#94A3B8" }}>(v6.79.0 F-6 — owner only; set a monthly target per measure)</span>
@@ -1018,13 +1018,13 @@ export default function Finance({
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
               <Card>
                 <SectionTitle>PIPELINE — CONFIRMED / RESERVED / LOADING</SectionTitle>
-                <div style={{ fontSize: 28, fontWeight: 700, color: pipelineAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A", letterSpacing: "-0.5px" }}>{fmtPLN(pipelineAgg.totalNetMarginPLN)}</div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: pipelineAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A", letterSpacing: "-0.5px" }}>{fmtPLN(pipelineAgg.totalNetMarginPLN)}</div>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>net forecast · {fmtPct(pipelineAgg.avgNetMarginPct)} after {fmtPLN(pipelineAgg.totalOverheadPLN)} overhead</div>
                 <div style={{ fontSize: 11, color: "#AAA", marginTop: 6 }}>{pipelineAgg.orderCount} active order{pipelineAgg.orderCount === 1 ? "" : "s"} not yet shipped</div>
               </Card>
               <Card>
                 <SectionTitle>DELIVERED — SHIPPED / INVOICED / CLOSED</SectionTitle>
-                <div style={{ fontSize: 28, fontWeight: 700, color: deliveredAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A", letterSpacing: "-0.5px" }}>{fmtPLN(deliveredAgg.totalNetMarginPLN)}</div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: deliveredAgg.totalNetMarginPLN < 0 ? "#DC2626" : "#16A34A", letterSpacing: "-0.5px" }}>{fmtPLN(deliveredAgg.totalNetMarginPLN)}</div>
                 <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>net actual · {fmtPct(deliveredAgg.avgNetMarginPct)} after {fmtPLN(deliveredAgg.totalOverheadPLN)} overhead</div>
                 <div style={{ fontSize: 11, color: "#AAA", marginTop: 6 }}>{deliveredAgg.orderCount} settled order{deliveredAgg.orderCount === 1 ? "" : "s"}</div>
               </Card>
@@ -1074,19 +1074,19 @@ export default function Finance({
                   }));
                 });
                 rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
-                if (!rows.length) return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: 16, fontSize: 12.5, color: "#94A3B8" }}>No claims recorded. Producer claims start from the lot (Inventory); client claims from the SO ("Record client claim") or the lot's quality flow.</div>;
+                if (!rows.length) return <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: 16, fontSize: 12, color: "#94A3B8" }}>No claims recorded. Producer claims start from the lot (Inventory); client claims from the SO ("Record client claim") or the lot's quality flow.</div>;
                 return (
                   <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, overflow: "hidden" }}>
                     <div style={{ display: "grid", gridTemplateColumns: "90px 130px 90px 120px 120px 1fr 130px", padding: "8px 14px", background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
-                      {["TYPE", "REF", "DATE", "LOT", "PO / SO", "DETAIL", "STATUS"].map((h, i) => <div key={i} style={{ fontSize: 9.5, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>)}
+                      {["TYPE", "REF", "DATE", "LOT", "PO / SO", "DETAIL", "STATUS"].map((h, i) => <div key={i} style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>{h}</div>)}
                     </div>
                     {rows.map((r, i) => (
                       <div key={i} style={{ display: "grid", gridTemplateColumns: "90px 130px 90px 120px 120px 1fr 130px", padding: "8px 14px", borderBottom: i < rows.length - 1 ? "1px solid #F8FAFC" : "none", fontSize: 12, alignItems: "center" }}>
                         <div><span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: r.kind === "Producer" ? "#FEF3C7" : "#FEE2E2", color: r.kind === "Producer" ? "#B45309" : "#B91C1C" }}>{r.kind}</span></div>
-                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}>{r.ref}</div>
+                        <div style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{r.ref}</div>
                         <div style={{ color: "#64748B" }}>{r.date || "—"}</div>
-                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", color: "#7C3AED" }}>{r.lot}</div>
-                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", color: "#2563EB" }}>{r.doc || "—"}</div>
+                        <div style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", color: "#7C3AED" }}>{r.lot}</div>
+                        <div style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", color: "#2563EB" }}>{r.doc || "—"}</div>
                         <div style={{ color: "#475569" }}>{r.detail || "—"}</div>
                         <div style={{ fontSize: 11, fontWeight: 600, color: r.status === "Issued" ? "#16A34A" : r.status === "Credit note drafted" ? "#0369A1" : "#64748B" }}>{r.status}</div>
                       </div>
@@ -1103,7 +1103,7 @@ export default function Finance({
             <ConsignmentPositionsCard pos={pos} lots={lots} orders={orders} invoices={invoices} shipments={shipments} claims={claims} financeNotes={financeNotes} poSettlements={poSettlements} />
             <Card style={{ marginBottom: 18 }}>
               <SectionTitle>P/L BY SALES ORDER</SectionTitle>
-              <div style={{ fontSize: 10.5, color: "#64748B", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 7, padding: "7px 10px", marginTop: 10 }}>
+              <div style={{ fontSize: 10, color: "#64748B", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 7, padding: "7px 10px", marginTop: 10 }}>
                 Direct costs flow automatically (v6.37.1): freight entered on shipment legs mirrors into the shipment's costs, delivery allocates them into lot landed cost, and the <b>actual</b> P/L counts a cost once it's invoiced <b>or</b> its shipment is Delivered/Closed (accrual). Costs already in a lot's landed cost arrive here through COGS — never double-counted.
               </div>
               {(() => {
@@ -1119,7 +1119,7 @@ export default function Finance({
                     </div>
                     {rows.map(({ o, m }: any) => (
                       <React.Fragment key={o.id}><div onClick={() => setPlOpenSO(plOpenSO === o.id ? null : o.id)} title="click: the full breakdown of this sale's result" style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px 110px 100px 100px 100px 110px 70px", gap: 8, padding: "8px 8px", fontSize: 12, borderTop: "1px solid #F1F5F9", alignItems: "center", cursor: "pointer", background: plOpenSO === o.id ? "#F8FAFC" : "transparent" }}>
-                        <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700, color: "#0369A1" }}>{o.number}</div>
+                        <div style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontWeight: 700, color: "#0369A1" }}>{o.number}</div>
                         <div style={{ color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.client?.name || "—"}</div>
                         <div style={{ fontSize: 11, color: "#64748B" }}>{o.status}</div>
                         <div style={{ textAlign: "right" }}>{fmtPLNcompact(m.revenuePLN)}</div>
@@ -1162,7 +1162,7 @@ export default function Finance({
                   <Field label="Invoice no. (received)"><Inp value={(form as any).invoiceNo || ""} onChange={(e: any) => setForm({ ...form, invoiceNo: e.target.value } as any)} placeholder="FV/2026/06/123 — from Fakturownia/KSeF" /></Field>
                   <Field label="Amount"><Inp type="number" value={form.amount} onChange={(e: any) => setForm({ ...form, amount: safe(e.target.value), amountPLN: Math.round(safe(e.target.value) * (String(form.currency || "PLN").toUpperCase() === "PLN" ? 1 : safe(form.fxRate)) * 100) / 100 })} /></Field>
                   <Field label="Currency"><Sel value={form.currency} onChange={(e: any) => setForm({ ...form, currency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c} value={c}>{c}</option>)}</Sel></Field>
-                  <Field label="FX → PLN (NBP)"><div data-op-rate="1" title={opFx.note} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{String(form.currency || "PLN").toUpperCase() === "PLN" ? "1" : (safe(form.fxRate) > 0 ? String(form.fxRate) : "—")}<span style={{ fontSize: 10.5, color: "#94A3B8", marginLeft: 6 }}>{opFx.note}</span></div></Field>{/* v7.21.11 (A-RV-34): shown, not typed */}
+                  <Field label="FX → PLN (NBP)"><div data-op-rate="1" title={opFx.note} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{String(form.currency || "PLN").toUpperCase() === "PLN" ? "1" : (safe(form.fxRate) > 0 ? String(form.fxRate) : "—")}<span style={{ fontSize: 10, color: "#94A3B8", marginLeft: 6 }}>{opFx.note}</span></div></Field>{/* v7.21.11 (A-RV-34): shown, not typed */}
                   <Field label="Amount PLN"><div data-op-pln="1" style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 10px", fontSize: 13, background: "#F9FAFB", color: "#374151" }}>{safe(form.amountPLN) ? safe(form.amountPLN).toLocaleString("pl-PL", { minimumFractionDigits: 2 }) : "—"}</div></Field>{/* v7.21.11: the amount × the rate */}
                   <Field label="Allocation method"><Sel value={form.allocationMethod} onChange={(e: any) => setForm({ ...form, allocationMethod: e.target.value as any })}>{ALLOCATION_METHODS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}</Sel></Field>
                   <Field label="Status"><Sel value={form.status} onChange={(e: any) => setForm({ ...form, status: e.target.value as any })}>{["Budget", "Expected", "Received", "Posted", "Paid"].map(s => <option key={s} value={s}>{s}</option>)}</Sel></Field>
@@ -1197,33 +1197,33 @@ export default function Finance({
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                     <SectionTitle>OPERATIONAL COST ENTRIES</SectionTitle>
                     <div style={{ display: "flex", gap: 8 }}>
-                      <button onClick={copyLastMonth} title="Copy every cost of the most recent month into the next month as Expected — adjust amounts where needed" style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #BFDBFE", background: "#fff", color: "#2563EB", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>⟳ Copy last month</button>
+                      <button onClick={copyLastMonth} title="Copy every cost of the most recent month into the next month as Expected — adjust amounts where needed" style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #BFDBFE", background: "#fff", color: "#2563EB", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>⟳ Copy last month</button>
                     </div>
                   </div>
                   {/* v6.10: filter by period and by supplier */}
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", margin: "8px 0 10px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#888" }}>PERIOD</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#888" }}>PERIOD</span>
                       <select value={costPeriodFilter} onChange={e => setCostPeriodFilter(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: "inherit", background: "#fff" }}>
                         <option value="all">All periods</option>
                         {costPeriods.map(p => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#888" }}>SUPPLIER</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "#888" }}>SUPPLIER</span>
                       <select value={costSupplierFilter} onChange={e => setCostSupplierFilter(e.target.value)} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, fontFamily: "inherit", background: "#fff", maxWidth: 220 }}>
                         <option value="all">All suppliers</option>
                         {costSuppliers.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
                     {(costPeriodFilter !== "all" || costSupplierFilter !== "all") && (
-                      <button onClick={() => { setCostPeriodFilter("all"); setCostSupplierFilter("all"); }} style={{ border: "none", background: "transparent", color: "#2563EB", cursor: "pointer", fontSize: 11.5, fontFamily: "inherit" }}>clear filters</button>
+                      <button onClick={() => { setCostPeriodFilter("all"); setCostSupplierFilter("all"); }} style={{ border: "none", background: "transparent", color: "#2563EB", cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>clear filters</button>
                     )}
                     <div style={{ marginLeft: "auto", fontSize: 11, color: "#888" }}>{filteredCosts.length} entr{filteredCosts.length === 1 ? "y" : "ies"} · <strong>{fmtPLN(filteredCostTotalPLN)}</strong></div>
                   </div>
 
                   {/* v6.11.1 (#): click a row to open/close its full detail */}
-                  <div style={{ minHeight: 64, marginBottom: 10, padding: "9px 12px", borderRadius: 8, border: "1px dashed #E5E7EB", background: "#FCFCFD", fontSize: 11.5, color: "#555" }}>
+                  <div style={{ minHeight: 64, marginBottom: 10, padding: "9px 12px", borderRadius: 8, border: "1px dashed #E5E7EB", background: "#FCFCFD", fontSize: 11, color: "#555" }}>
                     {openCost ? (
                       <div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -1234,7 +1234,7 @@ export default function Finance({
                           <span><span style={{ color: "#AAA" }}>Period</span> <strong>{openCost.period || "—"}</strong></span>
                           <span><span style={{ color: "#AAA" }}>Date</span> <strong>{openCost.date || "—"}</strong></span>
                           <span><span style={{ color: "#AAA" }}>Supplier</span> <strong>{openCost.supplierName || "—"}</strong></span>
-                          <span><span style={{ color: "#AAA" }}>Invoice no.</span> <strong style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{(openCost as any).invoiceNo || "—"}</strong></span>
+                          <span><span style={{ color: "#AAA" }}>Invoice no.</span> <strong style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{(openCost as any).invoiceNo || "—"}</strong></span>
                           <span><span style={{ color: "#AAA" }}>Category</span> <strong>{catLabel(openCost.category)}</strong></span>
                           <span><span style={{ color: "#AAA" }}>Cost center</span> <strong>{openCost.costCenter || "—"}</strong></span>
                           <span><span style={{ color: "#AAA" }}>Allocation</span> <strong>{methodLabel(openCost.allocationMethod)}</strong></span>
@@ -1258,9 +1258,9 @@ export default function Finance({
                         <thead><tr style={{ textAlign: "left", color: "#888", borderBottom: "1px solid #EEE" }}><th style={{ padding: 7 }}>Date</th><th>Supplier</th><th>Category</th><th>Status</th><th style={{ textAlign: "right" }}>Amount</th><th></th></tr></thead>
                         <tbody>{filteredCosts.map((c: OperationalCost) => <tr key={c.id} onClick={() => setOpenCost(prev => (prev && prev.id === c.id ? null : c))} style={{ borderBottom: "1px solid #F5F5F5", background: openCost && openCost.id === c.id ? "#F1F5F9" : "transparent", cursor: "pointer" }}>
                           <td style={{ padding: 7, color: "#666", whiteSpace: "nowrap" }}>{c.date || c.period || "—"}</td>
-                          <td><div style={{ fontWeight: 600, color: "#333" }}>{c.supplierName || "—"}</div>{(c as any).invoiceNo ? <div style={{ fontSize: 10.5, color: "#AAA", fontFamily: "ui-monospace, Menlo, monospace" }}>{(c as any).invoiceNo}</div> : null}</td>
+                          <td><div style={{ fontWeight: 600, color: "#333" }}>{c.supplierName || "—"}</div>{(c as any).invoiceNo ? <div style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{(c as any).invoiceNo}</div> : null}</td>
                           <td>{catLabel(c.category)}</td>
-                          <td><span style={{ padding: "2px 6px", borderRadius: 999, background: c.status === "Budget" ? "#EFF6FF" : c.status === "Expected" ? "#FEF3C7" : "#ECFDF5", color: c.status === "Budget" ? "#1D4ED8" : c.status === "Expected" ? "#92400E" : "#065F46", fontSize: 10.5 }}>{c.status}</span></td>
+                          <td><span style={{ padding: "2px 6px", borderRadius: 999, background: c.status === "Budget" ? "#EFF6FF" : c.status === "Expected" ? "#FEF3C7" : "#ECFDF5", color: c.status === "Budget" ? "#1D4ED8" : c.status === "Expected" ? "#92400E" : "#065F46", fontSize: 10 }}>{c.status}</span></td>
                           <td style={{ textAlign: "right", fontWeight: 600 }}>{fmtPLN(safe(c.amountPLN) || safe(c.amount) * (safe(c.fxRate) || 1))}</td>
                           <td style={{ textAlign: "right", whiteSpace: "nowrap" }}><button onClick={(e) => { e.stopPropagation(); editCost(c); }} style={{ border: "none", background: "transparent", color: "#2563EB", cursor: "pointer", fontSize: 11 }}>Edit</button><ActionButton action="delete" onClick={(e) => { e.stopPropagation(); deleteCost(c.id); }} /></td>
                         </tr>)}</tbody>

@@ -29,26 +29,26 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
     return [!String(a.product || "").trim() && "item", hasVar && !String(a.variety || "").trim() && "variety", !String(a.size || "").trim() && "size", !String(a.quality || "").trim() && "quality", !(parseFloat(a.qty) > 0) && "quantity", !(parseFloat(a.unitPrice) > 0) && "unit price", !(a.packagingId || String(a.packaging || "").trim()) && "packaging"].filter(Boolean) as string[]; };
   const incomplete = added.map((a: any, i: number) => ({ i, miss: missingOf(a) })).filter(x => x.miss.length);
   const payload = () => [...rows.map(r => ({ lineId: r.lineId, qty: String(r.qty).trim() === "" ? undefined : parseFloat(String(r.qty).replace(",", ".")), boxes: String(r.boxes ?? "").trim() === "" ? undefined : parseFloat(String(r.boxes).replace(",", ".")) })), ...added.filter(a => parseFloat(a.qty) > 0).map(a => ({ newLine: { ...a, qty: parseFloat(String(a.qty).replace(",", ".")), unitPrice: parseFloat(String(a.unitPrice).replace(",", ".")) || 0 } }))];
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "6px 8px", fontSize: 12, width: "100%", boxSizing: "border-box" };
   const total = rows.reduce((s, r) => s + (parseFloat(String(r.qty).replace(",", ".")) || (String(r.qty).trim() === "" ? (parseFloat(r.it.qty) || 0) : 0)), 0) + added.reduce((s, a) => s + (parseFloat(String(a.qty).replace(",", ".")) || 0), 0);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "50px 16px", overflow: "auto" }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "min(900px, 100%)", border: "2px solid #7C3AED", overflow: "hidden" }}>
         <div style={{ background: "#F5F3FF", borderBottom: "1px solid #DDD6FE", padding: "10px 16px" }}>
           <div style={{ fontSize: 14, fontWeight: 800, color: "#6D28D9" }}>📦 Producer's packing list · {order.number}</div>
-          <div style={{ fontSize: 11.5, color: "#64748B" }}>the final kilos per line — blank keeps the estimate · 0 = not loaded · anything loaded that the order did not have is added below as an additional item</div>
+          <div style={{ fontSize: 11, color: "#64748B" }}>the final kilos per line — blank keeps the estimate · 0 = not loaded · anything loaded that the order did not have is added below as an additional item</div>
         </div>
         <div style={{ padding: "12px 16px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr 0.9fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>LINE</div><div>SIZE</div><div>CLASS</div><div>ESTIMATED / ORDERED</div><div>FINAL KG</div><div>BOXES LOADED</div></div>
           {rows.map((r, i) => <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr 0.8fr 1fr 1fr 0.9fr", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F1F5F9" }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700 }}>{r.it.product}{r.it.variety ? ` — ${r.it.variety}` : ""}</div><div style={{ fontSize: 12 }}>{r.it.size || "—"}</div><div style={{ fontSize: 12 }}>{r.it.quality || "—"}</div>
+            <div style={{ fontSize: 12, fontWeight: 700 }}>{r.it.product}{r.it.variety ? ` — ${r.it.variety}` : ""}</div><div style={{ fontSize: 12 }}>{r.it.size || "—"}</div><div style={{ fontSize: 12 }}>{r.it.quality || "—"}</div>
             <div style={{ fontSize: 12 }}>{Math.round(parseFloat(r.it.qty) || 0).toLocaleString("pl-PL")} kg {isEstimatedLine(r.it) ? <span style={{ color: "#B45309" }}>≈ estimated</span> : <span style={{ color: "#94A3B8" }}>final</span>}</div>
             <input type="number" value={r.qty} onChange={e => setRows(rows.map((x, k) => k === i ? { ...x, qty: e.target.value } : x))} placeholder={isEstimatedLine(r.it) ? "final kg" : String(r.it.qty)} style={inp} />
             {/* v6.99.65 (A-PK-4): the boxes follow the final kilos (from the packaging); type the producer's count if it differs */}
             {(() => { const fk = String(r.qty).trim() === "" ? parseFloat(r.it.qty) : parseFloat(String(r.qty).replace(",", ".")); const d = counts ? counts({ ...r.it, qty: fk, boxesManual: undefined, palletsManual: undefined }).boxes : null;
               return <input type="number" value={r.boxes} onChange={e => setRows(rows.map((x, k) => k === i ? { ...x, boxes: e.target.value } : x))} placeholder={d != null ? String(d) : "boxes"} title={d != null ? `${d} from the final kilos and the packaging — type the producer's count if it differs` : "no packaging on this line"} style={inp} />; })()}
           </div>)}
-          <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>ADDITIONAL ITEMS — loaded, not on the order</div>
+          <div style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", margin: "12px 0 4px" }}>ADDITIONAL ITEMS — loaded, not on the order</div>
           {/* v6.99.57 (A-PK-1, owner): the PO line's own editors — item/variety from the catalogue, size, quality, quantity, price, coloration, packaging.
               Origin and unit come from the order; the quantity is FINAL (it is what is loaded); CN code, boxes and pallets derive. */}
           {/* v7.18.3 (A-AU-5): size and coloration are picked from the item's lists in the catalog — no suggestion lists any more */}
@@ -64,16 +64,16 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
                 <div><Lbl>Packaging</Lbl><select value={a.packagingId ?? ""} onChange={e => { const pk = (packagingTypes || []).find((t: any) => String(t.id) === e.target.value); set({ packagingId: pk ? pk.id : null, packaging: pk ? pk.label : "" }); }} style={missingOf(a).includes("packaging") ? { ...inp, borderColor: "#DC2626", background: "#FEF2F2" } : inp}><option value="">— choose —</option>{(packagingTypes || []).map((t: any) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></div>
                 <button onClick={() => setAdded(added.filter((_, k) => k !== i))} title="remove this item" style={{ border: "1px solid #FECACA", background: "#fff", color: "#DC2626", borderRadius: 6, height: 32, cursor: "pointer" }}>✕</button>
               </div>
-              <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 4 }}>taken from the order: origin <b>{a.origin || "—"}</b> · unit <b>{a.pricingUnit || "kg"}</b> · quantity <b>final</b>{a.cnCode ? <> · CN <b>{a.cnCode}</b></> : null} · boxes and pallets derive from the packaging</div>
+              <div style={{ fontSize: 10, color: "#64748B", marginTop: 4 }}>taken from the order: origin <b>{a.origin || "—"}</b> · unit <b>{a.pricingUnit || "kg"}</b> · quantity <b>final</b>{a.cnCode ? <> · CN <b>{a.cnCode}</b></> : null} · boxes and pallets derive from the packaging</div>
             </div>); })}
           <button onClick={() => { const b = (order.items || [])[0] || {}; setAdded([...added, { id: `pk-${nextId()}`, product: b.product || "", variety: "", size: "", quality: b.quality || "I", qty: "", unitPrice: "", coloration: "", packaging: "", packagingId: null, cnCode: cnCodeForItem(catalog, b.product) || "", origin: b.origin || "", pricingUnit: b.pricingUnit || "kg" }]); }}
-            style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add additional items</button>
+            style={{ width: "100%", padding: "8px", marginTop: 4, border: "2px dashed #7C3AED", borderRadius: 8, background: "#F5F3FF", color: "#6D28D9", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>⊕ Add additional items</button>
           <div style={{ marginTop: 12, fontSize: 13, fontWeight: 800 }}>Truck total: {Math.round(total).toLocaleString("pl-PL")} kg</div>
           {/* v6.99.56 (A-PL-2, owner): what follows — the sale is what was loaded, so it takes the final kilos; a new size joins it at a price to agree */}
           {preview && (() => { const pv = preview(payload(), { choice, prices }); return (
             <div style={{ marginTop: 12, border: "1px solid #DDD6FE", borderRadius: 8, padding: "8px 10px", background: "#FAF5FF" }}>
-              <div style={{ fontSize: 10.5, fontWeight: 800, color: "#6D28D9", marginBottom: 4 }}>WHAT FOLLOWS</div>
-              <div style={{ fontSize: 11.5, color: "#475569" }}>Expected lots rebuilt from the final lines · shipments not yet loaded re-derive their goods.</div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#6D28D9", marginBottom: 4 }}>WHAT FOLLOWS</div>
+              <div style={{ fontSize: 11, color: "#475569" }}>Expected lots rebuilt from the final lines · shipments not yet loaded re-derive their goods.</div>
               {pv.soChanges.map((s: string, i: number) => <div key={i} style={{ fontSize: 12, marginTop: 3 }}>• {s}</div>)}
               {pv.questions.map((q: any) => <div key={q.key} style={{ fontSize: 12, marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}><span style={{ color: "#92400E", fontWeight: 700 }}>? {q.label}</span>
                 <select value={choice[q.key] || ""} onChange={e => setChoice({ ...choice, [q.key]: e.target.value })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 6px", fontSize: 12 }}><option value="">— choose —</option>{q.options.map((o: string) => <option key={o}>{o}</option>)}</select></div>)}
@@ -84,9 +84,9 @@ export function PackingResultWindow({ order, onClose, onConfirm, preview = null,
         </div>
         <div style={{ borderTop: "1px solid #E5E7EB", background: "#F8FAFC", padding: "10px 16px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <SmallButton onClick={onClose}>Cancel</SmallButton>
-          {incomplete.length > 0 && <span style={{ fontSize: 11.5, color: "#B91C1C", fontWeight: 700, alignSelf: "center" }}>Additional item{incomplete.length > 1 ? "s" : ""} incomplete: {incomplete.map(x => `#${x.i + 1} — ${x.miss.join(", ")}`).join(" · ")}</span>}
+          {incomplete.length > 0 && <span style={{ fontSize: 11, color: "#B91C1C", fontWeight: 700, alignSelf: "center" }}>Additional item{incomplete.length > 1 ? "s" : ""} incomplete: {incomplete.map(x => `#${x.i + 1} — ${x.miss.join(", ")}`).join(" · ")}</span>}
           <button disabled={incomplete.length > 0} onClick={() => { if (incomplete.length) return; onConfirm(payload(), { choice, prices }); }}
-            style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Quantities are final</button>
+            style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#16A34A", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Quantities are final</button>
         </div>
       </div>
     </div>
@@ -98,14 +98,14 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm, pos 
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
   const refDupes = supplierRefUsedOn(f.supplierRef, order.number, pos, shipments);   // v7.8.0 (A-PO-REF-1)
   const myLots = (lots || []).filter((l: any) => String(l.poRef) === String(order.number));
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12, width: "100%", boxSizing: "border-box" };
   const [asking, setAsking] = React.useState(false);
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "50px 16px", overflow: "auto" }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "min(820px, 100%)", border: "2px solid #0F766E", overflow: "hidden" }}>
         <div style={{ background: "#F0FDFA", borderBottom: "1px solid #99F6E4", padding: "10px 16px" }}>
           <div style={{ fontSize: 14, fontWeight: 800, color: "#0F766E" }}>🚚 Register the supplier's truck</div>
-          <div style={{ fontSize: 11.5, color: "#64748B" }}>{order.number} · {order.supplier?.name || ""} · the supplier delivers ({order.buyIncoterm}) — we track the truck, we do not pay for it</div>
+          <div style={{ fontSize: 11, color: "#64748B" }}>{order.number} · {order.supplier?.name || ""} · the supplier delivers ({order.buyIncoterm}) — we track the truck, we do not pay for it</div>
         </div>
         <div style={{ padding: "14px 16px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
@@ -117,7 +117,7 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm, pos 
             <div><Lbl>Temperature recorder</Lbl><input value={f.recorder} onChange={e => set("recorder", e.target.value)} placeholder="TR-88412" style={inp} /></div>
           </div>
           <div style={{ marginTop: 10 }}><Lbl>Note</Lbl><input value={f.note} onChange={e => set("note", e.target.value)} style={inp} /></div>
-          <div style={{ marginTop: 12, fontSize: 11.5, color: "#64748B" }}>
+          <div style={{ marginTop: 12, fontSize: 11, color: "#64748B" }}>
             Carrying {myLots.length} lot(s): {myLots.map((l: any) => `${l.number} · ${l.product}${l.variety ? " " + l.variety : ""} ${Math.round(Number(l.expectedKg) || 0).toLocaleString("pl-PL")} kg`).join(" · ") || "—"}
           </div>
         </div>
@@ -126,8 +126,8 @@ export function SupplierTruckWindow({ order, lots = [], onClose, onConfirm, pos 
           <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <SmallButton kind="close" onClick={onClose}>Close</SmallButton>
             {asking
-              ? <><SmallButton onClick={() => setAsking(false)}>No</SmallButton><button disabled={refDupes.length > 0} onClick={() => { if (refDupes.length) return; onConfirm(f); }} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, register</button></>
-              : <button onClick={() => setAsking(true)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Register truck</button>}
+              ? <><SmallButton onClick={() => setAsking(false)}>No</SmallButton><button disabled={refDupes.length > 0} onClick={() => { if (refDupes.length) return; onConfirm(f); }} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Yes, register</button></>
+              : <button onClick={() => setAsking(true)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: "#0F766E", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Register truck</button>}
           </span>
         </div>
       </div>
@@ -181,12 +181,12 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 {order.buyIncoterm && <FlowBadge order={order} />}
                 <VarianceBadge variance={order.variance} />
               </div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace", marginBottom: 4 }}>{order.number}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: "#111", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", marginBottom: 4 }}>{order.number}</div>
               <div style={{ fontSize: 13, color: "#444" }}>{order.supplier?.name} · {order.supplier?.country} {destLabel !== "—" && <>· destination {dest ? LOCATION_TYPES[dest.type]?.icon : "📍"} {destLabel}</>}</div>
             </div>
             <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Total value</div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
               {order.currency !== "PLN" && <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{fmtMoney(totalPLN, "PLN")} · rate {order.fxRate}</div>}
               <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>{fmtNum(totalKg)} kg total</div>
             </div>
@@ -206,7 +206,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
               {/* Line items */}
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>LINE ITEMS ({order.items.length})</SectionTitle>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: "#F9FAFB" }}>
                       {["Product", "Origin", "Size", "Kl.", "Packaging", "Boxes", "Qty kg", "Unit price", "Total"].map((h, i) => (
@@ -221,12 +221,12 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                         <tr key={i} style={{ borderBottom: "1px solid #F3F4F6" }}>
                           <td style={{ padding: "10px", fontWeight: 600 }}>
                             {it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}
-                            {it.coloration && <div style={{ fontSize: 10.5, color: "#AAA", fontWeight: 400 }}>{it.coloration}</div>}
+                            {it.coloration && <div style={{ fontSize: 10, color: "#AAA", fontWeight: 400 }}>{it.coloration}</div>}
                           </td>
                           <td style={{ padding: "10px", color: "#555" }}>{it.origin || "—"}</td>
                           <td style={{ padding: "10px", color: "#555" }}>{it.size || "—"}</td>
                           <td style={{ padding: "10px" }}><QualityBadge quality={it.quality} /></td>
-                          <td style={{ padding: "10px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
+                          <td style={{ padding: "10px", color: "#666", fontSize: 11 }}>{it.packaging || "—"}</td>
                           <td style={{ padding: "10px", textAlign: "right", color: "#555" }}>{(() => { const b = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return b ? fmtNum(b) : "—"; })()}</td>
                           <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{fmtNum(it.qty)}</td>
                           <td style={{ padding: "10px", textAlign: "right" }}>{(order.pricingMode || "firm") === "consignment" ? <span style={{ color: "#7C3AED", fontWeight: 600 }}>Consignment ⚖</span> : <>{parseFloat(it.unitPrice || 0).toFixed(2)} {order.currency}</>}</td>
@@ -257,14 +257,14 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                     note — so receiving lives HERE too, not only on the lot in Inventory. */}
                 {typeof onPackingResult === "function" && order.status === "Confirmed" && (order.items || []).some((it: any) => isEstimatedLine(it)) && (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8 }}>
-                    <div style={{ fontSize: 11.5, color: "#92400E", fontWeight: 700 }}>Quantities are ESTIMATED — prices agreed, kilos to be confirmed by the producer's packing result. Transport can be booked on these figures (v6.95.0, PO-10).</div>
+                    <div style={{ fontSize: 11, color: "#92400E", fontWeight: 700 }}>Quantities are ESTIMATED — prices agreed, kilos to be confirmed by the producer's packing result. Transport can be booked on these figures (v6.95.0, PO-10).</div>
                     <button onClick={onPackingResult} style={{ marginTop: 6, padding: "4px 10px", borderRadius: 6, border: "none", background: "#B45309", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📦 Enter packing result → quantities final</button>
                   </div>
                 )}
                 {/* v6.99.36 (A-R25-6, owner): the supplier truck moved OUT of Linked documents — it has its own box under the line items */}
                 {typeof onReceiveLot === "function" && (expectedLots || []).length > 0 && (
                   <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <span style={{ fontSize: 10.5, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
+                    <span style={{ fontSize: 10, color: "#92400E", fontWeight: 700 }}>Expected · direct receipt:</span>
                     {expectedLots.map((l: any) => (
                       <button key={String(l.id)} onClick={() => onReceiveLot(l)} title="DDP / supplier-delivered arrival with no shipment of ours — posts the receipt movement" style={{ padding: "4px 10px", borderRadius: 6, border: "none", background: "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📥 Receive {l.number} ({Math.round(parseFloat(l.expectedKg) || 0).toLocaleString("pl-PL")} kg)</button>
                     ))}
@@ -274,7 +274,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                     — the stored legacy array was never updated by the Invoices module, so a
                     cost invoice linked to this PO was invisible here. */}
                 <LinkRow label="Invoices" items={computedInvoices ?? order.linkedInvoices} color="#16A34A" bg="#DCFCE7" />
-                <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
+                <div style={{ marginTop: 10, fontSize: 10, color: "#AAA", lineHeight: 1.5, fontStyle: "italic" }}>
                   Links are computed live: sales orders that source from this PO, shipments that carry it, and lots created from it.
                 </div>
               </Card>
@@ -289,7 +289,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 <SectionTitle>SUPPLIER</SectionTitle>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginBottom: 4 }}>{order.supplier?.name}</div>
                 <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>{order.supplier?.country}</div>
-                {order.supplier?.nip && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>NIP / VAT</div><div style={{ fontSize: 12, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.supplier.nip}</div></div>}
+                {order.supplier?.nip && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>NIP / VAT</div><div style={{ fontSize: 12, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{order.supplier.nip}</div></div>}
                 {liveParty(order.supplier, sd.contacts || [])?.address && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Address</div><div style={{ fontSize: 12, color: "#444" }}>{formatAddress(addressOf(liveParty(order.supplier, sd.contacts || [])), { oneLine: true }) || liveParty(order.supplier, sd.contacts || [])?.address}</div></div>}
                 {order.supplier?.contact && <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>Contact</div><div style={{ fontSize: 12, color: "#444" }}>{order.supplier.contact}</div></div>}
                 {order.supplier?.email && <div><div style={{ fontSize: 10, color: "#888" }}>Email</div><a href={`mailto:${order.supplier.email}`} style={{ fontSize: 12, color: "#2563EB", textDecoration: "none" }}>{order.supplier.email}</a></div>}
@@ -309,7 +309,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
 <div style={{ fontWeight: 600, color: "#888" }}>—</div>
                   </div>
                   <div><div style={{ fontSize: 10, color: "#888" }}>PAYMENT</div><div style={{ fontWeight: 500 }}>{paymentText(order, liveParty(order.supplier, sd.contacts || []) || order.supplier)}</div></div>
-                  <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "ui-monospace, Menlo, monospace" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
+                  <div><div style={{ fontSize: 10, color: "#888" }}>FX RATE</div><div style={{ fontWeight: 500, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{order.fxRate} {order.currency} → PLN {order.fxLockedAt && <span style={{ fontSize: 10, color: "#AAA", fontFamily: "inherit" }}>(locked {order.fxLockedAt})</span>}</div></div>
                 </div>
               </Card>
 
@@ -326,7 +326,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                     const pct = (delta / order.variance.expectedKg) * 100;
                     if (delta === 0) return <div style={{ fontSize: 12, color: "#16A34A" }}>✓ Quantity matched exactly</div>;
                     return (
-                      <div style={{ padding: "10px 12px", background: delta < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${delta < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 6, fontSize: 11.5, color: delta < 0 ? "#92400E" : "#1E40AF" }}>
+                      <div style={{ padding: "10px 12px", background: delta < 0 ? "#FEF3C7" : "#DBEAFE", border: `1px solid ${delta < 0 ? "#FDE68A" : "#BFDBFE"}`, borderRadius: 6, fontSize: 11, color: delta < 0 ? "#92400E" : "#1E40AF" }}>
                         <strong>{delta > 0 ? "Surplus" : "Shortfall"}:</strong> {Math.abs(delta).toLocaleString()} kg ({pct.toFixed(2)}%)
                       </div>
                     );
@@ -342,16 +342,16 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
             const trucks = supplierTrucks || [];   // v6.99.42 (hotfix): was filtering a list of NUMBERS for .arrangedBy — never matched, the box always read empty
             return (
               <Card style={{ marginBottom: 16, borderLeft: "4px solid #0F766E" }}>
-                <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>🚚 {trucks.length ? "Register another truck" : "Register supplier's truck"}</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
+                <SectionTitle right={typeof onRegisterTruck === "function" ? <button onClick={onRegisterTruck} style={{ padding: "5px 12px", borderRadius: 7, border: "1px solid #0F766E", background: "#F0FDFA", color: "#0F766E", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>🚚 {trucks.length ? "Register another truck" : "Register supplier's truck"}</button> : null}>SUPPLIER'S TRUCK <span style={{ fontWeight: 500, textTransform: "none", color: "#94A3B8" }}>— the supplier delivers ({order.buyIncoterm}); we track the movement, the freight is theirs</span></SectionTitle>
                 {!trucks.length && <div style={{ fontSize: 12, color: "#94A3B8" }}>No truck registered yet. Register it when the supplier announces the plates and the ETA.</div>}
                 {trucks.map((s: any) => { const u = (s.legs || []).flatMap((l: any) => l.vehicles || [])[0] || {}; return (
                   <div key={s.number} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr 1fr 1fr 1fr auto", gap: 8, fontSize: 12, alignItems: "center" }}>
                       <div><b>{s.number}</b></div>
-                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10 }}>truck </span><b>{u.truckPlate || "—"}</b>{u.trailerPlate ? <span style={{ color: "#64748B" }}> / {u.trailerPlate}</span> : null}</div>
                       <div>{s.supplierRef || u.supplierRef ? <span style={{ background: "#1D4ED8", color: "#fff", padding: "1px 8px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{s.supplierRef || u.supplierRef}</span> : <span style={{ color: "#94A3B8" }}>no supplier ref</span>}</div>
-                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
-                      <div><span style={{ color: "#94A3B8", fontSize: 10.5 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10 }}>ETA </span>{u.eta || u.plannedDeliveryDate || s.expectedDeliveryDate || "—"}</div>
+                      <div><span style={{ color: "#94A3B8", fontSize: 10 }}>recorder </span>{u.tempRecorderNo || "—"}</div>
                       <div style={{ fontWeight: 700, color: s.status === "Delivered" ? "#16A34A" : "#B45309" }}>{s.status}</div>
                       <div>{typeof onOpenShipment === "function" && <SmallButton onClick={() => onOpenShipment(s.number)}>Open</SmallButton>}</div>
                     </div>
@@ -369,7 +369,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
           {order.notes && (
             <Card style={{ marginBottom: 16 }}>
               <SectionTitle>NOTES</SectionTitle>
-              <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{order.notes}</div>
+              <div style={{ fontSize: 12, color: "#444", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{order.notes}</div>
             </Card>
           )}
           {settlement && (order.pricingMode || "firm") === "consignment" && <TruckSettlementCard order={order} {...settlement} />}

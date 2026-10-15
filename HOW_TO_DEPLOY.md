@@ -154,3 +154,16 @@ All of these travel WITH the zip. As long as you copy the whole file set
 
 No ChatGPT batching step. If something in my zip doesn't deploy, that's my bug
 to fix, and the first error line from Vercel tells me exactly what.
+
+## Leftover files — the release check (v7.23.0)
+
+GitHub keeps every file ever uploaded unless it is deleted by hand, so files from older versions can stay behind.
+Every release carries `release-files.json`, the list of its own files. Before each build, `scripts/check-release.cjs`
+compares the copy with that list and, if something does not belong, prints a box in the Vercel build log:
+
+    RELEASE CHECK — v7.x
+    These 1 file(s) are NOT part of v7.x — delete them from the GitHub copy:
+       src/OldScreen.tsx
+
+The build goes on (the type-check reads only the files the app loads), but delete what it names — an old file under
+`api/` would even be deployed as an endpoint. The cleanest way remains the one in P-6: replace the whole copy with the zip.

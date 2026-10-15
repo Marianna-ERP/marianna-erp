@@ -165,7 +165,7 @@ export function QualityBadge({ quality }: any) {
     "Industrial": { bg: "#FEE2E2", color: "#991B1B" },  // processing-grade — red
   };
   const p = palette[quality] || palette["I"];
-  return <span style={{ background: p.bg, color: p.color, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
+  return <span style={{ background: p.bg, color: p.color, padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
 export function FlowBadge({ flow, order = null, compact = false }: any) {
   // v6.29.0: terms-first vocabulary — old-flow and new POs render identically.
@@ -388,7 +388,7 @@ function EmailModal({ order, contacts = [], onClose }: any) {
           </div>
 
           {/* Backend roadmap note */}
-          <div style={{ fontSize: 10.5, color: "#9CA3AF", lineHeight: 1.5, paddingTop: 4, fontStyle: "italic" }}>
+          <div style={{ fontSize: 10, color: "#9CA3AF", lineHeight: 1.5, paddingTop: 4, fontStyle: "italic" }}>
             Coming with the backend: PDF auto-generation server-side, automatic attachment, send via Marianna's SMTP, delivery tracking, and a "Sent" timestamp on the PO.
           </div>
         </div>
@@ -413,7 +413,7 @@ export function LifecycleTimeline({ status }: any) {
         return (
           <React.Fragment key={s}>
             <div style={{
-              padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600,
+              padding: "4px 9px", borderRadius: 14, fontSize: 10, fontWeight: 600,
               background: current ? palette.bg : (past ? "#F3F4F6" : "#FAFAFA"),
               color: current ? palette.color : (past ? "#374151" : "#CCC"),
               border: current ? `1px solid ${palette.color}` : "1px solid transparent",
@@ -423,7 +423,7 @@ export function LifecycleTimeline({ status }: any) {
           </React.Fragment>
         );
       })}
-      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Deleted</span>}
+      {isCancelled && <span style={{ marginLeft: 8, padding: "4px 9px", borderRadius: 14, fontSize: 10, fontWeight: 600, background: "#FEE2E2", color: "#DC2626" }}>✕ Deleted</span>}
     </div>
   );
 }
@@ -455,12 +455,12 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
   const bandPct = rateRec && (rateRec.bands || []).length ? commissionPctForSales(rateRec, calc.grossPLN) : null;
   const upd = (patch: any) => setSettlements && setSettlements((prev: any[]) => { const all = prev || []; const cur = all.find((s: any) => String(s.poNumber) === String(order.number)); if (cur) return all.map((s: any) => s === cur ? { ...s, ...patch } : s); return [...all, { id: nextId(), poNumber: order.number, status: "Open", ratePLNperEUR: rate, commissionPct: pct, ...patch }]; });
   const fmt = (n: number, c = "PLN") => `${(n || 0).toLocaleString("pl-PL", { minimumFractionDigits: 2 })} ${c}`;
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5, width: "100%", boxSizing: "border-box" };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11, width: "100%", boxSizing: "border-box" };
   const closed = rec?.status === "Closed";
   const rows = salesReportRows(calc);
 
   const [askClose, setAskClose] = React.useState(false);
-  const docBtn = (colour: string, bg: string): any => ({ padding: "7px 14px", borderRadius: 8, border: `1px solid ${colour}`, background: bg, color: colour, fontSize: 12.5, fontWeight: 800, cursor: "pointer" });
+  const docBtn = (colour: string, bg: string): any => ({ padding: "7px 14px", borderRadius: 8, border: `1px solid ${colour}`, background: bg, color: colour, fontSize: 12, fontWeight: 800, cursor: "pointer" });
   function doClose() {
     const number = rec?.number || nextSettlementNumberPO(settlements, new Date().getFullYear());   // v6.99.117 (AUD-27): a re-closed settlement keeps its number (it may be on a printed statement)
     upd({ status: "Closed", number, closedAt: localTodayISO(), ratePLNperEUR: rate, fxTableDate: sr.tableDate, commissionPct: pct });   // v7.18.6: the NBP table kept with the rate
@@ -490,7 +490,7 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
           {provCur !== cur && provCur !== "PLN" && <input type="number" step="0.0001" disabled={closed || !!chosenInv} value={rec?.provisionalRate ?? ""} placeholder="PLN rate" title={`PLN per 1 ${provCur}`} onChange={e => upd({ provisionalRate: parseFloat(e.target.value) || 0 })} style={inp} />}
         </div></div>
       </div>
-      <div id={`sales-report-${order.id}`} style={{ fontSize: 11.5 }}>
+      <div id={`sales-report-${order.id}`} style={{ fontSize: 11 }}>
         {/* v6.99.36 (A-R25-1, owner): grouped headers, figures right-aligned with separators, a totals row, the currency named once. */}
         {/* v6.99.104 (A-PV-3, owner 2 Oct): the ARRIVED · SORTED INTO · SOLD · LEFT label line removed — the column heads say it */}
         <div style={{ display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontWeight: 700, color: "#94A3B8", fontSize: 10, textAlign: "right" }}><div style={{ textAlign: "left" }}>VARIETY · LOT</div><div>RECEIVED kg</div><div>CLASS I kg</div><div>CLASS II kg</div><div>WASTE kg</div><div>SOLD I kg</div><div>SOLD II kg</div><div>VALUE ({"PLN"})</div><div>ON STOCK kg</div></div>
@@ -506,7 +506,7 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
           <div style={{ color: (l.onStockKg || 0) > 0 ? "#B45309" : "#94A3B8" }}>{Math.round(l.onStockKg || 0).toLocaleString("pl-PL")}</div>
           {/* v6.99.105 (A-ST-9, owner 2 Oct): the sales behind the line — SO, client, class, kilos, value, and the claims that touch them */}
           {(l.sales || []).map((sr: any, si: number) => <div key={si} style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr 1.1fr 0.9fr", gap: 6, fontSize: 11, color: "#475569", textAlign: "right" }}>
-            <div style={{ textAlign: "left", paddingLeft: 14 }}>↳ <DocLink num={sr.soNumber} from={order.number}><span style={{ color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 700 }}>{sr.soNumber}</span></DocLink>{sr.client ? ` · ${sr.client}` : ""}{sr.claims.length ? <span style={{ color: "#B45309", fontWeight: 700 }}> · claim {sr.claims.map((cn: string, ci: number) => <DocLink key={cn} num={cn} from={order.number}><span>{ci ? ", " : ""}{cn}</span></DocLink>)}</span> : null}</div>
+            <div style={{ textAlign: "left", paddingLeft: 14 }}>↳ <DocLink num={sr.soNumber} from={order.number}><span style={{ fontWeight: 700}}>{sr.soNumber}</span></DocLink>{sr.client ? ` · ${sr.client}` : ""}{sr.claims.length ? <span style={{ color: "#B45309", fontWeight: 700 }}> · claim {sr.claims.map((cn: string, ci: number) => <DocLink key={cn} num={cn} from={order.number}><span>{ci ? ", " : ""}{cn}</span></DocLink>)}</span> : null}</div>
             <div /><div /><div /><div />
             <div>{sr.grade === "I" ? Math.round(sr.kg).toLocaleString("pl-PL") : ""}</div><div>{sr.grade === "II" ? Math.round(sr.kg).toLocaleString("pl-PL") : ""}</div>
             <div>{fmt(sr.pln).replace(" PLN", "")}</div><div />
@@ -542,7 +542,7 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
               <div>2 · we issue our COMMISSION INVOICE <b>{fmt(calc.commissionEUR, cur)}</b></div>
               <div style={{ color: "#15803D", fontWeight: 700 }}>3 · after compensation {calc.balanceEUR >= 0 ? `we owe ${prodName}` : `${prodName} owes us`} <b>{fmt(Math.abs(calc.balanceEUR), cur)}</b></div>
               {calc.stillToTransferEUR != null && <div style={{ fontSize: 11, color: "#64748B" }}>provisional paid {fmt(calc.provisionalPaidEUR || 0, cur)} · {calc.stillToTransferEUR >= 0 ? `still to transfer to ${prodName}` : `${prodName} still owes us`} <b>{fmt(Math.abs(calc.stillToTransferEUR), cur)}</b></div>}
-              {calc.stillToTransferEUR == null && rec?.provisionalInvoiceNo && <div style={{ fontSize: 10.5, color: "#94A3B8" }}>the provisional invoice {rec.provisionalInvoiceNo} is not in the register — register it as a cost invoice and pick it above to follow its payments</div>}
+              {calc.stillToTransferEUR == null && rec?.provisionalInvoiceNo && <div style={{ fontSize: 10, color: "#94A3B8" }}>the provisional invoice {rec.provisionalInvoiceNo} is not in the register — register it as a cost invoice and pick it above to follow its payments</div>}
             </> : <div style={{ color: "#94A3B8" }}>Enter the producer's provisional invoice to see the correction and the balance.</div>}
           </div>
         </div>
@@ -557,13 +557,13 @@ export function TruckSettlementCard({ onOpenResult = null, order, lots = [], ord
         {!closed && setSettlements && (
           askClose
             ? <span style={{ display: "flex", gap: 8, alignItems: "center", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#92400E" }}>{calc.fullySold ? "Close this settlement" : "Close as INTERIM (the truck is not fully sold)"} — net sales {calc.netSalesEUR.toLocaleString("pl-PL")} EUR, commission {calc.commissionEUR.toLocaleString("pl-PL")} EUR. It can be re-opened until the commission is invoiced.</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#92400E" }}>{calc.fullySold ? "Close this settlement" : "Close as INTERIM (the truck is not fully sold)"} — net sales {calc.netSalesEUR.toLocaleString("pl-PL")} EUR, commission {calc.commissionEUR.toLocaleString("pl-PL")} EUR. It can be re-opened until the commission is invoiced.</span>
                 <SmallButton onClick={() => setAskClose(false)}>No</SmallButton>
                 <button onClick={() => { setAskClose(false); doClose(); }} style={{ padding: "5px 14px", borderRadius: 7, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Yes, close</button>
               </span>
             : (cur !== "PLN" && !(Number(rate) > 0))   /* v7.16.2 (AUD-31): a foreign-currency settlement closes only with its rate — once closed, the rate can no longer be entered */
-              ? <span data-close-needs-rate="1" style={{ fontSize: 11.5, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>Enter the PLN→{cur} rate to close — without it the net sales in {cur}, the commission and the producer's note can't be worked out.</span>
-              : <button onClick={() => setAskClose(true)} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>🔒 Close settlement{calc.fullySold ? "" : " (interim)"}</button>
+              ? <span data-close-needs-rate="1" style={{ fontSize: 11, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "6px 10px" }}>Enter the PLN→{cur} rate to close — without it the net sales in {cur}, the commission and the producer's note can't be worked out.</span>
+              : <button onClick={() => setAskClose(true)} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>🔒 Close settlement{calc.fullySold ? "" : " (interim)"}</button>
         )}
         {closed && setSettlements && !rec?.commissionInvoiceId && (
           <button onClick={async () => { if (!(await uiConfirm({ title: "Please confirm", message: `Re-open settlement ${rec?.number || ""}? Its expected credit note is withdrawn and the figures become live again.` }))) return;
@@ -603,7 +603,7 @@ export function LinkRow({ label, items, color, bg, from = "" }: any) {
       {items?.length > 0 ? (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
           {items.map(ref => (
-            <DocLink key={ref} num={ref} from={from}><span style={{ padding: "3px 8px", background: bg, color, border: `1px solid ${color}33`, borderRadius: 4, fontSize: 11, fontWeight: 600, fontFamily: "ui-monospace, Menlo, monospace", display: "inline-block" }}>{ref}</span></DocLink>
+            <DocLink key={ref} num={ref} from={from}><span style={{ padding: "3px 8px", background: "#F8FAFC", border: "1px solid #E2E8F0", borderRadius: 4, fontSize: 11, fontWeight: 600, display: "inline-block" }}>{ref}</span></DocLink>
           ))}
         </div>
       ) : <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>none yet</span>}
@@ -766,7 +766,7 @@ export function buildExpectedLotsFromPO(order, existingLots = []) {   // v6.99.5
 
 // v6.35.0: render linked document numbers, striking through CANCELLED ones with a red
 // line (kept on record but visibly voided). cancelledSet holds the cancelled numbers.
-function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
+function LinkedDocNumbers({ nums, cancelledSet, title }: any) {   // v7.23.3 (A-UI-1): no icon — the link colours itself
   if (!nums || nums.length === 0) return null;
   // v6.54.0: say how many of these actually COUNT. A PO listing three shipments
   // of which two are cancelled reads as "three shipments" while every guard and
@@ -774,11 +774,11 @@ function LinkedDocNumbers({ nums, cancelledSet, color, icon, title }: any) {
   // to delete. Struck-through refs alone are easy to miss in a long list.
   const dead = (nums || []).filter((n: string) => cancelledSet && cancelledSet.has(String(n))).length;
   return (
-    <div style={{ color }} title={title}>
+    <div title={title}>
       {/* v6.65.0 (owner request): one document per row, like the SO list. */}
       {nums.map((n: string, i: number) => (
         <div key={String(n)} style={{ whiteSpace: "nowrap", lineHeight: 1.5 }}>
-          {i === 0 ? icon + " " : <span style={{ visibility: "hidden" }}>{icon} </span>}
+          
           <DocRef num={n} cancelledSet={cancelledSet} />
         </div>
       ))}
@@ -1281,19 +1281,19 @@ ${blockNote}`.trim(),
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>OPEN <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· not closed / cancelled</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111", marginTop: 2 }}>{activeCount}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>GOODS IN <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· lots received</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: arrivedCount > 0 ? "#16A34A" : "#111", marginTop: 2 }}>{arrivedCount}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: arrivedCount > 0 ? "#16A34A" : "#111", marginTop: 2 }}>{arrivedCount}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>OPEN VALUE <span style={{ color: "#CBD5E1", fontWeight: 400 }}>· PLN</span></div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtMoney(pendingValue, "PLN")}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111", marginTop: 2 }}>{fmtMoney(pendingValue, "PLN")}</div>
           </Card>
           <Card style={{ padding: "9px 12px" }}>
             <div style={{ fontSize: 10, color: "#888", fontWeight: 600, letterSpacing: "0.04em" }}>LOADING OVERDUE</div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: overdueLoading > 0 ? "#B45309" : "#111", marginTop: 2 }}>{overdueLoading}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: overdueLoading > 0 ? "#B45309" : "#111", marginTop: 2 }}>{overdueLoading}</div>
           </Card>
         </div>
 
@@ -1306,7 +1306,7 @@ ${blockNote}`.trim(),
           {(() => { const n = (orders || []).filter((o: any) => o.status !== "Cancelled" && (o.items || []).some((it: any) => isEstimatedLine(it)) && archiveShow(o)).length; return (
             <button onClick={() => setEstOnly(!estOnly)} title="v6.99.56 (A-PL-4): POs whose quantities are still estimated — close them with the producer's packing list"
               style={{ padding: "6px 10px", borderRadius: 7, border: `1px solid ${estOnly ? "#B45309" : "#FDE68A"}`, background: estOnly ? "#B45309" : "#FFFBEB", color: estOnly ? "#fff" : "#92400E", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>≈ Estimated only ({n})</button>); })()}
-          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             <option value="Active">Active</option>
             <option value="All">All statuses</option>
             {Object.keys(PO_STATUSES).map(s => <option key={s} value={s}>{statusWord(s)}</option>)}
@@ -1316,7 +1316,7 @@ ${blockNote}`.trim(),
             (orders || []).forEach((o: any) => { const n = o.supplier?.name; if (n) counts[n] = (counts[n] || 0) + 1; });
             const activeSuppliers = Object.entries(counts).sort((a, b) => b[1] - a[1]);
             return (
-              <select value={filterSupplier} onChange={e => setFilterSupplier(e.target.value)} title="Filter by supplier" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 220 }}>
+              <select value={filterSupplier} onChange={e => setFilterSupplier(e.target.value)} title="Filter by supplier" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, background: "#fff", fontFamily: "inherit", maxWidth: 220 }}>
                 <option value="All">All suppliers</option>
                 {activeSuppliers.map(([name, n]) => <option key={name} value={name}>{name} ({n})</option>)}
               </select>
@@ -1347,7 +1347,7 @@ ${blockNote}`.trim(),
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
               >
                 <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "ui-monospace, Menlo, monospace" }}>{o.number}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: o.status === "Cancelled" ? "#B91C1C" : "#2563EB", textDecoration: o.status === "Cancelled" ? "line-through" : "none", textDecorationColor: "#DC2626", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{o.number}</div>
                   {/* v6.99.84 (A-PO-C1, owner): the markers on their own line under the number — consignment and estimated */}
                   {o.status !== "Cancelled" && (String(o.pricingMode || "") === "consignment" || (o.items || []).some((it: any) => isEstimatedLine(it))) && <div style={{ display: "flex", gap: 4, marginTop: 2 }}>
                     {String(o.pricingMode || "") === "consignment" && <span title="consignment — priced from the sales, settled with the producer" style={{ fontSize: 10, fontWeight: 800, color: "#6D28D9", background: "#EDE9FE", border: "1px solid #DDD6FE", borderRadius: 10, padding: "0 6px" }}>consignment</span>}
@@ -1366,29 +1366,29 @@ ${blockNote}`.trim(),
                     ))}
                   </div>
                 </div>
-                <div style={{ fontSize: 11.5, color: isLoadingOverdue ? "#B45309" : "#444", fontWeight: isLoadingOverdue ? 600 : 400 }} title={isLoadingOverdue ? "the loading date has passed on an active PO" : undefined}>{formatDMY(o.orderDate) || formatDMY(o.loadingDate) || "—"}</div>{/* v6.99.107 (A-CLR-1, owner): amber — a timing hint, not an error */}
-                <div style={{ fontSize: 11.5, color: "#444" }}>{formatDMY(o.expectedDeliveryDate) || "—"}</div>
+                <div style={{ fontSize: 11, color: isLoadingOverdue ? "#B45309" : "#444", fontWeight: isLoadingOverdue ? 600 : 400 }} title={isLoadingOverdue ? "the loading date has passed on an active PO" : undefined}>{formatDMY(o.orderDate) || formatDMY(o.loadingDate) || "—"}</div>{/* v6.99.107 (A-CLR-1, owner): amber — a timing hint, not an error */}
+                <div style={{ fontSize: 11, color: "#444" }}>{formatDMY(o.expectedDeliveryDate) || "—"}</div>
                 <div><StatusBadge status={o.status} /></div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{fmtMoney(total, o.currency)}</div>
-                  {o.currency !== "PLN" && <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtMoney(totalPLN, "PLN")}</div>}
-                  <div style={{ fontSize: 10.5, color: "#AAA" }}>{fmtNum(totalKg)} kg</div>
+                  {o.currency !== "PLN" && <div style={{ fontSize: 10, color: "#AAA" }}>{fmtMoney(totalPLN, "PLN")}</div>}
+                  <div style={{ fontSize: 10, color: "#AAA" }}>{fmtNum(totalKg)} kg</div>
                 </div>
-                <div style={{ fontSize: 10.5, fontFamily: "ui-monospace, Menlo, monospace", lineHeight: 1.5 }}>
+                <div style={{ fontSize: 10, fontFamily: "inherit", fontVariantNumeric: "tabular-nums", lineHeight: 1.5 }}>
                   {/* v6.34.1 (item 3): show the linked DOCUMENT NUMBERS, not counts. */}
                   {/* v6.45.0: SOs are DERIVED (any order sourcing from this PO) — they
                       were missing entirely from this column. */}
-                  {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)).map((so: any) => so.number))); return sos.length ? <div style={{ color: "#7C3AED" }} title="Sales orders">🧾 {sos.join(", ")}</div> : null; })()}
+                  {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)).map((so: any) => so.number))); return sos.length ? <div title="Sales orders">{sos.map((n: any) => <div key={String(n)} style={{ whiteSpace: "nowrap", lineHeight: 1.5 }}><DocRef num={n} cancelledSet={cancelledRefs} /></div>)}</div> : null;   /* v7.23.3 (A-UI-1): links, no icon */ })()}
                   {(() => { const cl = computedPOLinks(o, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }); return (<>
-                  <LinkedDocNumbers nums={cl.linkedSalesOrders} cancelledSet={cancelledRefs} color="#16A34A" icon="🧾" title="Sales orders" />{/* v7.1.4 (A-PV-5) */}
-                  <LinkedDocNumbers nums={cl.linkedShipments} cancelledSet={cancelledRefs} color="#0284C7" icon="📦" title="Shipments" />
+                  <LinkedDocNumbers nums={cl.linkedSalesOrders} cancelledSet={cancelledRefs} title="Sales orders" />{/* v7.1.4 (A-PV-5) */}
+                  <LinkedDocNumbers nums={cl.linkedShipments} cancelledSet={cancelledRefs} title="Shipments" />
                   {/* v6.62.0 (user ruling): lots and invoices rendered as raw
                       joined strings while shipments went through LinkedDocNumbers,
                       so one column mixed two styles and only shipments showed a
                       cancelled ref struck through or an n/m live badge. All kinds
                       now render the same way, as in the SO. */}
-                  <LinkedDocNumbers nums={cl.linkedLots} cancelledSet={cancelledRefs} color="#92400E" icon="🏷" title="Lots" />
-                  <LinkedDocNumbers nums={cl.linkedInvoices} cancelledSet={cancelledRefs} color="#16A34A" icon="📄" title="Invoices" />
+                  <LinkedDocNumbers nums={cl.linkedLots} cancelledSet={cancelledRefs} title="Lots" />
+                  <LinkedDocNumbers nums={cl.linkedInvoices} cancelledSet={cancelledRefs} title="Invoices" />
                   {!cl.linkedShipments?.length && !cl.linkedLots?.length && !cl.linkedInvoices?.length && !(extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)) && <span style={{ color: "#CCC" }}>—</span>}
                   </>); })()}
                 </div>

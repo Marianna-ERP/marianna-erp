@@ -125,7 +125,7 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
   return (
     <Card style={{ marginBottom: 16 }}>
       <SectionTitle>SEASONS</SectionTitle>
-      <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 10 }}>Numbers continue across seasons. A closed season is <b>archived</b> — its documents leave the day-to-day screens but stay in the file; export it to its own file to keep the system light, re-import it whenever an old claim or recall needs it. A lot that still holds kilos never archives.</div>
+      <div style={{ fontSize: 11, color: "#64748B", marginBottom: 10 }}>Numbers continue across seasons. A closed season is <b>archived</b> — its documents leave the day-to-day screens but stay in the file; export it to its own file to keep the system light, re-import it whenever an old claim or recall needs it. A lot that still holds kilos never archives.</div>
       <div style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap", marginBottom: 10 }}>
         <div><Lbl>Season starts on</Lbl><div style={{ display: "flex", gap: 6 }}><input type="number" min={1} max={31} value={st.startDay} onChange={e => setSeasonSettings && setSeasonSettings({ ...st, startDay: Math.max(1, Math.min(31, parseInt(e.target.value) || 1)) })} style={{ width: 56, border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }} /><select value={st.startMonth} onChange={e => setSeasonSettings && setSeasonSettings({ ...st, startMonth: parseInt(e.target.value) })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }}>{["January","February","March","April","May","June","July","August","September","October","November","December"].map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select></div></div>
         <div style={{ fontSize: 12 }}>Current season: <b>{cur}</b></div>
@@ -133,8 +133,8 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr auto", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>SEASON</div><div>DOCUMENTS</div><div>STATE</div><div /></div>
       {present.map(({ season, count }) => { const closed = (archivedSeasons || []).includes(season); return (
-        <div key={season} style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr auto", gap: 8, alignItems: "center", padding: "6px 0", borderTop: "1px solid #F1F5F9", fontSize: 12.5 }}>
-          <div style={{ fontWeight: 800 }}>{season}{season === cur ? <span style={{ color: "#16A34A", fontSize: 10.5 }}> · current</span> : null}</div>
+        <div key={season} style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr auto", gap: 8, alignItems: "center", padding: "6px 0", borderTop: "1px solid #F1F5F9", fontSize: 12 }}>
+          <div style={{ fontWeight: 800 }}>{season}{season === cur ? <span style={{ color: "#16A34A", fontSize: 10 }}> · current</span> : null}</div>
           <div>{count} document(s){liveLots(season) ? ` · ${liveLots(season)} lot(s) with kilos stay live` : ""}</div>
           <div style={{ color: closed ? "#92400E" : "#16A34A", fontWeight: 700 }}>{closed ? "archived" : "open"}</div>
           <div style={{ display: "flex", gap: 6 }}>
@@ -188,7 +188,7 @@ function LocationsPanel({ refStores = {} }: any) {
     <Card style={{ marginBottom: 16 }}>
       {lpNode}
       <SectionTitle>PORTS &amp; LOCATIONS <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0, color: "#888" }}>· feeds port pickers, the over-ship guard and transport-order addresses</span></SectionTitle>
-      <div style={{ fontSize: 11.5, color: "#64748B", margin: "6px 0 12px" }}>
+      <div style={{ fontSize: 11, color: "#64748B", margin: "6px 0 12px" }}>
         Add your own ports, port/transshipment warehouses or facilities here — they appear in every location picker.
         Built-in reference locations can be edited too (e.g. put the real transshipment-warehouse address on a port) — shown with an <span style={{ color: "#B45309", fontWeight: 700 }}>edited</span> mark.
         Supplier / client / warehouse addresses and forwarders' relay points are <strong>not listed here</strong> — they live in <strong>Parties</strong> (and still appear in every location picker automatically).
@@ -215,7 +215,7 @@ function LocationsPanel({ refStores = {} }: any) {
           return (
             <div key={l.id} style={{ display: "grid", gridTemplateColumns: "1.5fr 0.9fr 0.8fr 1.7fr 0.9fr auto", gap: 8, padding: "7px 10px", borderBottom: "1px solid #F8FAFC", fontSize: 12, alignItems: "center" }}>
               {isEd ? <input style={inp} value={edit.name} onChange={e => setEdit((x: any) => ({ ...x, name: e.target.value }))} />
-                    : <div style={{ fontWeight: 600 }}>{l.name}{overridden && <span style={{ marginLeft: 6, fontSize: 9.5, color: "#B45309", fontWeight: 700 }}>edited</span>}</div>}
+                    : <div style={{ fontWeight: 600 }}>{l.name}{overridden && <span style={{ marginLeft: 6, fontSize: 10, color: "#B45309", fontWeight: 700 }}>edited</span>}</div>}
               <div style={{ color: "#64748B" }}>{l.type}</div>
               {isEd ? <input style={inp} value={edit.country} onChange={e => setEdit((x: any) => ({ ...x, country: e.target.value }))} /> : <div style={{ color: "#64748B" }}>{l.country}</div>}
               {isEd ? <input style={inp} value={edit.address} onChange={e => setEdit((x: any) => ({ ...x, address: e.target.value }))} placeholder="address" /> : <div style={{ color: "#94A3B8", fontSize: 11 }}>{l.address || "—"}</div>}
@@ -242,7 +242,7 @@ function LocationsPanel({ refStores = {} }: any) {
             </div>
           );
         })}
-        {shown.length === 0 && <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12.5 }}>No locations match.</div>}
+        {shown.length === 0 && <div style={{ padding: 18, textAlign: "center", color: "#AAA", fontSize: 12 }}>No locations match.</div>}
       </div>
     </Card>
   );
@@ -255,8 +255,8 @@ function FullScreenModal({ title, onClose, children }: any) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", zIndex: 70, display: "flex", alignItems: "stretch", justifyContent: "center", padding: "3vh 3vw" }} onClick={onClose}>
       <div style={{ background: "#F8FAFC", borderRadius: 14, width: "100%", maxWidth: PAGE_MAX, display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 64px rgba(15,23,42,0.35)" }} onClick={(e: any) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", background: "#fff", borderBottom: "1px solid #E5E7EB" }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: "#111" }}>{title}</div>
-          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Close</button>
+          <div style={{ fontSize: 14, fontWeight: 800, color: "#111" }}>{title}</div>
+          <button onClick={onClose} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Close</button>
         </div>
         <div style={{ overflowY: "auto", padding: 18 }}>{children}</div>
       </div>
@@ -271,9 +271,9 @@ function ManageCard({ title, summary, buttonLabel, onManage }: any) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 800, color: "#94A3B8", letterSpacing: "0.06em", textTransform: "uppercase" }}>{title}</div>
-          <div style={{ fontSize: 12.5, color: "#64748B", marginTop: 4 }}>{summary}</div>
+          <div style={{ fontSize: 12, color: "#64748B", marginTop: 4 }}>{summary}</div>
         </div>
-        <button onClick={onManage} style={{ flexShrink: 0, border: "none", background: "#111", color: "#fff", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{buttonLabel}</button>
+        <button onClick={onManage} style={{ flexShrink: 0, border: "none", background: "#111", color: "#fff", borderRadius: 8, padding: "9px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{buttonLabel}</button>
       </div>
     </Card>
   );
@@ -331,12 +331,12 @@ export function PackagingPanel({ types, setTypes, refStores = {}, onLinkSpelling
   return (
     <div>
       {pkNode}
-      <div style={{ fontSize: 12.5, color: "#555", lineHeight: 1.6, marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: "#555", lineHeight: 1.6, marginBottom: 14 }}>
         Gross weight on transport orders is calculated as <strong>net + (number of units x empty-unit weight)</strong>.
         Gross also includes the pallets themselves. Apples travel in wooden boxes holding 13&nbsp;kg (1.4&nbsp;kg empty, 72 to a pallet), so 19&nbsp;422&nbsp;kg net = 1&nbsp;494 boxes on 21 pallets = 22&nbsp;038.6&nbsp;kg gross.
         Set <em>applies to</em> so a product picks its packaging automatically.
       </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 18 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginBottom: 18 }}>
         <thead><tr style={{ background: "#F9FAFB", textAlign: "left" }}>
           <th style={{ padding: "7px 9px" }}>Packaging</th>
           <th style={{ padding: "7px 9px", textAlign: "right" }}>Holds (kg)</th>
@@ -369,7 +369,7 @@ export function PackagingPanel({ types, setTypes, refStores = {}, onLinkSpelling
         <div style={{ fontSize: 12, color: "#555", margin: "6px 0 10px", lineHeight: 1.5 }}>Before the picker, packaging was typed on PO and SO lines. Link each spelling to its type once: its lines then name the type, take kilos per box and tare from it, and print its name. The type shown is a suggestion — change it if it is wrong.</div>
         {spellGroups.map((g: any) => <div key={g.key || "none"} style={{ marginBottom: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 700, color: "#334155", margin: "6px 0" }}>{g.type ? `Suggested: ${g.type.label}` : "No suggestion — pick the type"}{g.type && g.rows.length > 1 ? <SmallButton onClick={() => linkSpellings(g.rows)}>Link all {g.rows.length}</SmallButton> : null}</div>
-          {g.rows.map((s: any) => <div key={s.key} data-typed-spelling={s.key} style={{ display: "grid", gridTemplateColumns: "1.3fr 1.2fr 1.4fr auto", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F1F5F9", fontSize: 12.5 }}>
+          {g.rows.map((s: any) => <div key={s.key} data-typed-spelling={s.key} style={{ display: "grid", gridTemplateColumns: "1.3fr 1.2fr 1.4fr auto", gap: 8, alignItems: "center", padding: "4px 0", borderTop: "1px solid #F1F5F9", fontSize: 12 }}>
             <span style={{ fontWeight: 600 }}>{s.spelling}</span>
             <span style={{ color: "#64748B" }}>{s.poLines} PO · {s.soLines} SO line{s.poLines + s.soLines === 1 ? "" : "s"} · {s.docs.length} document{s.docs.length === 1 ? "" : "s"}</span>
             <select value={pickOf(s)} onChange={e => setSpellChoice((c: any) => ({ ...c, [s.key]: e.target.value }))} style={INP}><option value="">— pick the type —</option>{liveTypes.map((t: any) => <option key={String(t.id)} value={String(t.id)}>{t.label}</option>)}</select>
@@ -543,7 +543,7 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
                   {v}<button onClick={() => rmVar(c.item, v)} title="Remove variety" style={{ border: "none", background: "#E5E7EB", color: "#666", borderRadius: "50%", width: 16, height: 16, lineHeight: "14px", cursor: "pointer", fontSize: 11 }}>×</button>
                 </span>
               ))}
-              {(c.deletedVarieties || []).map((v: string) => <span key={"del-" + v} title="deleted" style={{ fontSize: 11.5, color: "#9CA3AF", textDecoration: "line-through", marginRight: 6 }}>{v}</span>)}{/* v7.17.1 (A-RV-07) */}
+              {(c.deletedVarieties || []).map((v: string) => <span key={"del-" + v} title="deleted" style={{ fontSize: 11, color: "#9CA3AF", textDecoration: "line-through", marginRight: 6 }}>{v}</span>)}{/* v7.17.1 (A-RV-07) */}
               <input value={vDraft[c.item] || ""} onChange={e => setVDraft(d => ({ ...d, [c.item]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addVar(c.item); }} placeholder="+ variety" style={{ ...inp, padding: "4px 8px", fontSize: 12, width: 130 }} />
             </div>
             {(["calibres", "colorations"] as const).map(kind => { const vals: string[] = (c as any)[kind] || []; const dels: string[] = (c as any)[kind === "calibres" ? "deletedCalibres" : "deletedColorations"] || [];
@@ -551,7 +551,7 @@ export function ProductCatalogPanel({ catalog, setCatalog, refStores = {} }: any
               return <div key={kind} data-catalog-list={kind} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: "#94A3B8", minWidth: 78 }}>{kind === "calibres" ? "Calibres" : "Colorations"}</span>
                 {vals.map(v => <span key={v} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#EEF2FF", borderRadius: 14, padding: "3px 6px 3px 11px", fontSize: 12 }}>{v}<button onClick={() => rmValue(c.item, kind, v)} title={kind === "calibres" ? "Delete calibre" : "Delete coloration"} style={{ border: "none", background: "#E0E7FF", color: "#666", borderRadius: "50%", width: 16, height: 16, lineHeight: "14px", cursor: "pointer", fontSize: 11 }}>×</button></span>)}
-                {dels.map(v => <span key={"del-" + v} title="deleted" style={{ fontSize: 11.5, color: "#9CA3AF", textDecoration: "line-through", marginRight: 6 }}>{v}</span>)}
+                {dels.map(v => <span key={"del-" + v} title="deleted" style={{ fontSize: 11, color: "#9CA3AF", textDecoration: "line-through", marginRight: 6 }}>{v}</span>)}
                 <input value={valDraft[c.item + "|" + kind] || ""} onChange={e => setValDraft(d => ({ ...d, [c.item + "|" + kind]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addValue(c.item, kind); }} placeholder={kind === "calibres" ? "+ calibre" : "+ coloration"} style={{ ...inp, padding: "4px 8px", fontSize: 12, width: 120 }} />
                 {used.length > 0 && <span style={{ fontSize: 11, color: "#64748B" }}>on lines, not listed: {used.slice(0, 14).map(u => <button key={u.value} onClick={() => addValue(c.item, kind, u.value)} title={`${u.lines} line(s) — add it to the list`} style={{ border: "1px dashed #CBD5E1", background: "#fff", color: "#334155", borderRadius: 12, padding: "1px 8px", margin: "0 3px 3px 0", fontSize: 11, cursor: "pointer" }}>+ {u.value}</button>)}</span>}
               </div>; })}
@@ -589,10 +589,10 @@ function RolesPanel({ roles: savedRoles = [], setRoles: saveRoles = null, users 
       {list.map((r: any) => (
         <div key={r.id} style={{ borderTop: "1px solid #F1F5F9", padding: "8px 0" }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 4 }}>
-            <input value={r.name} onChange={e => setRole(r.id, { name: e.target.value })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12.5, fontWeight: 800, width: 180 }} />
+            <input value={r.name} onChange={e => setRole(r.id, { name: e.target.value })} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "4px 8px", fontSize: 12, fontWeight: 800, width: 180 }} />
             {r.isGM && <span style={{ fontSize: 11, color: "#15803D", fontWeight: 700 }}>sees everything</span>}
           </div>
-          {!r.isGM && <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11.5 }}>
+          {!r.isGM && <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11 }}>
             {MODULE_KEYS.map(k => <label key={k} style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={!!r.modules?.[k]} onChange={e => setRole(r.id, { modules: { ...r.modules, [k]: e.target.checked } })} />{MOD_LABEL_R[k] || k}</label>)}
           </div>}
           {!r.isGM && r.modules?.finance && <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11, color: "#475569", marginTop: 4, paddingLeft: 12 }}>Finance →
@@ -634,18 +634,18 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>{dialogNode}
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>👥 Users & permissions</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Tick what each user may open. With no users defined everyone sees everything; the first user should be the owner. The user is recognised by the name entered in Settings → "Your name".</div>
-      {gaps.map((g, i) => <div key={i} style={{ fontSize: 11.5, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", marginBottom: 6 }}>{g}</div>)}
+      {gaps.map((g, i) => <div key={i} style={{ fontSize: 11, color: "#B45309", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 9px", marginBottom: 6 }}>{g}</div>)}
       {/* v7.5.1 (A-USR-8, owner 6 Oct): each user is a row — name · role (from the Roles above) · sign-in e-mail — read-only once saved, Edit unlocks it */}
-      <button onClick={() => { const id = mintId(); setUsers((prev: any[]) => [...(prev || []), { id, name: "", roleId: "", email: "", isOwner: false, modules: { dashboard: true }, finance: {} }]); setEditing(e => ({ ...e, [String(id)]: true })); }} style={{ marginBottom: 10, padding: "6px 14px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>+ Add user</button>
-      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 1.6fr 1.4fr 150px", gap: 8, padding: "6px 0", fontSize: 10.5, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>NAME</div><div>ROLE</div><div>SIGN-IN E-MAIL</div><div>RIGHTS</div><div /></div>
-      {(users || []).map((u: any) => { const ed = !!editing[String(u.id)]; const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+      <button onClick={() => { const id = mintId(); setUsers((prev: any[]) => [...(prev || []), { id, name: "", roleId: "", email: "", isOwner: false, modules: { dashboard: true }, finance: {} }]); setEditing(e => ({ ...e, [String(id)]: true })); }} style={{ marginBottom: 10, padding: "6px 14px", borderRadius: 8, border: "none", background: "#111", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Add user</button>
+      <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 1.6fr 1.4fr 150px", gap: 8, padding: "6px 0", fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>NAME</div><div>ROLE</div><div>SIGN-IN E-MAIL</div><div>RIGHTS</div><div /></div>
+      {(users || []).map((u: any) => { const ed = !!editing[String(u.id)]; const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: "100%", boxSizing: "border-box" };
         const upd = (patch: any) => setUsers((prev: any[]) => (prev || []).map((x: any) => x.id === u.id ? materializeUser({ ...x, ...patch }, roleList) : x));
         return (
-        <div key={String(u.id)} style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 1.6fr 1.4fr 150px", gap: 8, padding: "8px 0", borderTop: "1px solid #F1F5F9", alignItems: "center", fontSize: 12.5, background: ed ? "#FFFBEB" : "transparent" }}>
+        <div key={String(u.id)} style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 1.6fr 1.4fr 150px", gap: 8, padding: "8px 0", borderTop: "1px solid #F1F5F9", alignItems: "center", fontSize: 12, background: ed ? "#FFFBEB" : "transparent" }}>
           {ed ? <input value={u.name || ""} placeholder="full name" onChange={e => upd({ name: e.target.value })} style={inp} /> : <div style={{ fontWeight: 800 }}>{u.name || "—"}{u.isOwner ? <span style={{ color: "#15803D", fontWeight: 700 }}> · GM</span> : null}</div>}
           {ed ? <select value={u.roleId || ""} onChange={e => upd({ roleId: e.target.value })} style={inp}><option value="">choose a role…</option>{roleList.map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}</select> : <div style={{ color: u.roleId ? "#111" : "#B45309" }}>{(roleList.find((r: any) => String(r.id) === String(u.roleId)) || {} as any).name || (u.role ? `${u.role} (choose a role)` : "no role")}</div>}
           {ed ? <input value={u.email || ""} placeholder="the e-mail they sign in with" onChange={e => upd({ email: e.target.value.trim() })} style={inp} /> : <div style={{ color: u.email ? "#334155" : "#B45309" }}>{u.email || "not linked"}</div>}
-          <div style={{ fontSize: 11.5, color: "#475569" }}>{rightsSummary(u, roleList)}
+          <div style={{ fontSize: 11, color: "#475569" }}>{rightsSummary(u, roleList)}
             {ed && u.roleId && <details style={{ marginTop: 4 }}><summary style={{ cursor: "pointer", color: "#64748B" }}>extra modules for this person</summary>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>{MODULE_KEYS.filter(k => !((roleList.find((r: any) => String(r.id) === String(u.roleId)) || {} as any).modules || {})[k]).map(k => <label key={k} style={{ display: "flex", gap: 3, alignItems: "center" }}><input type="checkbox" checked={(u.extraModules || []).includes(k)} onChange={e => upd({ extraModules: e.target.checked ? [...(u.extraModules || []), k] : (u.extraModules || []).filter((x: string) => x !== k) })} />{k}</label>)}</div></details>}
           </div>
@@ -656,9 +656,9 @@ function UsersPanel({ users: savedUsers = [], setUsers: saveUsers = null, roles:
         </div>); })}
       {/* v7.2.0 (A-SET-1): nothing is written until Save; the bar says what is pending and why a save is refused */}
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #F1F5F9", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <button disabled={!dirty} onClick={() => saveDraft()} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: dirty ? (problems.length ? "#B45309" : "#16A34A") : "#E5E7EB", color: dirty ? "#fff" : "#94A3B8", fontSize: 12.5, fontWeight: 800, cursor: dirty ? "pointer" : "default" }}>Save users</button>
-        <button disabled={!dirty} onClick={async () => { if ((await uiConfirm({ title: "Please confirm", message: "Discard the changes to the users?" }))) setUsers(savedUsers || []); }} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", color: dirty ? "#111" : "#94A3B8", fontSize: 12.5, fontWeight: 700, cursor: dirty ? "pointer" : "default" }}>Cancel</button>
-        {dirty ? <span style={{ fontSize: 11.5, color: problems.length ? "#B45309" : "#475569", fontWeight: 600 }}>{problems.length ? `Not savable yet: ${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ""}` : `${usersDiff(savedUsers || [], users).length} change(s) not saved yet`}</span> : <span style={{ fontSize: 11.5, color: "#94A3B8" }}>no unsaved changes</span>}
+        <button disabled={!dirty} onClick={() => saveDraft()} style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: dirty ? (problems.length ? "#B45309" : "#16A34A") : "#E5E7EB", color: dirty ? "#fff" : "#94A3B8", fontSize: 12, fontWeight: 800, cursor: dirty ? "pointer" : "default" }}>Save users</button>
+        <button disabled={!dirty} onClick={async () => { if ((await uiConfirm({ title: "Please confirm", message: "Discard the changes to the users?" }))) setUsers(savedUsers || []); }} style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", color: dirty ? "#111" : "#94A3B8", fontSize: 12, fontWeight: 700, cursor: dirty ? "pointer" : "default" }}>Cancel</button>
+        {dirty ? <span style={{ fontSize: 11, color: problems.length ? "#B45309" : "#475569", fontWeight: 600 }}>{problems.length ? `Not savable yet: ${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ""}` : `${usersDiff(savedUsers || [], users).length} change(s) not saved yet`}</span> : <span style={{ fontSize: 11, color: "#94A3B8" }}>no unsaved changes</span>}
       </div>
     </div>
   );
@@ -682,7 +682,7 @@ function FxSettingsPanel({ fxSettings = {}, setFxSettings = null }: any) {
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>💱 Exchange rates — NBP{fxSettings?._nbp ? <span style={{ fontSize: 11, fontWeight: 500, color: "#16A34A", marginLeft: 8 }}>table A of {String(fxSettings._nbp).replace(/(\d{4})(\d{2})(\d{2})/, "$3/$2/$1")} read</span> : <span style={{ fontSize: 11, fontWeight: 500, color: "#92400E", marginLeft: 8 }}>NBP not reached yet</span>}</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Read from NBP automatically. Every invoice, payment and order takes the NBP rate of the last working day <b>before</b> its own date; these are today's, for reference.</div>
-      <div data-fx-reference="1" style={{ display: "flex", gap: 16, fontSize: 12.5, marginBottom: 12 }}>{["EUR", "USD", "GBP"].map(c => <span key={c}>{c} <b>{fxSettings?.[c] ? Number(fxSettings[c]).toFixed(4) : "—"}</b></span>)}</div>
+      <div data-fx-reference="1" style={{ display: "flex", gap: 16, fontSize: 12, marginBottom: 12 }}>{["EUR", "USD", "GBP"].map(c => <span key={c}>{c} <b>{fxSettings?.[c] ? Number(fxSettings[c]).toFixed(4) : "—"}</b></span>)}</div>
       <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Safety buffer on orders (%)</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 6 }}>A sale is priced at the NBP rate <b>less</b> this %, a purchase at the rate <b>plus</b> it — the margin you see already allows for a weaker euro at payment. Invoices and payments never take it.</div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -711,7 +711,7 @@ function useSectionDraft(saved: any, save: ((v: any) => void) | null, id: string
     <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>{dialogNode}
       <button disabled={!dirty} onClick={() => doSave()} style={{ padding: "6px 14px", borderRadius: 8, border: "none", background: dirty ? "#16A34A" : "#E5E7EB", color: dirty ? "#fff" : "#94A3B8", fontSize: 12, fontWeight: 800, cursor: dirty ? "pointer" : "default" }}>Save</button>
       <button disabled={!dirty} onClick={() => setDraft(saved ?? {})} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", color: dirty ? "#111" : "#94A3B8", fontSize: 12, fontWeight: 700, cursor: dirty ? "pointer" : "default" }}>Cancel</button>
-      <span style={{ fontSize: 11.5, color: dirty ? "#475569" : "#94A3B8" }}>{dirty ? "changes not saved yet" : "no unsaved changes"}</span>
+      <span style={{ fontSize: 11, color: dirty ? "#475569" : "#94A3B8" }}>{dirty ? "changes not saved yet" : "no unsaved changes"}</span>
     </div>);
   return { draft, setDraft, bar };
 }
@@ -719,7 +719,7 @@ function useSectionDraft(saved: any, save: ((v: any) => void) | null, id: string
 function CompanyPanel({ company: savedCompany = {}, setCompany: saveCompany = null }: any) {
   const { draft: company, setDraft: setCompany, bar } = useSectionDraft(savedCompany, saveCompany, "company", "Company information");   // v7.2.1
   if (typeof saveCompany !== "function") return null;
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12, width: "100%", boxSizing: "border-box" };
   const set = (k: string, v: any) => setCompany((prev: any) => ({ ...(prev || {}), [k]: v }));
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
@@ -751,7 +751,7 @@ function NumberingPanel({ numbering: savedNumbering = {}, setNumbering: saveNumb
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px", marginBottom: 16 }}>
       <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4 }}>🔢 Numbering</div>
       <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Prefix per document type — numbers are PREFIX-YYYY-NNNN, sequence resets each year. Existing documents keep their numbers. On Supabase the sequence is issued by the database (no collisions across browsers).</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>{kinds.map(([k, label]) => <label key={k} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{label}<input value={numbering?.[k] ?? k} onChange={e => setNumbering((prev: any) => ({ ...(prev || {}), [k]: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || k }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 70, fontFamily: "ui-monospace, Menlo, monospace" }} /></label>)}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>{kinds.map(([k, label]) => <label key={k} style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>{label}<input value={numbering?.[k] ?? k} onChange={e => setNumbering((prev: any) => ({ ...(prev || {}), [k]: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || k }))} style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 12, width: 70, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }} /></label>)}</div>
       {bar}{/* v7.2.1 (A-SET-1) */}
     </div>
   );
@@ -978,7 +978,7 @@ export default function Settings({ roles = [], setRoles = null,
               <div style={{ height: 8, borderRadius: 4, background: "#F1F5F9", overflow: "hidden" }}>
                 <div style={{ width: `${u.pct}%`, height: "100%", background: warn ? "#D97706" : "#16A34A" }} />
               </div>
-              <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 6 }}>
+              <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 6 }}>
                 Largest: {u.perKey.slice(0, 4).map(k => `${k.key} ${k.kb} KB`).join(" · ") || "—"}
                 {warn ? " — consider deleting old local backups below to free space." : ""}
               </div>
@@ -1046,14 +1046,14 @@ export default function Settings({ roles = [], setRoles = null,
             you enable it below. The API token is kept in Vercel's settings and used only by the app's server part — <strong>never in a browser</strong>.
           </div>
           {/* v7.21.1 (AUD-49, owner 11 Oct): what the server part holds — the token itself is never shown */}
-          <div data-fkt-server="1" style={{ background: fktServer && fktServer.configured ? "#ECFDF5" : "#FFFBEB", border: `1px solid ${fktServer && fktServer.configured ? "#A7F3D0" : "#FCD34D"}`, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: fktServer && fktServer.configured ? "#065F46" : "#92400E", marginBottom: 14, lineHeight: 1.5 }}>
+          <div data-fkt-server="1" style={{ background: fktServer && fktServer.configured ? "#ECFDF5" : "#FFFBEB", border: `1px solid ${fktServer && fktServer.configured ? "#A7F3D0" : "#FCD34D"}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: fktServer && fktServer.configured ? "#065F46" : "#92400E", marginBottom: 14, lineHeight: 1.5 }}>
             {fktServer === undefined ? "Checking the connection…"
               : fktServer === null ? "The app's server part could not be asked — sign in again, or use the file import."
               : fktServer.configured ? <>Connected to <strong>{fktServer.account}</strong>{fktServer.testCopy ? " — this is the TEST copy: invoices are never created from here." : "."}</>
               : <>Not connected yet. In Vercel, open this project → Settings → Environment Variables and add <strong>FAKTUROWNIA_API_TOKEN</strong> (the token from Fakturownia → Settings → API) and <strong>FAKTUROWNIA_SUBDOMAIN</strong> (the part of your Fakturownia address before .fakturownia.pl), then redeploy. Until then, use the file import.</>}
           </div>
           {fktMsg && (
-            <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 7, fontSize: 12.5,
+            <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 7, fontSize: 12,
               background: fktMsg.kind === "success" ? "#ECFDF5" : fktMsg.kind === "error" ? "#FEE2E2" : "#EFF6FF",
               border: `1px solid ${fktMsg.kind === "success" ? "#A7F3D0" : fktMsg.kind === "error" ? "#FCA5A5" : "#BFDBFE"}`,
               color: fktMsg.kind === "success" ? "#065F46" : fktMsg.kind === "error" ? "#991B1B" : "#1E40AF" }}>
@@ -1061,7 +1061,7 @@ export default function Settings({ roles = [], setRoles = null,
             </div>
           )}
           <div style={{ background: fktLiveWrite ? "#FEF2F2" : "#F9FAFB", border: `1px solid ${fktLiveWrite ? "#FECACA" : "#E5E7EB"}`, borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
-            <label style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer", fontSize: 12.5, color: "#374151" }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer", fontSize: 12, color: "#374151" }}>
               <input type="checkbox" checked={fktLiveWrite} onChange={e => setFktLiveWrite(e.target.checked)} style={{ marginTop: 2 }} />
               <span>
                 <strong>Allow creating real invoices in Fakturownia from this browser</strong> (off by default).
@@ -1078,24 +1078,24 @@ export default function Settings({ roles = [], setRoles = null,
               main — so a PLN or USD invoice printed a EUR account number to the
               client. Set a default per currency and an invoice never has to ask. */}
           <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Bank accounts (Fakturownia departments)</div>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bank accounts (Fakturownia departments)</div>
             <div style={{ fontSize: 11, color: "#64748B", lineHeight: 1.5, marginBottom: 8 }}>
               Each account issues in one currency. Choose which one an invoice should carry for each currency you invoice in — a wrong account number on a document that has reached KSeF can only be corrected by issuing another one.
             </div>
-            {!fktDepts.length && <div style={{ fontSize: 11.5, color: "#94A3B8", marginBottom: 8 }}>No accounts loaded yet — read them from Fakturownia.</div>}
+            {!fktDepts.length && <div style={{ fontSize: 11, color: "#94A3B8", marginBottom: 8 }}>No accounts loaded yet — read them from Fakturownia.</div>}
             {/* v6.76.0: every account listed with its bank number, and its
                 currency SET BY HAND where it could not be read. Parsing a label
                 is guesswork; seven rows set once is not. */}
             {fktDepts.length > 0 && <div style={{ marginBottom: 10 }}>
               {fktDepts.map((d: any) => (
-                <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr 150px 80px", gap: 8, alignItems: "center", marginBottom: 4, fontSize: 11.5 }}>
+                <div key={d.id} style={{ display: "grid", gridTemplateColumns: "1fr 150px 80px", gap: 8, alignItems: "center", marginBottom: 4, fontSize: 11 }}>
                   <div><strong>{d.name}</strong>{d.taxNo ? <span style={{ color: "#94A3B8" }}> · {d.taxNo}</span> : null}</div>
-                  <div style={{ color: "#64748B", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 10.5, overflow: "hidden", textOverflow: "ellipsis" }} title={d.bankAccount}>{d.bankAccount || "—"}</div>
+                  <div style={{ color: "#64748B", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis" }} title={d.bankAccount}>{d.bankAccount || "—"}</div>
                   <select value={d.currency || ""} onChange={e => {
                       const next = fktDepts.map((x: any) => x.id === d.id ? { ...x, currency: e.target.value } : x);
                       setFktDepts(next);
                       try { window.localStorage.setItem("marianna-erp:fktDepartments", JSON.stringify(next)); } catch {}
-                    }} style={{ border: `1px solid ${d.currency ? "#E5E7EB" : "#FCA5A5"}`, borderRadius: 6, padding: "4px 6px", fontSize: 11.5 }}>
+                    }} style={{ border: `1px solid ${d.currency ? "#E5E7EB" : "#FCA5A5"}`, borderRadius: 6, padding: "4px 6px", fontSize: 11 }}>
                     <option value="">— set —</option>
                     {["PLN", "EUR", "USD", "GBP", "CHF"].map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
@@ -1106,7 +1106,7 @@ export default function Settings({ roles = [], setRoles = null,
               <div key={cur} style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 8, alignItems: "center", marginBottom: 5 }}>
                 <div style={{ fontSize: 12, fontWeight: 700 }}>{cur}</div>
                 <select value={fktDeptDefaults[cur] ?? ""} onChange={e => { const m = { ...fktDeptDefaults, [cur]: e.target.value }; setFktDeptDefaults(m); try { window.localStorage.setItem("marianna-erp:fktDepartmentDefaults", JSON.stringify(m)); } catch {} }}
-                  style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12.5 }}>
+                  style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "6px 8px", fontSize: 12 }}>
                   <option value="">— ask each time —</option>
                   {fktDepts.filter((d: any) => d.currency === cur).map((d: any) => (
                     <option key={d.id} value={d.id}>{d.name}{d.bankAccount ? ` · …${String(d.bankAccount).slice(-6)}` : ""}</option>

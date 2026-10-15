@@ -17,10 +17,11 @@ import { nextId } from "./ids";
 import { paymentBasisOf, PAYMENT_BASES } from "./po.domain";
 import { readCountries } from "./Contacts";
 import { useUnsavedGuard } from "./unsaved";
-import { CLIENTS, CURRENCIES, Inp, QUALITY_GRADES, QualityBadge, Sel, SourceBadge, computeLineAvailability, fmtMoney, fmtNum, lotReservations, netTotal, poLineReservations, sameSoDuplicateSources, supplierNameForPO, validatePOReadinessForSO, validateSourcing, useSalesData } from "./SalesOrders";
+import { CLIENTS, CURRENCIES, Inp, QUALITY_GRADES, QualityBadge, Sel, SourceBadge, computeLineAvailability, fmtMoney, fmtNum, lotReservations, netTotal, poLineReservations, sameSoDuplicateSources, supplierNameForPO, validatePOReadinessForSO, validateSourcing, useSalesData, lotColorationOf, withLotColorations } from "./SalesOrders";
 import { nbpRateBefore, orderBufferPct, orderRateFrom } from "./fx";   // v7.13.4 (A-AU-2)
 import { parseNum } from "./numbers";
 import { INCOTERM_CODES, isIncoterm2020, incotermLabel, incotermLine, namedPlaceGuide, ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
+import { sourceMatch } from "./salesOrders.domain";   // v7.23.2 (A-SOL-1)
 
 // ─── SOURCE PICKER MODAL ──────────────────────────────────────────────────
 // Lets the user pick where a SO line's goods will come from: a stock lot, or a PO.
@@ -33,7 +34,12 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
   const productMatch = (p) => !filter || (p || "").toLowerCase().includes(filter.toLowerCase());
 
   const byNumDesc = (a: any, b: any) => String(b?.number || "").localeCompare(String(a?.number || ""), undefined, { numeric: true });
-  const matchingLots = sd.lots.filter(l => productMatch(l.product)).sort(byNumDesc); // v6.81.0 (D-58): newest first
+  // v7.23.2 (A-SOL-1, owner 13 Oct): "Change source" on a line that names its item and variety opens on the TRUE matches only —
+  // same item and variety, and size, class, origin, coloration wherever both carry one; a lot without a variety is never a match
+  // and is shown apart. Typing another filter turns it into a free search, as before.
+  const strict = !!(lineItem.product && lineItem.variety) && filter === (lineItem.product || "");
+  const matchingLots = (strict ? sd.lots.filter(l => sourceMatch(lineItem, l) === "match") : sd.lots.filter(l => productMatch(l.product))).sort(byNumDesc); // v6.81.0 (D-58): newest first
+  const noVarietyLots = strict ? sd.lots.filter(l => sourceMatch(lineItem, l) === "no-variety").sort(byNumDesc) : [];
   // v7.7.2 (A-SO-PK-1, owner 8 Oct): lots that can be sold come first (in stock → expected → direct); the rest fold away
   const [showNA, setShowNA] = useState(false);
   const canSell = (l: any) => Number(l.availableKg) > 0 && !(l as any).rejected && !/Shipped|Delivered|Cancelled|Closed/i.test(String(l.status || ""));
@@ -58,9 +64,10 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
       size: lot.size,
       quality: lot.quality,
       packaging: lot.packaging,
-    });
-  }
-  function pickPO(poLine) {
+      coloration: lot.coloration || "",   // v7.23.1 (A-SOL-2): from the lot (which reads it from its PO line)
+      });
+      }
+      function pickPO(poLine) {
     onPick({
       sourceType: "PO",
       sourceRef: poLine._po.number,
@@ -93,7 +100,7 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
         </div>
 
         <div style={{ padding: "12px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 12.5, color: "#334155", fontWeight: 600 }}>{matchingLots.length} lots · <span style={{ color: "#15803D" }}>{availLots.length} with kilos available</span></span>{/* v7.7.2: the leftover "From Stock" button is gone */}
+          <span style={{ fontSize: 12, color: "#334155", fontWeight: 600 }}>{matchingLots.length} lots{strict ? ` of ${lineItem.product} — ${lineItem.variety}` : ""} · <span style={{ color: "#15803D" }}>{availLots.length} with kilos available</span></span>{/* v7.7.2: the leftover "From Stock" button is gone */}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 11, color: "#475569" }}>Filter by product:</span>
             <Inp value={filter} onChange={e => setFilter(e.target.value)} placeholder="e.g. Carrot" style={{ width: 200 }} />
@@ -122,10 +129,10 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#0369A1"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
                   <div>
-                    <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#0369A1" }}>{lot.number}</div>
-                    {(lot as any).status && <span style={{ display: "inline-block", marginTop: 3, fontSize: 9.5, fontWeight: 700, padding: "1px 7px", borderRadius: 5, background: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }}>{(lot as any).status}</span>}
+                    <div style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 12, fontWeight: 700, color: "#0369A1" }}>{lot.number}</div>
+                    {(lot as any).status && <span style={{ display: "inline-block", marginTop: 3, fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 5, background: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }}>{(lot as any).status}</span>}
                     {/* v6.99.127 (A-ONE-1): where the lot is — expected at the producer, in our stock, or direct — and the PO it comes from */}
-                    <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 2 }}>{(lot as any).lotState === "rejected by quality report" ? "⚠ rejected by the quality report — not for sale until sorted or returned" : ""}{(lot as any).lotState !== "rejected by quality report" && (lot as any).poRef ? `from ${(lot as any).poRef}` : ""}</div>{/* v7.8.1 (A-SO-PK-2): the state is on the badge; the PO once, here */}
+                    <div style={{ fontSize: 10, color: "#64748B", marginTop: 2 }}>{(lot as any).lotState === "rejected by quality report" ? "⚠ rejected by the quality report — not for sale until sorted or returned" : ""}{(lot as any).lotState !== "rejected by quality report" && (lot as any).poRef ? `from ${(lot as any).poRef}` : ""}</div>{/* v7.8.1 (A-SO-PK-2): the state is on the badge; the PO once, here */}
                   </div>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{lot.product}{(lot as any).variety ? " — " + (lot as any).variety : ""}</div>
@@ -151,16 +158,22 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
                   <div><QualityBadge quality={lot.quality} /></div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: isEmpty ? 13 : 18, fontWeight: 800, color: isEmpty ? "#9CA3AF" : "#15803D" }}>{isEmpty ? "sold out" : `${fmtNum(offer)} kg`}</div>{/* v7.7.2 (A-SO-PK-1): the figure that matters stands out */}
-                    <div style={{ fontSize: 10.5, color: "#475569" }}>{isEmpty ? `nothing left as class ${lineClass}` : `available as class ${lineClass}`}</div>
-                    {byGrade && (byGrade.II > 0 || byGrade.I > 0) && <div style={{ fontSize: 9.5, color: "#64748B" }}>lot holds I {fmtNum(byGrade.I)} · II {fmtNum(byGrade.II)}</div>}
+                    <div style={{ fontSize: 10, color: "#475569" }}>{isEmpty ? `nothing left as class ${lineClass}` : `available as class ${lineClass}`}</div>
+                    {byGrade && (byGrade.II > 0 || byGrade.I > 0) && <div style={{ fontSize: 10, color: "#64748B" }}>lot holds I {fmtNum(byGrade.I)} · II {fmtNum(byGrade.II)}</div>}
                     {live.totalReserved > 0 && (
-                      <div style={{ fontSize: 9.5, color: "#64748B", marginTop: 1 }}>of {fmtNum(lot.availableKg)} total</div>
+                      <div style={{ fontSize: 10, color: "#64748B", marginTop: 1 }}>of {fmtNum(lot.availableKg)} total</div>
                     )}
                   </div>
                 </div>
                 );
-              }).concat(naLots.length ? [<button key="__na" onClick={() => setShowNA(v => !v)} style={{ width: "100%", marginTop: 6, padding: "8px", borderRadius: 8, border: "1px dashed #CBD5E1", background: "#fff", color: "#475569", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{showNA ? "Hide" : "Show"} not available ({naLots.length}) — shipped, delivered or sold out</button>] : [])
+              }).concat(naLots.length ? [<button key="__na" onClick={() => setShowNA(v => !v)} style={{ width: "100%", marginTop: 6, padding: "8px", borderRadius: 8, border: "1px dashed #CBD5E1", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{showNA ? "Hide" : "Show"} not available ({naLots.length}) — shipped, delivered or sold out</button>] : [])
             )
+          )}
+          {strict && noVarietyLots.length > 0 && (   /* v7.23.2 (A-SOL-1): never a match — named apart, to be completed */
+            <div style={{ marginTop: 14, padding: "10px 12px", border: "1px dashed #F59E0B", borderRadius: 8, background: "#FFFBEB", fontSize: 12, color: "#92400E" }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>No variety — fill it in on the lot or its PO to offer it here</div>
+              {noVarietyLots.map((l: any) => <div key={l.number}>{l.number}{l.poRef ? ` · ${l.poRef}` : ""}{l.size ? ` · ${l.size}` : ""}</div>)}
+            </div>
           )}
           {tab === "PO" && (
             matchingPOLines.length === 0 ? (
@@ -175,10 +188,10 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
                   onMouseEnter={e => e.currentTarget.style.borderColor = "#166534"}
                   onMouseLeave={e => e.currentTarget.style.borderColor = "#EBEBEB"}>
                   <div>
-                    <div style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, fontWeight: 700, color: "#166534" }}>{line._po.number}</div>
+                    <div style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 12, fontWeight: 700, color: "#166534" }}>{line._po.number}</div>
                     <span style={{
                       display: "inline-block", marginTop: 3, padding: "1px 6px", borderRadius: 4,
-                      fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em",
+                      fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
                       background: line._po.status === "Draft" ? "#F3F4F6" : "#DBEAFE",
                       color: line._po.status === "Draft" ? "#6B7280" : "#2563EB",
                     }}>{line._po.status}</span>
@@ -202,7 +215,7 @@ export function SourcePickerModal({ lineItem, lineIndex, allOrders = [], current
                     <div style={{ fontSize: 13, fontWeight: 700, color: isEmpty ? "#9CA3AF" : "#9D174D" }}>{fmtNum(live.liveAvailable)} kg</div>
                     <div style={{ fontSize: 10, color: "#888" }}>live available</div>
                     {live.totalReserved > 0 && (
-                      <div style={{ fontSize: 9.5, color: "#AAA", marginTop: 1 }}>of {fmtNum(line.available)} total</div>
+                      <div style={{ fontSize: 10, color: "#AAA", marginTop: 1 }}>of {fmtNum(line.available)} total</div>
                     )}
                   </div>
                 </div>
@@ -389,7 +402,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
   const priceQtyBlock = priceQtyGaps.length > 0 && nonDraftStatuses.includes(order.status);
   const isBlocked = sourcingBlock || poReadinessBlock || availabilityBlock || priceQtyBlock;
   // v6.99.60: the leave-guard lives HERE, where the blocks are known — "Save and continue" never saves what the Save button would refuse
-  useUnsavedGuard({ id: "so-form", label: order?.number ? `Sales order ${order.number}` : "the new sales order", draft: order, save: () => { if (!isBlocked) onSave(order); } });
+  useUnsavedGuard({ id: "so-form", label: order?.number ? `Sales order ${order.number}` : "the new sales order", draft: order, save: () => { if (!isBlocked) onSave(withLotColorations(order, sd)); } });
 
   // PO-ETA-vs-SO-delivery warning: if any line sourced from a PO has ETA after this SO's deliveryDate, surface it
   const deliveryWarnings = [];
@@ -452,7 +465,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
           })()}
           <button onClick={onCancel} style={{ padding: "5px 14px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
           <button
-            onClick={() => onSave(order)}
+            onClick={() => onSave(withLotColorations(order, sd))}   /* v7.23.1 (A-SOL-2) */
             disabled={isBlocked}
             title={
               sourcingBlock ? `Cannot save as ${order.status} with unsourced lines — pick sources first or set status back to Draft` :
@@ -481,7 +494,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
           {priceQtyBlock && (
             <div style={{ padding: "12px 16px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, marginBottom: 16 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#991B1B" }}>Cannot save as {order.status} — {priceQtyGaps.length} line{priceQtyGaps.length === 1 ? "" : "s"} without quantity or sell price</div>
-              <div style={{ fontSize: 11.5, color: "#991B1B", marginTop: 4, lineHeight: 1.5 }}>{priceQtyGaps.join(" · ")}. Keep it as Draft until they are known.</div>
+              <div style={{ fontSize: 11, color: "#991B1B", marginTop: 4, lineHeight: 1.5 }}>{priceQtyGaps.join(" · ")}. Keep it as Draft until they are known.</div>
             </div>
           )}
           {sourcingBlock && (
@@ -516,7 +529,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               invoice. Say so before that happens. */}
           {(() => { const bad = unresolvedBoxLines(order.items, sd.packagingTypes);
             return bad.length ? (
-              <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11.5, color: "#92400E" }}>
+              <div style={{ margin: "0 0 10px", padding: "9px 11px", borderRadius: 7, background: "#FFFBEB", border: "1px solid #FDE68A", fontSize: 11, color: "#92400E" }}>
                 <strong>Priced per box, but no box weight is set</strong> for {Array.from(new Set(bad)).join(", ")}. Set the packaging on the line so boxes can convert to kilos.
               </div>
             ) : null; })()}
@@ -556,7 +569,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
               <div>
                 <Lbl>SO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
                 {/* BP-18: controlled document id — display/copy only. */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 700, color: "#334155" }}>
                   <span>{order.number || "SO-2026-…"}</span>
                   <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy SO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
                 </div>
@@ -579,7 +592,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                 {(() => {
                   const d = deriveSoStatus(order, sd.shipments);
                   if (!d.derived && !d.overridden) return null;
-                  return <div style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, fontSize: 11.5,
+                  return <div style={{ marginBottom: 6, padding: "7px 10px", borderRadius: 7, fontSize: 11,
                     background: d.overridden ? "#FFFBEB" : "#F0F9FF",
                     border: `1px solid ${d.overridden ? "#FDE68A" : "#BAE6FD"}`,
                     color: d.overridden ? "#92400E" : "#0369A1" }}>
@@ -739,14 +752,14 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                   {INCOTERM_CODES.map(c => <option key={c} value={c}>{incotermLabel(c)}</option>)}
                 </Sel>
                 {order.sellIncoterm && (
-                  <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                  <div style={{ fontSize: 10, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
                     {incotermLine(order.sellIncoterm, "sell")}
                   </div>
                 )}
               </div>
               <div>
                 <Lbl>Destination <span style={{ color: "#BBB", fontWeight: 400 }}>· follows sell incoterm</span></Lbl>
-                <div style={{ fontSize: 10.5, color: order.sellIncoterm ? "#2563EB" : "#888", margin: "2px 0 6px", lineHeight: 1.4 }}>{incotermDestinationHint}</div>
+                <div style={{ fontSize: 10, color: order.sellIncoterm ? "#2563EB" : "#888", margin: "2px 0 6px", lineHeight: 1.4 }}>{incotermDestinationHint}</div>
                 {(() => {
                   // FB-11: the destination options adapt to the sell incoterm — the term decides
                   // where WE deliver, so we surface the right place type first.
@@ -780,7 +793,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                 ) : (
                   <>
                     <LocationPicker value={order.destinationLocationId ?? order.destinationText ?? ""} contacts={contacts} disabled={fullyLocked} placeholder="— destination (client site, port, warehouse) —" onChange={(r: any) => setOrder((o: any) => ({ ...o, destinationLocationId: r.id, destinationText: r.name }))} title="v6.99.10: one location list for every destination" style={{ marginTop: 6 }} />
-                    <div style={{ fontSize: 10.5, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
+                    <div style={{ fontSize: 10, color: "#888", marginTop: 4, lineHeight: 1.4 }}>
                       Pick the destination from the Directory (relay, port, or client site as the Incoterm requires). Free text takes precedence on the printed SO.
                     </div>
                   </>
@@ -870,7 +883,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                 }}>
                   {/* Source bar */}
                   {gradeShort > 0 && (
-                    <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "7px 10px", marginBottom: 8, fontSize: 11.5, color: "#92400E" }}>
+                    <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "7px 10px", marginBottom: 8, fontSize: 11, color: "#92400E" }}>
                       <b>Class {avail.grade}: only {Number(avail.primaryAvailable || 0).toLocaleString("pl-PL")} kg available</b> of the {Number(avail.lineQty || 0).toLocaleString("pl-PL")} kg on this line — short {gradeShort.toLocaleString("pl-PL")} kg. Sorting moved part of {it.sourceRef} to another class.
                       {canAdjust ? (
                         <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
@@ -905,7 +918,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     {it.sourceType && (
                       <button onClick={() => clearSource(i)} title="Remove the source link from this line" style={{ padding: "3px 10px", borderRadius: 5, border: "1px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✕ Clear source</button>
                     )}
-                    <div style={{ marginLeft: "auto", fontSize: 10.5, color: lineIsBlocking ? "#991B1B" : "#777" }}>
+                    <div style={{ marginLeft: "auto", fontSize: 10, color: lineIsBlocking ? "#991B1B" : "#777" }}>
                       {lineIsBlocking
                         ? `Required to save as ${order.status}`
                         : (!it.sourceType && "Pick the lot this line sells (expected, in stock or direct)" /* v7.21.8 (A-RV-31) */)}
@@ -940,45 +953,19 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     </div>
                   )}
 
-                  {/* Availability strip — shows when the line is sourced and has a qty */}
+                  {/* v7.23.2 (A-SOL-1, owner 13 Oct): ONE statement — this line, what its lot still has free, and the shortage highlighted */}
                   {showAvail && (
                     <div style={{
-                      display: "flex", alignItems: "center", gap: 12, marginBottom: 10, padding: "6px 10px", borderRadius: 6,
+                      display: "flex", alignItems: "center", flexWrap: "wrap", gap: 14, marginBottom: 10, padding: avail.hasOverage ? "8px 12px" : "6px 10px", borderRadius: 6,
                       background: lineOverageBlocks ? "#FEE2E2" : (avail.hasOverage ? "#FEF3C7" : "#F9FAFB"),
-                      border: lineOverageBlocks ? "1px solid #FCA5A5" : (avail.hasOverage ? "1px solid #FCD34D" : "1px solid #F3F4F6"),
-                      fontSize: 11,
+                      border: lineOverageBlocks ? "1px solid #F87171" : (avail.hasOverage ? "1px solid #F59E0B" : "1px solid #F3F4F6"),
+                      fontSize: 12,
                     }}>
-                      <span style={{ fontWeight: 700, color: lineOverageBlocks ? "#991B1B" : (avail.hasOverage ? "#92400E" : "#555") }}>
-                        {lineOverageBlocks ? "🚫 Insufficient supply:" : avail.hasOverage ? "⚠ Availability:" : "Availability:"}
-                      </span>
-                      <span style={{ color: "#444" }}>
-                        Demand <strong>{fmtNum(avail.lineQty)} kg</strong>
-                      </span>
-                      <span style={{ color: "#AAA" }}>·</span>
-                      <span style={{ color: "#444" }}>
-                        On {it.sourceType === "STOCK" ? "lot" : "PO line"} <strong>{fmtNum(avail.primaryAvailable)} kg</strong>
-                      </span>
-                      {avail.otherSourcesAvailable > 0 && (
-                        <>
-                          <span style={{ color: "#AAA" }}>+</span>
-                          <span style={{ color: "#444" }}>
-                            Other sources <strong>{fmtNum(avail.otherSourcesAvailable)} kg</strong>
-                            <span style={{ color: "#888", fontSize: 10 }}>
-                              {avail.otherStockKg > 0 && ` (📦 ${fmtNum(avail.otherStockKg)}`}
-                              {avail.otherStockKg > 0 && avail.otherPOKg > 0 && ` + `}
-                              {avail.otherPOKg > 0 && `🚚 ${fmtNum(avail.otherPOKg)}`}
-                              {(avail.otherStockKg > 0 || avail.otherPOKg > 0) && `)`}
-                            </span>
-                          </span>
-                        </>
-                      )}
-                      <span style={{ color: "#AAA" }}>=</span>
-                      <span style={{ color: lineOverageBlocks ? "#991B1B" : (avail.hasOverage ? "#92400E" : "#16A34A"), fontWeight: 600 }}>
-                        Combined <strong>{fmtNum(avail.combinedAvailable)} kg</strong>
-                      </span>
+                      <span style={{ color: "#444" }}>This line <strong>{fmtNum(avail.lineQty)} kg</strong></span>
+                      <span style={{ color: "#444" }}>Free <strong>{fmtNum(avail.primaryAvailable)} kg</strong></span>
                       {avail.hasOverage && (
-                        <span style={{ marginLeft: "auto", fontWeight: 700, color: lineOverageBlocks ? "#991B1B" : "#92400E" }}>
-                          {lineOverageBlocks ? `Blocks ${order.status} — short by ${fmtNum(avail.overage)} kg` : `Short by ${fmtNum(avail.overage)} kg`}
+                        <span style={{ fontWeight: 800, fontSize: 13, color: lineOverageBlocks ? "#991B1B" : "#92400E" }}>
+                          Short by {fmtNum(avail.overage)} kg{lineOverageBlocks ? ` — blocks ${order.status}` : ""}
                         </span>
                       )}
                     </div>
@@ -987,7 +974,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     <div>
                       <Lbl>Item / Variety {it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}>· from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl>
                       {it.sourceType && it.sourceRef
-                        ? <div style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12.5, background: "#F9FAFB", color: "#374151", minHeight: 18 }} title="Inherited from the linked source — clear the source link to change the product">{it.product || "—"}{it.variety ? ` — ${it.variety}` : ""}</div>
+                        ? <div style={{ border: "1px solid #E5E7EB", borderRadius: 6, padding: "7px 9px", fontSize: 12, background: "#F9FAFB", color: "#374151", minHeight: 18 }} title="Inherited from the linked source — clear the source link to change the product">{it.product || "—"}{it.variety ? ` — ${it.variety}` : ""}</div>
                         : <ItemVarietyPicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product || ""} variety={it.variety || ""} onItem={(v: string) => si(i, "product", v)} onVariety={(v: string) => si(i, "variety", v)} />}
                     </div>
                     <div><Lbl>Origin{it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from {it.sourceType === "PO" ? "PO" : "stock"}</span> : null}</Lbl><Sel value={it.origin || ""} onChange={e => si(i, "origin", e.target.value)} disabled={fullyLocked || !!(it.sourceType && it.sourceRef)} title="v6.99.26 (owner): country of origin — the list is the Directory's Countries tab"><option value="">— country —</option>{readCountries().map((c: any) => <option key={c.iso} value={c.name}>{c.name}</option>)}{it.origin && !readCountries().some((c: any) => c.name === it.origin) && <option value={it.origin}>{it.origin}</option>}</Sel></div>
@@ -1012,7 +999,8 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
                     <div><Lbl>Sell price {pricingUnitOf(it) === "box" ? "/ box" : "/ kg"}{it.priceToAgree && !(parseFloat(it.unitPrice) > 0) ? <span style={{ color: "#DC2626", fontWeight: 800 }}> · price to agree</span> : null}</Lbl><Inp type="number" value={it.unitPrice ?? ""} style={it.priceToAgree && !(parseFloat(it.unitPrice) > 0) ? { borderColor: "#DC2626", background: "#FEF2F2" } : undefined} onChange={e => si(i, "unitPrice", e.target.value)} placeholder={pricingUnitOf(it) === "box" ? "e.g. 36.40" : "e.g. 2.80"} disabled={isLocked} /></div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr 0.8fr 0.8fr 1fr 1.1fr 38px", gap: 8, alignItems: "end", marginTop: 8 }}>
-                    <div><Lbl>Coloration</Lbl><CatalogValuePicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product} kind="colorations" value={it.coloration} onChange={(v: string) => si(i, "coloration", v)} disabled={fullyLocked} /></div>
+                    {(() => { const fromLot = it.sourceType === "STOCK" && it.sourceRef ? lotColorationOf(it.sourceRef, sd) : ""; const own = String(it.coloration || ""); const differs = !!(own && fromLot && own.toLowerCase() !== fromLot.toLowerCase());   /* v7.23.1 (A-SOL-2): from the lot, like origin, size and class */
+                      return <div><Lbl>Coloration{it.sourceType && it.sourceRef ? <span style={{ color: "#2563EB", fontWeight: 400 }}> · from stock</span> : null}</Lbl><CatalogValuePicker catalog={productCatalog} setCatalog={setProductCatalog} item={it.product} kind="colorations" value={own || fromLot} onChange={(v: string) => si(i, "coloration", v)} disabled={fullyLocked || !!(it.sourceType === "STOCK" && it.sourceRef && fromLot)} />{differs && <div style={{ fontSize: 11, color: "#B45309", marginTop: 3 }}>The lot says {fromLot} — this line was typed {own}</div>}</div>; })()}
                     <div>
                       <Lbl>Packaging</Lbl>
                       <PackagingPicker types={sd.packagingTypes || []} setTypes={setPackagingTypes} packaging={it.packaging} packagingId={it.packagingId} onPick={(pk: any) => { si(i, "packaging", pk ? pk.label : ""); si(i, "packagingId", pk ? pk.id : null); }} />{/* v7.18.0 (A-AU-1): picked, never typed */}
@@ -1038,7 +1026,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], allOrders 
             <div style={{ marginTop: 14, padding: 14, background: "#F9FAFB", borderRadius: 8, display: "flex", justifyContent: "flex-end", gap: 24 }}>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 10, color: "#888" }}>NET TOTAL</div>
-                <div style={{ fontSize: 18, fontWeight: 700 }}>{fmtMoney(netTotal(order.items, sd), order.currency)}</div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{fmtMoney(netTotal(order.items, sd), order.currency)}</div>
               </div>
             </div>
             <div style={{ marginTop: 12, padding: "6px 10px", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 7, fontSize: 12, fontWeight: 700, color: "#166534" }} title="v6.99.6 (A-R9-2): totals of the lines — check before Confirm">Σ {totalsLine(documentTotals(order.items, sd.packagingTypes, order.fxRate), order.currency)}</div>

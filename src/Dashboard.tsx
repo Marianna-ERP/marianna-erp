@@ -55,7 +55,7 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
                   <Card key={t.key} style={{ cursor: "pointer", borderLeft: `4px solid ${color(t.tone)}` }}>
                     <div onClick={() => (t.filter && onOpenFilter ? onOpenFilter(t.module, t.filter) : onNavigate(t.module === "integrity" ? "settings" : t.module))}>
                       <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{t.title}</div>
-                      <div style={{ fontSize: 13.5, fontWeight: 800, color: color(t.tone), marginTop: 4 }}>{t.count ? `${t.count} · ` : ""}{t.detail}</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: color(t.tone), marginTop: 4 }}>{t.count ? `${t.count} · ` : ""}{t.detail}</div>
                     </div>
                   </Card>
                 ))}
@@ -63,7 +63,7 @@ export default function Dashboard({ pos = [], orders = [], lots = [], contacts =
             </div>
           ));
         })()}
-        <div style={{ marginTop: 10, fontSize: 10.5, color: "#AAA", textAlign: "center" }}>The Dashboard shows what needs attention today. Analysis lives in Finance; registers in their modules.</div>
+        <div style={{ marginTop: 10, fontSize: 10, color: "#AAA", textAlign: "center" }}>The Dashboard shows what needs attention today. Analysis lives in Finance; registers in their modules.</div>
       </div>
     </ModulePage>
   );

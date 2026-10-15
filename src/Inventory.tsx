@@ -490,7 +490,7 @@ export function QualityBadge({ quality }: any) {
     "Industrial": { bg: "#FEE2E2", color: "#991B1B" },  // processing-grade — red
   };
   const p = palette[quality] || palette["I"];
-  return <span style={{ background: p.bg, color: p.color, padding: "1px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
+  return <span style={{ background: p.bg, color: p.color, padding: "1px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>Kl. {quality}</span>;
 }
 export function LocationPill({ locationId, lot = null }: any) {
   const loc = locById(locationId);
@@ -500,7 +500,7 @@ export function LocationPill({ locationId, lot = null }: any) {
   if (lot) {
     const direct = lotIsDirect(lot);
     if (direct) return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#7C3AED" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#7C3AED" }}>
         <span style={{ fontSize: 11 }}>↗</span>
         <span style={{ fontWeight: 500 }}>Direct · producer → client</span>
       </span>
@@ -509,7 +509,7 @@ export function LocationPill({ locationId, lot = null }: any) {
   if (!loc) return <span style={{ color: "#CCC" }}>—</span>;
   const t = locType(loc.type);
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#444" }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#444" }}>
       <span style={{ fontSize: 11 }}>{t.icon}</span>
       <span style={{ fontWeight: 500 }}>{loc.name}</span>
     </span>
@@ -535,12 +535,12 @@ export function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], 
   const lbl = MOVEMENT_LABELS[dir];
   if (!lbl) return null;
   if (compact) {
-    return <span title={lbl.hint} style={{ background: "#fff", border: `1px solid ${lbl.color}33`, padding: "1px 7px", borderRadius: 4, fontSize: 10.5, fontWeight: 700, color: lbl.color, whiteSpace: "nowrap" }}>{lbl.label}</span>;
+    return <span title={lbl.hint} style={{ background: "#fff", border: `1px solid ${lbl.color}33`, padding: "1px 7px", borderRadius: 4, fontSize: 10, fontWeight: 700, color: lbl.color, whiteSpace: "nowrap" }}>{lbl.label}</span>;
   }
   return (
-    <span title={lbl.hint} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", background: "#fff", border: `1px solid ${lbl.color}33`, borderRadius: 8, fontSize: 11.5, fontWeight: 700, color: lbl.color }}>
+    <span title={lbl.hint} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", background: "#fff", border: `1px solid ${lbl.color}33`, borderRadius: 8, fontSize: 11, fontWeight: 700, color: lbl.color }}>
       {lbl.label}
-      <span style={{ fontWeight: 400, color: "#94A3B8", fontSize: 10.5 }}>· {ends.origin.country} → {ends.destination.country}</span>{/* v7.12.1 (A-TD-2): the two ends the rule used */}
+      <span style={{ fontWeight: 400, color: "#94A3B8", fontSize: 10 }}>· {ends.origin.country} → {ends.destination.country}</span>{/* v7.12.1 (A-TD-2): the two ends the rule used */}
     </span>
   );
 }
@@ -649,7 +649,7 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
             <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: 12 }}>
               <Lbl>Affected quantity (kg) · max {maxLoss.toLocaleString()}</Lbl>
               <Inp type="number" value={lossKg} onChange={e => setLossKg(e.target.value)} placeholder="0" />
-              <div style={{ fontSize: 10.5, color: "#9A3412", marginTop: 6 }}>This records a write-off movement that reduces stock on hand by this amount.</div>
+              <div style={{ fontSize: 10, color: "#9A3412", marginTop: 6 }}>This records a write-off movement that reduces stock on hand by this amount.</div>
             </div>
           )}
           <div><Lbl>Findings / notes</Lbl>
@@ -658,7 +658,7 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
               placeholder="e.g. 3% shrinkage on arrival; soft fruit in 2 pallets; client reported mould on delivery" />
           </div>
           <div style={{ borderTop: "1px solid #F3F4F6", paddingTop: 12 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer" }}>
               <input type="checkbox" checked={proposeCN} onChange={e => setProposeCN(e.target.checked)} />
               Propose a credit note for this inspection
             </label>
@@ -666,7 +666,7 @@ function InspectionModal({ lot, onCancel, onConfirm }: any) {
               <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginTop: 10 }}>
                 <div><Lbl>Proposed credit amount</Lbl><Inp type="number" value={cnAmount} onChange={e => setCnAmount(e.target.value)} placeholder="0" /></div>
                 <div><Lbl>Currency</Lbl><Sel value={cnCurrency} onChange={e => setCnCurrency(e.target.value)}><option>PLN</option><option>EUR</option><option>USD</option></Sel></div>
-                <div style={{ gridColumn: "span 2", fontSize: 10.5, color: "#92400E", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "6px 9px" }}>This records a <strong>proposed</strong> credit note on the lot. Issuing it formally happens in the Invoicing module (later).</div>
+                <div style={{ gridColumn: "span 2", fontSize: 10, color: "#92400E", background: "#FFF7ED", border: "1px solid #FED7AA", borderRadius: 6, padding: "6px 9px" }}>This records a <strong>proposed</strong> credit note on the lot. Issuing it formally happens in the Invoicing module (later).</div>
               </div>
             )}
           </div>
@@ -743,7 +743,7 @@ function SortingModal({ lot, onCancel, onConfirm }: any) {
       <div style={{ width: 440, background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         <div style={{ padding: "16px 22px", borderBottom: "1px solid #EBEBEB" }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>Record sorting · {lot.number}</div>
-          <div style={{ fontSize: 11.5, color: "#888", marginTop: 3 }}>Warehouse sorting service — charged per kg on the warehouse tariff. Does not change stock; record any rejected kg separately as a quality issue.</div>
+          <div style={{ fontSize: 11, color: "#888", marginTop: 3 }}>Warehouse sorting service — charged per kg on the warehouse tariff. Does not change stock; record any rejected kg separately as a quality issue.</div>
         </div>
         <div style={{ padding: "16px 22px" }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -791,7 +791,7 @@ function ReturnModal({ lot, contacts = [], onCancel, onConfirm }: any) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 100, padding: "24px 16px", overflowY: "auto" }}>
       <div style={{ background: "#fff", borderRadius: 14, width: 520, maxWidth: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", margin: "auto", padding: 22 }}>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>↩ Return to warehouse — {lot.number}</div>
-        <div style={{ fontSize: 11.5, color: "#64748B", lineHeight: 1.5, marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: "#64748B", lineHeight: 1.5, marginBottom: 16 }}>
           A return restores stock to your warehouse and books the return transport as a shipment with its cost. It does <strong>not</strong> reopen the original sale — settle any value with the client via a quality issue / credit note.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -847,20 +847,20 @@ function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save"
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", zIndex: 60, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 16px", overflow: "auto" }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "min(980px, 100%)", border: `2px solid ${colour}`, overflow: "hidden" }}>
         <div style={{ background: "#F8FAFC", borderBottom: `1px solid ${colour}33`, padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
-          <div><div style={{ fontSize: 14, fontWeight: 800, color: colour }}>{title}</div><div style={{ fontSize: 11.5, color: "#64748B" }}>{subtitle}</div></div>
+          <div><div style={{ fontSize: 14, fontWeight: 800, color: colour }}>{title}</div><div style={{ fontSize: 11, color: "#64748B" }}>{subtitle}</div></div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             {extra}
             <SmallButton kind="close" onClick={onClose}>Close</SmallButton>
-            <button onClick={() => (confirmText ? setAsking(true) : onSave())} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{saveLabel}</button>
+            <button onClick={() => (confirmText ? setAsking(true) : onSave())} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{saveLabel}</button>
           </div>
         </div>
         <div style={{ padding: "14px 16px", maxHeight: "72vh", overflow: "auto" }}>{children}</div>
         {asking && (
           <div style={{ borderTop: `2px solid ${colour}`, background: "#F8FAFC", padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700 }}>{confirmText}</div>
+            <div style={{ fontSize: 12, fontWeight: 700 }}>{confirmText}</div>
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
               <SmallButton onClick={() => setAsking(false)}>No, go back</SmallButton>
-              <button onClick={() => { setAsking(false); onSave(); }} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>Yes, {saveLabel.toLowerCase()}</button>
+              <button onClick={() => { setAsking(false); onSave(); }} style={{ padding: "6px 16px", borderRadius: 7, border: "none", background: colour, color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Yes, {saveLabel.toLowerCase()}</button>
             </div>
           </div>
         )}
@@ -868,7 +868,7 @@ function QhWindow({ title, subtitle, colour, onClose, onSave, saveLabel = "Save"
     </div>
   );
 }
-const qhInp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+const qhInp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 9px", fontSize: 12, width: "100%", boxSizing: "border-box" };
 // v7.18.5 (A-AU-10, owner 9 Oct — P-8): a name is picked from its list — the inspector and the counter from Settings → Users, the
 // sorter from our team or a warehouse — never typed. A name written before stays, shown in amber as typed.
 export const userNames = (users: any[]): string[] => Array.from(new Set((users || []).filter((u: any) => u && !u.deleted && u.active !== false).map((u: any) => String(u.name || u.email || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pl"));
@@ -882,7 +882,7 @@ function NamePicker({ value, options = [], onChange, placeholder = "— pick —
   </select>;
 }
 function QhField({ label, hint, children }: any) {
-  return <div><div style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", marginBottom: 3 }}>{label}</div>{children}{hint ? <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{hint}</div> : null}</div>;
+  return <div><div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", marginBottom: 3 }}>{label}</div>{children}{hint ? <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 2 }}>{hint}</div> : null}</div>;
 }
 
 /** A-QH-3/4/7/8: the quality report as the producer's sheet — header · external quality · defects · conclusion. */
@@ -896,14 +896,14 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave, users
   const setTol = (categoryName: string, val: any) => set("tolerances", { ...(ins.tolerances || {}), [categoryName]: val === "" ? "" : (isFinite(parseFloat(val)) ? parseFloat(val) : val) });
   return (
     <QhWindow draft={ins} title="🔬 Quality inspection" subtitle={`${lot.number} · ${lot.product}${lot.variety ? " — " + lot.variety : ""}`} colour="#0E7490" onClose={onClose} onSave={() => onSave(ins)} saveLabel="Save report">
-      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>HEADER</div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>HEADER</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
         <QhField label="Date of inspection" hint={beforeReceiptWarning(lot, ins.date) || undefined}><DateInput value={ins.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>
         <QhField label="Location of inspection"><Sel value={ins.stage} onChange={(e: any) => set("stage", e.target.value)}><option value="pre-unloading">On arrival / pre-unloading</option><option value="warehouse">In our warehouse</option><option value="client">At the client</option><option value="other">Other</option></Sel></QhField>
         <QhField label="Inspector"><NamePicker value={ins.inspector} options={userNames(users)} onChange={(v: string) => set("inspector", v)} placeholder="— who inspected —" /></QhField>
         <QhField label="Temperature (°C)"><input value={ins.temperature ?? ""} onChange={e => set("temperature", e.target.value)} style={qhInp} /></QhField>
         <QhField label={`Quantity delivered (${ins.unit || "kg"})`}><input type="number" value={ins.orderedQty ?? ""} onChange={e => set("orderedQty", e.target.value)} style={qhInp} />{(() => { const n = inspectionQtyNote(ins, lot); if (!n) return null; const k = (v: number) => Math.round(v).toLocaleString("pl-PL");
-          return <div style={{ fontSize: 10.5, fontWeight: 700, color: "#B45309", marginTop: 3 }}>{n.kind === "receipt" ? `⚠ the receipt says ${k(n.lotKg)} kg — correct the receipt if this report is right` : `the lot will be re-posted from ${k(n.lotKg)} to ${k(n.reportKg)} kg — the client's report owns a direct lot`}</div>; })()}</QhField>
+          return <div style={{ fontSize: 10, fontWeight: 700, color: "#B45309", marginTop: 3 }}>{n.kind === "receipt" ? `⚠ the receipt says ${k(n.lotKg)} kg — correct the receipt if this report is right` : `the lot will be re-posted from ${k(n.lotKg)} to ${k(n.reportKg)} kg — the client's report owns a direct lot`}</div>; })()}</QhField>
         <QhField label={`Quantity checked (${ins.unit || "kg"})`} hint="same unit as delivered"><input type="number" value={ins.checkedQty ?? ""} onChange={e => set("checkedQty", e.target.value)} style={qhInp} /></QhField>
         <QhField label="Unit" hint="applies to both quantities"><Sel value={ins.unit || "kg"} onChange={(e: any) => { const u = e.target.value; const kpb = num((ins.externalChecks || []).find((c: any) => String(c.name).startsWith("Unit pack weight"))?.expected) || 0;
         setIns((x: any) => { const conv = (val: any) => { const n = num(val); if (!n || !kpb) return val; return u === "boxes" ? Math.round(n / kpb) : Math.round(n * kpb); };
@@ -911,7 +911,7 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave, users
         <QhField label="Sample %" hint="computed: checked ÷ delivered"><div style={{ ...qhInp, background: "#F8FAFC", fontWeight: 800 }}>{samplePctOf(ins)} %</div></QhField>
       </div>
 
-      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>EXTERNAL QUALITY — what we ordered against what arrived</div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", marginBottom: 6 }}>EXTERNAL QUALITY — what we ordered against what arrived</div>
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.7fr 0.7fr 0.7fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: "#94A3B8" }}><div>CHECK</div><div>EXPECTED</div><div>MAX</div><div>AVG</div><div>MIN</div><div>RESULT</div></div>
       {checks.map((c: any, i: number) => (
         <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.7fr 0.7fr 0.7fr 1fr", gap: 8, alignItems: "center", padding: "3px 0" }}>
@@ -924,7 +924,7 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave, users
         </div>
       ))}
 
-      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "14px 0 6px" }}>DEFECTS</div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", margin: "14px 0 6px" }}>DEFECTS</div>
       {(ins.defects || []).map((d: any, i: number) => (
         <div key={i} style={{ display: "grid", gridTemplateColumns: "150px 1fr 90px 90px 34px", gap: 8, marginBottom: 5, alignItems: "center" }}>
           <Sel value={d.category} onChange={(e: any) => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, category: e.target.value, name: "" } : x))}>{DEFECT_CATEGORIES.map((c: string) => <option key={c}>{c}</option>)}</Sel>
@@ -934,26 +934,26 @@ export function InspectionWindow({ ins, setIns, lot, cat, onClose, onSave, users
             {d.name && !defectsFor(cat, lot.product).some((x: any) => x.name === d.name) && <option value={d.name}>{d.name}</option>}
           </Sel>
           <input type="number" step="0.01" placeholder="% found" value={d.pct ?? ""} onChange={e => set("defects", ins.defects.map((x: any, k: number) => k === i ? { ...x, pct: e.target.value } : x))} style={qhInp} />
-          <div style={{ fontSize: 10.5, color: "#94A3B8", textAlign: "center" }}>tol. {parseFloat((ins.tolerances || {})[d.category]) || 0} %</div>
+          <div style={{ fontSize: 10, color: "#94A3B8", textAlign: "center" }}>tol. {parseFloat((ins.tolerances || {})[d.category]) || 0} %</div>
           <ActionButton action="remove" onClick={() => set("defects", ins.defects.filter((_: any, k: number) => k !== i))} />
         </div>
       ))}
       <button onClick={() => set("defects", [...(ins.defects || []), { category: "Major", name: "", pct: "" }])}
-        style={{ width: "100%", padding: "9px", marginTop: 4, border: "2px dashed #0E7490", borderRadius: 8, background: "#F0FDFA", color: "#0E7490", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>⊕ Add defect</button>
+        style={{ width: "100%", padding: "9px", marginTop: 4, border: "2px dashed #0E7490", borderRadius: 8, background: "#F0FDFA", color: "#0E7490", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>⊕ Add defect</button>
 
-      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#94A3B8", margin: "14px 0 6px" }}>TOLERANCES &amp; CONCLUSION <span style={{ fontWeight: 500, textTransform: "none" }}>— the limits this report is judged against; they travel with it</span></div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: "#94A3B8", margin: "14px 0 6px" }}>TOLERANCES &amp; CONCLUSION <span style={{ fontWeight: 500, textTransform: "none" }}>— the limits this report is judged against; they travel with it</span></div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 8 }}>
         {v.rows.map((r: any) => (
           <div key={r.category} style={{ border: `1px solid ${r.acceptable ? "#BBF7D0" : "#FECACA"}`, background: r.acceptable ? "#F0FDF4" : "#FEF2F2", borderRadius: 8, padding: "7px 9px" }}>
             <div style={{ fontSize: 11, fontWeight: 800 }}>{r.category}</div>
             <div style={{ fontSize: 13, fontWeight: 800 }}>{r.pct} %</div>
             <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: 3 }}>
-              <span style={{ fontSize: 10.5, color: "#64748B" }}>tolerance</span>
+              <span style={{ fontSize: 10, color: "#64748B" }}>tolerance</span>
               <input type="number" step="0.1" disabled={r.category === "Unacceptable"} value={(ins.tolerances || {})[r.category] ?? r.tolerance} onChange={e => setTol(r.category, e.target.value)}
                 title={r.category === "Unacceptable" ? "Always 0 % — one unacceptable defect rejects the consignment" : ""} style={{ ...qhInp, width: 62, padding: "3px 6px", background: r.category === "Unacceptable" ? "#F3F4F6" : "#fff" }} />
-              <span style={{ fontSize: 10.5 }}>%</span>
+              <span style={{ fontSize: 10 }}>%</span>
             </div>
-            <div style={{ fontSize: 10.5, fontWeight: 800, color: r.acceptable ? "#16A34A" : "#DC2626", marginTop: 3 }}>{r.acceptable ? "Acceptable" : "Not acceptable"}</div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: r.acceptable ? "#16A34A" : "#DC2626", marginTop: 3 }}>{r.acceptable ? "Acceptable" : "Not acceptable"}</div>
           </div>
         ))}
       </div>
@@ -976,7 +976,7 @@ export function SortingWindow({ f, setF, lot, inspections = [], contacts = [], o
     <QhWindow draft={f} title="⚖ Sorting job" subtitle={`${lot.number} · splits what the inspection said to sort`} colour="#7C3AED" onClose={onClose}
       onSave={onSave} saveLabel="Post sorting"
       confirmText={`Post this sorting: ${num(f.kgIn).toLocaleString("pl-PL")} kg → class I ${num(f.classIKg).toLocaleString("pl-PL")} · class II ${num(f.classIIKg).toLocaleString("pl-PL")} · waste ${num(f.wasteKg).toLocaleString("pl-PL")}${follows ? "" : " (no inspection referenced)"}?`}>
-      {!inspections.length && <div style={{ fontSize: 11.5, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>No quality inspection on this lot yet — sorting normally follows one. You can still post it.</div>}
+      {!inspections.length && <div style={{ fontSize: 11, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 7, padding: "6px 9px", marginBottom: 10 }}>No quality inspection on this lot yet — sorting normally follows one. You can still post it.</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
         <QhField label="Date sorted" hint={beforeReceiptWarning(lot, f.date) || undefined}><DateInput value={f.date} min={lotReceiptDate(lot) || undefined} onChange={(e: any) => set("date", e.target.value)} /></QhField>
         <QhField label="What is being sorted" hint="a second sorting takes from what is left, not from the whole lot">
@@ -1025,7 +1025,7 @@ export function CountWindow({ f, setF, lot, onClose, onSave, users = [] }: any) 
           <input type="number" value={(e as any).looseBoxes ?? ""} onChange={ev => setRow(r.grade, "looseBoxes", ev.target.value)} style={qhInp} />
           <input type="number" value={(e as any).kgPerBox ?? ""} onChange={ev => setRow(r.grade, "kgPerBox", ev.target.value)} style={qhInp} />
           <input type="number" value={kg > 0 ? kg : ((e as any).countedKg ?? "")} onChange={ev => setRow(r.grade, "countedKg", ev.target.value)} disabled={kg > 0} title={kg > 0 ? "derived from the boxes" : "loose goods — type the kilos"} style={{ ...qhInp, background: kg > 0 ? "#F8FAFC" : "#fff", fontWeight: 700 }} />
-          <div style={{ fontSize: 11.5 }}>{r.informational ? <span style={{ color: "#94A3B8" }}>not adjusted</span> : <>{Math.round(num(r.systemKg)).toLocaleString("pl-PL")} · <b style={{ color: diff === 0 ? "#16A34A" : "#B45309" }}>{diff >= 0 ? "+" : ""}{diff}</b></>}</div>
+          <div style={{ fontSize: 11 }}>{r.informational ? <span style={{ color: "#94A3B8" }}>not adjusted</span> : <>{Math.round(num(r.systemKg)).toLocaleString("pl-PL")} · <b style={{ color: diff === 0 ? "#16A34A" : "#B45309" }}>{diff >= 0 ? "+" : ""}{diff}</b></>}</div>
         </div>
       ); })}
       <div style={{ marginTop: 8, fontSize: 11, color: "#64748B" }}>Waste and damaged boxes were written off when they were found — count them on their own line if they are still on the floor; that figure never adjusts the stock. A difference beyond 1 kg on class I or class II becomes a reasoned adjustment on that class.</div>
@@ -1058,8 +1058,8 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
   const dueQC = arrivedAt && reportDays ? addDaysISO(arrivedAt, reportDays) : "";   // v6.99.122 (AUD-09)
   const tile = (title: string, body: any, color = "#111") => (
     <div style={{ background: "#FAFAFA", border: "1px solid #F1F5F9", borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
-      <div style={{ fontSize: 9.5, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{title}</div>
-      <div style={{ fontSize: 11.5, color, marginTop: 3, lineHeight: 1.45 }}>{body}</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: 0.4 }}>{title}</div>
+      <div style={{ fontSize: 11, color, marginTop: 3, lineHeight: 1.45 }}>{body}</div>
     </div>
   );
   return (
@@ -1071,10 +1071,10 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
       {(() => { const po = (pos || []).find((p: any) => String(p.number) === String(lot.poRef)); const consignment = String(po?.pricingMode || "") === "consignment"; return (
       <div style={{ background: "#F1F5F9", color: "#0F172A", padding: "10px 16px", display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap", borderBottom: "1px solid #E2E8F0" }}>
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: "#64748B" }}>LOT WORKBENCH</span>
-        {lot.poRef ? <DocLink num={lot.poRef} from={lot.number}><span style={{ fontSize: 16, fontWeight: 800, fontFamily: "ui-monospace, Menlo, monospace", color: "#1D4ED8" }}>{lot.poRef}</span></DocLink> : <span style={{ fontSize: 13, color: "#94A3B8" }}>no purchase order</span>}
+        {lot.poRef ? <DocLink num={lot.poRef} from={lot.number}><span style={{ fontSize: 16, fontWeight: 800}}>{lot.poRef}</span></DocLink> : <span style={{ fontSize: 13, color: "#94A3B8" }}>no purchase order</span>}
         {consignment ? <span style={{ fontSize: 11, fontWeight: 700, background: "#EDE9FE", color: "#6D28D9", padding: "2px 10px", borderRadius: 20 }}>consignment</span> : null}
         {unit?.supplierRef ? <span style={{ fontSize: 13, fontWeight: 700, background: "#DBEAFE", color: "#1E40AF", padding: "2px 10px", borderRadius: 20 }}>supplier ref {unit.supplierRef}</span> : <span style={{ fontSize: 12, color: "#94A3B8" }}>no supplier reference yet</span>}
-        {po?.supplier?.name ? <span style={{ fontSize: 12.5, color: "#334155" }}>{po.supplier.name}</span> : null}
+        {po?.supplier?.name ? <span style={{ fontSize: 12, color: "#334155" }}>{po.supplier.name}</span> : null}
       </div>); })()}
       <div style={{ padding: "12px 16px" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
@@ -1085,7 +1085,7 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
         {tile("SALES", <>{sales.length ? sales.map((o: any) => { const kg = (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))).reduce((a: number, it: any) => a + num(it.qty), 0); return <div key={o.number}>{o.number} · <b>{Math.round(kg).toLocaleString("pl-PL")} kg</b>{o.items?.some((it: any) => it.grade === "II") ? " · II" : ""} · {o.status}</div>; }) : <span style={{ color: "#94A3B8" }}>no sales yet</span>}<span style={{ color: num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "#16A34A" : "#B45309" }}>{num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "fully sold" : `${Math.max(0, Math.round(num(lot.receivedKg) - soldKg - g.waste)).toLocaleString("pl-PL")} kg to sell`}</span></>)}
         {tile("SETTLEMENT (on the PO)", settlement ? <>{settlement.number ? settlement.number + " · " : ""}<b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? ` · closed ${settlement.closedAt}` : ""}<br />{settlement.commissionInvoiceId ? "commission invoice issued" : settlement.status === "Closed" ? "commission not yet invoiced — waiting for the Monday commission run" : "closes on the PO when the truck is sold"}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `not opened yet — on ${lot.poRef}` : "—"}</span>)}
       </div>
-      <div style={{ marginTop: 8, fontSize: 10.5, color: "#94A3B8" }}>Actions live below in their owning sections: Receive · Inspect · Sort · Count · Move · Return · Claim; the settlement, its reports and the commission run are on the PO. This strip stores nothing — it reads what each module owns.</div>
+      <div style={{ marginTop: 8, fontSize: 10, color: "#94A3B8" }}>Actions live below in their owning sections: Receive · Inspect · Sort · Count · Move · Return · Claim; the settlement, its reports and the commission run are on the PO. This strip stores nothing — it reads what each module owns.</div>
       </div>
     </div>
   );
@@ -1456,23 +1456,23 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
         <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search lot, product, PO/SO, location…" style={{ flex: "1 1 220px", minWidth: 190, border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 12px", fontSize: 13, outline: "none", background: "#fff" }} />
           <SmallButton onClick={() => exportRowsToXlsx(`stock_on_hand_${xlsStamp()}`, filtered, [{ key: "number", label: "Lot" }, { key: "product", label: "Product" }, { key: "variety", label: "Variety" }, { key: "size", label: "Calibre" }, { key: "quality", label: "Class" }, { key: "status", label: "Status" }, { key: "locationId", label: "Location", fmt: (v: any) => (locById(v) || {}).name || "" }, { key: "expectedKg", label: "Expected kg" }, { key: "receivedKg", label: "Received kg" }, { key: "physicalKg", label: "Physical kg" }, { key: "reservedKg", label: "Reserved kg" }, { key: "grades", label: "Grades I/II/waste", fmt: (v: any) => v ? `${v.I || 0} / ${v.II || 0} / ${v.waste || 0}` : "" }, { key: "poRef", label: "PO" }, { key: "arrivalDate", label: "Arrived" }, { key: "costs", label: "Landed cost PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.pln) || 0), 0) }], "Stock")} title="v6.99.0: exports the rows as filtered, columns as shown">Export file (Excel)</SmallButton>
-            <select value={sortBy} onChange={e => setSortBy(e.target.value)} title="Sort by stock age (arrival date of the first receipt)" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff" }}>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} title="Sort by stock age (arrival date of the first receipt)" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, background: "#fff" }}>
             <option value="default">Sort: default</option>
             <option value="oldest">Oldest stock first</option>
             <option value="newest">Newest stock first</option>
           </select>
-          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} title="Filter by status" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             <option value="inPossession">In our possession</option>
             <option value="all">All statuses</option>
             {Object.keys(LOT_STATUSES).map(s => <option key={s} value={s}>{statusWord(s)}</option>)}
           </select>
-          <select value={filterLocationType} onChange={e => setFilterLocationType(e.target.value)} title="Filter by location" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
+          <select value={filterLocationType} onChange={e => setFilterLocationType(e.target.value)} title="Filter by location" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, background: "#fff", fontFamily: "inherit", maxWidth: 200 }}>
             {["All", ...Object.keys(LOCATION_TYPES)].map(t => <option key={t} value={t}>{t === "All" ? "All locations" : `${locType(t).icon} ${locType(t).label}`}</option>)}
           </select>
-          <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} title="Filter by product" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 180 }}>
+          <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} title="Filter by product" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, background: "#fff", fontFamily: "inherit", maxWidth: 180 }}>
             {["All", ...productOptions].map(p => <option key={p} value={p}>{p === "All" ? "All products" : p}</option>)}
           </select>
-          <select value={filterQuality} onChange={e => setFilterQuality(e.target.value)} title="Filter by quality" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, background: "#fff", fontFamily: "inherit", maxWidth: 140 }}>
+          <select value={filterQuality} onChange={e => setFilterQuality(e.target.value)} title="Filter by quality" style={{ border: "1px solid #E5E7EB", borderRadius: 8, padding: "8px 10px", fontSize: 12, background: "#fff", fontFamily: "inherit", maxWidth: 140 }}>
             {["All", ...QUALITY_GRADES].map(q => <option key={q} value={q}>{q === "All" ? "All grades" : `Kl. ${q}`}</option>)}
           </select>
         </div>
@@ -1498,7 +1498,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                 onMouseLeave={e => e.currentTarget.style.background = "#fff"}
               >
                 <div>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "#2563EB", fontFamily: "ui-monospace, Menlo, monospace" }}>{l.number}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#2563EB", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{l.number}</div>
                   <div style={{ marginTop: 3 }}><VarianceBadge expected={l.expectedKg} actual={l.receivedKg} lot={l} /></div>
                 </div>
                 {/* v6.99.81 (A-IN-2, owner): item — variety · size, packaging, origin (readable) · producer; the arrival moved to its own column */}
@@ -1518,10 +1518,10 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                 {/* v6.99.81 (A-IN-3, owner): stock lots count their days with us; a direct lot shows its dates and no count */}
                 <div>{(() => { const a = lotArrivedCell(l, localTodayISO()); const D = (d: any) => d ? formatDMY(d) : "—";
                   if (a.kind === "stock") return <><div style={{ fontSize: 12, color: "#334155" }}>arrived {D(a.date)}</div>{a.days !== undefined && <div style={{ fontSize: 11, fontWeight: 700, color: ageColor(a.days) }}>{a.days} d on stock</div>}</>;
-                  if (a.kind === "direct") return <><div style={{ fontSize: 11.5, fontWeight: 700, color: "#7C3AED" }}>Direct</div><div style={{ fontSize: 11, color: "#64748B" }}>{a.loaded ? `loaded ${D(a.loaded)}` : ""}{a.delivered ? ` · delivered ${D(a.delivered)}` : ""}</div></>;
-                  if (a.kind === "expected") return <div style={{ fontSize: 11.5, color: "#B45309", fontWeight: 600 }}>expected {D(a.date)}</div>;
+                  if (a.kind === "direct") return <><div style={{ fontSize: 11, fontWeight: 700, color: "#7C3AED" }}>Direct</div><div style={{ fontSize: 11, color: "#64748B" }}>{a.loaded ? `loaded ${D(a.loaded)}` : ""}{a.delivered ? ` · delivered ${D(a.delivered)}` : ""}</div></>;
+                  if (a.kind === "expected") return <div style={{ fontSize: 11, color: "#B45309", fontWeight: 600 }}>expected {D(a.date)}</div>;
                   return <span style={{ color: "#CCC" }}>—</span>; })()}
-                  {(() => { const w = lotWarningsShown(l, localTodayISO()); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10.5, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected"
+                  {(() => { const w = lotWarningsShown(l, localTodayISO()); return w.length ? <div data-lot-warning="1" title={w.map(x => `${x.field}: ${x.why}`).join("\n")} style={{ fontSize: 10, fontWeight: 700, color: "#B45309", marginTop: 2 }}>⚠ {w.map(x => x.field === "still expected" ? (x.why.match(/expected for (\d+) days/) || [])[1] + " d still expected"
                     : x.field === "unexplained movements" ? (x.why.match(/^(\d+) movement/) || [])[1] + " unexplained movement(s)"   // v7.11.2 (A-RV-24)
                     : x.field === "ageing stock" ? (x.why.match(/in store (\d+) days/) || [])[1] + " d in store, unsold"   // v7.11.2 (A-RV-24)
                     : (x.why.match(/^(over|short) by [^)]*\)/) || [x.field])[0]).join(" · ")}</div> : null; })()}{/* v7.10.3 (A-RV-15) */}</div>
@@ -1532,10 +1532,10 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                     return <>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#111" }}>{fmtNum(onHand)} kg{isExpected ? <span style={{ fontSize: 10, color: "#B45309", fontWeight: 600 }}> expected</span> : null}</div>
                       {/* v6.99.81 (A-IN-6, owner): free in green, reserved in orange */}
-                      <div style={{ fontSize: 10.5 }}><span style={{ color: "#16A34A", fontWeight: 700 }}>{fmtNum(res.liveAvailable)} free</span><span style={{ color: "#94A3B8" }}> · </span><span style={{ color: "#D97706", fontWeight: 700 }}>{fmtNum(res.totalReserved)} reserved</span></div>
+                      <div style={{ fontSize: 10 }}><span style={{ color: "#16A34A", fontWeight: 700 }}>{fmtNum(res.liveAvailable)} free</span><span style={{ color: "#94A3B8" }}> · </span><span style={{ color: "#D97706", fontWeight: 700 }}>{fmtNum(res.totalReserved)} reserved</span></div>
                     </>;
                   })()}
-                  {l.damagedKg > 0 && <div style={{ fontSize: 10.5, color: "#DC2626", fontWeight: 600 }}>{fmtNum(l.damagedKg)} damaged</div>}
+                  {l.damagedKg > 0 && <div style={{ fontSize: 10, color: "#DC2626", fontWeight: 600 }}>{fmtNum(l.damagedKg)} damaged</div>}
                 </div>
                 {/* v6.99.81 (A-IN-7, owner): the value in the lot's own state — in stock · delivered · expected — never "0" for goods that went direct */}
                 <div>{(() => { const v = lotValue(l, cpk); const ch = cpk > 0 ? { consignment: false, provisionalPerKgPLN: null } : consignmentHint(l, extPOs || [], extSettlements || [], lots || []);
@@ -1549,14 +1549,14 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
                   <div style={{ fontSize: 10, color: "#64748B" }}>{v.label !== "—" ? <span style={{ fontWeight: 700, color: v.label === "in stock" ? "#16A34A" : v.label === "expected" ? "#B45309" : "#0F766E" }}>{v.label}</span> : null}{v.label !== "—" ? " · " : ""}{fmtMoney(cpk)}/kg</div>
                 </>; })()}</div>
                 <div>
-                  {l.poRef && <div style={{ fontSize: 11, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={l.poRef} cancelledSet={cancelledRefs} /></div>}
+                  {l.poRef && <div style={{ fontSize: 11, fontWeight: 600 }}><DocRef num={l.poRef} cancelledSet={cancelledRefs} /></div>}
                   {/* v7.1.6 (A-IN-13, owner 6 Oct): the lot's sales and the shipments carrying it, each a link (the PO above already is) */}
                   {soList.slice(0, 3).map(s => (
-                    <div key={s.number} style={{ fontSize: 11, color: "#15803D", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={s.number} cancelledSet={cancelledRefs} /></div>
+                    <div key={s.number} style={{ fontSize: 11, fontWeight: 600 }}><DocRef num={s.number} cancelledSet={cancelledRefs} /></div>
                   ))}
                   {soList.length > 3 && <div style={{ fontSize: 10, color: "#AAA" }}>+{soList.length - 3} more sales</div>}
                   {(() => { const shps = (shipments || []).filter((sh: any) => sh && sh.status !== "Cancelled" && (sh.goods || []).some((g: any) => String(g.lotRef) === String(l.number))).map((sh: any) => sh.number); return <>
-                    {shps.slice(0, 3).map((n: string) => <div key={n} style={{ fontSize: 11, color: "#0284C7", fontFamily: "ui-monospace, Menlo, monospace", fontWeight: 600 }}><DocRef num={n} cancelledSet={cancelledRefs} /></div>)}
+                    {shps.slice(0, 3).map((n: string) => <div key={n} style={{ fontSize: 11, fontWeight: 600 }}><DocRef num={n} cancelledSet={cancelledRefs} /></div>)}
                     {shps.length > 3 && <div style={{ fontSize: 10, color: "#AAA" }}>+{shps.length - 3} more shipments</div>}
                   </>; })()}
                 </div>

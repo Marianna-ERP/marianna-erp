@@ -22,6 +22,6 @@
     "types": []
   },
   "include": [
-    "src"
+    "src/index.tsx"
   ]
 }

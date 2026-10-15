@@ -42,12 +42,12 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#FAFAFA", padding: 24, fontFamily: "system-ui, -apple-system, sans-serif" }}>
         <div style={{ maxWidth: 520, background: "#fff", border: "1px solid #E5E7EB", borderRadius: 14, padding: 28, boxShadow: "0 10px 40px rgba(0,0,0,0.08)" }}>
-          <div style={{ fontSize: 34, marginBottom: 8 }}>⚠️</div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: "#111", marginBottom: 8 }}>Something went wrong on screen</div>
-          <div style={{ fontSize: 13.5, color: "#444", lineHeight: 1.6, marginBottom: 6 }}>
+          <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#111", marginBottom: 8 }}>Something went wrong on screen</div>
+          <div style={{ fontSize: 13, color: "#444", lineHeight: 1.6, marginBottom: 6 }}>
             This is a display error, not data loss. <strong>Your data is safe</strong> — it's stored in this browser and a screen crash doesn't touch it.
           </div>
-          <div style={{ fontSize: 13.5, color: "#444", lineHeight: 1.6, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, color: "#444", lineHeight: 1.6, marginBottom: 16 }}>
             Download a backup just to be safe, then reload. If it keeps happening, send the backup file and the message below.
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>

@@ -26,7 +26,7 @@ const eq = (a, b, m) => { if (a !== b) throw new Error((m || "") + " expected " 
   const Sh = require(path.resolve(__dirname, "../src/Shipments")); const SO = require(path.resolve(__dirname, "../src/SalesOrders"));
   await t("US-4: the shipment editor, opened on a real shipment and left alone, asks nothing", async () => {
     const r2 = createRoot(document.getElementById("r")); const sh = d.shipments.find(s => (s.legs || []).length > 1) || d.shipments[0];
-    await act(async () => r2.render(React.createElement(Sh.default, { shipments: d.shipments, setShipments: () => {}, contacts: d.contacts, lots: d.lots, orders: d.orders, pos: d.pos, initialSelectedNumber: sh.number })));
+    await act(async () => r2.render(React.createElement(Sh.default, { shipments: d.shipments, setShipments: () => {}, contacts: d.contacts, lots: d.lots, orders: d.orders, pos: d.pos, initialEdit: true, initialSelectedNumber: sh.number })));
     await sleep(600); eq(U.openEditors().some(l => l.startsWith("Shipment")), true, "the editor registered"); eq(U.dirtyEntries().length, 0, "dirty after opening"); await act(async () => r2.unmount());
   });
   await t("US-4: the SO form, opened on a real order and left alone, asks nothing", async () => {

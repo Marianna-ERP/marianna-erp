@@ -1,12 +1,12 @@
 import { fillEmptyPlaces, termsToReview, deliveredAtDestination } from "./incoterms.domain";   // v7.9.2 · v7.20.0 (A-INC-2): the incoterm review
 import { TermsReviewList, TERMS_REVIEW } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { statusWord } from "./format";
-import { ModuleHeader, ActionButton, notifySaved } from "./ui";
+import { ModuleHeader, ActionButton, notifySaved, DocRef } from "./ui";
 import React, { useMemo, useState } from "react";
 import { exportRowsToXlsx, stamp as xlsStamp } from "./exportXlsx";
 
 import DateInput from "./DateInput";
-import { postShipmentToLots, derivePurpose, nextShipmentAction, syncLegFreightCostLines, legFreightSource, findLotForSOLine } from "./shipments.domain";
+import { postShipmentToLots, derivePurpose, syncLegFreightCostLines, legFreightSource, findLotForSOLine, carriedRefs } from "./shipments.domain";
 import { grossForGoodsLine, PACKAGING_SEED } from "./packaging.domain";
 import { recomputeLotFromMovements } from "./inventory.domain";
 import LoadingProtocolModal from "./LoadingProtocolModal";
@@ -22,7 +22,7 @@ import { allocateShipmentCostsToLots, shipmentLotRefs as engineShipmentLotRefs, 
 import { nextId } from "./ids";
 import { resolveFxRate, defaultFxRate, documentFxDefault } from "./fx";
 import { unifiedLocations, locationById } from "./locations";
-import { localTodayISO } from "./dates";
+import { localTodayISO, formatDMY } from "./dates";
 import { recordAudit } from "./audit";
 import { isArchived, DEFAULT_SEASON } from "./season.domain";
 import PlanningSheet from "./PlanningSheet";   // v6.99.63 — ShipmentBoard (the live view) kept in the repository for the later connection
@@ -35,6 +35,7 @@ import { CreateShipmentModal } from "./ShipmentCreate";
 import { ShipmentDetail } from "./ShipmentDetail";
 import { TransportOrderPrintModal, TransportOrderEmailModal } from "./ShipmentDocuments";
 import { outstandingCustoms } from "./customs.domain";   // v7.10.4 (A-RV-15)
+import { soClientName } from "./salesOrders.domain";   // v7.23.5 (A-SHV-1)
 const CUSTOMS_OPEN = "Customs open";   // v7.10.4 (A-RV-15): the Shipments list filter for clearances not yet Cleared
 // v6.92.0 (A-R8-18): expected freight lines per CARRIER × LEG replace the per-leg line when any unit carries a price.
 // v7.22.4 (A-RV-16): no hidden copy of the counterparties — costLinesByCarrierLegApply takes them as a parameter
@@ -955,53 +956,54 @@ export function ModeBadge({ mode }: any) {
 export function BillingBadge({ status }: any) {
   const color = status === "Cost allocated" || status === "Closed" ? "#059669" : status === "Ready for supplier invoice" ? "#D97706" : "#6B7280";
   const bg = status === "Cost allocated" || status === "Closed" ? "#D1FAE5" : status === "Ready for supplier invoice" ? "#FEF3C7" : "#F3F4F6";
-  return <span style={{ background: bg, color, padding: "2px 8px", borderRadius: 6, fontSize: 10.5, fontWeight: 700 }}>{status || "Not ready"}</span>;
+  return <span style={{ background: bg, color, padding: "2px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700 }}>{status || "Not ready"}</span>;
 }
 // SmallButton: shared kit (./ui) — Batch 2.
 function EmptyState({ title, sub }: any) {
-  return <Card style={{ textAlign: "center", padding: 32, color: "#888" }}><div style={{ fontSize: 15, fontWeight: 700, color: "#444" }}>{title}</div><div style={{ fontSize: 12, marginTop: 4 }}>{sub}</div></Card>;
+  return <Card style={{ textAlign: "center", padding: 32, color: "#888" }}><div style={{ fontSize: 14, fontWeight: 700, color: "#444" }}>{title}</div><div style={{ fontSize: 12, marginTop: 4 }}>{sub}</div></Card>;
 }
 
 function Kpi({ label, value, sub, onClick }: any) {
   return <div onClick={onClick} title={sub || ""} style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: "9px 12px", cursor: onClick ? "pointer" : "default" }}>
     <div style={{ fontSize: 10, color: "#888", fontWeight: 800, letterSpacing: "0.04em", marginBottom: 2 }}>{label}</div>
-    <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "-0.3px" }}>{value}</div>
+    <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "-0.3px" }}>{value}</div>
   </div>;
 }
 
-function ShipmentListRow({ sh, active, onClick, contacts, planNumber = "" }: any) {
-  // BP-60 part A (v6.56.0): two lines instead of one. The old row showed number,
-  // mode and status — true, but never the thing you scan a list FOR. You had to
-  // open each shipment to find out where it goes and when. Now the second line
-  // carries route, dates, weight and carrier, and a chip names the single next
-  // action so the list tells you what to DO, not just what exists.
-  const missingDocs = (sh.documents || []).filter(d => ["Required", "Missing"].includes(d.status)).length;
-  const dead = isCancelled(sh);
-  const na = dead ? null : nextShipmentAction(sh);
-  const kg = (sh.goods || []).reduce((a, g) => a + parseNum(g.qtyKg), 0);
-  // v6.99.86 (owner 1 Oct): the dates come from the units — the actual loading / unloading once entered, the planned ones until then (the header's creation-time dates were shown before, and never changed)
-  const sd = shipmentDates(sh); const dates = [sd.loaded || sd.plannedLoading, sd.delivered || sd.plannedDelivery].filter(Boolean).join(" \u2192 "); const actual = !!(sd.loaded || sd.delivered);
-  return <div onClick={onClick}
-    style={{ padding: "8px 12px", borderBottom: "1px solid #F1F5F9", cursor: "pointer", background: dead ? "#FEF2F2" : active ? "#F9FAFB" : "#fff", borderLeft: dead ? "4px solid #DC2626" : active ? "4px solid #111" : "4px solid transparent", minWidth: 0 }}>
-    <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: dead ? "#B91C1C" : "#2563EB", fontFamily: "ui-monospace, Menlo, monospace", whiteSpace: "nowrap", ...(dead ? { textDecoration: "line-through", textDecorationColor: "#DC2626" } : {}) }}>{sh.number}</div>
-      <ModeBadge mode={sh.mode} />
-      <StatusBadge status={sh.status} shipment={sh} />
-      {planNumber && <span title={`Part of load plan ${planNumber}`} style={{ fontSize: 9.5, fontWeight: 700, color: "#0369A1", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}>{planNumber}</span>}
-      <div style={{ flex: 1 }} />
-      {missingDocs > 0 && <span title={`${missingDocs} document(s) missing`} style={{ width: 8, height: 8, borderRadius: "50%", background: "#F59E0B", flexShrink: 0 }} />}
-      {na && <span style={{ fontSize: 9.5, fontWeight: 700, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 999, padding: "1px 7px", whiteSpace: "nowrap" }}>{na.label}</span>}
-    </div>
-    {/* v6.58.0: route and carrier REMOVED from the summary line (user ruling)
-        — route read shipment-level locations that real data leaves unset, so
-        it named the wrong place with confidence. Dates and quantity stay. */}
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, fontSize: 10.5, color: "#64748B", minWidth: 0 }}>
-      {dates && <span style={{ whiteSpace: "nowrap", color: actual ? "#0F766E" : undefined, fontWeight: actual ? 600 : undefined }} title={actual ? "actual dates from the trucks (loaded / unloaded)" : "planned dates"}>{dates}</span>}
-      {kg > 0 && <span style={{ whiteSpace: "nowrap" }}>{Math.round(kg).toLocaleString("pl-PL")} kg</span>}
-    </div>
-  </div>;
+/** v7.23.5 (A-SHV-1, owner approved 13 Oct): the shipments as a full-width list, one row per shipment; a click opens its page. */
+function ShipmentTable({ rows, contacts, orders = [], pos = [], termsAll = [], onOpen }: any) {
+  const S = (v: any) => String(v ?? "").trim();
+  const th: React.CSSProperties = { textAlign: "left", fontSize: 11, fontWeight: 600, color: "#94A3B8", padding: "9px 10px", borderBottom: "1px solid #E5E7EB", whiteSpace: "nowrap", background: "#fff" };
+  const td: React.CSSProperties = { textAlign: "left", fontSize: 12, padding: "10px", borderBottom: "1px solid #F1F5F9", verticalAlign: "top" };
+  const day = (actual: any, planned: any) => S(actual) ? <span>{formatDMY(S(actual).slice(0, 10))}</span> : S(planned) ? <span style={{ color: "#94A3B8" }}>{formatDMY(S(planned).slice(0, 10))} (planned)</span> : <span style={{ color: "#CBD5E1" }}>—</span>;
+  const clientOf = (r: string) => { const o: any = (orders || []).find((x: any) => S(x.number) === r); return o ? soClientName(o) : ""; };
+  const supplierOf = (r: string) => { const p: any = (pos || []).find((x: any) => S(x.number) === r); return p ? S(p.supplier?.name || p.supplierName || p.supplier) : ""; };
+  const refs = (list: string[], nameOf: (r: string) => string) => list.length ? <>{list.slice(0, 2).map(r => <div key={r} style={{ marginBottom: 6 }}><DocRef num={r} /><div>{nameOf(r)}</div></div>)}{list.length > 2 && <div style={{ fontSize: 11, color: "#94A3B8" }}>+ {list.length - 2} more</div>}</> : <span style={{ color: "#CBD5E1" }}>—</span>;
+  return <Card style={{ padding: 0, overflowX: "auto" }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+      <thead><tr>{["Shipment", "Status", "Mode and route", "Loading → delivery", "SO / Client", "PO / Supplier", "Carriers / Forwarders", "Weight", "Still missing"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+      <tbody>{(rows || []).map((sh: any) => {
+        const dead = isCancelled(sh); const cr = carriedRefs(sh); const d = shipmentDates(sh); const legs: any[] = sh.legs || [];
+        const from = legs.length ? locationTextFromFields(legs[0].fromLocationId, legs[0].fromCustom) : ""; const to = legs.length ? locationTextFromFields(legs[legs.length - 1].toLocationId, legs[legs.length - 1].toCustom) : "";
+        const providers = Array.from(new Set(providerIdsForShipment(sh).map((id: any) => providerName(id, contacts)).filter(Boolean)));
+        const docs = (sh.documents || []).filter((x: any) => ["Required", "Missing"].includes(x.status)).map((x: any) => S(x.type));
+        const noPlates = !dead && !["Delivered", "Closed"].includes(S(sh.status)) && legs.some((l: any) => l.mode === "Road" && transportUnitsForLeg(l).some((u: any) => !S(u.truckPlate || u.vehiclePlate)));
+        const terms = (termsAll || []).filter((x: any) => x.shipment === S(sh.number)).length;
+        const missing = dead ? [] : [...docs.slice(0, 2), ...(docs.length > 2 ? [`+ ${docs.length - 2} documents`] : []), ...(noPlates ? ["plates"] : []), ...(terms ? [`${terms} term${terms > 1 ? "s" : ""} to review`] : [])];
+        return <tr key={sh.id} onClick={() => onOpen(sh)} tabIndex={0} onKeyDown={e => { if (e.key === "Enter") onOpen(sh); }} style={{ cursor: "pointer", background: dead ? "#FEF2F2" : undefined }}>
+          <td style={{ ...td, fontWeight: 700, color: dead ? "#B91C1C" : "#0E7490", whiteSpace: "nowrap", textDecoration: dead ? "line-through" : undefined }}>{sh.number}</td>
+          <td style={td}><StatusBadge status={sh.status} shipment={sh} /></td>
+          <td style={td}><ModeBadge mode={sh.mode} />{(from || to) && <div style={{ fontSize: 11, color: "#64748B", marginTop: 4 }}>{from || "—"} → {to || "—"}</div>}</td>
+          <td style={{ ...td, whiteSpace: "nowrap" }}>{day(d.loaded, d.plannedLoading)}<br />{day(d.delivered, d.plannedDelivery)}</td>
+          <td style={td}>{refs(cr.soRefs, clientOf)}</td>
+          <td style={td}>{refs(cr.poRefs, supplierOf)}</td>
+          <td style={td}>{providers.length ? providers.map(p => <div key={p}>{p}</div>) : <span style={{ color: "#CBD5E1" }}>—</span>}</td>
+          <td style={{ ...td, whiteSpace: "nowrap" }}>{shipmentKg(sh) ? `${fmtNum(shipmentKg(sh))} kg` : "—"}</td>
+          <td style={td}>{missing.length ? missing.map((m, i) => <span key={i} style={{ display: "inline-block", margin: "0 4px 3px 0", padding: "1px 7px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "#FFF8E6", color: "#8A5A00", whiteSpace: "nowrap" }}>{m}</span>) : <span style={{ fontSize: 11, color: "#94A3B8" }}>nothing</span>}</td>
+        </tr>; })}</tbody>
+    </table>
+  </Card>;
 }
-
 
 // v6.18.12 (#2): keep a single auto-managed "customs" cost line in sync with the
 // shipment's structured customs section, so the clearance cost flows into allocation
@@ -1069,7 +1071,7 @@ export function Stage({ title, subtitle, done, total, open, onToggle, children }
       <span style={{ fontSize: 13, fontWeight: 800, color: "#111" }}>{title}</span>
       {subtitle && <span style={{ fontSize: 11, color: "#94A3B8" }}>{subtitle}</span>}
       <span style={{ flex: 1 }} />
-      {total > 0 && <span style={{ fontSize: 10.5, color: complete ? "#166534" : "#64748B" }}>{done}/{total}</span>}
+      {total > 0 && <span style={{ fontSize: 10, color: complete ? "#166534" : "#64748B" }}>{done}/{total}</span>}
       <span style={{ fontSize: 11, color: "#94A3B8" }}>{open ? "\u25B2" : "\u25BC"}</span>
     </button>
     {open && <div style={{ padding: "4px 16px 16px" }}>{children}</div>}
@@ -1104,7 +1106,7 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
   }));
   const isSeaish = ["sea", "multimodal"].includes(String(shipment.mode || "").toLowerCase());
   if (!isSeaish) return null;
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11.5 };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 6, padding: "5px 8px", fontSize: 11 };
   return (
     <Card>
       <SectionTitle right={<span style={{ display: "flex", gap: 6 }}>
@@ -1123,7 +1125,7 @@ export function ForwarderReports({ shipment, orders = [], onStuffing, onDevannin
             <input placeholder="Seal" value={r.seal} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, seal: e.target.value } : x))} style={inp} />
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {trucks.map((t: any) => { const f = r.feeders.find((z: any) => String(z.truckId) === String(t.id));
-                return <label key={String(t.id)} style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11.5, border: "1px solid " + (f ? "#7C3AED" : "#E5E7EB"), borderRadius: 6, padding: "2px 6px" }}>
+                return <label key={String(t.id)} style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11, border: "1px solid " + (f ? "#7C3AED" : "#E5E7EB"), borderRadius: 6, padding: "2px 6px" }}>
                   <input type="checkbox" checked={!!f} onChange={() => setRows(rs => rs.map((x, k) => k === i ? { ...x, feeders: f ? x.feeders.filter((z: any) => String(z.truckId) !== String(t.id)) : [...x.feeders, { truckId: t.id }] } : x))} />
                   {t.truckPlate || `truck ${t.id}`}{f && <input type="number" placeholder="split kg" value={f.kg ?? ""} onChange={e => setRows(rs => rs.map((x, k) => k === i ? { ...x, feeders: x.feeders.map((z: any) => String(z.truckId) === String(t.id) ? { ...z, kg: parseNum(e.target.value, 0) || undefined } : z) } : x))} style={{ ...inp, width: 68, padding: "1px 4px" }} />}
                 </label>; })}
@@ -1176,9 +1178,9 @@ export function cargoVariance(sh: any, types: any[]): { told: { pallets: number;
 
 
 
-export const th = { padding: "8px 8px", fontSize: 10.5, letterSpacing: "0.04em", textTransform: "uppercase", fontWeight: 800 };
+export const th = { padding: "8px 8px", fontSize: 10, letterSpacing: "0.04em", textTransform: "uppercase", fontWeight: 800 };
 export const td = { padding: "9px 8px", verticalAlign: "top" };
-export function pillStyle(bg, color) { return { background: bg, color, padding: "3px 8px", borderRadius: 6, fontSize: 10.5, fontWeight: 800 }; }
+export function pillStyle(bg, color) { return { background: bg, color, padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 800 }; }
 export function ChecklistLine({ ok, label, warnText = "" }: any) {
   return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F1F5F9" }}><div style={{ fontSize: 12, color: "#444" }}>{label}</div><div style={{ fontSize: 11, fontWeight: 800, color: ok ? "#16A34A" : "#D97706" }}>{ok ? "OK" : (warnText || "Open")}</div></div>;
 }
@@ -1201,6 +1203,7 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
   onOpenPacking = null,   // v6.99.56 (A-PL-5)
   onStartClaim = null,
   initialSelectedNumber = "",
+  initialEdit = false,   // v7.23.5 (A-SHV-1): open the editor directly (the suites' way in) — a link now opens the shipment's page
   invoices: extInvoices = [],
   inspections: extInspections = [],
   planningSheets = [], setPlanningSheets = null, planningSheetLog = [], setPlanningSheetLog = null, productCatalog: productCatalogProp = [], userName: userNameProp = "",   // v6.99.63   // v6.99.55 (BD-1): the board reads the inspection header for step 4
@@ -1227,7 +1230,7 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
   const setOrders = extSetOrders || setLocalOrders;
   const contacts = React.useMemo(() => extContacts || [], [extContacts]);
 
-  const [selectedId, setSelectedId] = useState((shipments[0] || {}).id || null);
+  const [selectedId, setSelectedId] = useState(() => ((initialSelectedNumber && (shipments || []).find((x: any) => String(x.number) === String(initialSelectedNumber))) || shipments[0] || {}).id || null);   // v7.23.5 (A-SHV-1)
   const [boardView, setBoardView] = useState(false);   // v6.99.55 (BD-1): list · detail · BOARD
   const [query, setQuery] = useState("");
   const [modeFilter, setModeFilter] = useState("All");
@@ -1241,7 +1244,8 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
   // v6.99.124 (A-LP-1): load plans retired — no plan number on the list any more
   // v6.99.42: a shipment can be opened from another module ("Open" on the PO's supplier-truck box)
   const [showCustomsImport, setShowCustomsImport] = useState(false);   // v6.99.72 (A-CU-3)
-  const [editShipment, setEditShipment] = useState<any>(() => (initialSelectedNumber ? (extShipments || []).find((x: any) => String(x.number) === String(initialSelectedNumber)) || null : null));
+  const [editShipment, setEditShipment] = useState<any>(() => (initialEdit && initialSelectedNumber ? (extShipments || []).find((x: any) => String(x.number) === String(initialSelectedNumber)) || null : null));   // v7.23.5 (A-SHV-1): a link from another module opens the shipment's PAGE; only initialEdit opens the editor
+  const [pageOpen, setPageOpen] = useState<boolean>(() => !!(initialSelectedNumber && (extShipments || []).some((x: any) => String(x.number) === String(initialSelectedNumber))));
   const [printShipment, setPrintShipment] = useState(null);
   const [protocolShipment, setProtocolShipment] = useState<any>(null);
   const [emailShipment, setEmailShipment] = useState(null);
@@ -1711,7 +1715,7 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
     {shDialogNode}
     <ModuleHeader title="Shipments" right={<>
             <div style={{ display: "inline-flex", border: "1px solid #CBD5E1", borderRadius: 8, overflow: "hidden" }}>
-              {[["list", "List & detail"], ["board", "Weekly board"]].map(([k, l]) => <button key={k} onClick={() => setBoardView(k === "board")} style={{ padding: "4px 10px", border: "none", fontSize: 11.5, fontWeight: 800, cursor: "pointer", background: (k === "board") === boardView ? "#0F172A" : "#fff", color: (k === "board") === boardView ? "#fff" : "#475569" }}>{l}</button>)}
+              {[["list", "List"], ["board", "Weekly board"]].map(([k, l]) => <button key={k} onClick={() => setBoardView(k === "board")} style={{ padding: "4px 10px", border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer", background: (k === "board") === boardView ? "#0F172A" : "#fff", color: (k === "board") === boardView ? "#fff" : "#475569" }}>{l}</button>)}
             </div>
       <div style={{ display: "flex", gap: 8 }}><ActionButton action="importCsv" label="Import customs files" title="v6.99.72 (A-CU-3): drop the agent's files — release (CC529C), exit confirmation (CC599C), SAD copy — each finds its truck" onClick={() => setShowCustomsImport(true)} /><SmallButton onClick={() => exportRowsToXlsx(`shipments_${xlsStamp()}`, filtered, [{ key: "number", label: "Shipment" }, { key: "purpose", label: "Purpose" }, { key: "arrangedBy", label: "Arranged by" }, { key: "mode", label: "Mode" }, { key: "status", label: "Status" }, { key: "poRefs", label: "POs", fmt: (v: any) => (v || []).join(", ") }, { key: "soRefs", label: "SOs", fmt: (v: any) => (v || []).join(", ") }, { key: "legs", label: "Units", fmt: (v: any) => (v || []).flatMap((l: any) => (l.vehicles || []).map((u: any) => `${u.truckPlate || u.containerNumber || "unit"} ${Math.round(Number(u.qtyKg) || 0)} kg${u.loadedAt ? " loaded " + u.loadedAt : ""}`)).join(" | ") }, { key: "actualLoadingDate", label: "Loaded" }, { key: "actualDeliveryDate", label: "Delivered" }, { key: "costs", label: "Costs PLN", fmt: (v: any) => (v || []).reduce((s: number, c: any) => s + (Number(c.amountPLN) || 0), 0) }, { key: "billingStatus", label: "Billing" }], "Shipments")} title="v6.99.0: exports the rows as filtered">Export file (Excel)</SmallButton><SmallButton onClick={() => setShowCreate(true)} kind="green">+ New shipment</SmallButton></div>
     </>} />   {/* v6.99.61 (A-HD-1) */}
@@ -1731,7 +1735,7 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
           {[["shipments", `Shipments (${filtered.length})`]].map(([k, label]) => (
             <button key={k} onClick={() => setTab(k)} style={{
               border: "none", background: "transparent", cursor: "pointer", padding: "6px 2px", marginRight: 14,
-              fontSize: 12.5, fontWeight: tab === k ? 800 : 600, color: tab === k ? "#111" : "#94A3B8",
+              fontSize: 12, fontWeight: tab === k ? 800 : 600, color: tab === k ? "#111" : "#94A3B8",
               borderBottom: tab === k ? "2px solid #111" : "2px solid transparent",
             }}>{label}</button>
           ))}
@@ -1745,21 +1749,12 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
 
     {/* v6.99.124 (A-LP-1, owner): the Load plans tab retired — the shipment editor's trucks, containers and forwarder reports do what it did */}
 
-    <div style={{ flex: 1, overflow: "hidden", padding: "16px 28px 24px", display: tab === "shipments" ? "block" : "none" }}>
-      <div style={{ height: "100%", display: "grid", gridTemplateColumns: "390px 1fr", gap: 16 }}>
-        <Card style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <div style={{ padding: 14, borderBottom: "1px solid #E5E7EB", display: "grid", gap: 10 }}>
-            <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}<option value={CUSTOMS_OPEN}>{CUSTOMS_OPEN} ({customsOpenSet.size})</option><option value={TERMS_REVIEW}>{TERMS_REVIEW} ({termsAll.length})</option></Sel></div>
-          </div>
-          <div style={{ overflow: "auto", flex: 1 }}>
-            {statusFilter === TERMS_REVIEW   // v7.20.0 (A-INC-2): the review — one line per inconsistency, sales and purchases included; a shipment line opens its editor
-              ? <TermsReviewList findings={termsShown} onOpenShipment={(no: string) => { const sh = shipments.find((x: any) => String(x.number) === String(no)); if (sh) { setSelectedId(sh.id); setEditShipment(sh); } }} />
-              : filtered.length ? newestFirst(filtered).map(sh => <ShipmentListRow key={sh.id} sh={sh} contacts={contacts} active={selected?.id === sh.id} onClick={() => setSelectedId(sh.id)} />) : <EmptyState title="No shipments" sub="Adjust filters or create a shipment." />}
-          </div>
-        </Card>
-        <div style={{ overflow: "auto", paddingRight: 2 }}>
-          {selected ? <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} termsFindings={termsAll.filter(x => x.shipment === String(selected.number))} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
+    <div style={{ flex: 1, overflow: "auto", padding: "16px 28px 24px", display: tab === "shipments" ? "block" : "none" }}>
+      {pageOpen && selected ? (<>   {/* v7.23.5 (A-SHV-1, owner approved 13 Oct): the shipment as its own page, like a PO or an SO */}
+        <button type="button" onClick={() => setPageOpen(false)} style={{ border: "none", background: "none", padding: "2px 0", marginBottom: 8, fontSize: 13, fontWeight: 600, color: "#2563EB", cursor: "pointer" }}>← Shipments</button>
+          <ShipmentDetail packagingTypes={packagingTypes} shipment={selected} termsFindings={termsAll.filter(x => x.shipment === String(selected.number))} contacts={contacts} orders={orders} pos={pos} lots={lots} onEdit={() => setEditShipment(selected)} onPrint={() => setPrintShipment(selected)} onLoadingProtocol={() => setProtocolShipment(selected)} onRaiseClaim={() => raiseTransportClaim(selected)} onEmail={() => setEmailShipment(selected)} onQuickStatus={(status) => quickStatus(selected, status)} onSendBilling={() => sendToBilling(selected)} onAllocateCosts={() => allocateCosts(selected)} onApplyInventory={() => applyInventoryMovement(selected)}
+            allShipments={shipments}   /* v7.23.6 (A-SHV-1): one DHL for several shipments of a client */
+            onSetOriginals={(nos: string[], dhl: string, date: string) => { setShipments((prev: any[]) => (prev || []).map((s: any) => nos.includes(String(s.number)) ? { ...s, docsCourierTrackingNo: dhl, docsCourierDate: date } : s)); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: nos.join(", "), action: "updated", summary: `Originals sent by DHL ${dhl} on ${date}: ${nos.join(", ")}` }); setToast(`DHL ${dhl} saved on ${nos.length} shipment(s): ${nos.join(", ")}.`); }}
             onMarkTOSent={(key: string) => { updateShipment(selected.id, (s: any) => ({ ...s, transportOrders: { ...(s.transportOrders || {}), [key]: { sentAt: todayISO(), told: sentCargoSnapshot(s, packagingTypes || []) } }, confirmationStatus: "Sent", confirmationSentAt: s.confirmationSentAt || todayISO() })); recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "status", summary: `Transport order ${key} marked sent` }); }}
             onStuffing={(rows: any[]) => { updateShipment(selected.id, (s: any) => applyStuffingReport(s, rows, { nextId })); setToast(`${selected.number}: ${rows.length} container(s) created from the forwarder's report.`); }}
             onDevanning={(rows: any[]) => {
@@ -1769,9 +1764,16 @@ export default function Shipments({ archive = null, claims: extClaims = [], init
               setShipments((prev: any[]) => [...(prev || []), ...spawned]);
               recordAudit({ module: "Shipments", docType: "Shipment", docNumber: selected.number, action: "created", summary: `De-vanning report → ${spawned.map((s: any) => s.number + " (" + s.purpose + ")").join(", ")}` });
               setToast(`${spawned.length} onward shipment(s) created from the de-vanning report: ${spawned.map((s: any) => s.number).join(", ")}.`);
-            }} /> : <EmptyState title="No shipment selected" sub="Create or select a shipment to view details." />}
+            }} />
+      </>) : (<>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) 160px 200px", gap: 8, marginBottom: 12 }}>
+          <Inp value={query} onChange={e => setQuery(e.target.value)} placeholder="Search shipment, PO, SO, lot, provider..." />
+          <Sel value={modeFilter} onChange={e => setModeFilter(e.target.value)}><option>All</option>{HEADER_MODES.map(m => <option key={m}>{m}</option>)}</Sel><Sel value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Open</option><option>All</option>{STATUS_ORDER.map(s => <option key={s} value={s}>{statusWord(s)}</option>)}<option value={CUSTOMS_OPEN}>{CUSTOMS_OPEN} ({customsOpenSet.size})</option><option value={TERMS_REVIEW}>{TERMS_REVIEW} ({termsAll.length})</option></Sel>
         </div>
-      </div>
+        {statusFilter === TERMS_REVIEW   // v7.20.0 (A-INC-2): the review; a shipment line opens that shipment's page (v7.23.5)
+          ? <Card style={{ padding: 0 }}><TermsReviewList findings={termsShown} onOpenShipment={(no: string) => { const sh = shipments.find((x: any) => String(x.number) === String(no)); if (sh) { setSelectedId(sh.id); setPageOpen(true); } }} /></Card>
+          : filtered.length ? <ShipmentTable rows={newestFirst(filtered)} contacts={contacts} orders={orders} pos={pos} termsAll={termsAll} onOpen={(sh: any) => { setSelectedId(sh.id); setPageOpen(true); }} /> : <EmptyState title="No shipments" sub="Adjust filters or create a new shipment." />}
+      </>)}
     </div>
 
     {showCreate && <CreateShipmentModal productCatalog={productCatalogProp} pos={pos} orders={orders} lots={lots} contacts={contacts} shipments={shipments} onCancel={() => setShowCreate(false)} onCreate={createShipment} />}

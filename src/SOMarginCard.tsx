@@ -79,7 +79,7 @@ export default function SOMarginCard({
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#AAA", letterSpacing: "0.06em" }}>PROFITABILITY · P&L</div>
-          <div style={{ fontSize: 10.5, color: "#888", marginTop: 2 }}>
+          <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>
             {mode === "forecast"
               ? "Forecast — full SO commitment, expected costs"
               : "Actual — shipped quantities, settled costs"}
@@ -122,7 +122,7 @@ export default function SOMarginCard({
         </div>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 10, color: "#888" }}>NET P/L</div>
-          <div style={{ fontSize: 19, fontWeight: 700, color: marginColor, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={fmtPLN(margin.netMarginPLN)}>{fmtPLN(margin.netMarginPLN)}</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: marginColor, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontVariantNumeric: "tabular-nums" }} title={fmtPLN(margin.netMarginPLN)}>{fmtPLN(margin.netMarginPLN)}</div>
           <div style={{ fontSize: 12, color: marginColor, fontWeight: 600 }}>{fmtPct(margin.netMarginPct)}</div>
           {margin.currency !== "PLN" && (
             <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={fmtSO(margin.netMarginSO, margin.currency)}>{fmtSO(margin.netMarginSO, margin.currency)}</div>
@@ -147,7 +147,7 @@ export default function SOMarginCard({
               <div title={`Net P/L: ${fmtPLN(margin.netMarginPLN)}`} style={{ flex: margin.netMarginPLN, background: "#16A34A" }} />
             )}
           </div>
-          <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 10.5, color: "#666", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 14, marginTop: 6, fontSize: 10, color: "#666", flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <div style={{ width: 8, height: 8, background: "#7C3AED", borderRadius: 2 }} />
               <span>COGS {fmtPLN(margin.cogsPLN)}</span>
@@ -200,16 +200,16 @@ export default function SOMarginCard({
 
       {/* Detailed breakdown — collapsible would be nice but kept open for now */}
       <details>
-        <summary style={{ fontSize: 11.5, color: "#666", fontWeight: 600, cursor: "pointer", padding: "4px 0" }}>
+        <summary style={{ fontSize: 11, color: "#666", fontWeight: 600, cursor: "pointer", padding: "4px 0" }}>
           Show cost breakdown
         </summary>
-        <div style={{ marginTop: 10, fontSize: 11.5 }}>
+        <div style={{ marginTop: 10, fontSize: 11 }}>
           {/* Revenue lines */}
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.04em", marginBottom: 4 }}>REVENUE LINES</div>
             {margin.revenueLines.map((l, i) => (
               <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F9FAFB", color: l.amountSO === 0 ? "#AAA" : "#444" }}>
-                <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10 }}> — {l.note}</span> : null}</span>
                 <span style={{ fontWeight: 500 }}>{fmtSO(l.amountSO || 0, margin.currency)}</span>
               </div>
             ))}
@@ -221,7 +221,7 @@ export default function SOMarginCard({
               <div style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.04em", marginBottom: 4 }}>COGS LINES</div>
               {margin.cogsLines.map((l, i) => (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F9FAFB", color: "#444" }}>
-                  <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                  <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10 }}> — {l.note}</span> : null}</span>
                   <span style={{ fontWeight: 500 }}>{fmtPLN(l.amountPLN)}</span>
                 </div>
               ))}
@@ -234,7 +234,7 @@ export default function SOMarginCard({
               <div style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.04em", marginBottom: 4 }}>DIRECT / LOGISTICS COSTS</div>
               {margin.directLines.map((l, i) => (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F9FAFB", color: "#444" }}>
-                  <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                  <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10 }}> — {l.note}</span> : null}</span>
                   <span style={{ fontWeight: 500 }}>{fmtPLN(l.amountPLN)}</span>
                 </div>
               ))}
@@ -247,7 +247,7 @@ export default function SOMarginCard({
               <div style={{ fontSize: 10, fontWeight: 700, color: "#AAA", letterSpacing: "0.04em", marginBottom: 4 }}>ALLOCATED OPERATIONAL OVERHEAD</div>
               {margin.overheadLines.map((l, i) => (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #F9FAFB", color: "#444" }}>
-                  <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10.5 }}> — {l.note}</span> : null}</span>
+                  <span>{l.label}{l.note ? <span style={{ color: "#999", fontSize: 10 }}> — {l.note}</span> : null}</span>
                   <span style={{ fontWeight: 500 }}>{fmtPLN(l.amountPLN)}</span>
                 </div>
               ))}

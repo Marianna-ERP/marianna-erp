@@ -140,11 +140,14 @@ export function DocRef({ num, cancelledSet, style = {}, prefix = "", from = "" }
 // ── v6.99.79 (A-NAV-1, owner 28 Sept): a document number takes you to its document ─────────────────────────────────
 // App provides `open`; any number it can resolve (PO, SO, shipment, lot, invoice) becomes a link. Outside App (tests,
 // print) nothing changes: the number renders exactly as before. A click never also triggers the row it sits in.
-export const DocNavContext = React.createContext<null | { open: (num: string, from?: string) => void; canOpen: (num: string) => boolean }>(null);
+export const DocNavContext = React.createContext<null | { open: (num: string, from?: string) => void; canOpen: (num: string) => boolean; kindOf?: (num: string) => string }>(null);
+// v7.23.3 (A-UI-1, owner 13 Oct): ONE COLOUR PER KIND OF DOCUMENT, on every screen — applied by the link itself, so no screen picks
+// its own; no icon before a number; the number in the app's own font, with even-width figures
+export const DOC_COLOURS: Record<string, string> = { pos: "#1D4ED8", orders: "#15803D", shipments: "#0E7490", lots: "#B45309", invoices: "#7C3AED", claims: "#BE123C" };
 export function DocLink({ num, from = "", children }: any) {
   const nav = React.useContext(DocNavContext);
   if (!nav || !nav.canOpen(String(num))) return <>{children}</>;
-  return <a href={`#open/${encodeURIComponent(String(num))}`} data-doclink="1" title={`Open ${num}`} onClick={e => { e.preventDefault(); e.stopPropagation(); nav.open(String(num), from ? String(from) : ""); }} style={{ textDecoration: "none", cursor: "pointer" }}>{children}</a>;
+  return <a href={`#open/${encodeURIComponent(String(num))}`} data-doclink="1" title={`Open ${num}`} onClick={e => { e.preventDefault(); e.stopPropagation(); nav.open(String(num), from ? String(from) : ""); }} style={{ textDecoration: "none", cursor: "pointer", color: DOC_COLOURS[nav.kindOf ? nav.kindOf(String(num)) : ""] || undefined, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{children}</a>;
 }
 
 // ── In-app dialogs (P2-6) ────────────────────────────────────────────────────
@@ -158,7 +161,7 @@ function DialogShell({ tone, title, message, buttons, input = null }: any) {
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: accent, flexShrink: 0 }} />
           <div style={{ fontSize: 14, fontWeight: 800, color: "#111" }}>{title}</div>
         </div>
-        <div style={{ padding: "8px 20px 16px", fontSize: 12.5, color: "#444", lineHeight: 1.55, whiteSpace: "pre-line" }}>{message}</div>
+        <div style={{ padding: "8px 20px 16px", fontSize: 12, color: "#444", lineHeight: 1.55, whiteSpace: "pre-line" }}>{message}</div>
         {input && <div style={{ padding: "0 20px 16px" }}>{input}</div>}
         <div style={{ padding: "12px 20px", background: "#F8FAFC", display: "flex", justifyContent: "flex-end", gap: 8 }}>{buttons}</div>
       </div>

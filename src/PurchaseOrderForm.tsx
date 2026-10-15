@@ -154,7 +154,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                 <StatusBadge status={order.status || "Draft"} />
                 {order.buyIncoterm && <FlowBadge order={order} />}
               </div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.id ? order.number : "New Purchase Order"}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#111", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{order.id ? order.number : "New Purchase Order"}</div>
               <div style={{ fontSize: 12, color: "#AAA", marginTop: 2 }}>{isLocked ? "Locked — commercial terms can't change; downstream records depend on this PO" : order.status !== "Draft" && order.id ? "Confirmed — still editable (nothing depends on it yet); edits re-sync the expected lot" : "Draft — all fields editable"}</div>
             </div>
             <div style={{ textAlign: "right", flex: "0 0 auto", whiteSpace: "nowrap" }}>
@@ -166,7 +166,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
           </div>
 
           {isLocked && (
-            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12.5, color: "#92400E", lineHeight: 1.5 }}>
+            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
               🔒 <strong>This PO is locked.</strong> Its commercial terms (product, quantities, supplier, incoterm, flow, pricing) can't be changed because something downstream already depends on it{(() => {
                 const reasons = [hasLinkedSO && "a sales order is sourced from it", hasShipment && "a shipment references it", lotReceivedOrMoved && "its goods have been received or moved"].filter(Boolean);
                 return reasons.length ? ` — ${reasons.join(", ")}` : "";
@@ -174,7 +174,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
             </div>
           )}
           {!isLocked && order.id && order.status !== "Draft" && (
-            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 12.5, color: "#1E40AF", lineHeight: 1.5 }}>
+            <div style={{ marginBottom: 16, padding: "11px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, fontSize: 12, color: "#1E40AF", lineHeight: 1.5 }}>
               ✎ <strong>Confirmed, and still editable.</strong> Nothing depends on this PO yet (no sales order, no shipment, goods not received), so you can still change its details — saving will re-sync the expected inventory lot. ⚠ As soon as you link a sales order, create a shipment, or receive goods, THIS PO LOCKS COMPLETELY — every field becomes read-only and can't be changed again. Get the details right now. (Reverting to Draft withdraws the not-yet-received lot.)
             </div>
           )}
@@ -187,7 +187,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
               <div>
                 <Lbl>PO number <span style={{ color: "#16A34A", fontWeight: 500 }}>· system number{!order.id ? ", auto-generated" : ""}</span></Lbl>
                 {/* BP-6: number is a controlled document id — display/copy only, never edited. */}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13, fontWeight: 700, color: "#334155" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px", border: "1px solid #E5E7EB", borderRadius: 8, background: "#F8FAFC", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 700, color: "#334155" }}>
                   <span>{order.number || "PO-2026-…"}</span>
                   <button type="button" onClick={() => { try { navigator.clipboard.writeText(order.number || ""); } catch {} }} title="Copy PO number" style={{ marginLeft: "auto", border: "1px solid #E5E7EB", background: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, color: "#64748B" }}>Copy</button>
                 </div>
@@ -267,7 +267,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                       return (<>
                         <Lbl>{pool.label} *</Lbl>
                         <LocationPicker disabled={isLocked} value={order.destinationLocationId ?? order.destinationText ?? ""} contacts={contacts} preferredKinds={pool.types} placeholder={`— ${pool.label.toLowerCase()} —`} onChange={(r: any) => setOrder((o: any) => ({ ...o, destinationLocationId: r.id, destinationText: r.name }))} />
-                        <div style={{ fontSize: 10.5, color: "#6366F1", marginTop: 5 }}>{order.buyIncoterm ? namedPlaceGuide(order.buyIncoterm, "buy").hint : "Select the purchase incoterm — it sets what to fill here."}</div>
+                        <div style={{ fontSize: 10, color: "#6366F1", marginTop: 5 }}>{order.buyIncoterm ? namedPlaceGuide(order.buyIncoterm, "buy").hint : "Select the purchase incoterm — it sets what to fill here."}</div>
                       </>);
                     })()}
                   </div>
@@ -280,7 +280,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                   const placeName = order.destinationText || (locationById(order.destinationLocationId)?.name) || "";
                   if (!order.buyIncoterm) return null;
                   return (
-                    <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF", fontSize: 11.5, color: "#4338CA", lineHeight: 1.45 }}>
+                    <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#FBFCFF", border: "1px dashed #E0E7FF", fontSize: 11, color: "#4338CA", lineHeight: 1.45 }}>
                       {incotermLine(order.buyIncoterm, "buy", placeName)}
                     </div>
                   );
@@ -294,13 +294,13 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                   const warn = poWarnings(order);
                   if (!gate && !warn.length) {
                     return order.status === "Draft" ? (
-                      <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#F0FDF4", border: "1px solid #BBF7D0", fontSize: 11.5, color: "#166534" }}>
+                      <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "#F0FDF4", border: "1px solid #BBF7D0", fontSize: 11, color: "#166534" }}>
                         ✓ Ready to confirm — terms complete, every line has what the protocol and customs will need.
                       </div>
                     ) : null;
                   }
                   return (
-                    <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, fontSize: 11.5,
+                    <div style={{ marginTop: 10, padding: "9px 11px", borderRadius: 8, fontSize: 11,
                       background: gate ? "#FEF2F2" : "#FFFBEB",
                       border: `1px solid ${gate ? "#FECACA" : "#FDE68A"}`,
                       color: gate ? "#991B1B" : "#92400E" }}>
@@ -338,7 +338,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
                     {PAYMENT_BASES.map(b => <option key={b.value} value={b.value}>{b.value === "INVOICE" ? "days from invoice date" : b.label}</option>)}
                   </Sel>
                 </div>
-                <div style={{ fontSize: 10.5, color: "#94A3B8", marginTop: 4 }}>{paymentTermsLabel(paymentBasisOf(order), order.paymentDays ?? paymentDaysFor(order, order.supplier))} — printed on the order and used for the invoice's due date</div>
+                <div style={{ fontSize: 10, color: "#94A3B8", marginTop: 4 }}>{paymentTermsLabel(paymentBasisOf(order), order.paymentDays ?? paymentDaysFor(order, order.supplier))} — printed on the order and used for the invoice's due date</div>
               </div>
               <div>
                 <Lbl>Pricing</Lbl>

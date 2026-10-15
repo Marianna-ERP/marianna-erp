@@ -51,10 +51,15 @@ export function productsMatch(a: any, b: any, varA?: any, varB?: any): boolean {
   if (va && vb) return va === vb;
   return true;
 }
-export function productVarietyKey(x: any): string {
-  const p = normalizeProduct(x?.product);
-  const v = normalizeProduct(x?.variety);
-  return v ? `${p}|${v}` : p;
+/** v7.23.2 (A-SOL-1, owner 13 Oct): is this lot a true source for this sale line? Same item and the same variety (both written),
+ *  and size, class, origin and coloration agree wherever both carry one. A lot without a variety is never a match. */
+export function sourceMatch(line: any, lot: any): "match" | "no-variety" | "different" {
+  const n = (v: any) => String(v ?? "").trim().toLowerCase();
+  if (n(line?.product) !== n(lot?.product)) return "different";
+  if (!n(lot?.variety)) return "no-variety";
+  if (!n(line?.variety) || n(line.variety) !== n(lot.variety)) return "different";
+  const agree = (a: any, b: any) => !n(a) || !n(b) || n(a) === n(b);
+  return agree(line.size, lot.size) && agree(line.grade || line.quality, lot.quality) && agree(line.origin, lot.origin) && agree(line.coloration, lot.coloration) ? "match" : "different";
 }
 export function soClientName(o: any): string {
   if (o?.clientName) return o.clientName;
@@ -246,7 +251,6 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
   // lot's poLineId; legacy lots without one fall back to the old
   // product-keyed received map (applied only in the other-sources path).
   const goneKgByPOLine: Record<string, number> = {};
-  const receivedKgByPOProduct: Record<string, number> = {};
   // v6.51.0 (ROOT CAUSE B): exclude the sales order being evaluated from the
   // "already gone" figure. Its own shipped goods are what IT sold — subtracting
   // them made a shipped SO look at its own PO line and see nothing available
@@ -280,15 +284,11 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
     if (l.poLineId != null) {
       const k2 = `${l.poRef}::${l.poLineId}`;
       goneKgByPOLine[k2] = (goneKgByPOLine[k2] || 0) + gone;
-    } else {
-      const k = `${l.poRef}::${productVarietyKey(l)}`;  // FB-12: keyed by product+variety
-      receivedKgByPOProduct[k] = (receivedKgByPOProduct[k] || 0) + Math.max(0, (l.receivedKg ?? 0));
     }
   });
 
   return (soItems || []).map((it: any) => {
     const lineQty = parseFloat(it.qty) || 0;
-    const lineKey = productVarietyKey(it); // FB-12
 
     let primaryAvailable = 0;
     let primaryProductMismatch = false;
@@ -321,34 +321,12 @@ export function computeLineAvailability(soItems: any[], allOrders: any[], curren
       }
     }
 
-    let otherStockKg = 0, otherPOKg = 0;
-    LOTS.forEach(lot => {
-      if (productVarietyKey(lot) !== lineKey) return;  // FB-12: product+variety
-      if (it.sourceType === "STOCK" && it.sourceRef === lot.number) return;
-      otherStockKg += lotRemaining(lot.number);
-    });
-    PO_REFS.forEach(po => {
-      (po.items || []).forEach((line: any) => {
-        if (productVarietyKey(line) !== lineKey) return;  // FB-12: product+variety
-        if (it.sourceType === "PO" && it.sourceRef === po.number && (it.sourceLineId ?? 1) === line.id) return;
-        // v6.45.0 (D): per-line gone kg is already inside poLineRemaining; the
-        // product-keyed received map now only covers legacy lots without poLineId.
-        const legacyReceived = receivedKgByPOProduct[`${po.number}::${productVarietyKey(line)}`] || 0;
-        otherPOKg += Math.max(0, poLineRemaining(po.number, line.id) - legacyReceived);
-      });
-    });
-
-    const otherSourcesAvailable = otherStockKg + otherPOKg;
-    const combinedAvailable = primaryAvailable + otherSourcesAvailable;
+    // v7.23.2 (A-SOL-1, owner 13 Oct): one statement per line — what its lot still has free; no "other sources", no "combined" figure
     const primaryShortfallAmount = Math.max(0, lineQty - primaryAvailable);
 
     return {
       lineQty,
       primaryAvailable: Math.round(primaryAvailable * 100) / 100,
-      otherStockKg: Math.round(otherStockKg * 100) / 100,
-      otherPOKg: Math.round(otherPOKg * 100) / 100,
-      otherSourcesAvailable: Math.round(otherSourcesAvailable * 100) / 100,
-      combinedAvailable: Math.round(combinedAvailable * 100) / 100,
       overage: Math.round(primaryShortfallAmount * 100) / 100,
       hasOverage: primaryShortfallAmount > 0.01,
       grade: gradeOfLine,                     // v6.99.22 (G-1): which class this line promises

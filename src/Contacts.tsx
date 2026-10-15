@@ -279,7 +279,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               {/* v6.99.40 (A-ADDR, owner): an address is four facts. They print as three lines on every document,
                   map 1:1 to Fakturownia's fields, and let a city be filtered. The old one-line text is kept until the DDL. */}
               {/* v7.3.5 (A-LOC-1, owner 7 Oct): the legal address is the address on documents; ticked, it is also offered as a loading / delivery place */}
-              <label style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#334155", margin: "4px 0 8px" }}>
+              <label style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#334155", margin: "4px 0 8px" }}>
                 <input type="checkbox" checked={form.isPlace !== undefined ? !!form.isPlace : (() => { const t = [form.type, ...(form.additionalTypes || [])]; return t.includes("Supplier") || t.includes("Client") || t.includes("Warehouse"); })()} onChange={e => setForm((f: any) => ({ ...f, isPlace: e.target.checked }))} />
                 <span><b>Goods are loaded / delivered at this address</b> <span style={{ color: "#94A3B8" }}>— offered in the location pickers as this company's place (on for producers, suppliers, clients and warehouses unless you untick it)</span></span>
               </label>
@@ -290,13 +290,13 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
               </div>
               <div style={{ gridColumn: "span 2" }}><Lbl>Address note <span style={{ color: "#AAA", fontWeight: 400 }}>· district, market, PO box — whatever the postcode grid does not hold</span></Lbl>
                 <Inp value={form.addr?.note ?? ""} onChange={e => setAddr("note", e.target.value)} placeholder="Central Fruits & Vegetable Market" />
-                {form.addressNeedsCheck && <div style={{ fontSize: 10.5, color: "#B45309", marginTop: 3 }}>⚠ this address came from one line and could not be split — check the parts above (the original read: {form.address})</div>}
+                {form.addressNeedsCheck && <div style={{ fontSize: 10, color: "#B45309", marginTop: 3 }}>⚠ this address came from one line and could not be split — check the parts above (the original read: {form.address})</div>}
               </div>
               <div><Lbl>Country</Lbl><Sel value={form.country || ""} onChange={e => { const v = e.target.value; setForm((f: any) => ({ ...f, country: v, addr: { ...(f.addr || {}), country: v } })); }} title="v6.99.14: the list is edited in the Countries tab"><option value="">— country —</option><optgroup label="EU">{readCountries().filter(x => x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup><optgroup label="Other">{readCountries().filter(x => !x.eu).sort((a, b) => a.name.localeCompare(b.name, "en")).map(x => <option key={x.iso}>{x.name}</option>)}</optgroup>{form.country && !readCountries().some(x => x.name === form.country) && <option value={form.country}>{form.country}</option>}</Sel></div>{false && <Inp value={form.country} onChange={e => sf("country", e.target.value)} placeholder="e.g. Poland" />}
               <div><Lbl>NIP / Local Tax ID / EU VAT number</Lbl><Inp value={form.nip || form.vatEuId || ""} onChange={e => sf("nip", e.target.value)} placeholder="e.g. 5252842787 or PL5252842787" /></div>
               {/* v6.99.2 (CP-2/CP-3/CP-4/CP-7): TERMS block · people with role & e-mail · archive · producer agreements */}
               <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 10px" }}>
-                <div style={{ gridColumn: "1 / -1", fontSize: 10.5, fontWeight: 700, color: "#94A3B8" }}>TERMS (inherited by documents)</div>
+                <div style={{ gridColumn: "1 / -1", fontSize: 10, fontWeight: 700, color: "#94A3B8" }}>TERMS (inherited by documents)</div>
                 <div><Lbl>Payment terms (days) <span style={{ color: "#94A3B8", fontWeight: 400 }}>· from invoice</span></Lbl><Inp type="number" value={form.terms?.paymentDays ?? form.paymentTermsDays ?? ""} onChange={e => { const v = parseFloat(e.target.value) || 0; sf("terms", { ...(form.terms || {}), paymentDays: v }); sf("paymentTermsDays", v); }} /></div>
               <div><Lbl>Credit limit (PLN) — clients</Lbl><Inp value={form.creditLimitPLN ?? ""} onChange={e => sf("creditLimitPLN", e.target.value)} type="number" placeholder="blank = unlimited" /></div>
                 <div><Lbl>Notice days (claims)</Lbl><Inp type="number" value={form.terms?.noticeDays ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), noticeDays: parseFloat(e.target.value) || 0 })} placeholder="legal default" /></div>
@@ -304,7 +304,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
                 <div><Lbl>Default currency</Lbl><Sel value={form.terms?.defaultCurrency || form.defaultCurrency || "PLN"} onChange={e => sf("terms", { ...(form.terms || {}), defaultCurrency: e.target.value })}>{["PLN", "EUR", "USD"].map(c => <option key={c}>{c}</option>)}</Sel></div>
                 <div><Lbl>Default VAT rate (invoices)</Lbl><Sel value={form.terms?.defaultVatRate ?? ""} onChange={e => sf("terms", { ...(form.terms || {}), defaultVatRate: e.target.value === "" ? null : Number(e.target.value) })}><option value="">— none —</option>{[0, 5, 8, 23].map(r => <option key={r} value={r}>{r}%</option>)}</Sel></div>{/* v7.18.7 (BP-46): optional — an invoice draft for this company starts at it */}
                 <div style={{ gridColumn: "1 / -1" }}><Lbl>Receiving hours (delivery window) — e.g. Mon–Fri 06:00–14:00</Lbl><Inp value={form.receivingHours || ""} onChange={e => sf("receivingHours", e.target.value)} placeholder="when this site receives trucks — a planned delivery outside it will warn" /></div>
-                <label style={{ gridColumn: "1 / -1", fontSize: 11.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
+                <label style={{ gridColumn: "1 / -1", fontSize: 11, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={!!form.archived} onChange={e => sf("archived", e.target.checked)} /> Archived — hidden from every picker, kept on its documents (CP-4)</label>
               </div>
               {/* people are edited in the People tab (one list: `contacts`); v6.99.5 removed the duplicate editor */}
               {/* v6.68.0 (F-3): credit control — confirming an SO that pushes this client's
@@ -398,7 +398,7 @@ function CounterpartyModal({ counterparty, contacts = [], onSave, onClose, canSe
           )}
           {/* v6.99.87 (A-PT-1/2, owner ruling 1 Oct): the warehouse agreement section and "Charged through our forwarder" are gone — the tariff above prices a warehouse; a fixed monthly fee is a warehouse invoice allocated to the cargo or the month; a site that does not invoice us is a Place */}
           {allTypes.includes("Supplier") && !canSeeCommission && (
-            <div style={{ fontSize: 11.5, color: "#94A3B8", padding: "6px 0" }}>Commission terms — visible to the owner and finance only (v6.81.0, D-57).</div>
+            <div style={{ fontSize: 11, color: "#94A3B8", padding: "6px 0" }}>Commission terms — visible to the owner and finance only (v6.81.0, D-57).</div>
           )}
           {allTypes.includes("Supplier") && canSeeCommission && (
             <div>
@@ -488,7 +488,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
         <TypeBadge type={counterparty.type} />
         {(counterparty.additionalTypes || []).map(t => (
           <span key={t} title={`Also acts as ${t}`}
-            style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "2px 8px", borderRadius: 16, fontSize: 10.5, fontWeight: 700 }}>
+            style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "2px 8px", borderRadius: 16, fontSize: 10, fontWeight: 700 }}>
             + {t}
           </span>
         ))}
@@ -502,7 +502,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
           <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
             <Avatar label={counterparty.name} bg={typeStyle.bg} color={typeStyle.color} />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#111", lineHeight: 1.2 }}>{counterparty.name}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#111", lineHeight: 1.2 }}>{counterparty.name}</div>
               <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{counterparty.country || "—"} · {counterparty.defaultCurrency}</div>
             </div>
           </div>
@@ -530,19 +530,19 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
             {counterparty.finance.bankName && (
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontSize: 10, color: "#999" }}>Bank</div>
-                <div style={{ fontSize: 12.5, color: "#333", fontWeight: 500 }}>{counterparty.finance.bankName}</div>
+                <div style={{ fontSize: 12, color: "#333", fontWeight: 500 }}>{counterparty.finance.bankName}</div>
               </div>
             )}
             {counterparty.finance.accountNumber && (
               <div style={{ marginBottom: 6 }}>
                 <div style={{ fontSize: 10, color: "#999" }}>Account</div>
-                <div style={{ fontSize: 11.5, color: "#333", fontFamily: "ui-monospace, Menlo, monospace", wordBreak: "break-all" }}>{counterparty.finance.accountNumber}</div>
+                <div style={{ fontSize: 11, color: "#333", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", wordBreak: "break-all" }}>{counterparty.finance.accountNumber}</div>
               </div>
             )}
             {counterparty.finance.swift && (
               <div>
                 <div style={{ fontSize: 10, color: "#999" }}>SWIFT / BIC</div>
-                <div style={{ fontSize: 12, color: "#333", fontFamily: "ui-monospace, Menlo, monospace" }}>{counterparty.finance.swift}</div>
+                <div style={{ fontSize: 12, color: "#333", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{counterparty.finance.swift}</div>
               </div>
             )}
           </div>
@@ -551,7 +551,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
         {counterparty.notes && (
           <div style={{ margin: "0 20px 14px" }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em", marginBottom: 6 }}>NOTES</div>
-            <div style={{ fontSize: 12.5, color: "#555", lineHeight: 1.6 }}>{counterparty.notes}</div>
+            <div style={{ fontSize: 12, color: "#555", lineHeight: 1.6 }}>{counterparty.notes}</div>
           </div>
         )}
 
@@ -560,7 +560,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
             <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em", marginBottom: 6 }}>LINKED DOCUMENTS</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {counterparty.linkedDocs.map(ref => (
-                <span key={ref} style={{ background: "#EFF6FF", color: "#2563EB", fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, fontFamily: "ui-monospace, Menlo, monospace" }}>{ref}</span>
+                <span key={ref} style={{ background: "#EFF6FF", color: "#2563EB", fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{ref}</span>
               ))}
             </div>
           </div>
@@ -571,7 +571,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
           <div style={{ margin: "0 20px 12px", padding: "10px 0 0", borderTop: "1px solid #F3F4F6" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#BBB", letterSpacing: "0.06em" }}>LOCATIONS</div>
-              {onAddLocation && <button onClick={() => onAddLocation(counterparty)} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>+ add location</button>}
+              {onAddLocation && <button onClick={() => onAddLocation(counterparty)} style={{ padding: "3px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>+ add location</button>}
             </div>
             {(() => { const own = readCustomLocations().filter((l: any) => String((l as any).ownerId) === String(counterparty.id)); const legal = counterparty.isPlace !== false && counterpartyLocations([counterparty]).length > 0;
               return <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.6 }}>
@@ -600,7 +600,7 @@ function CounterpartyDetailPanel({ counterparty, onEditCompany, onDeleteCompany,
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{p.name}</div>
-                    {p.isPrimary && <span style={{ fontSize: 9, fontWeight: 700, color: "#16A34A", background: "#DCFCE7", padding: "1px 6px", borderRadius: 4, letterSpacing: "0.04em" }}>PRIMARY</span>}
+                    {p.isPrimary && <span style={{ fontSize: 10, fontWeight: 700, color: "#16A34A", background: "#DCFCE7", padding: "1px 6px", borderRadius: 4, letterSpacing: "0.04em" }}>PRIMARY</span>}
                   </div>
                   <div style={{ fontSize: 11, color: "#888", marginTop: 1 }}>{p.role}</div>
                 </div>
@@ -658,7 +658,7 @@ function EmailModal({ counterparty, person, onClose }: any) {
         </div>
         {sent ? (
           <div style={{ padding: "40px 24px", textAlign: "center" }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>✓</div>
+            <div style={{ fontSize: 24, marginBottom: 10 }}>✓</div>
             <div style={{ fontSize: 14, fontWeight: 600, color: "#16A34A" }}>Email sent!</div>
           </div>
         ) : (
@@ -1031,9 +1031,9 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
               onClick={() => fileInputRef.current?.click()}
               style={{ border: "2px dashed #E5E7EB", borderRadius: 12, padding: "60px 40px", textAlign: "center", background: "#FAFAFA", cursor: "pointer", transition: "all 0.15s", width: "100%", maxWidth: 520 }}
             >
-              <div style={{ fontSize: 44, marginBottom: 12 }}>📊</div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: "#111", marginBottom: 6 }}>{isCsv ? "Drop a contacts CSV here" : "Drop the Fakturownia export here"}</div>
-              <div style={{ fontSize: 12.5, color: "#888" }}>{isCsv ? "A .csv with the same columns as Export CSV · max ~10 MB" : "Supports .xls / .xlsx / .csv · max ~10 MB"}</div>
+              <div style={{ fontSize: 24, marginBottom: 12 }}>📊</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#111", marginBottom: 6 }}>{isCsv ? "Drop a contacts CSV here" : "Drop the Fakturownia export here"}</div>
+              <div style={{ fontSize: 12, color: "#888" }}>{isCsv ? "A .csv with the same columns as Export CSV · max ~10 MB" : "Supports .xls / .xlsx / .csv · max ~10 MB"}</div>
               <input ref={fileInputRef} type="file" accept={isCsv ? ".csv" : ".xls,.xlsx,.csv"} style={{ display: "none" }} onChange={e => handleFile(e.target.files?.[0])} />
             </div>
             <div style={{ marginTop: 18, padding: "12px 16px", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, maxWidth: 520, fontSize: 12, color: "#92400E" }}>
@@ -1072,7 +1072,7 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
 
             {/* Filters + bulk actions */}
             <div style={{ padding: "10px 24px", borderBottom: "1px solid #F3F4F6", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / NIP / country…" style={{ flex: "1 1 220px", minWidth: 180, border: "1px solid #E5E7EB", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, outline: "none" }} />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / NIP / country…" style={{ flex: "1 1 220px", minWidth: 180, border: "1px solid #E5E7EB", borderRadius: 8, padding: "6px 12px", fontSize: 12, outline: "none" }} />
               <div style={{ display: "flex", gap: 4 }}>
                 {["All", "New", "Duplicates"].map(d => (
                   <button key={d} onClick={() => setFilterDup(d)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid", borderColor: filterDup === d ? "#111" : "#E5E7EB", background: filterDup === d ? "#111" : "#fff", color: filterDup === d ? "#fff" : "#555", fontSize: 11, cursor: "pointer", fontWeight: 500 }}>{d}</button>
@@ -1123,18 +1123,18 @@ function ImportModal({ existingCounterparties, onCancel, onImport, source = "fak
                         </td>
                         <td style={{ padding: "8px 10px" }}>
                           <div style={{ fontWeight: 600, color: "#111", maxWidth: 280, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.name}>{r.name}</div>
-                          {r.address && <div style={{ fontSize: 10.5, color: "#999", maxWidth: 280, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.address}>{r.address}</div>}
+                          {r.address && <div style={{ fontSize: 10, color: "#999", maxWidth: 280, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.address}>{r.address}</div>}
                           {r.contacts[0]?.name && r.contacts[0].name !== "—" && (
-                            <div style={{ fontSize: 10.5, color: "#666" }}>👤 {r.contacts[0].name}</div>
+                            <div style={{ fontSize: 10, color: "#666" }}>👤 {r.contacts[0].name}</div>
                           )}
                         </td>
                         <td style={{ padding: "8px 10px", color: "#555" }}>{r.country || <span style={{ color: "#CCC" }}>—</span>}</td>
-                        <td style={{ padding: "8px 10px", color: "#555", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11 }}>{r.nip || <span style={{ color: "#CCC" }}>—</span>}</td>
-                        <td style={{ padding: "8px 10px", color: "#555", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 11 }}>{r.vatEuId || <span style={{ color: "#CCC" }}>—</span>}</td>
+                        <td style={{ padding: "8px 10px", color: "#555", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>{r.nip || <span style={{ color: "#CCC" }}>—</span>}</td>
+                        <td style={{ padding: "8px 10px", color: "#555", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", fontSize: 11 }}>{r.vatEuId || <span style={{ color: "#CCC" }}>—</span>}</td>
                         <td style={{ padding: "8px 10px", color: "#2563EB", fontSize: 11, maxWidth: 160, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.contacts[0]?.email}>{r.contacts[0]?.email || <span style={{ color: "#CCC" }}>—</span>}</td>
                         <td style={{ padding: "8px 10px", color: "#666", fontSize: 11 }}>
                           {r.finance.bankName && <div style={{ maxWidth: 120, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={r.finance.bankName}>{r.finance.bankName}</div>}
-                          {r.finance.accountNumber && <div style={{ color: "#AAA", fontSize: 10, fontFamily: "ui-monospace, Menlo, monospace" }}>✓ acct</div>}
+                          {r.finance.accountNumber && <div style={{ color: "#AAA", fontSize: 10, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>✓ acct</div>}
                         </td>
                         <td style={{ padding: "8px 10px" }}>
                           {r._duplicate ? (
@@ -1320,7 +1320,7 @@ function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
           )}
           {differing.map(f => (
             <div key={f.key} style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, color: "#888", letterSpacing: "0.04em", marginBottom: 5 }}>{f.label.toUpperCase()}</div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", letterSpacing: "0.04em", marginBottom: 5 }}>{f.label.toUpperCase()}</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {(["keep", "incoming"] as const).map(side => {
                   const rec = side === "keep" ? keep : incoming;
@@ -1329,8 +1329,8 @@ function MergeCounterpartiesModal({ keep, incoming, onApply, onCancel }: any) {
                     <label key={side} style={{ display: "flex", gap: 8, alignItems: "flex-start", border: `1.5px solid ${active ? "#16A34A" : "#E5E7EB"}`, background: active ? "#F0FDF4" : "#fff", borderRadius: 8, padding: "8px 10px", cursor: "pointer" }}>
                       <input type="radio" checked={active} onChange={() => setChoices(prev => ({ ...prev, [f.key]: side }))} style={{ marginTop: 2 }} />
                       <span>
-                        <span style={{ fontSize: 9.5, fontWeight: 700, color: side === "keep" ? "#16A34A" : "#D97706", display: "block" }}>{side === "keep" ? "KEPT RECORD" : (incoming.id != null ? "DUPLICATE RECORD" : "NEW ENTRY")}</span>
-                        <span style={{ fontSize: 12.5, color: "#111" }}>{mergeValueDisplay(mergeFieldValue(rec, f.key))}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: side === "keep" ? "#16A34A" : "#D97706", display: "block" }}>{side === "keep" ? "KEPT RECORD" : (incoming.id != null ? "DUPLICATE RECORD" : "NEW ENTRY")}</span>
+                        <span style={{ fontSize: 12, color: "#111" }}>{mergeValueDisplay(mergeFieldValue(rec, f.key))}</span>
                       </span>
                     </label>
                   );
@@ -1357,7 +1357,7 @@ function DuplicateReviewModal({ candidate, matches, onOpenExisting, onMergeInto,
       <div style={{ width: 640, maxHeight: "85vh", overflow: "auto", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         <div style={{ padding: "18px 24px", borderBottom: "1px solid #EBEBEB" }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>⚠ Possible duplicate counterparty</div>
-          <div style={{ fontSize: 12.5, color: "#666", marginTop: 4, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 12, color: "#666", marginTop: 4, lineHeight: 1.5 }}>
             You're saving <strong>"{candidate.name}"</strong>, but {matches.length === 1 ? "a similar record already exists" : `${matches.length} similar records already exist`}. Check below before creating a duplicate.
           </div>
         </div>
@@ -1366,8 +1366,8 @@ function DuplicateReviewModal({ candidate, matches, onOpenExisting, onMergeInto,
             <div key={i} style={{ border: "1px solid #FDE68A", background: "#FFFBEB", borderRadius: 9, padding: "11px 13px", marginBottom: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 13.5, fontWeight: 700, color: "#111" }}>{m.counterparty.name}</div>
-                  <div style={{ fontSize: 11.5, color: "#92400E", marginTop: 2 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#111" }}>{m.counterparty.name}</div>
+                  <div style={{ fontSize: 11, color: "#92400E", marginTop: 2 }}>
                     Match: {m.reason === "tax" ? "same tax ID" : "similar name"} · {m.counterparty.country || "—"} · {m.counterparty.type}{m.counterparty.nip ? ` · ${m.counterparty.nip}` : ""}
                   </div>
                 </div>
@@ -1402,7 +1402,7 @@ function FindDuplicatesModal({ pairs, onReview, onClose }: any) {
         <div style={{ padding: "14px 24px" }}>
           {pairs.map((p, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, border: "1px solid #F3F4F6", borderRadius: 9, padding: "10px 13px", marginBottom: 8 }}>
-              <div style={{ fontSize: 12.5, color: "#111", lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12, color: "#111", lineHeight: 1.5 }}>
                 <strong>{p.a.name}</strong> <span style={{ color: "#AAA" }}>↔</span> <strong>{p.b.name}</strong>
                 <div style={{ fontSize: 11, color: "#92400E" }}>{p.reason === "tax" ? "Same tax ID" : "Similar name"} · {p.a.type}/{p.b.type}</div>
               </div>
@@ -1450,7 +1450,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
   // (v7.6.1: the chips decide the kinds)
   // (v7.6.1: the Hidden chip replaces the old show-hidden tick)
   // (v7.6.1: replaced by the chips and the search)
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12, width: "100%", boxSizing: "border-box" };
   const save = () => {
     if (!String(form.name).trim()) return;
     const addr = { street: form.street || "", postcode: form.postcode || "", city: form.city || "", country: form.country || "" };
@@ -1478,7 +1478,7 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
   return (
     <div>{dialogNode}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-        {CHIPS.map(([k, label]) => <button key={k} onClick={() => setChip(k)} style={{ padding: "6px 14px", borderRadius: 20, border: "1px solid", borderColor: chip === k ? "#111" : "#E5E7EB", background: chip === k ? "#111" : "#fff", color: chip === k ? "#fff" : "#374151", fontSize: 12.5, cursor: "pointer" }}>{label} <span style={{ opacity: 0.6, marginLeft: 4 }}>{count(k)}</span></button>)}
+        {CHIPS.map(([k, label]) => <button key={k} onClick={() => setChip(k)} style={{ padding: "6px 14px", borderRadius: 20, border: "1px solid", borderColor: chip === k ? "#111" : "#E5E7EB", background: chip === k ? "#111" : "#fff", color: chip === k ? "#fff" : "#374151", fontSize: 12, cursor: "pointer" }}>{label} <span style={{ opacity: 0.6, marginLeft: 4 }}>{count(k)}</span></button>)}
         <button onClick={() => { setEditId(null); setForm({ name: "", country: "", type: "Port", street: "", postcode: "", city: "", unlocode: "", ownerId: null }); setWinOpen(true); }} style={{ marginLeft: "auto", padding: "8px 16px", borderRadius: 8, border: "none", background: "#16A34A", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ New location</button>
       </div>
       {(() => {   /* v7.18.1 (A-AU-3, owner 9 Oct): the addresses typed as sale destinations — each becomes the client's site ONCE */
@@ -1494,24 +1494,24 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
           onLinkSaleDestination(r.key, { id: loc.id, name: loc.name }); force((x: number) => x + 1);
         };
         return <div data-typed-destinations="1" style={{ background: "#fff", border: "1px solid #FDE68A", borderLeft: "4px solid #F59E0B", borderRadius: 12, padding: "12px 16px", marginBottom: 14 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#92400E" }}>Sale destinations typed as an address — make each the client's site once</div>
-          <div style={{ fontSize: 11.5, color: "#64748B", margin: "3px 0 8px" }}>The same address as the client's legal address is linked to it; any other becomes a new location of the client. Its sales then name the place — the trade direction and the documents read it from there.</div>
-          {typed.map((r: any) => <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr 1fr auto", gap: 8, alignItems: "center", padding: "5px 0", borderTop: "1px solid #F1F5F9", fontSize: 12.5 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#92400E" }}>Sale destinations typed as an address — make each the client's site once</div>
+          <div style={{ fontSize: 11, color: "#64748B", margin: "3px 0 8px" }}>The same address as the client's legal address is linked to it; any other becomes a new location of the client. Its sales then name the place — the trade direction and the documents read it from there.</div>
+          {typed.map((r: any) => <div key={r.key} style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr 1fr auto", gap: 8, alignItems: "center", padding: "5px 0", borderTop: "1px solid #F1F5F9", fontSize: 12 }}>
             <span style={{ fontWeight: 700 }}>{r.clientName}</span><span style={{ color: "#475569" }}>{r.text}</span>
-            <span style={{ fontSize: 11.5, color: "#64748B" }}>{r.orders.length} sale{r.orders.length === 1 ? "" : "s"}: {r.orders.slice(0, 3).join(", ")}{r.orders.length > 3 ? " …" : ""}</span>
+            <span style={{ fontSize: 11, color: "#64748B" }}>{r.orders.length} sale{r.orders.length === 1 ? "" : "s"}: {r.orders.slice(0, 3).join(", ")}{r.orders.length > 3 ? " …" : ""}</span>
             <button onClick={() => makeSite(r)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #BFDBFE", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>{r.legalSiteId != null ? "Link to the legal address" : "Make it a site of the client"}</button>
           </div>)}
         </div>;
       })()}
       <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search locations, address, country, company…" style={{ width: "100%", boxSizing: "border-box", border: "1px solid #E5E7EB", borderRadius: 8, padding: "10px 14px", fontSize: 13, marginBottom: 12 }} />
       <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 0.9fr 0.8fr 1.8fr 1.1fr 170px", gap: 8, padding: "10px 16px", background: "#F9FAFB", fontSize: 10.5, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>LOCATION</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>COMPANY · USED BY</div><div style={{ textAlign: "right" }}>ACTIONS</div></div>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 0.9fr 0.8fr 1.8fr 1.1fr 170px", gap: 8, padding: "10px 16px", background: "#F9FAFB", fontSize: 10, fontWeight: 700, color: "#94A3B8", letterSpacing: "0.05em" }}><div>LOCATION</div><div>KIND</div><div>COUNTRY</div><div>ADDRESS</div><div>COMPANY · USED BY</div><div style={{ textAlign: "right" }}>ACTIONS</div></div>
         {shown.length === 0 && <div style={{ padding: 24, textAlign: "center", color: "#94A3B8", fontSize: 13 }}>No location here.</div>}
         {shown.map((l: any) => { const src = sourceOf(l); const used = usageOf(l.id); const mine = src === "added here" || src === "migrated (legacy)"; const owner = ownerOf(l); return (
-          <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "1.6fr 0.9fr 0.8fr 1.8fr 1.1fr 170px", gap: 8, padding: "10px 16px", borderTop: "1px solid #F3F4F6", fontSize: 12.5, alignItems: "center", opacity: (l as any).__hidden ? 0.55 : 1 }}>
+          <div key={String(l.id)} style={{ display: "grid", gridTemplateColumns: "1.6fr 0.9fr 0.8fr 1.8fr 1.1fr 170px", gap: 8, padding: "10px 16px", borderTop: "1px solid #F3F4F6", fontSize: 12, alignItems: "center", opacity: (l as any).__hidden ? 0.55 : 1 }}>
             <div style={{ fontWeight: 700 }}>{l.name}</div><div style={{ color: "#475569" }}>{(KINDS.find(k => k[0] === l.type) || [0, l.type])[1]}</div><div>{l.country || "—"}</div>
             <div style={{ color: "#475569", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.address || "—"}</div>
-            <div style={{ fontSize: 11.5, color: "#64748B" }}>{owner != null ? companyName(owner) : "—"}{used ? ` · ${used} doc.` : ""}</div>
+            <div style={{ fontSize: 11, color: "#64748B" }}>{owner != null ? companyName(owner) : "—"}{used ? ` · ${used} doc.` : ""}</div>
             <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
               {src === "counterparty site" && onOpenCompany && <button onClick={() => onOpenCompany(owner)} title="the legal address is edited on its company" style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, cursor: "pointer" }}>open company →</button>}
               {(mine || src === "built-in") && !(l as any).__hidden && <button onClick={() => openEdit(l)} style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #BFDBFE", background: "#fff", color: "#1D4ED8", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Edit</button>}
@@ -1534,8 +1534,8 @@ export function PortsView({ counterparties = [], pos = [], orders = [], lots = [
             <div><Lbl>UN/LOCODE (optional)</Lbl><input value={form.unlocode ?? ""} onChange={e => setForm({ ...form, unlocode: e.target.value })} style={inp} /></div>
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-            <button onClick={() => setWinOpen(false)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
-            <button disabled={!String(form.name || "").trim()} onClick={save} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: String(form.name || "").trim() ? "#111" : "#E5E7EB", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "Add location"}</button>
+            <button onClick={() => setWinOpen(false)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+            <button disabled={!String(form.name || "").trim()} onClick={save} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: String(form.name || "").trim() ? "#111" : "#E5E7EB", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{editId != null ? "Save" : "Add location"}</button>
           </div>
         </div>
       </div>}
@@ -1559,7 +1559,7 @@ function CountriesView() {
   setUserCountries(readCountries());
   const [list, setList] = useState<any[]>(() => readCountries());
   const [form, setForm] = useState<any>({ iso: "", name: "", eu: false });
-  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12.5, width: "100%", boxSizing: "border-box" };
+  const inp: any = { border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 12, width: "100%", boxSizing: "border-box" };
   const save = (next: any[]) => { const sorted = [...next].sort((a, b) => Number(b.eu) - Number(a.eu) || String(a.name).localeCompare(String(b.name), "en")); setList(sorted); writeCountries(sorted); };
   return (
     <div style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 12, padding: "16px 18px" }}>{dialogNode}
@@ -2009,7 +2009,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
                   {c.additionalTypes.map(t => (
                     <span key={t} title={`Also acts as ${t}`}
-                      style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "0 6px", borderRadius: 3, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em" }}>
+                      style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "0 6px", borderRadius: 3, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em" }}>
                       +{t}
                     </span>
                   ))}
@@ -2027,7 +2027,7 @@ function CompaniesTable({ rows, selectedId, onSelect, onEdit, onDelete, onEmail 
               <div style={{ fontSize: 13, color: "#333" }}>{primary?.name || <span style={{ color: "#CCC", fontStyle: "italic" }}>no contact</span>}</div>
               <div style={{ fontSize: 11, color: "#AAA" }}>{primary?.role || ""}{primary?.email ? ` · ${primary.email}` : ""}</div>
             </div>
-            <div style={{ fontSize: 12.5, color: "#555" }}>{c.country || "—"}</div>
+            <div style={{ fontSize: 12, color: "#555" }}>{c.country || "—"}</div>
             <div style={{ fontSize: 12, fontWeight: 600, color: "#555" }}>
               {c.contacts.length}
               {c.contacts.length > 1 && <span style={{ fontSize: 10, color: "#AAA", marginLeft: 4 }}>👥</span>}
@@ -2063,14 +2063,14 @@ function PeopleTable({ rows, onOpenCompany, onEmail }: any) {
         >
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "#111" }}>{person.name}</div>
-            {person.isPrimary && <span style={{ fontSize: 9, fontWeight: 700, color: "#16A34A", background: "#DCFCE7", padding: "1px 5px", borderRadius: 3, letterSpacing: "0.03em" }}>PRIMARY</span>}
+            {person.isPrimary && <span style={{ fontSize: 10, fontWeight: 700, color: "#16A34A", background: "#DCFCE7", padding: "1px 5px", borderRadius: 3, letterSpacing: "0.03em" }}>PRIMARY</span>}
           </div>
           <div style={{ fontSize: 13, color: "#333" }}>{counterparty.name}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
             <TypeBadge type={counterparty.type} />
             {(counterparty.additionalTypes || []).slice(0, 2).map(t => (
               <span key={t} title={`Also acts as ${t}`}
-                style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "0 5px", borderRadius: 3, fontSize: 9, fontWeight: 700 }}>
+                style={{ background: TYPE_COLORS[t]?.bg || "#F3F4F6", color: TYPE_COLORS[t]?.color || "#6B7280", padding: "0 5px", borderRadius: 3, fontSize: 10, fontWeight: 700 }}>
                 +{t.slice(0, 3)}
               </span>
             ))}

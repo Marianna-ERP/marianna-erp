@@ -12,7 +12,7 @@ import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, quantityLabel, 
 import { localTodayISO, formatDMY } from "./dates";
 import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { settlementState } from "./invoicePlus.domain";   // v7.16.5 (A-RV-14): the SO view shows our payment state, not Fakturownia's flag
-import { Inp, LOCATION_TYPES, LifecycleBar, QualityBadge, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, supplierNameForPO, useSalesData } from "./SalesOrders";
+import { Inp, LOCATION_TYPES, LifecycleBar, QualityBadge, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, supplierNameForPO, useSalesData, lotColorationOf } from "./SalesOrders";
 import { ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 // ─── INVOICE CREATION MODAL ───────────────────────────────────────────────
@@ -65,7 +65,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
             <SectionTitle>INVOICE HEADER</SectionTitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div><Lbl>Invoice number</Lbl><Inp value={invoice.number} onChange={e => sf("number", e.target.value)} /></div>
-              <div><Lbl>Type</Lbl><div style={{ padding: "8px 10px", background: "#DCFCE7", color: "#16A34A", borderRadius: 6, fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, Menlo, monospace" }}>SINV · Sales Invoice (↑ Receivable)</div></div>
+              <div><Lbl>Type</Lbl><div style={{ padding: "8px 10px", background: "#DCFCE7", color: "#16A34A", borderRadius: 6, fontSize: 12, fontWeight: 700, fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>SINV · Sales Invoice (↑ Receivable)</div></div>
               <div><Lbl>Issue date</Lbl><Inp value={invoice.issueDate} onChange={e => sf("issueDate", e.target.value)} type="date" noFuture /></div>
               <div><Lbl>Sale date</Lbl><Inp value={invoice.saleDate} onChange={e => sf("saleDate", e.target.value)} type="date" noFuture /></div>
               <div><Lbl>Due date</Lbl><Inp value={invoice.dueDate} onChange={e => sf("dueDate", e.target.value)} type="date" /></div>
@@ -131,7 +131,7 @@ export function InvoiceCreationModal({ order, existingInvoiceNumbers, onCancel, 
                     </tr>
                   );
                 })}
-                <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10.5 }}>{(() => { const t = documentTotals(order.items, sd.packagingTypes, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
+                <tr style={{ background: "#F3F4F6" }}><td colSpan={9} style={{ border: "1px solid #ccc", padding: "6px 8px", fontWeight: 700, fontSize: 10 }}>{(() => { const t = documentTotals(order.items, sd.packagingTypes, order.fxRate); return `RAZEM / TOTAL: ${t.kg.toLocaleString("pl-PL")} kg · ${t.boxes.toLocaleString("pl-PL")} opak./boxes · ${t.pallets.toLocaleString("pl-PL")} pal. · ${(order.pricingMode || "firm") === "consignment" ? "konsygnacja / consignment" : t.value.toLocaleString("pl-PL", { minimumFractionDigits: 2 }) + " " + order.currency}`; })()}</td></tr>
               </tbody>
             </table>
           </Card>
@@ -232,18 +232,18 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
                 <StatusBadge status={order.status} />
-                {order.statusOverride ? <span data-status-by-hand="1" title="This status was set by hand — the shipments do not show it yet" style={{ fontSize: 11.5, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "2px 8px" }}>set by hand{order.statusOverrideReason ? ` — ${order.statusOverrideReason}` : ""}{order.statusOverrideAt ? ` · ${formatDMY(order.statusOverrideAt)}` : ""}</span> : null}{/* v7.11.3 (A-RV-25) */}
+                {order.statusOverride ? <span data-status-by-hand="1" title="This status was set by hand — the shipments do not show it yet" style={{ fontSize: 11, fontWeight: 700, color: "#92400E", background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "2px 8px" }}>set by hand{order.statusOverrideReason ? ` — ${order.statusOverrideReason}` : ""}{order.statusOverrideAt ? ` · ${formatDMY(order.statusOverrideAt)}` : ""}</span> : null}{/* v7.11.3 (A-RV-25) */}
               </div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: "#111", fontFamily: "ui-monospace, Menlo, monospace" }}>{order.number}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: "#111", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{order.number}</div>
               <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>{order.client?.name || "—"}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 11, color: "#888" }}>Net total</div>
-              <div style={{ fontSize: 28, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: "#111" }}>{fmtMoney(total, order.currency)}</div>
               {order.currency !== "PLN" && order.fxRate && <div style={{ fontSize: 12, color: "#888" }}>≈ {fmtMoney(total * order.fxRate, "PLN")} · rate {order.fxRate}</div>}
-              {order.currency !== "PLN" && order.fxLockedAt && <div style={{ fontSize: 10.5, color: "#94A3B8" }} title="v6.95.0 (SO-8): the rate is a locked fact">rate {order.fxRate} locked {order.fxLockedAt}</div>}
+              {order.currency !== "PLN" && order.fxLockedAt && <div style={{ fontSize: 10, color: "#94A3B8" }} title="v6.95.0 (SO-8): the rate is a locked fact">rate {order.fxRate} locked {order.fxLockedAt}</div>}
               {(() => { const ev = deliveryEventFor(order.sellIncoterm); const act = actualDeliveryDate(order, shipments); const d = deliveryDelayDays(order, shipments);
-                return <div style={{ fontSize: 10.5, color: d != null && d > 0 ? "#B45309" : "#94A3B8", marginTop: 2 }} title={`v6.95.0 (SO-3): for ${order.sellIncoterm || "these terms"} delivery means ${ev.where}`}>delivery ({ev.where}): planned {order.deliveryDate || "—"}{act ? ` · actual ${act}` : " · not yet"}{d != null ? ` · ${d > 0 ? d + " day(s) late" : d < 0 ? Math.abs(d) + " day(s) early" : "on time"}` : ""}</div>; })()}
+                return <div style={{ fontSize: 10, color: d != null && d > 0 ? "#B45309" : "#94A3B8", marginTop: 2 }} title={`v6.95.0 (SO-3): for ${order.sellIncoterm || "these terms"} delivery means ${ev.where}`}>delivery ({ev.where}): planned {order.deliveryDate || "—"}{act ? ` · actual ${act}` : " · not yet"}{d != null ? ` · ${d > 0 ? d + " day(s) late" : d < 0 ? Math.abs(d) + " day(s) early" : "on time"}` : ""}</div>; })()}
             </div>
           </div>
 
@@ -270,8 +270,8 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
 
           {/* v7.1.3 (A-PL-1, owner ruling 6 Oct): the result of a sale lives in ONE place — Finance → P/L; here only a link, for those who may open it */}
           {canOpenResult && (
-            <div style={{ marginBottom: 16, fontSize: 12.5 }}>
-              <button type="button" onClick={() => onOpenResult && onOpenResult(order)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, color: "#111", cursor: "pointer" }}>Result of this sale → Finance</button>
+            <div style={{ marginBottom: 16, fontSize: 12 }}>
+              <button type="button" onClick={() => onOpenResult && onOpenResult(order)} style={{ border: "1px solid #E5E7EB", background: "#fff", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#111", cursor: "pointer" }}>Result of this sale → Finance</button>
             </div>
           )}
 
@@ -279,7 +279,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
             <div>
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>LINE ITEMS ({order.items.length})</SectionTitle>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: "#F9FAFB", borderBottom: "1px solid #F3F4F6" }}>
                       {/* v6.99.76 (A-SV-1, owner): Source · Product · Origin · Kl · Packaging · Boxes · Qty · Unit price · Total — the PO's box */}
@@ -297,11 +297,11 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                           <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef, sd) : ""} /></td>
                           <td style={{ padding: "10px 6px" }}>
                             <div style={{ fontWeight: 600 }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</div>
-                            {(it.size || it.coloration) && <div style={{ fontSize: 10.5, color: "#AAA" }}>{[it.size, it.coloration].filter(Boolean).join(" · ")}</div>}
+                            {(() => { const col = it.coloration || (it.sourceType === "STOCK" && it.sourceRef ? lotColorationOf(it.sourceRef, sd) : "");   /* v7.23.1 (A-SOL-2) */ return (it.size || col) ? <div style={{ fontSize: 10, color: "#AAA" }}>{[it.size, col].filter(Boolean).join(" · ")}</div> : null; })()}
                           </td>
                           <td style={{ padding: "10px 6px", color: "#555" }}>{it.origin || "—"}</td>
                           <td style={{ padding: "10px 6px", textAlign: "center" }}><QualityBadge quality={it.quality} /></td>
-                          <td style={{ padding: "10px 6px", color: "#666", fontSize: 11.5 }}>{it.packaging || "—"}</td>
+                          <td style={{ padding: "10px 6px", color: "#666", fontSize: 11 }}>{it.packaging || "—"}</td>
                           <td style={{ padding: "10px 6px", textAlign: "right", color: "#555" }}>{(() => { const bx = String(it.pricingUnit || "kg") !== "kg" ? parseFloat(it.boxes) : effectiveCounts(it, sd.packagingTypes || []).boxes; return bx ? fmtNum(bx) : "—"; })()}</td>
                           <td style={{ padding: "10px 6px", textAlign: "right", fontWeight: 600 }}>
                             {fmtNum(it.qty)} kg
@@ -312,7 +312,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                             )}
                             {it.sourceType && it.sourceRef && av.lineQty > 0 && !av.hasOverage && (
                               <div style={{ fontSize: 10, color: "#16A34A", fontWeight: 600, marginTop: 2 }}>
-                                ✓ {fmtNum(av.combinedAvailable)} kg avail.
+                                Free {fmtNum(av.primaryAvailable)} kg   {/* v7.23.2 (A-SOL-1): what the line's lot still has free */}
                               </div>
                             )}
                           </td>
@@ -343,7 +343,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                     <div style={{ marginBottom: 8 }}>
                       <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SALES INVOICES</div>
                       {computedLinks.linkedInvoices.map(inv => (
-                        <DocLink key={inv} num={inv} from={order.number}>                        <div style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv}</div></DocLink>
+                        <DocLink key={inv} num={inv} from={order.number}>                        <div style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 5, fontSize: 11, fontWeight: 600, color: "#1D4ED8", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{inv}</div></DocLink>
                       ))}
                     </div>
                   )}
@@ -357,7 +357,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                         const dead = cancelledDocSet(shipments).has(String(s));
                         return (
                           <DocLink key={s} num={s} from={order.number}><div title={dead ? "Cancelled — kept on record, no longer active" : undefined}
-                            style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: dead ? "#FEF2F2" : "#F3E8FF", border: `1px solid ${dead ? "#FECACA" : "#DDD6FE"}`, borderRadius: 5, fontSize: 11, fontWeight: 600, color: dead ? "#B91C1C" : "#7C3AED", fontFamily: "ui-monospace, Menlo, monospace", ...(dead ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px" } : {}) }}>{s}</div></DocLink>
+                            style={{ display: "inline-block", padding: "4px 8px", margin: "2px", background: dead ? "#FEF2F2" : "#F3E8FF", border: `1px solid ${dead ? "#FECACA" : "#DDD6FE"}`, borderRadius: 5, fontSize: 11, fontWeight: 600, color: dead ? "#B91C1C" : "#7C3AED", fontFamily: "inherit", fontVariantNumeric: "tabular-nums", ...(dead ? { textDecoration: "line-through", textDecorationColor: "#DC2626", textDecorationThickness: "1.5px" } : {}) }}>{s}</div></DocLink>
                         );
                       })}
                     </div>
@@ -367,7 +367,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
               {order.notes && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle>NOTES</SectionTitle>
-                  <div style={{ fontSize: 12.5, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{order.notes}</div>
+                  <div style={{ fontSize: 12, color: "#444", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{order.notes}</div>
                 </Card>
               )}
             </div>
@@ -375,7 +375,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
             <div>
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle>CLIENT</SectionTitle>{/* v6.99.76 (A-SV-2, owner): Client · NIP/VAT · Contact · e-mail — the PO's supplier box */}
-                {(() => { const cl: any = order.client || {}; const row = (lbl: string, v: any, mono = false) => <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>{lbl}</div><div style={{ fontSize: 12, color: "#444", fontFamily: mono ? "ui-monospace, Menlo, monospace" : "inherit" }}>{v || "—"}</div></div>;
+                {(() => { const cl: any = order.client || {}; const row = (lbl: string, v: any, mono = false) => <div style={{ marginBottom: 8 }}><div style={{ fontSize: 10, color: "#888" }}>{lbl}</div><div style={{ fontSize: 12, color: "#444", fontFamily: "inherit", fontVariantNumeric: mono ? "tabular-nums" : undefined }}>{v || "—"}</div></div>;
                   return <div style={{ fontSize: 12 }}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: "#111", marginBottom: 8 }}>{cl.name || "—"}</div>
                     {row("NIP / VAT", cl.vatEuId || cl.nip, true)}
@@ -405,10 +405,10 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                     <div key={idx} style={{ background: "#fff", border: "1px solid #BBF7D0", borderRadius: 8, padding: "10px 12px", marginBottom: 6 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: inv.paymentStatus === "Cancelled" ? "#B91C1C" : "#16A34A", textDecoration: inv.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.number}</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: inv.paymentStatus === "Cancelled" ? "#B91C1C" : "#16A34A", textDecoration: inv.paymentStatus === "Cancelled" ? "line-through" : "none", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{inv.number}</div>
                           <div style={{ fontSize: 10, color: "#888", marginTop: 1 }}>SINV · Issue {formatDMY(inv.issueDate)} · Due {formatDMY(inv.dueDate)}</div>
                         </div>
-                        <div style={{ padding: "2px 8px", background: inv.paymentStatus === "Cancelled" ? "#FEF2F2" : "#DCFCE7", color: inv.paymentStatus === "Cancelled" ? "#B91C1C" : "#16A34A", borderRadius: 4, fontSize: 9.5, fontWeight: 700, letterSpacing: "0.04em" }} title="v6.80.0 (D-44): the register's own status — not a fixed 'READY'">{String(inv.paymentStatus || "Draft").toUpperCase()}</div>
+                        <div style={{ padding: "2px 8px", background: inv.paymentStatus === "Cancelled" ? "#FEF2F2" : "#DCFCE7", color: inv.paymentStatus === "Cancelled" ? "#B91C1C" : "#16A34A", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: "0.04em" }} title="v6.80.0 (D-44): the register's own status — not a fixed 'READY'">{String(inv.paymentStatus || "Draft").toUpperCase()}</div>
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 11, color: "#444" }}>
                         <div>Net: <strong>{fmtMoney(inv.netAmount, inv.currency)}</strong></div>
@@ -418,9 +418,9 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                     </div>
                   ))}
                   {soInvoices.some(inv => inv.paymentStatus !== "Cancelled" && (inv.fakturownia?.exported || inv.fakturownia?.fktId)) ? (
-                    <div style={{ fontSize: 10.5, color: "#0C4A6E", marginTop: 8, lineHeight: 1.5, padding: "7px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6 }}>
+                    <div style={{ fontSize: 10, color: "#0C4A6E", marginTop: 8, lineHeight: 1.5, padding: "7px 10px", background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 6 }}>
                       {soInvoices.filter(inv => inv.paymentStatus !== "Cancelled" && (inv.fakturownia?.exported || inv.fakturownia?.fktId)).map((inv, i) => (
-                        <div key={i}>✓ Matched in Fakturownia{inv.fakturownia?.ksef ? <> · KSeF <span style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>{inv.fakturownia.ksef}</span></> : null} · <strong title="From our own payments — the bank (rule 11), never Fakturownia's paid flag">{settlementState(inv, localTodayISO())}</strong></div>
+                        <div key={i}>✓ Matched in Fakturownia{inv.fakturownia?.ksef ? <> · KSeF <span style={{ fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{inv.fakturownia.ksef}</span></> : null} · <strong title="From our own payments — the bank (rule 11), never Fakturownia's paid flag">{settlementState(inv, localTodayISO())}</strong></div>
                       ))}
                     </div>
                   ) : (
@@ -429,9 +429,9 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                     </div>
                   )}
                   {fktConfigured && (
-                    <button onClick={() => onMatchInvoices(order)} disabled={fktMatching} style={{ marginTop: 8, padding: "6px 12px", borderRadius: 7, border: "none", background: fktMatching ? "#A7F3D0" : "#16A34A", color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: fktMatching ? "wait" : "pointer", fontFamily: "inherit" }}>{fktMatching ? "Matching…" : "↻ Match from Fakturownia (read-only)"}</button>
+                    <button onClick={() => onMatchInvoices(order)} disabled={fktMatching} style={{ marginTop: 8, padding: "6px 12px", borderRadius: 7, border: "none", background: fktMatching ? "#A7F3D0" : "#16A34A", color: "#fff", fontSize: 11, fontWeight: 700, cursor: fktMatching ? "wait" : "pointer", fontFamily: "inherit" }}>{fktMatching ? "Matching…" : "↻ Match from Fakturownia (read-only)"}</button>
                   )}
-                  {fktMatchMsg && <div style={{ fontSize: 10.5, color: fktMatchMsg.kind === "error" ? "#DC2626" : "#15803D", marginTop: 6 }}>{fktMatchMsg.text}</div>}
+                  {fktMatchMsg && <div style={{ fontSize: 10, color: fktMatchMsg.kind === "error" ? "#DC2626" : "#15803D", marginTop: 6 }}>{fktMatchMsg.text}</div>}
                 </Card>
               )}
 

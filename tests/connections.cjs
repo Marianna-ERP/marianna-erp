@@ -505,7 +505,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     const plain = shipList(); ok(/Terms to review \(21\)/.test(plain) && !/inconsistencies with the incoterms on/.test(plain), "the review shows without the filter");
   });
   await t("A-INC-2 (v7.20.0): the selected shipment's detail shows its terms to review (SHP-2026-0028)", async () => {
-    const s28 = d.shipments.find(s => s.number === "SHP-2026-0028"); const h = shipList({ shipments: [s28, ...d.shipments.filter(s => s !== s28)] });
+    const s28 = d.shipments.find(s => s.number === "SHP-2026-0028"); const h = shipList({ shipments: [s28, ...d.shipments.filter(s => s !== s28)], initialSelectedNumber: "SHP-2026-0028" });   // v7.23.5 (A-SHV-1): the shipment opens as its page
     ok(/Terms to review \(1\) — the incoterms say otherwise[^⚠]*CIF SO-2026-0020 no insurance certificate/.test(h), "SHP-0028's detail shows no terms to review");
   });
   await t("A-INC-2 (v7.20.0): the Dashboard counts the terms to review (21) and its tile opens Shipments on that filter", async () => {
@@ -594,6 +594,77 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     function W() { const s = G.useSharedStore("x"); return React.createElement("div", null, s.ready ? "THE APP RAN" : s.node); }
     const h = T(renderToStaticMarkup(React.createElement(W)));
     ok(/This copy isn't connected to the shared data/.test(h), h.slice(0, 160)); ok(!/THE APP RAN/.test(h), "the app ran on this browser's data"); ok(/restore it into the TEST copy/.test(h), "no word on old backups");
+  });
+
+  // ══ v7.23.1 — A-SOL-2: a sale line's coloration comes from its lot, which reads it from its PO line ══
+  await t("A-SOL-2 (v7.23.1): a lot reads its coloration from its own PO line; picking it brings the coloration into the sale line, shown 'from stock'; saving fills a line that has none; a typed value that differs is kept and flagged", async () => {
+    const SOm = require(path.resolve("./src/SalesOrders")); const fsx = require("fs"); const eq = (a, b, m) => ok(a === b, `${m || "values"}: ${JSON.stringify(a)} ≠ ${JSON.stringify(b)}`);
+    const pos = [{ number: "PO-T-9", status: "Confirmed", items: [{ id: 11, product: "Apples", variety: "Elise", coloration: "red blush", cnCode: "08081080", qty: 1000 }, { id: 12, product: "Apples", variety: "Gala", coloration: "striped", qty: 500 }] }];
+    const lots = [{ number: "LOT-T-1", product: "Apples", variety: "Elise", poRef: "PO-T-9", poLineId: 11, status: "Expected", expectedKg: 1000 }, { number: "LOT-T-2", product: "Apples", variety: "Gala", poRef: "PO-T-9", status: "Expected", expectedKg: 500 }];
+    const sd = SOm.buildSalesData({ invLots: lots, pos });
+    eq(SOm.lotColorationOf("LOT-T-1", sd), "red blush"); eq(SOm.lotColorationOf("LOT-T-2", sd), "striped", "matched by item and variety when the lot has no PO line id");
+    const filled = SOm.withLotColorations({ items: [{ sourceType: "STOCK", sourceRef: "LOT-T-1", coloration: "" }, { sourceType: "STOCK", sourceRef: "LOT-T-2", coloration: "typed" }] }, sd);
+    eq(filled.items.map(i => i.coloration).join(), "red blush,typed");
+    const src = fsx.readFileSync(path.resolve("./src/SalesOrderForm.tsx"), "utf8");
+    ok(/coloration: lot\.coloration \|\| ""/.test(src) && /The lot says \{fromLot\}/.test(src) && /Coloration\{it\.sourceType && it\.sourceRef \?/.test(src), "the form does not read the lot's coloration");
+  });
+
+  // ══ v7.23.3 — A-UI-1: one colour per kind of document, no icons ══
+  await t("A-UI-1 (v7.23.3): a document link takes its kind's colour on every screen (PO blue, SO green, shipment teal, LOT amber, invoice violet, claim red-pink) — the screens no longer colour their numbers or put an icon before them", async () => {
+    const ui = require(path.resolve("./src/ui")); const fsx = require("fs"); const eq = (a, b, m) => ok(a === b, `${m || "values"}: ${JSON.stringify(a)} ≠ ${JSON.stringify(b)}`);
+    eq(JSON.stringify(ui.DOC_COLOURS), JSON.stringify({ pos: "#1D4ED8", orders: "#15803D", shipments: "#0E7490", lots: "#B45309", invoices: "#7C3AED", claims: "#BE123C" }));
+    const kinds = { "SO-1": "orders", "LOT-1": "lots", "PO-1": "pos" }; const nav = { open: () => {}, canOpen: () => true, kindOf: n => kinds[n] || "" };
+    const html = renderToStaticMarkup(React.createElement(ui.DocNavContext.Provider, { value: nav }, ["SO-1", "LOT-1", "PO-1"].map(n => React.createElement(ui.DocLink, { key: n, num: n }, n))));
+    ok(/color:#15803D[^>]*>SO-1/i.test(html.replace(/\s/g, "")) && /color:#B45309[^>]*>LOT-1/i.test(html.replace(/\s/g, "")) && /color:#1D4ED8[^>]*>PO-1/i.test(html.replace(/\s/g, "")), "a link is not in its kind's colour: " + html.slice(0, 300));
+    const app = fsx.readFileSync(path.resolve("./src/App.tsx"), "utf8"); ok(/kindOf: docModule/.test(app), "the app does not tell the link its kind");
+    const po = fsx.readFileSync(path.resolve("./src/PurchaseOrders.tsx"), "utf8"), so = fsx.readFileSync(path.resolve("./src/SalesOrders.tsx"), "utf8");
+    ok(!/<LinkedDocNumbers[^>]*icon=|🧾 \{sos|📦<DocRef|📄<DocRef|\{icon\}<DocRef|"📦" : "🚚"/.test(po + so), "an icon is still put before a document number");
+  });
+
+  // ══ v7.23.5 — A-SHV-1: Shipments laid out like the other modules ══
+  await t("A-SHV-1 (v7.23.5): Shipments lists every shipment full width with the agreed columns; a click opens its own page — '← Shipments', the seven facts, route and goods open, the long sections folded until opened, 'Re-post inventory' under More — and back returns to the list", async () => {
+    const Sh = require(path.resolve("./src/Shipments")).default; const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
+    const txt = () => host.textContent.replace(/\s+/g, " "); const click = async el => { await act(async () => { el.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); }); };
+    const pick = d.shipments.find(s => (s.legs || []).some(l => l.mode === "Road") && (s.legs || []).some(l => l.mode === "Sea")) || d.shipments.find(s => (s.legs || []).length) || d.shipments[0];
+    await act(async () => { root.render(React.createElement(Sh, { shipments: d.shipments, setShipments: noop, contacts: d.contacts, pos: d.pos, lots: d.lots, orders: d.orders })); });
+    const heads = Array.from(host.querySelectorAll("thead th")).map(x => x.textContent).join("|");
+    ok(heads.includes("Shipment|Status|Mode and route|Loading → delivery|SO / Client|PO / Supplier|Carriers / Forwarders|Weight|Still missing"), "the list's columns: " + heads);
+    const row = Array.from(host.querySelectorAll("tbody tr")).find(r => (r.textContent || "").startsWith(pick.number)); ok(row, "no row for " + pick.number);
+    await click(row);
+    ok(/← Shipments/.test(txt()), "the page did not open");
+    ["Loading", "Delivery", "SO / Client", "PO / Supplier", "LOT", "Carriers / Forwarders", "Weight", "Route and legs", "Goods"].forEach(k => ok(txt().includes(k), "the page lacks " + k));
+    if ((pick.legs || []).some(l => l.mode === "Road")) ok(txt().includes("Truck number") && txt().includes("Trailer number") && txt().includes("Unloading date"), "the road leg's table");
+    if ((pick.legs || []).some(l => l.mode === "Sea")) ok(txt().includes("Port of Discharge (POD)") && txt().includes("Truck number loaded into it"), "the sea leg's table");
+    ok(!txt().includes("Required documents received"), "the checklist is not folded");
+    await click(Array.from(host.querySelectorAll("button")).find(b => /Checklist/.test(b.textContent || ""))); ok(txt().includes("Required documents received"), "the checklist does not open");
+    ok(!txt().includes("Re-post inventory"), "Re-post inventory is not under More"); await click(Array.from(host.querySelectorAll("button")).find(b => (b.textContent || "").trim() === "More ▾")); ok(txt().includes("Re-post inventory"), "More does not open");
+    await click(Array.from(host.querySelectorAll("button")).find(b => /← Shipments/.test(b.textContent || ""))); ok(host.querySelectorAll("thead th").length >= 9 && !/← Shipments/.test(txt()), "back does not return to the list");
+    await act(async () => root.unmount()); host.remove();
+  });
+  await t("A-SHV-1 (v7.23.5): a link from another module (and a 'Terms to review' line) opens the shipment's page, not its editor", async () => {
+    const Sh = require(path.resolve("./src/Shipments")).default; const fsx = require("fs");
+    const h = renderToStaticMarkup(React.createElement(Sh, { shipments: d.shipments, setShipments: noop, contacts: d.contacts, pos: d.pos, lots: d.lots, orders: d.orders, initialSelectedNumber: d.shipments[0].number }));
+    ok(/← Shipments/.test(h) && !/>Close</.test(h), "the link opened the editor");
+    ok(/onOpenShipment=[\s\S]{0,220}setPageOpen\(true\)/.test(fsx.readFileSync(path.resolve("./src/Shipments.tsx"), "utf8")), "a terms line does not open the page");
+  });
+
+  // ══ v7.23.6 — A-SHV-1: one DHL for several shipments of a client ══
+  await t("A-SHV-1 (v7.23.6): 'Originals sent by DHL…' takes one DHL number and date and offers the client's other shipments still waiting for their originals, ticked — one save writes the number on each", async () => {
+    const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
+    const orders = [{ number: "SO-X1", status: "Confirmed", client: { id: 9, name: "Nile Fresh" } }, { number: "SO-X2", status: "Confirmed", client: { id: 9, name: "Nile Fresh" } }, { number: "SO-Y1", status: "Confirmed", client: { id: 5, name: "Other" } }];
+    const mk = (id, no, so, extra) => ({ id, number: no, status: "Loaded", mode: "Road", legs: [], goods: [{ id: 1, soRef: so, qtyKg: 1000 }], documents: [{ id: 1, type: "Invoice", status: "Have it" }], ...(extra || {}) });
+    const all = [mk(1, "SHP-X1", "SO-X1"), mk(2, "SHP-X2", "SO-X2"), mk(3, "SHP-X3", "SO-X1", { docsCourierTrackingNo: "OLD-1" }), mk(4, "SHP-Y1", "SO-Y1")];
+    let got = null;
+    await act(async () => { root.render(React.createElement(Det, { shipment: all[0], contacts: [], orders, pos: [], lots: [], allShipments: all, onSetOriginals: (nos, dhl, date) => { got = { nos, dhl, date }; }, openAll: true })); });
+    const click = async el => { await act(async () => { el.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); }); };
+    await click(Array.from(host.querySelectorAll("button")).find(b => /Originals sent by DHL/.test(b.textContent || "")));
+    const dlg = host.querySelector('[role="dialog"]'); ok(dlg, "the window did not open"); const txt = dlg.textContent;
+    ok(/SHP-X2/.test(txt) && !/SHP-X3/.test(txt) && !/SHP-Y1/.test(txt), "the window does not offer exactly the client's other shipment still waiting: " + txt.slice(0, 200));
+    const inp = dlg.querySelector('input[aria-label="DHL number"]'); const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    await act(async () => { setter.call(inp, "4417 2209 13"); inp.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    await click(Array.from(dlg.querySelectorAll("button")).find(b => /^Save on 2 shipments$/.test((b.textContent || "").trim())));
+    ok(got && got.nos.join() === "SHP-X1,SHP-X2" && got.dhl === "4417 2209 13" && /^\d{4}-\d{2}-\d{2}$/.test(got.date), "saved: " + JSON.stringify(got));
+    await act(async () => root.unmount()); host.remove();
   });
 
   console.log(`CONNECTIONS: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);

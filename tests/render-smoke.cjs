@@ -159,9 +159,10 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const multi = (d4.shipments || []).filter((s) => String(s.mode || "").toLowerCase() === "multimodal" && (s.legs || []).length > 1);
     const sh = multi.find(arranging) || multi[0] || d4.shipments[0];
     _where = "shipment editor " + sh.number;
-    const html = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: d4.shipments, setShipments: () => {}, contacts: d4.contacts, lots: d4.lots, orders: d4.orders, pos: d4.pos, initialSelectedNumber: sh.number }));
-    const iB = html.indexOf("Booking (sea"), iU = html.indexOf("Loading place");
-    const checks = { close: />Close</.test(html), bookingBeforeUnits: iB > 0 && iU > iB, forwarderInBookingLine: html.indexOf(">Forwarder<") > iB, portsShown: html.includes(">POL") && html.includes("Shipping line"), noBareUnitWord: !/>unit<\/div>/.test(html) };
+    const html = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: d4.shipments, setShipments: () => {}, contacts: d4.contacts, lots: d4.lots, orders: d4.orders, pos: d4.pos, initialEdit: true, initialSelectedNumber: sh.number }));
+    const ed = html.slice(Math.max(0, html.indexOf(">Close<")));   // v7.23.5 (A-SHV-1): the editor opens over the shipment's page — read the editor alone
+    const iB = ed.indexOf("Booking (sea"), iU = ed.indexOf("Loading place");
+    const checks = { close: />Close</.test(html), bookingBeforeUnits: iB > 0 && iU > iB, forwarderInBookingLine: ed.indexOf(">Forwarder<") > iB, portsShown: ed.includes(">POL") && ed.includes("Shipping line"), noBareUnitWord: !/>unit<\/div>/.test(ed) };
     const bad = Object.entries(checks).filter(([k, v]) => !v).map(([k]) => k);
     if (!bad.length) { passed++; console.log("  \u2713 shipment editor layout: Close · Header → Booking → Units · booking line · ports shown"); } else { failed++; console.log("  \u2717 shipment editor layout — " + bad.join(", ")); }
   } catch (e) { failed++; console.log("  \u2717 shipment editor layout —", (e.message || "").slice(0, 120)); } }
@@ -242,7 +243,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ShMod = require(path.resolve("./src/Shipments"));
     let sh = C.applyCustomsFile(mk(), 11, C.parseCustomsFile(relX), "CC529C.xml", () => 90001); sh = C.applyCustomsFile(sh, 11, C.parseCustomsFile(exitX), "CC599C.xml", () => 90002);
     _where = "shipment editor · customs line";
-    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: [sh], setShipments: () => {}, contacts: [], lots: [], orders: [{ number: "SO-2026-0090", client: { name: "Al Baraka For Import & Export" }, sellIncoterm: "CFR" }], pos: [], invoices, initialSelectedNumber: sh.number }));
+    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: [sh], setShipments: () => {}, contacts: [], lots: [], orders: [{ number: "SO-2026-0090", client: { name: "Al Baraka For Import & Export" }, sellIncoterm: "CFR" }], pos: [], invoices, initialEdit: true, initialSelectedNumber: sh.number }));
     [">Exited<", "left the EU 2026-05-12", "IT137103", ">Detach file<", "Import customs files"].forEach(w => { if (!eh.includes(w)) bad.push("editor lacks " + JSON.stringify(w)); });
     if (!/<button[^>]*>Detach file<\/button>/.test(eh) || !/<button[^>]*#DC2626[^>]*>Detach file<\/button>/.test(eh)) bad.push("Detach is not the white/red remove button");
     // 3. the invoice: the CUSTOMS card reads the shipment
@@ -279,13 +280,13 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     { const DI = require(path.resolve("./src/DateInput")); if (DI.dmyToIso("31/06/2026") !== null || DI.dmyToIso("29/02/2026") !== null || DI.dmyToIso("30/06/2026") !== "2026-06-30" || DI.dmyToIso("29/02/2028") !== "2028-02-29") bad.push("A-DT-1: the date control still accepts a day that does not exist"); }
     _where = "SHP-2026-0035 editor";
     const ShMod = require(path.resolve("./src/Shipments"));
-    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: d9.shipments, setShipments: () => {}, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, invoices: d9.invoices || [], initialSelectedNumber: "SHP-2026-0035" }));
+    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: d9.shipments, setShipments: () => {}, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, invoices: d9.invoices || [], initialEdit: true, initialSelectedNumber: "SHP-2026-0035" }));
     const et = eh.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").replace(/&#x27;/g, "'");
     [["its goods are PO-2026-0042's", "TR1's swap"], ["its goods are PO-2026-0041's", "TR2's swap"], ["SO-2026-0025 delivers to Damietta Port — this booking discharges at Gdańsk Port", "POD vs SO"], ["the booking discharges at Gdańsk Port", "container 1 vs booking"], ["Use it", "one-click fix"], ["↺ booking", "back to the booking"]].forEach(([w, why]) => { if (!et.includes(w)) bad.push("editor lacks " + why + ": " + JSON.stringify(w)); });
     const rings = (eh.match(/box-shadow:0 0 0 2px #FCA5A5/g) || []).length;
     // opened, the containers took the booking's missing ETD and POD; what stays empty on SHP-0035 is outlined (it has no gaps left but the truck times) — and a unit with gaps is outlined
     const gapSh = JSON.parse(JSON.stringify(sh)); gapSh.legs[0].vehicles[1].plannedDeliveryDate = ""; gapSh.legs[0].vehicles[1].deliveryLocationId = null; gapSh.legs[0].vehicles[1].deliveryText = ""; gapSh.bookings[0].eta = "";
-    const gh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: [gapSh], setShipments: () => {}, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, invoices: [], initialSelectedNumber: "SHP-2026-0035" }));
+    const gh = renderToStaticMarkup(React.createElement(ShMod.default, { shipments: [gapSh], setShipments: () => {}, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, invoices: [], initialEdit: true, initialSelectedNumber: "SHP-2026-0035" }));
     const gr = (gh.match(/box-shadow:0 0 0 2px #FCA5A5/g) || []).length; if (gr < rings + 3) bad.push(`red rings: ${rings} on the file, ${gr} with 3 more gaps`);
     if (!bad.length) { passed++; console.log(`  \u2713 SHP-2026-0035: containers 21 + 21 pallets (was 42 + 42); the legs box follows the carrier; the editor names both swapped trucks, the POD against the SO, and rings what is empty (${rings} → ${gr})`); }
     else { failed++; console.log("  \u2717 SHP-2026-0035 — " + bad.join(" · ")); }
@@ -448,14 +449,14 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     _where = "shipments list — SHP-2026-0037";
     const lh = renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {} }));
     const li = lh.indexOf("SHP-2026-0037"); const row = lh.slice(li, li + 1600);
-    if (!/title="actual dates from the trucks[^"]*">2026-06-02 → 2026-06-15</.test(row)) bad.push("list row does not show the truck's actual dates: " + (T(row).slice(0, 160)));
+    if (!/<span>02\/06\/2026<\/span><br\/><span>15\/06\/2026<\/span>/.test(row)) bad.push("list row does not show the truck's actual dates: " + (T(row).slice(0, 160)));   // v7.23.5 (A-SHV-1): dd/mm/yyyy, actual (not grey "planned")
     _where = "shipment editor — SHP-2026-0037 governing order";
-    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialSelectedNumber: "SHP-2026-0037" })); const et = T(eh);
+    const eh = renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialEdit: true, initialSelectedNumber: "SHP-2026-0037" })); const et = T(eh);
     if (!/Governing order/.test(et)) bad.push("no governing-order field on the PO's truck"); if (!/PO-2026-0044 · purchase · DDP/.test(et)) bad.push("the purchase is not named"); if (!/— no sale: to our warehouse —/.test(et)) bad.push("the sale cannot be chosen");
     _where = "shipment detail — SHP-2026-0037 dates";
     const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const sh = d9.shipments.find(s => s.number === "SHP-2026-0037");
     const dh = T(renderToStaticMarkup(React.createElement(Det, { shipment: sh, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, invoices: [], shipments: d9.shipments, onBack: () => {}, onEdit: () => {} })));
-    if (!/2026-06-02 loaded/.test(dh) || !/2026-06-15 unloaded/.test(dh)) bad.push("detail leg row lacks the actual dates: " + (dh.match(/LOADING .{0,60}/) || [""])[0]);
+    if (!/02\/06\/2026/.test(dh) || !/15\/06\/2026/.test(dh) || !/Unloaded/.test(dh)) bad.push("the leg table lacks the trucks' actual dates: " + (dh.match(/Truck number.{0,200}/) || [""])[0]);   // v7.23.5 (A-SHV-1): dd/mm/yyyy, in the road leg's table
     _where = "receive window";
     const W = require(path.resolve("./src/InventoryWindows")); const M = require(path.resolve("./src/shipmentModel.domain")); const lot = d9.lots.find(l => l.number === "LOT-2026-0127"); const po = d9.pos.find(p => p.number === "PO-2026-0044");
     const wh = renderToStaticMarkup(React.createElement(W.ReceiveLotModal, { lot, suggested: M.suggestedReceiptDate(lot, d9.shipments, po, "2026-10-01"), locationName: "Our warehouse", onCancel: () => {}, onConfirm: () => {} })); const wt = T(wh);
@@ -476,13 +477,14 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     if (!(iW >= 0 && iL > iW && iM > iL)) bad.push(`lot view order: workbench ${iW}, linked ${iL}, movements ${iM}`);
     _where = "shipment detail SHP-2026-0035";
     const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const sh = d9.shipments.find(s => s.number === "SHP-2026-0035");
-    const dt = T(renderToStaticMarkup(React.createElement(Det, { shipment: sh, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onStuffing: () => {}, onDevanning: () => {}, onEdit: () => {} })));
-    const g = dt.indexOf("Goods"), to = dt.indexOf("Transport orders") >= 0 ? dt.indexOf("Transport orders") : dt.indexOf("TRANSPORT ORDERS"), fw = dt.indexOf("Containers — forwarder's reports"), dc = dt.indexOf("Documents");
-    if (!(g > 0 && fw > g)) bad.push(`goods not before the forwarder box (goods ${g}, forwarder ${fw})`); if (fw < 0) bad.push("forwarder box not retitled");
-    if (/Document register/.test(dt)) bad.push("the document register box is still separate"); if (!(dc > 0 && /Documents.{0,40}Transport order/.test(dt.slice(dc)))) bad.push("Documents does not start with the transport order line");
+    const dt = T(renderToStaticMarkup(React.createElement(Det, { shipment: sh, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onStuffing: () => {}, onDevanning: () => {}, onEdit: () => {}, openAll: true })));
+    // v7.23.5 (A-SHV-1): the page reads route and legs (the forwarder's reports under the legs), then the goods, then the folded sections
+    const rl = dt.indexOf("Route and legs"), fw = dt.indexOf("Containers — forwarder's reports"), g = dt.indexOf("Goods", rl), dc = dt.indexOf("Documents", g);
+    if (!(rl > 0 && fw > rl && g > fw)) bad.push(`route (${rl}) → forwarder box (${fw}) → goods (${g}) out of order`); if (fw < 0) bad.push("forwarder box not retitled");
+    if (/Document register/.test(dt)) bad.push("the document register box is still separate"); if (!(dc > 0 && /Documents.{0,160}Transport order/.test(dt.slice(dc)))) bad.push("Documents does not start with the transport order line");
     if (!/port of loading: which trucks went into which container/i.test(dt)) bad.push("forwarder box lacks its explanation");
     _where = "shipment editor SHP-2026-0037 governing order";
-    const ShMod = require(path.resolve("./src/Shipments")); const eh = renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialSelectedNumber: "SHP-2026-0037" }));
+    const ShMod = require(path.resolve("./src/Shipments")); const eh = renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialEdit: true, initialSelectedNumber: "SHP-2026-0037" }));
     if (!/<div style="grid-column:1 \/ -1">.{0,200}Governing order/.test(eh.replace(/\n/g, " "))) bad.push("the governing-order block is not on a line of its own");
     _where = "parties";
     const Con = require(path.resolve("./src/Contacts")).default; const wh = d9.contacts.find(c => /Warehouse/i.test(String(c.type || ""))) || d9.contacts[0];
@@ -504,9 +506,11 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     if (!/>Delete<\/button>/.test(sv) || />Withdraw<\/button>/.test(sv)) bad.push("SO view: Delete missing or Withdraw still there");
     const cancelledPO = d9.pos.find(p => p.status === "Cancelled"); if (cancelledPO) { const cv = T(renderToStaticMarkup(React.createElement(POm.default, { ...c9, initialSelectedNumber: cancelledPO.number }))); if (!/Deleted — read-only/.test(cv)) bad.push("a deleted PO does not say so"); if (/\bCancelled\b/.test(cv.replace(/Cancelled at/g, ""))) bad.push("the word Cancelled still shows on a deleted PO"); }
     _where = "shipment view SHP-2026-0035"; const Det = require(path.resolve("./src/ShipmentDetail")).ShipmentDetail; const M = require(path.resolve("./src/shipmentModel.domain"));
-    const sh35 = d9.shipments.find(s => s.number === "SHP-2026-0035"); const dh = renderToStaticMarkup(React.createElement(Det, { shipment: sh35, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onEdit: () => {} })); const dt = T(dh);
-    if (!/AGRO-HURT[^|]{0,40}\+ Patace Cekicero|Patace Cekicero[^|]{0,40}\+ AGRO-HURT/.test(dt)) bad.push("road leg: the trucks' carriers not named: " + (dt.match(/Route \/ legs.{0,160}/) || [""])[0]); if (!/DCS NAKAPAL/.test(dt)) bad.push("sea leg: the booking's forwarder not named");
-    const iCh = dt.indexOf("Operational checklist"), iDoc = dt.indexOf("Documents", iCh), iCost = dt.indexOf("Costs / billing"); if (!(iCh > 0 && iDoc > iCh && iCost > iDoc)) bad.push(`pairs order: checklist ${iCh}, documents ${iDoc}, costs ${iCost}`);
+    const sh35 = d9.shipments.find(s => s.number === "SHP-2026-0035"); const dh = renderToStaticMarkup(React.createElement(Det, { shipment: sh35, contacts: d9.contacts, lots: d9.lots, orders: d9.orders, pos: d9.pos, onEdit: () => {}, openAll: true })); const dt = T(dh);
+    // v7.23.5 (A-SHV-1): each truck names its carrier in the road leg's table; the sea leg its forwarder; the sections follow in their order
+    const route = dt.slice(dt.indexOf("Route and legs"), dt.indexOf("Goods", dt.indexOf("Route and legs")));
+    if (!/AGRO-HURT/.test(route) || !/Patace Cekicero/.test(route)) bad.push("road leg: the trucks' carriers not named: " + route.slice(0, 200)); if (!/DCS NAKAPAL/.test(route)) bad.push("sea leg: the booking's forwarder not named");
+    const order = ["Checklist", "Documents", "Transport orders", "Costs", "Notes"].map(w => dh.indexOf(`>${w}</span>`)); if (!order.every((x, k) => x > 0 && (k === 0 || x > order[k - 1]))) bad.push(`sections order: ${order.join(", ")}`);
     if (!bad.length) { passed++; console.log("  \u2713 PO / SO views: solid red Delete, no Withdraw (A-DEL-4; every other record view: tests/connections, A-RV-10); shipment view: checklist | documents, costs | notes; the leg row names the trucks' carriers and the booking's forwarder (SHP-0035, SHP-0031 after the heal)"); }
     else { failed++; console.log("  \u2717 delete / withdraw / pairs / carriers — " + bad.join(" · ")); }
   } catch (e) { failed++; console.log("  \u2717 delete / withdraw / pairs / carriers —", (e.stack || e.message || "").split("\n").slice(0, 2).join(" ").slice(0, 220)); } }
@@ -520,7 +524,7 @@ render("Inventory detail " + (lot && lot.number), React.createElement(Inventory,
     const ch = renderToStaticMarkup(React.createElement(Cr, { pos: d9.pos, orders: d9.orders, lots: d9.lots, contacts: d9.contacts, shipments: d9.shipments, onCancel: () => {}, onCreate: () => {} }));
     if (!/>Close<\/button>/.test(ch)) bad.push("the create window's header Close is not drawn");
     _where = "SHP-2026-0039 editor tour"; const ShMod = require(path.resolve("./src/Shipments"));
-    const et = T(renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialSelectedNumber: "SHP-2026-0039" })));
+    const et = T(renderToStaticMarkup(React.createElement(ShMod.default, { ...c9, setShipments: () => {}, initialEdit: true, initialSelectedNumber: "SHP-2026-0039" })));
     ["TOUR · 1 LOADING · 3 UNLOADING", "Load 1 · AGRO-HURT", "14 265 kg", "Unload 1 ·", "SO-2026-0027", "Unload 3 · TUMAGE TUGUF Bronisze · SO-2026-0029"].forEach(w => { if (!et.includes(w)) bad.push("editor tour lacks " + JSON.stringify(w)); });
     if (/its goods are PO-2026-0044's/.test(et)) bad.push("the truck is still told to load at the producer");
     _where = "SHP-2026-0039 transport order"; const SD = require(path.resolve("./src/ShipmentDocuments")); const sh0 = d9.shipments.find(s => s.number === "SHP-2026-0039");

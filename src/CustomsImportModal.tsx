@@ -26,7 +26,7 @@ export function CustomsImportView({ rows, setRows, onAttach, onClose, onFiles, r
         <div style={{ padding: 22, overflowY: "auto", flex: 1 }}>
           {!result && (
             <label onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); onFiles(Array.from(e.dataTransfer.files || [])); }}
-              style={{ display: "block", border: "2px dashed #CBD5E1", borderRadius: 10, padding: "18px 16px", textAlign: "center", color: "#475569", fontSize: 12.5, cursor: "pointer", marginBottom: 16, background: "#F8FAFC" }}>
+              style={{ display: "block", border: "2px dashed #CBD5E1", borderRadius: 10, padding: "18px 16px", textAlign: "center", color: "#475569", fontSize: 12, cursor: "pointer", marginBottom: 16, background: "#F8FAFC" }}>
               Drop the agent's .xml files here, or click to choose (several at once)
               <input type="file" accept=".xml,.XML" multiple style={{ display: "none" }} onChange={e => onFiles(Array.from(e.target.files || []))} />
             </label>
@@ -36,9 +36,9 @@ export function CustomsImportView({ rows, setRows, onAttach, onClose, onFiles, r
             return (
               <div key={i} style={{ border: "1px solid #E5E7EB", borderRadius: 10, padding: "12px 14px", marginBottom: 10, background: r.done ? "#F0FDF4" : "#fff" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em", color: "#fff", background: KIND_COLOR[p.kind] || "#6B7280", borderRadius: 6, padding: "2px 8px", fontFamily: "ui-monospace, Menlo, monospace" }}>{p.kind === "unknown" ? "?" : p.kind}</span>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.04em", color: "#fff", background: KIND_COLOR[p.kind] || "#6B7280", borderRadius: 6, padding: "2px 8px", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{p.kind === "unknown" ? "?" : p.kind}</span>
                   <span style={{ fontSize: 13, fontWeight: 700, color: "#111" }}>{CUSTOMS_FILE_LABEL[p.kind]}</span>
-                  <span style={{ fontSize: 11.5, color: "#888", fontFamily: "ui-monospace, Menlo, monospace" }}>{r.name}</span>
+                  <span style={{ fontSize: 11, color: "#888", fontFamily: "inherit", fontVariantNumeric: "tabular-nums" }}>{r.name}</span>
                 </div>
                 {p.ok && (
                   <div style={{ fontSize: 12, color: "#444", marginTop: 6, lineHeight: 1.6 }}>
@@ -51,7 +51,7 @@ export function CustomsImportView({ rows, setRows, onAttach, onClose, onFiles, r
                   </div>
                 )}
                 {r.done ? (
-                  <div style={{ marginTop: 8, fontSize: 12.5, color: "#166534", fontWeight: 600 }}>✓ Attached to {r.done}</div>
+                  <div style={{ marginTop: 8, fontSize: 12, color: "#166534", fontWeight: 600 }}>✓ Attached to {r.done}</div>
                 ) : !p.ok ? (
                   <div style={{ marginTop: 8, fontSize: 12, color: "#B91C1C" }}>{s.reason}</div>
                 ) : (
@@ -60,7 +60,7 @@ export function CustomsImportView({ rows, setRows, onAttach, onClose, onFiles, r
                     <div>
                       {options.length ? (
                         <select value={r.choice} onChange={e => setRows((prev: ImportRow[]) => withChoice(prev, i, e.target.value))}
-                          style={{ width: "100%", border: `1px solid ${s.exact ? "#86EFAC" : "#FCD34D"}`, borderRadius: 7, padding: "6px 9px", fontSize: 12.5, background: "#fff", fontFamily: "inherit" }}>
+                          style={{ width: "100%", border: `1px solid ${s.exact ? "#86EFAC" : "#FCD34D"}`, borderRadius: 7, padding: "6px 9px", fontSize: 12, background: "#fff", fontFamily: "inherit" }}>
                           {!s.exact && <option value="">— leave this file out —</option>}
                           {options.map(h => <option key={homeKey(h)} value={homeKey(h)}>{homeLabel(h)}{h.confidence === "exact" ? " (exact)" : ""}</option>)}
                         </select>
@@ -74,7 +74,7 @@ export function CustomsImportView({ rows, setRows, onAttach, onClose, onFiles, r
               </div>
             );
           })}
-          {result && <div style={{ marginTop: 6, fontSize: 12.5, color: "#166534", fontWeight: 600 }}>{result}</div>}
+          {result && <div style={{ marginTop: 6, fontSize: 12, color: "#166534", fontWeight: 600 }}>{result}</div>}
         </div>
         <div style={{ padding: "12px 22px", borderTop: "1px solid #EBEBEB", display: "flex", gap: 8, justifyContent: "flex-end", alignItems: "center" }}>
           {!result && rows.length > 0 && <span style={{ fontSize: 12, color: "#666", marginRight: "auto" }}>{chosen} of {rows.length} file(s) will be attached</span>}
