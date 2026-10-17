@@ -667,5 +667,22 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     await act(async () => root.unmount()); host.remove();
   });
 
+  // ══ v7.25.1 — FZ-17: invoices that name their company in text are linked once ══
+  await t("FZ-17 (v7.25.1): Invoices lists the invoices that name their company in text only; a company of the very same name is suggested; Link writes the company's id (and nothing for an invoice already linked)", async () => {
+    const Inv = require(path.resolve("./src/Invoices")).default; const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
+    const base = { kind: "PURCHASE", category: "GOODS", dueDate: "2026-10-31", currency: "PLN", fxRate: 1, netAmount: 100, vatRate: 0, vatAmount: 0, grossAmount: 100, netPLN: 100, grossPLN: 100, positions: [], links: [], paymentStatus: "Issued", paidAmount: 0, payments: [], notes: "" };
+    const invoices = [{ ...base, id: 11, number: "FV 1/10/2026", issueDate: "2026-10-01", counterparty: { name: "Agro A" } },
+                      { ...base, id: 12, number: "FV 2/10/2026", issueDate: "2026-10-02", counterparty: { id: 6, name: "Linked Co" } }];
+    let store = invoices; const setInvoices = u => { store = typeof u === "function" ? u(store) : u; };
+    await act(async () => { root.render(React.createElement(Inv, { invoices, setInvoices, contacts: [{ id: 5, name: "Agro A" }, { id: 6, name: "Linked Co" }], orders: [], pos: [], shipments: [], lots: [], financeNotes: [], setFinanceNotes: noop })); });
+    ok(/1 invoice names the company in text only/.test(host.textContent), "no review line: " + host.textContent.slice(0, 160));
+    const click = async el => { await act(async () => { el.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); }); };
+    await click(Array.from(host.querySelectorAll("button")).find(b => (b.textContent || "").trim() === "Review"));
+    const sel = Array.from(host.querySelectorAll("select")).find(s => Array.from(s.options).some(o => o.text === "Choose the company…")); ok(sel && sel.value === "5", "the same-name company is not suggested");
+    await click(Array.from(host.querySelectorAll("button")).find(b => (b.textContent || "").trim() === "Link"));
+    ok(store.find(i => i.id === 11).counterparty.id === 5, "Link did not write the company's id"); ok(store.find(i => i.id === 12) === invoices[1], "an invoice already linked was rewritten");
+    await act(async () => root.unmount()); host.remove();
+  });
+
   console.log(`CONNECTIONS: ${passed} passed, ${failed} failed`); if (failed) process.exit(1);
 })();

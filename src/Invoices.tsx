@@ -200,7 +200,7 @@ function ImportFakturowniaModal({ invoices = [], contacts = [], shipments = [], 
     const inc = rows.filter(r => r.include && r.tag !== "SKIP");
     const regs: any[] = []; const flips: any[] = []; const opCosts: any[] = [];   /* v7.22.0 (A-RV-40): warehouse invoices go to the register (v7.21.4) — no list of their own */
     inc.forEach(r => {
-      const contact = contactForSeller(r, contacts);
+      const contact = contactForSeller(r, contacts, { byName: false });   // v7.25.1 (FZ-17): linked by tax number only — the rest go to the review list
       if (r.tag === "WAREHOUSE") {
         const wh = warehouses.find((w: any) => String(w.id) === String(r.warehouseId)) || contact;
         // v7.21.4 (A-ST-10): a warehouse invoice goes into the register like any cost invoice — no separate store
@@ -380,6 +380,42 @@ function WarehouseAllocationModal({ inv, lots, contacts, onClose, onApply }: any
       </div>
     </div>
   );
+}
+
+/** v7.25.1 (FZ-17, owner 17 Oct): AN INVOICE NAMES ITS COMPANY BY ID. The ones that name it in text only are listed once — link each to
+ *  its company (a company of the very same name is suggested), or open the Directory to add it; no free text. */
+function UnlinkedCompanies({ invoices, contacts, setInvoices }: any) {
+  const S = (v: any) => String(v ?? "").trim(); const norm = (v: any) => S(v).toLowerCase().replace(/\s+/g, " ");
+  const live = (contacts || []).filter((c: any) => c && c.status !== "Deleted" && S(c.name));
+  const rows = (invoices || []).filter((i: any) => i && !S(i.counterparty?.id) && !/Cancelled/i.test(S(i.status) + S(i.paymentStatus)));
+  const [open, setOpen] = useState(false); const [pick, setPick] = useState<Record<string, string>>({});
+  if (!rows.length || !setInvoices) return null;
+  const suggest = (i: any) => { const n = norm(i.counterparty?.name); const hit = n ? live.find((c: any) => norm(c.name) === n) : null; return hit ? String(hit.id) : ""; };
+  const link = (i: any, cid: string) => {
+    const c = live.find((x: any) => String(x.id) === String(cid)); if (!c) return;
+    setInvoices((prev: any[]) => (prev || []).map((x: any) => x && x.id === i.id ? { ...x, counterparty: { ...(x.counterparty || {}), id: c.id, name: c.name } } : x));
+    recordAudit({ module: "Invoices", docType: "Invoice", docNumber: S(i.number), action: "updated", summary: `Company linked by id: ${c.name} (was named "${S(i.counterparty?.name) || "—"}" in text) — FZ-17` });
+  };
+  const btn: React.CSSProperties = { padding: "5px 10px", borderRadius: 7, border: "1px solid #E5E7EB", background: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" };
+  return <Card style={{ marginBottom: 14, borderColor: "#FDE68A", background: "#FFFBEB" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <b style={{ fontSize: 13 }}>{rows.length} invoice{rows.length === 1 ? "" : "s"} name{rows.length === 1 ? "s" : ""} the company in text only</b>
+      <span style={{ fontSize: 12, color: "#92400E" }}>Link each to its company once — the statements, the reports and the database then read it by id.</span>
+      <button type="button" onClick={() => setOpen(o => !o)} style={{ ...btn, marginLeft: "auto" }}>{open ? "Hide" : "Review"}</button>
+    </div>
+    {open && <div style={{ marginTop: 10, overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+      <thead><tr>{["Invoice", "Issued", "Named as", "Company", ""].map(h => <th key={h} style={{ textAlign: "left", fontSize: 11, color: "#92400E", padding: "5px 8px", borderBottom: "1px solid #FDE68A" }}>{h}</th>)}</tr></thead>
+      <tbody>{rows.map((i: any) => { const cur = pick[String(i.id)] ?? suggest(i);
+        return <tr key={i.id}>
+          <td style={{ padding: "6px 8px", fontWeight: 700 }}>{i.number || "—"}</td>
+          <td style={{ padding: "6px 8px" }}>{i.issueDate ? formatDMY(S(i.issueDate).slice(0, 10)) : "—"}</td>
+          <td style={{ padding: "6px 8px" }}>{S(i.counterparty?.name) || "—"}</td>
+          <td style={{ padding: "6px 8px", minWidth: 220 }}><Sel value={cur} onChange={(e: any) => setPick(p => ({ ...p, [String(i.id)]: e.target.value }))}><option value="">Choose the company…</option>{live.map((c: any) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</Sel></td>
+          <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+            <button type="button" disabled={!cur} onClick={() => link(i, cur)} style={{ ...btn, background: cur ? "#16A34A" : "#F1F5F9", color: cur ? "#fff" : "#94A3B8", borderColor: cur ? "#16A34A" : "#E5E7EB" }}>Link</button>{" "}
+            <button type="button" onClick={() => window.dispatchEvent(new CustomEvent("marianna:navigate", { detail: { module: "contacts", tab: "companies" } }))} style={btn}>＋ New company</button>
+          </td></tr>; })}</tbody></table></div>}
+  </Card>;
 }
 
 export default function Invoices(props: any) {
@@ -704,6 +740,7 @@ export default function Invoices(props: any) {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 28px" }}>
+        <UnlinkedCompanies invoices={invoices} contacts={contacts} setInvoices={setInvoices} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
           {[
             { l: "RECEIVABLE · OPEN", v: money(recvOpen, "PLN"), c: "#16A34A" },

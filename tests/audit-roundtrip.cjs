@@ -4033,6 +4033,41 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   });
 })();
 
+// ══ v7.25.0 — A-RV-13 / FZ-02: one source for each company ══
+(function v72500(){
+  console.log("\n══ v7.25.0 — A-RV-13 / FZ-02: one source for each company ══");
+  const CP = B("counterparty.domain.js"); const IC = B("integrityCheck.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("A-RV-13 / FZ-02 (v7.25.0): a document's company is read live by its id (or a merged duplicate's) and never by name; a document already showing the live company stays the very same object; a company edit rewrites no stored document", () => {
+    const contacts = [{ id: 1, name: "Agro A", address: "New street 1", contacts: [{ name: "Ann", isPrimary: true }] }, { id: 2, name: "Same Name", mergedFromIds: [7] }, { id: 3, name: "Same Name" }];
+    const po1 = { number: "PO-1", supplier: CP.companyCopy(contacts[0]) }; const po2 = { number: "PO-2", supplier: { id: 1, name: "Agro A", address: "Old street 9" } };
+    const po3 = { number: "PO-3", supplier: { id: 7, name: "Old dup" } }; const po4 = { number: "PO-4", supplier: { id: 99, name: "Same Name" } };
+    const out = CP.withLiveCompanies([po1, po2, po3, po4], ["supplier"], contacts);
+    ok(out[0] === po1, "an up-to-date document was rewritten"); eq(out[1].supplier.address, "New street 1"); eq(out[2].supplier.id, 2, "a merged duplicate's id leads to the survivor");
+    ok(out[3] === po4, "a company not found by id was matched by name"); const same = [po1]; ok(CP.withLiveCompanies(same, ["supplier"], contacts) === same, "nothing to show differently returns the very list");
+    const app = rd("App.tsx"); ok(!/refreshPOCounterparties|refreshSOCounterparties|refreshShipmentCounterparties|resolveCounterpartySnapshot/.test(app), "the rewrite-every-document refresh is still in App");
+    ok(/const pos = useMemo\(\(\) => withLiveCompanies\(posStored, \["supplier"\]/.test(app) && /const orders = useMemo\(\(\) => withLiveCompanies\(ordersStored, \["client"\]/.test(app), "the screens do not read the companies live");
+    ok(!/normalizeName\(c\.name\) === normalizeName\(saved\.name\)/.test(app + rd("counterparty.domain.ts")), "a company is still matched by name");
+  });
+  t("A-RV-13 (v7.25.0): a PO or SO whose company is not in Counterparties (by id or a merged duplicate's id) is named in the data checks", () => {
+    const r = IC.checkIntegrity({ contacts: [{ id: 2, mergedFromIds: [7] }], pos: [{ number: "PO-9", status: "Confirmed", supplier: { id: 99, name: "Gone" } }, { number: "PO-8", status: "Confirmed", supplier: { id: 7 } }], orders: [{ number: "SO-9", status: "Confirmed", client: { id: 98, name: "Gone too" }, items: [] }], lots: [], shipments: [], invoices: [] });
+    const hits = r.issues.filter(i => i.code === "COMPANY_UNKNOWN").map(i => i.entity).sort().join(","); eq(hits, "PO-9,SO-9");
+  });
+})();
+
+// ══ v7.25.1 — FZ-17: an invoice names its company by id ══
+(function v72501(){
+  console.log("\n══ v7.25.1 — FZ-17: the invoice's company by id ══");
+  const FI = B("fakturowniaImport.domain.js"); const fsx = require("fs"), px = require("path");
+  t("FZ-17 (v7.25.1): the Fakturownia import links an invoice to its company by tax number only (NIP, then the EU VAT id) — a name is never a link", () => {
+    const contacts = [{ id: 1, name: "Agro Fresh", nip: "123-456-78-90" }, { id: 2, name: "Nile Trade", vatEuId: "EG987" }];
+    eq(FI.contactForSeller({ seller: "Whatever", sellerTaxNo: "1234567890" }, contacts, { byName: false }).id, 1);
+    eq(FI.contactForSeller({ seller: "Whatever", sellerTaxNo: "eg987" }, contacts, { byName: false }).id, 2);
+    eq(FI.contactForSeller({ seller: "Agro Fresh" }, contacts, { byName: false }), null, "linked by name");
+    ok(FI.contactForSeller({ seller: "Agro Fresh" }, contacts), "the name still suggests");
+    ok(/contactForSeller\(r, contacts, \{ byName: false \}\)/.test(fsx.readFileSync(px.join(__dirname, "../src/Invoices.tsx"), "utf8")), "the import still links by name");
+  });
+})();
+
 // v6.99.110 (AUD-10): the whole suite ran — exit once with the verdict
 console.log(`\nAUDIT ROUND-TRIP TOTAL: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

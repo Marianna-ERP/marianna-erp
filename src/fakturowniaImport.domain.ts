@@ -92,7 +92,10 @@ export function isDuplicateCostInvoice(number: string, invoices: any[]): boolean
 }
 
 /** Find the counterparty record for a seller (name or tax-no match). */
-export function contactForSeller(row: { seller: string; sellerTaxNo?: string }, contacts: any[]): any | null {
+/** The seller's company. v7.25.1 (FZ-17, owner 17 Oct): an invoice is LINKED only by its tax number (NIP, then the EU VAT id) —
+ *  { byName: false }; a name is a suggestion for the review list, never a link (A-RV-13: two companies of one name could swap). */
+export function contactForSeller(row: { seller: string; sellerTaxNo?: string }, contacts: any[], opts: { byName?: boolean } = {}): any | null {
+  const byName = opts.byName !== false;
   const name = norm(row.seller);
   const tax = norm(row.sellerTaxNo).replace(/[^0-9a-z]/g, "");
   return (contacts || []).find((c: any) => {
@@ -101,6 +104,7 @@ export function contactForSeller(row: { seller: string; sellerTaxNo?: string }, 
     const cNip = norm(c.nip).replace(/[^0-9a-z]/g, "");
     const cVatEu = norm(c.vatEuId).replace(/[^0-9a-z]/g, "");
     if (tax && ((cNip && tax === cNip) || (cVatEu && tax === cVatEu))) return true;
+    if (!byName) return false;
     const cName = norm(c.name);
     return !!cName && (cName === name || (name.length > 4 && (cName.includes(name) || name.includes(cName))));
   }) || null;

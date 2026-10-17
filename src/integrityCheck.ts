@@ -733,6 +733,14 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
     (inp.orders || []).filter((o: any) => o && o.status !== "Cancelled" && o.destinationLocationId != null && o.destinationLocationId !== "" && !known(o.destinationLocationId))
       .forEach((o: any) => add("warning", "PLACE_UNKNOWN", "SOs", String(o.number), `${o.number}: its destination (id ${o.destinationLocationId}) is no location any more${o.destinationText ? ` — it read "${o.destinationText}"` : ""}. Choose the location on the sale.`));
   }
+  // v7.25.0 (A-RV-13, owner 17 Oct): a document's company is found by its id (or a merged duplicate's) — never by name; one not found
+  // shows its stored copy and is named here, so it can be chosen again
+  {
+    const known = new Set<string>(); (inp.contacts || []).forEach((c: any) => { if (!c) return; known.add(String(c.id)); (c.mergedFromIds || []).forEach((x: any) => known.add(String(x))); });
+    const lost = (s: any) => !!s && typeof s === "object" && s.id != null && !known.has(String(s.id));
+    (inp.pos || []).filter((p: any) => p && p.status !== "Cancelled" && lost(p.supplier)).forEach((p: any) => add("warning", "COMPANY_UNKNOWN", "POs", String(p.number), `${p.number}: its supplier "${p.supplier.name || "?"}" is not in Counterparties (id ${p.supplier.id}) — choose the supplier again`));
+    (inp.orders || []).filter((o: any) => o && o.status !== "Cancelled" && lost(o.client)).forEach((o: any) => add("warning", "COMPANY_UNKNOWN", "SOs", String(o.number), `${o.number}: its client "${o.client.name || "?"}" is not in Counterparties (id ${o.client.id}) — choose the client again`));
+  }
   // v7.8.0 (A-PO-REF-1): the producer's reference used on more than one PO
   duplicateSupplierRefs(inp.pos || [], inp.shipments || []).forEach(d => add("warning", "SUPPLIER_REF_DUPLICATE", "POs", d.on.join(", "), `The producer's reference "${d.ref}" is used on ${d.on.join(" and ")} — each PO needs its own.`));
   return { issues, counts, okay: counts.error === 0 };

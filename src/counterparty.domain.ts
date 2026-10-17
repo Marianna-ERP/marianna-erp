@@ -96,3 +96,32 @@ export function currentAgreement(contact: any, dateISO: string): ProducerAgreeme
   const valid = list.filter(a => (!a.validFrom || a.validFrom <= dateISO) && (!a.validTo || a.validTo >= dateISO)).sort((a, b) => S(b.validFrom).localeCompare(S(a.validFrom)));
   return valid[0] || null;
 }
+
+// ── v7.25.0 (A-RV-13 / FZ-02, owner 17 Oct): ONE SOURCE FOR EACH COMPANY ─────────────────────────────────────────────────────
+// A PO, an SO and a shipment name their companies by id; the screens read the company live from Counterparties. The copy a document
+// carries is never rewritten on a company edit any more, and a company is never looked up by NAME (two companies of one name could
+// swap) — one not found by its id (or by a merged duplicate's id) shows its stored copy and is named in the data checks.
+const primaryPersonOf = (c: any) => (c?.contacts || []).find((p: any) => p.isPrimary) || (c?.contacts || [])[0] || {};
+/** The company as a document shows it (the fields the documents have always carried). */
+export function companyCopy(c: any): any {
+  const p = primaryPersonOf(c);
+  return { id: c.id, name: c.name, country: c.country, nip: c.nip, vatEuId: c.vatEuId, type: c.type, additionalTypes: c.additionalTypes || [], address: c.address,
+    defaultCurrency: c.defaultCurrency, paymentTerms: c.paymentTerms, paymentTermsOther: c.paymentTermsOther, services: c.services || [], contact: p?.name || "", email: p?.email || "", phone: p?.phone || "" };
+}
+/** The company a document names, read live by its id or a merged duplicate's id — never by name. Not found: the copy as stored. */
+export function liveCompany(saved: any, contacts: any[]): any {
+  if (!saved || saved.id == null) return saved;
+  const id = String(saved.id);
+  const c = (contacts || []).find((x: any) => x && String(x.id) === id) || (contacts || []).find((x: any) => x && (x.mergedFromIds || []).map(String).includes(id));
+  return c ? companyCopy(c) : saved;
+}
+/** Documents with their companies read live; a document whose copy already equals the live company stays the very same object. */
+export function withLiveCompanies(docs: any[], fields: string[], contacts: any[]): any[] {
+  let any = false;
+  const out = (docs || []).map((d: any) => {
+    if (!d) return d; let o = d;
+    fields.forEach(f => { const s = d[f]; if (!s || typeof s !== "object") return; const live = liveCompany(s, contacts); if (live !== s && JSON.stringify(live) !== JSON.stringify(s)) { if (o === d) o = { ...d }; o[f] = live; } });
+    if (o !== d) any = true; return o;
+  });
+  return any ? out : (docs || []);
+}

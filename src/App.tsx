@@ -54,84 +54,14 @@ import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
 import { shapingSetter, shapeWritten } from "./storeShapes";   // v7.24.3 (FZ-01 step 2): a save writes the clean shape
+import { withLiveCompanies } from "./counterparty.domain";   // v7.25.0 (A-RV-13 / FZ-02)
 
 // Batch 5: migrate older-version stored data forward BEFORE any hook reads it
 // (module scope — runs before the App component's hooks read the stores).
 // NOTE (v6.26.1): this call must sit AFTER all imports — CRA's eslint
 // `import/first` rule fails the build otherwise. That exact mistake broke the
 // v6.26.0 deploy; the release gate now runs the real CRA build to catch it.
-dropLegacySnapshots();   // v7.21.0 (A-RV-19, owner ruling B 8 Oct): the single-browser mode is gone — its old local snapshots leave this browser's storage once
-
-// ─── MARIANNA ERP — INTEGRATION SHELL ──────────────────────────────────────
-// Owns canonical state for the frontend prototype and passes it to each module.
-// State is persisted in browser localStorage via useLocalStoredState so testers
-// can refresh, close the browser, and continue with the same test data.
-
-
-function normalizeName(value: any) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function primaryContact(c: any) {
-  return (c?.contacts || []).find((p: any) => p.isPrimary) || (c?.contacts || [])[0] || {};
-}
-
-function counterpartySnapshot(c: any) {
-  const primary = primaryContact(c);
-  return {
-    id: c.id,
-    name: c.name,
-    country: c.country,
-    nip: c.nip,
-    vatEuId: c.vatEuId,
-    type: c.type,
-    additionalTypes: c.additionalTypes || [],
-    address: c.address,
-    defaultCurrency: c.defaultCurrency,
-    paymentTerms: c.paymentTerms,
-    paymentTermsOther: c.paymentTermsOther,
-    services: c.services || [],
-    contact: primary?.name || "",
-    email: primary?.email || "",
-    phone: primary?.phone || "",
-  };
-}
-
-function resolveCounterpartySnapshot(saved: any, contacts: any[]) {
-  if (!saved) return saved;
-  const byId = contacts.find((c: any) => String(c.id) === String(saved.id));
-  // Merged duplicates: the surviving record keeps the absorbed record's id in
-  // mergedFromIds, so documents that referenced the removed duplicate re-point here.
-  const byMergedId = contacts.find((c: any) => (c.mergedFromIds || []).map(String).includes(String(saved.id)));
-  const byName = contacts.find((c: any) => normalizeName(c.name) === normalizeName(saved.name));
-  const c = byId || byMergedId || byName;
-  return c ? counterpartySnapshot(c) : saved;
-}
-
-function refreshPOCounterparties(pos: any[], contacts: any[]) {
-  return (pos || []).map((po: any) => ({
-    ...po,
-    supplier: resolveCounterpartySnapshot(po.supplier, contacts),
-  }));
-}
-
-function refreshSOCounterparties(orders: any[], contacts: any[]) {
-  return (orders || []).map((so: any) => ({
-    ...so,
-    client: resolveCounterpartySnapshot(so.client, contacts),
-  }));
-}
-
-function refreshShipmentCounterparties(shipments: any[], contacts: any[]) {
-  // Shipments mostly store provider IDs and therefore already resolve live data at print/email time.
-  // This pass refreshes any legacy/snapshot provider fields that may exist in imported data.
-  return (shipments || []).map((sh: any) => ({
-    ...sh,
-    carrier: resolveCounterpartySnapshot(sh.carrier, contacts),
-    forwarder: resolveCounterpartySnapshot(sh.forwarder, contacts),
-    broker: resolveCounterpartySnapshot(sh.broker, contacts),
-  }));
-}
+dropLegacySnapshots();
 
 // v6.18.2: nav grouped into clusters so it stays compact and doesn't scroll.
 // Short labels keep it tight; full names remain as tooltips.
@@ -205,10 +135,16 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
 export default function App() {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
   const [contacts, _setContactsRaw] = useLocalStoredState("contacts", SHELL_SEED.contacts);
-  const [pos, setPOsRaw] = useLocalStoredState("pos", SHELL_SEED.pos);
+  const [posStored, setPOsRaw] = useLocalStoredState("pos", SHELL_SEED.pos);
   const [lots, setLotsRaw] = useLocalStoredState("lots", SHELL_SEED.lots);
-  const [orders, setOrdersRaw] = useLocalStoredState("orders", SHELL_SEED.orders);
-  const [shipments, setShipments] = useLocalStoredState("shipments", SHELL_SEED.shipments);
+  const [ordersStored, setOrdersRaw] = useLocalStoredState("orders", SHELL_SEED.orders);
+  const [shipmentsStored, setShipments] = useLocalStoredState("shipments", SHELL_SEED.shipments);
+  // v7.25.0 (A-RV-13 / FZ-02, owner 17 Oct): ONE SOURCE FOR EACH COMPANY — the screens see each document's companies read live from
+  // Counterparties by id; a company edit no longer rewrites every PO, SO and shipment (nor re-sends the three lists). The stored copies
+  // stay as they are until the database step; a company not found by id is named in the data checks — never matched by name.
+  const pos = useMemo(() => withLiveCompanies(posStored, ["supplier"], contacts || []), [posStored, contacts]);
+  const orders = useMemo(() => withLiveCompanies(ordersStored, ["client"], contacts || []), [ordersStored, contacts]);
+  const shipments = useMemo(() => withLiveCompanies(shipmentsStored, ["carrier", "forwarder", "broker"], contacts || []), [shipmentsStored, contacts]);
   const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
   const [warehouseInvoices] = useLocalStoredState("warehouseInvoices", SHELL_SEED.warehouseInvoices || []);
   const [settledRefs, setSettledRefs] = useLocalStoredState("settledRefs", []);
@@ -347,13 +283,6 @@ export default function App() {
   function setContactsCascade(update: any) {
     _setContacts(update);
   }
-
-  useEffect(() => {
-    setPOs((prevPOs: any[]) => refreshPOCounterparties(prevPOs, contacts));
-    setOrders((prevOrders: any[]) => refreshSOCounterparties(prevOrders, contacts));
-    setShipments((prevShipments: any[]) => refreshShipmentCounterparties(prevShipments, contacts));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contacts]);
 
   // v7.21.13 (FZ-15): the id counter is primed by every store as it is read or pulled (useLocalStoredState) — no longer seven of them here
 
