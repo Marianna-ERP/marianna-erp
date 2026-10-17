@@ -36,12 +36,14 @@ export function dispositionFromSO(so: any): string {
   return "OUR_WAREHOUSE";
 }
 
-/** Phase B core: a PO is a DIRECT (never-our-warehouse) flow when a governing
- *  active SO sources it and that sale's terms send goods straight onward. */
-export function poDirectFromSOs(po: any, orders: any[]): boolean {
+/** Phase B core: a PO is a DIRECT (never-our-warehouse) flow when an active sale sells one of ITS LOTS and that sale's terms
+ *  send the goods straight onward. v7.24.2 (A-RV-41): a sale line names a lot (A-ONE-1) — the rule reads the PO's lots; it
+ *  used to look for lines "sourced from the PO", which no sale has had since, so it answered "not direct" for every PO. */
+export function poDirectFromSOs(po: any, orders: any[], lots: any[] = []): boolean {
+  const mine = new Set((lots || []).filter((l: any) => l && String(l.poRef) === String(po?.number)).map((l: any) => String(l.number)));
   return (orders || []).some((o: any) => {
     if (!o || o.status === "Cancelled" || o.status === "Draft") return false;
-    const sources = (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === po.number);
+    const sources = (o.items || []).some((it: any) => it && it.sourceRef != null && mine.has(String(it.sourceRef)));
     if (!sources) return false;
     const d = dispositionFromSO(o);
     return d === "DIRECT_TO_CLIENT" || d === "TO_PORT" || d === "CLIENT_PICKUP";
@@ -50,6 +52,24 @@ export function poDirectFromSOs(po: any, orders: any[]): boolean {
 
 
 
+
+/** v7.24.4 (A-RV-41, owner option 1, 17 Oct): "DIRECT" IS NEVER TYPED — the one rule keeps the stored flag current. Whenever a sale,
+ *  a PO or a lot changes, each PO's flag is what poDirectFromSOs says, and each of its lots carries its PO's flag; a lot not yet
+ *  received follows it in its status too (Expected ↔ Direct Expected). Lots already received keep their status — posting never
+ *  receives them again. Only differences are returned: nothing to change gives back the very arrays. */
+export function directSync(pos: any[], orders: any[], lots: any[]): { pos: any[]; lots: any[]; changedPOs: string[]; changedLots: string[] } {
+  const want = new Map<string, boolean>();
+  (pos || []).forEach((p: any) => { if (p && p.status !== "Cancelled" && p.buyIncoterm) want.set(String(p.number), poDirectFromSOs(p, orders || [], lots || [])); });
+  const changedPOs: string[] = [], changedLots: string[] = [];
+  const nextPOs = (pos || []).map((p: any) => { const w = p && want.get(String(p.number)); if (w === undefined || !!p.directFlow === w) return p; changedPOs.push(String(p.number)); return { ...p, directFlow: w }; });
+  const nextLots = (lots || []).map((l: any) => {
+    const w = l && want.get(String(l.poRef)); if (w === undefined) return l;
+    const st = String(l.status || ""); const st2 = !w && st === "Direct Expected" ? "Expected" : (w && st === "Expected" ? "Direct Expected" : st);
+    if (!!l.directFlow === w && st2 === st) return l;
+    changedLots.push(String(l.number)); return { ...l, directFlow: w, status: st2 };
+  });
+  return { pos: changedPOs.length ? nextPOs : pos, lots: changedLots.length ? nextLots : lots, changedPOs, changedLots };
+}
 
 /** A country string for the goods' ORIGIN — the producer, from the PO. */
 export function poOriginCountry(po: any): string {

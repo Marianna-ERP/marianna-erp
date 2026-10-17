@@ -15,16 +15,16 @@ import { stampSiteIds, ensureUsedBuiltinsAreOrdinary, usedLocationIds } from "./
 import { normaliseLot } from "./seasonOps.domain";
 import { normalisePO } from "./po.domain";
 import { normaliseSO } from "./so.domain";
-import { foldLegacyClaimFields } from "./claimsPlus.domain";
+
 import { normaliseInvoiceCategory } from "./invoicePlus.domain";
 import { normaliseCounterparty } from "./counterparty.domain";
-import { migrateAddressOn } from "./address.domain";
-import { mapDocTypes } from "./shipmentModel.domain";   // v7.18.2 · v7.21.0 (A-RV-19): the pre-v7 shipment repair is gone
-import { migrateSaleLinesToLots } from "./salesOrders.domain";   // v6.99.127
+
+   // v7.18.2 · v7.21.0 (A-RV-19): the pre-v7 shipment repair is gone
+   // v6.99.127
 import { useSingleTab } from "./useSingleTab";   // v6.99.114 (AUD-02)
 import { useSharedStore, SharedStoreStatus, EnvironmentStrip } from "./SharedStoreGate";   // v6.99.148–149
 import { setFxSettings as applyFxSettings, fetchNbpRates, ensureNbpRange } from "./fx";   // v7.13.x (A-AU-2)
-import { poDirectFromSOs } from "./tradeFlow.domain";
+import { poDirectFromSOs, directSync } from "./tradeFlow.domain";
 import Claims from "./Claims";
 import { localTodayISO, addDaysISO } from "./dates";
 import { nextId } from "./ids";
@@ -36,15 +36,15 @@ import { BackupBanner } from "./BackupPanel";
 import { setAuditSink, recordAudit } from "./audit";
 import { appendAudit, splitAuditOverflow, archiveAudit } from "./auditTrail.domain";
 import AuditTrail from "./AuditTrail";
-import { convertSettledRefsToEvents } from "./payments.domain";
+
 import { fxDatesNeeded, fxFillInvoice } from "./fxNbp.domain";   // v7.13.1 / v7.13.3 (A-AU-11 / A-AU-2)
 import { periodGuard } from "./periodClose.domain";   // v7.13.1 (A-AU-11): closed months are not re-rated
 import { APP_VERSION } from "./version";
 import IntegrityBadge from "./IntegrityBadge";
 import Invoices from "./Invoices";
-import { migrateLegacyInvoices, stripPendingInvoices, foldWarehouseInvoiceStore } from "./invoicing";   // v7.21.4 (A-ST-10)
+import { migrateLegacyInvoices } from "./invoicing";   // v7.21.4 (A-ST-10)
 import { syncOverheadOpCosts } from "./operationalCosts";
-import { normaliseStoredSoStatus } from "./statusOwnership.domain";
+
 import { canOpenModule, canOpenFinance, currentUser, effectiveUserName, userBySignIn, hasOwner } from "./permissions.domain";
 import { readSession, logout } from "./remoteStore";   // v7.1.0 (A-USR-1)
 import { orphanLotsToRemove, danglingLinks } from "./integrityCheck";
@@ -53,6 +53,7 @@ import { linkSpellingOnDocs } from "./packaging.domain";   // v7.18.0 (A-AU-1)
 import { linkSaleDestinationOn } from "./locations";   // v7.18.1 (A-AU-3)
 import { isArchived, STORE_KIND, DEFAULT_SEASON } from "./season.domain";
 import { dirtyEntries, saveAndCheck } from "./unsaved";
+import { shapingSetter, shapeWritten } from "./storeShapes";   // v7.24.3 (FZ-01 step 2): a save writes the clean shape
 
 // Batch 5: migrate older-version stored data forward BEFORE any hook reads it
 // (module scope — runs before the App component's hooks read the stores).
@@ -203,16 +204,24 @@ function TopNav({ active, onNav = () => {}, rightSlot = null, canOpen = (_k: str
 
 export default function App() {
   const { confirm: uiConfirm, alert: uiAlert, dialogNode } = useConfirm();   // v7.22.5 (A-RV-17): the app's own windows, not the browser's
-  const [contacts, _setContacts] = useLocalStoredState("contacts", SHELL_SEED.contacts);
-  const [pos, setPOs] = useLocalStoredState("pos", SHELL_SEED.pos);
-  const [lots, setLots] = useLocalStoredState("lots", SHELL_SEED.lots);
-  const [orders, setOrders] = useLocalStoredState("orders", SHELL_SEED.orders);
+  const [contacts, _setContactsRaw] = useLocalStoredState("contacts", SHELL_SEED.contacts);
+  const [pos, setPOsRaw] = useLocalStoredState("pos", SHELL_SEED.pos);
+  const [lots, setLotsRaw] = useLocalStoredState("lots", SHELL_SEED.lots);
+  const [orders, setOrdersRaw] = useLocalStoredState("orders", SHELL_SEED.orders);
   const [shipments, setShipments] = useLocalStoredState("shipments", SHELL_SEED.shipments);
   const [operationalCosts, setOperationalCosts] = useLocalStoredState("operationalCosts", SHELL_SEED.operationalCosts);
-  const [warehouseInvoices, setWarehouseInvoices] = useLocalStoredState("warehouseInvoices", SHELL_SEED.warehouseInvoices || []);
+  const [warehouseInvoices] = useLocalStoredState("warehouseInvoices", SHELL_SEED.warehouseInvoices || []);
   const [settledRefs, setSettledRefs] = useLocalStoredState("settledRefs", []);
   const [creditNotes] = useLocalStoredState("creditNotes", []);
-  const [invoices, setInvoices] = useLocalStoredState("invoices", []);
+  const [invoices, setInvoicesRaw] = useLocalStoredState("invoices", []);
+  // v7.24.3 (FZ-01 step 2): every save writes the clean shape — the tidy-ups run on the records a save writes, never at start-up.
+  // They read the other stores through refs, so the setters keep one identity for the whole session.
+  const shapeRefs = useRef<any>({}); shapeRefs.current = { pos, lots, orders };
+  const setPOs = useMemo(() => shapingSetter(setPOsRaw, (p: any) => { const c = shapeRefs.current; const r = normalisePO(p, { orders: c.orders || [], directFromSOs: (q: any, os: any[]) => poDirectFromSOs(q, os, c.lots || []) }); return r.changed ? r.po : p; }), [setPOsRaw]);
+  const setOrders = useMemo(() => shapingSetter(setOrdersRaw, (o: any) => { const r = normaliseSO(o); return r.changed ? r.so : o; }), [setOrdersRaw]);
+  const setInvoices = useMemo(() => shapingSetter(setInvoicesRaw, (x: any) => { const r = normaliseInvoiceCategory(x); return r.changed ? r.inv : x; }), [setInvoicesRaw]);
+  const _setContacts = useMemo(() => (u: any) => _setContactsRaw((prev: any[]) => { const next = shapeWritten(prev, typeof u === "function" ? u(prev) : u, (c: any) => { const r = normaliseCounterparty(c); return r.changed ? r.contact : c; }); if (next === prev || !Array.isArray(next)) return next; const st = stampSiteIds(next); return st.changed ? st.contacts : next; }), [_setContactsRaw]);
+  const setLots = useMemo(() => shapingSetter(setLotsRaw, (l: any) => { const c = shapeRefs.current; const po = (c.pos || []).find((p: any) => String(p.number) === String(l.poRef)); const r = normaliseLot(l, { po, poSettlements: c.poSettlements || [] }); return r.changed ? r.lot : l; }), [setLotsRaw]);
   const [productCatalog, setProductCatalog] = useLocalStoredState("productCatalog", PRODUCT_CATALOG_SEED);
   const [packagingTypes, setPackagingTypes] = useLocalStoredState("packagingTypes", PACKAGING_SEED);
   const [claims, setClaims] = useLocalStoredState("claims", []);
@@ -232,6 +241,17 @@ export default function App() {
   // v6.99.33: defectCatalogue / defectTolerances retired from the UI (import-compat only — see DATA_KEYS)
   // v6.90.0: settlements per PO (= per truck) — the producer's final result.
   const [poSettlements, setPoSettlements] = useLocalStoredState("poSettlements", []);
+  shapeRefs.current.poSettlements = poSettlements;   // v7.24.3: the lot tidy-up reads the PO settlements
+  // v7.24.4 (A-RV-41, owner option 1): "direct" is never typed — whenever a sale, a PO or a lot changes (here or arriving from a
+  // colleague), the one rule puts every PO's flag and its lots' right; only the differences are written, so it settles at once.
+  useEffect(() => {
+    const r = directSync(pos || [], orders || [], lots || []);
+    if (!r.changedPOs.length && !r.changedLots.length) return;
+    if (r.changedPOs.length) setPOsRaw((prev: any[]) => directSync(prev || [], orders || [], lots || []).pos);
+    if (r.changedLots.length) setLotsRaw((prev: any[]) => directSync(pos || [], orders || [], prev || []).lots);
+    const names = (xs: string[]) => xs.slice(0, 20).join(", ") + (xs.length > 20 ? ` +${xs.length - 20}` : "");
+    recordAudit({ module: "Purchase orders", docType: "Direct", docNumber: "A-RV-41", action: "derived", summary: `"Direct" kept current from the sales (A-RV-41)${r.changedPOs.length ? ` — POs: ${names(r.changedPOs)}` : ""}${r.changedLots.length ? ` — lots: ${names(r.changedLots)}` : ""}` });
+  }, [pos, orders, lots]);   // eslint-disable-line react-hooks/exhaustive-deps
   // v6.99.0 (FN-1): closed months with their frozen snapshot; (FN-7) reference FX rates as a setting.
   const [closedPeriods, setClosedPeriods] = useLocalStoredState("closedPeriods", []);
   const [fxSettings, setFxSettings] = useLocalStoredState("fxSettings", {});
@@ -255,35 +275,6 @@ export default function App() {
   useEffect(() => { fetchNbpRates().then(r => { if (r) setFxSettings((prev: any) => ({ ...(prev || {}), ...(r as any), _nbp: (r as any)._date })); });   /* v7.13.0 (A-AU-2): today's NBP wins over old typed rates */ // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { applyFxSettings(fxSettings || {}); }, [fxSettings]);
-  // v7.12.2 (A-TD-3, owner 8 Oct): the trade directions typed before v6.99.6 are cleared ONCE per dataset — the places decide (A-TD-1),
-  // the readers ask the rule (A-TD-2). Each cleared value is named in the audit trail. Runs on the shared data too (this is new work).
-  React.useEffect(() => {
-    try {
-      const MARK = "marianna:heal:v7.12.2-trade-direction";
-      if (typeof window === "undefined" || healDone(MARK) || !(shipments || []).length) return;
-      const had = (shipments || []).filter((s: any) => s && s.tradeDirection);
-      markHeal(MARK);
-      if (!had.length) return;
-      setShipments((prev: any[]) => (prev || []).map((s: any) => { if (!s || !s.tradeDirection) return s; const { tradeDirection, ...rest } = s; return rest; }));
-      recordAudit({ module: "Shipments", docType: "Heal", docNumber: "HEAL-7.12.2", action: "healed", summary: `Stored trade directions cleared — the places decide (A-TD-3): ${had.map((s: any) => `${s.number} ${s.tradeDirection}`).join(", ")}` });
-    } catch (e) { console.error("heal v7.12.2 failed (left data untouched):", e); }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shipments.length]);
-  // v7.18.2 (A-AU-4, owner 9 Oct): the shipment document types typed before the list are mapped to it ONCE per dataset — 'PL' →
-  // Packing list, 'Export declaration MRN' → Export declaration… anything unknown → Other, its words kept as the description.
-  // Each change is named in the audit trail. Deleted shipments are left as they are.
-  React.useEffect(() => {
-    try {
-      const MARK = "marianna:heal:v7.18.2-doc-types";
-      if (typeof window === "undefined" || healDone(MARK) || !(shipments || []).length) return;
-      const log: string[] = []; (shipments || []).forEach((s: any) => mapDocTypes(s, log));
-      markHeal(MARK);
-      if (!log.length) return;
-      setShipments((prev: any[]) => (prev || []).map((s: any) => mapDocTypes(s)));
-      recordAudit({ module: "Shipments", docType: "Heal", docNumber: "HEAL-7.18.2", action: "healed", summary: `Document types mapped to the one list (A-AU-4): ${log.join("; ")}` });
-    } catch (e) { console.error("heal v7.18.2 failed (left data untouched):", e); }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shipments.length]);
   const [financeNotes, setFinanceNotes] = useLocalStoredState("financeNotes", []);
   // v7.13.1 (A-AU-11) + v7.13.3 (A-AU-2), owner 9 Oct: a foreign-currency invoice carries the NBP rate of the last working day BEFORE
   // its issue date, and every payment the rate of the last working day before the day the money was received. Whatever is not yet
@@ -297,11 +288,6 @@ export default function App() {
     (async () => {
       try {
         const list = invoices || [];
-        const MARK = "marianna:heal:v7.13.1-closed-months";
-        if (!healDone(MARK)) {   // once: name the foreign invoices of closed months, left as they are
-          const left = list.filter((i: any) => i && String(i.currency || "PLN").toUpperCase() !== "PLN" && !i.fxTableDate && i.issueDate && fxClosed(i.issueDate)).map((i: any) => i.number);
-          markHeal(MARK); if (left.length) recordAudit({ module: "Invoices", docType: "Heal", docNumber: "FX-NBP", action: "healed", summary: `Closed months keep their rates (A-AU-11): ${left.join(", ")}` });
-        }
         const dates = fxDatesNeeded(list, fxClosed); if (!dates.length) return;
         const back = (iso: string, n: number) => addDaysISO(iso, -n);   // dates.ts (AUD-07/09)
         await ensureNbpRange(back(dates[0], 14), back(dates[dates.length - 1], 1));
@@ -324,10 +310,6 @@ export default function App() {
   // v7.7.1 (A-RET-1): the per-browser role is retired — rights come from the role in Settings → Users
   const [userName, setUserName] = useLocalStoredState("userName", "");
   // v6.40.0: the audit logbook — passive, capped, exported with everything else.
-  const [heals, setHeals] = useLocalStoredState("heals", {} as Record<string, string>);   // v6.99.145 (AUD-46): per DATASET, not per browser
-  const healsRef = useRef<Record<string, string>>(heals as any); healsRef.current = heals as any;
-  const healDone = (k: string) => !!(healsRef.current || {})[k] || (typeof window !== "undefined" && !!window.localStorage.getItem(k) && (markHeal(k), true));   // a browser-level marker from before is carried into the dataset once
-  function markHeal(k: string) { const stamp = new Date().toISOString(); healsRef.current = { ...(healsRef.current || {}), [k]: stamp }; setHeals((prev: any) => ({ ...(prev || {}), [k]: stamp })); }
   const [auditLog, setAuditLog] = useLocalStoredState("auditLog", []);
   // v7.17.1 (A-RV-07): a deleted packaging type or catalog item leaves every picker — the modules get the live ones; Settings all
   const livePackaging = useMemo(() => liveOnly(packagingTypes as any[]), [packagingTypes]);
@@ -383,23 +365,9 @@ export default function App() {
       const merged = migrateLegacyInvoices({ existing: prev || [], orders, warehouseInvoices, operationalCosts });   // v7.22.1 (FZ-12): no purchase invoice is invented from an order
       return merged.length !== (prev || []).length ? merged : prev;
     });
-    // v6.33.0 (A3-6): the register is now the sole owner — once this snapshot's
-    // pendingInvoices are folded (idempotent by source tag above), strip them
-    // from the orders. Same-reference return when clean, so no effect loop.
-    setOrders((prev: any[]) => stripPendingInvoices(prev).orders);
+    // v7.24.1 (FZ-01): the pending invoices of the orders were stripped long ago — the strip went (no change on either copy, 15 Oct)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, warehouseInvoices, operationalCosts]);   // eslint-disable-line react-hooks/exhaustive-deps
-  // v7.21.4 (A-ST-10, owner 9 Oct batch): the separate warehouse-invoices store is folded into the register once — what only the store
-  // knew (the warehouse, the month, an allocation) moves onto the register invoice, the lots' cost lines follow it, the store empties
-  useEffect(() => {
-    if (!(warehouseInvoices || []).length) return;
-    const r = foldWarehouseInvoiceStore({ store: warehouseInvoices, invoices, lots });
-    if (r.waiting.length) return;   // the register fold above has not written them yet
-    setInvoices((prev: any[]) => foldWarehouseInvoiceStore({ store: warehouseInvoices, invoices: prev, lots: [] }).invoices);
-    setLots((prev: any[]) => foldWarehouseInvoiceStore({ store: warehouseInvoices, invoices, lots: prev }).lots);
-    setWarehouseInvoices([]);
-    try { recordAudit({ module: "Finance", docType: "Migration", docNumber: "A-ST-10", action: "updated", summary: `Warehouse invoice(s) now kept only in the register: ${r.moved.join(", ")}` }); } catch {}
-  }, [warehouseInvoices, invoices]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // v6.82.0 (Round 6): packaging types saved before v6.46 lack boxesPerPallet/palletTareKg —
   // backfill from the seed by id/label so pallet tables split correctly.
@@ -418,73 +386,9 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // v6.94.0 (PO-3/4/5, owner decisions): purchase orders normalised once — retired derivation
-  // fields dropped, legacy statuses → Confirmed, payment days from legacy text, directFlow synced.
-  useEffect(() => {
-    setPOs((prev: any[]) => {
-      let changed = false;
-      const next = (prev || []).map((p: any) => { const r = normalisePO(p, { orders: orders || [], directFromSOs: poDirectFromSOs }); if (r.changed) changed = true; return r.po; });
-      return changed ? next : prev;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // v6.99.11: pickers may ask to open the Directory ("＋ Add it in the Directory…") — never free text.
   const navigateRef = useRef<(m: string) => void>(() => {});   // v6.99.58 (A-US-2)
   useEffect(() => { const h = (e: any) => { navigateRef.current("contacts");   /* v6.99.58 (A-US-2): guarded like every other jump */ try { window.sessionStorage.setItem("marianna:contactsTab", String(e?.detail?.tab || "companies")); if (e?.detail?.newLocationFor) window.sessionStorage.setItem("marianna:contactsNewLocFor", JSON.stringify(e.detail.newLocationFor)); } catch {} };   /* v7.18.1 (A-AU-3): "+ Add a site for this client" from a sale */ window.addEventListener("marianna:navigate", h); return () => window.removeEventListener("marianna:navigate", h); }, []);
-  // v6.99.40 (A-ADDR): every stored address is split into its parts ONCE — street · postcode · city · country.
-  // What cannot be split (a market address, a PO box) keeps its whole text in the street line and is flagged for review;
-  // the original one-line text stays until the DDL, so nothing that reads `address` breaks.
-  useEffect(() => { _setContacts((prev: any[]) => { let changed = false;
-    const next = (prev || []).map((c: any) => { const r = migrateAddressOn(c); let out = r.rec; if (r.changed) changed = true;
-      if (Array.isArray(out.extraAddresses) && out.extraAddresses.length) {
-        const sites = out.extraAddresses.map((s: any) => { const rec = typeof s === "string" ? { address: s } : s; const m = migrateAddressOn({ ...rec, country: rec.country || out.country }); if (m.changed) changed = true; return m.rec; });
-        out = { ...out, extraAddresses: sites };
-      }
-      return out; });
-    return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  // v6.99.2 (CP-1/2/6/9): counterparties normalised once — roles[], terms{}, ISO country, people[], caches dropped.
-  useEffect(() => { _setContacts((prev: any[]) => { let changed = false; const next = (prev || []).map((c: any) => { const r = normaliseCounterparty(c); if (r.changed) changed = true; return r.contact; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  // v6.96.0 (IN-6): counterparty addresses get a persistent siteId (today's derived id) — references never move again.
-  useEffect(() => { _setContacts((prev: any[]) => { const r = stampSiteIds(prev || []); return r.changed ? r.contacts : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  // v6.96.0 (IN-4): lots normalised once — mirrors dropped, consignment/direct synced from the PO, arrival derived, old per-lot settlement handed to poSettlements.
-  useEffect(() => {
-    const toMigrate: any[] = [];
-    setLots((prev: any[]) => { let changed = false; const next = (prev || []).map((l: any) => { const po = (pos || []).find((p: any) => String(p.number) === String(l.poRef)); const r = normaliseLot(l, { po, poSettlements: poSettlements || [] }); if (r.changed) changed = true; if (r.settlementToMigrate) toMigrate.push(r.settlementToMigrate); return r.lot; }); return changed ? next : prev; });
-    if (toMigrate.length) setPoSettlements((prev: any[]) => [...(prev || []), ...toMigrate.filter(s => !(prev || []).some((x: any) => String(x.poNumber) === String(s.poNumber))).map(s => ({ id: nextId(), poNumber: s.poNumber, status: s.status === "Closed" ? "Closed" : "Open", number: s.number, ratePLNperEUR: s.ratePLNperEUR, commissionPct: s.commissionPct ?? s.finalCommissionPct, closedAt: s.closedAt, notes: `Migrated from lot ${s.fromLot} (v6.96.0)` }))]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // v6.97.0 (CL-7/CL-1): claims normalised once — legacy form fields folded, EUR mirrored into the one money model.
-  useEffect(() => { setClaims((prev: any[]) => { let changed = false; const next = (prev || []).map((c: any) => { const r = foldLegacyClaimFields(c); if (r.changed) changed = true; return r.claim; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // v6.98.0 (IV-3/IV-5): invoices normalised once — one category, scope derived, creditNoteIds/locked dropped.
-  // v6.99.127 (A-ONE-1, owner 4 Oct): every sale sells a LOT — PO-sourced lines are pointed once at the lot made from their PO line
-  useEffect(() => { if (!(lots || []).length) return; setOrders((prev: any[]) => { const r = migrateSaleLinesToLots(prev || [], lots || []); if (!r.moved) return prev; recordAudit({ module: "Sales orders", docType: "Migration", docNumber: "A-ONE-1", action: "updated", summary: `${r.moved} sale line(s) now name their lot instead of a PO line${r.left.length ? `; ${r.left.length} left as they were (no lot): ${r.left.slice(0, 5).join(", ")}` : ""}` }); return r.orders; }); }, [lots.length]);   // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setInvoices((prev: any[]) => { let changed = false; const next = (prev || []).map((i: any) => { const r = normaliseInvoiceCategory(i); if (r.changed) changed = true; return r.inv; }); return changed ? next : prev; }); // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // v6.95.0 (SO-6): sales orders normalised once — mirrors and caches dropped, payment days from legacy text.
-  useEffect(() => {
-    setOrders((prev: any[]) => { let changed = false; const next = (prev || []).map((o: any) => { const r = normaliseSO(o); if (r.changed) changed = true; return r.so; }); return changed ? next : prev; });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // v6.79.0 (W-1): stored SO status is COMMERCIAL only. Typed physical statuses
-  // from before derivation existed are normalised once: supported by shipments →
-  // Confirmed (the derivation shows Shipped/Delivered); unsupported → a visible
-  // override, never a silent fact. "Reserved" → Confirmed (status dropped).
-  useEffect(() => {
-    setOrders((prev: any[]) => {
-      const next = (prev || []).map((o: any) => normaliseStoredSoStatus(o, shipments || []));
-      return JSON.stringify(next) !== JSON.stringify(prev || []) ? next : prev;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // v6.68.0 (D-34): SINGLE-ENTRY OVERHEAD — every register invoice with cost
   // scope OVERHEAD mirrors into exactly one operational cost (replace-by-ref
@@ -568,16 +472,6 @@ export default function App() {
 
   // Batch 5d (BP-39): one-time conversion — legacy "mark paid" flags on invoices
   // become tagged payment events. Idempotent: converted refs are removed.
-  const settledConversionDone = React.useRef(false);
-  React.useEffect(() => {
-    if (settledConversionDone.current) return;
-    settledConversionDone.current = true;
-    const invRefs = (settledRefs || []).filter((r: string) => String(r).startsWith("INV:") || String(r).startsWith("SINV:"));
-    if (!invRefs.length) return;
-    const res = convertSettledRefsToEvents(invoices, settledRefs, { todayISO: () => localTodayISO(), nextId });  // v6.79.0 (W-7)
-    if (res.converted > 0) { setInvoices(res.invoices); setSettledRefs(res.settledRefs); }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   function reloadFromStorage() {
     window.location.reload();

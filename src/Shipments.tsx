@@ -326,7 +326,7 @@ export function shipmentSORefs(shipment, orders = []) {
   if (!explicitlyLinked && !isInbound) {
     (orders || []).forEach((o: any) => {
       if (!o || o.status === "Cancelled") return;
-      const sourcesPO = (o.items || []).some((it: any) => it.sourceType === "PO" && (shipment.poRefs || []).includes(it.sourceRef));
+      const sourcesPO = false;
       if (sourcesPO && o.number) set.add(String(o.number));
     });
   }
@@ -772,7 +772,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
   const firstLot = _lineLots[0] || null;
   const originLocationId = firstLot?.locationId || opts.originLocationId || 1;
   const destinationLocationId = so.destinationLocationId || opts.destinationLocationId || 10;
-  const poRefs = uniq((so.items || []).filter(it => it.sourceType === "PO").map(it => it.sourceRef));
+  const poRefs = uniq((so.items || []).filter(it => false).map(it => it.sourceRef));
   const lotRefs = uniq((so.items || []).map((it: any, i: number) => _lineLots[i]?.number || (it.sourceType === "STOCK" ? it.sourceRef : "")).filter(Boolean));
   // v6.34.8: SO parity with PO — honour selectedItemIds, per-line "ship now" qty
   // (opts.lineQtys, default full line), and stamp soLineId for per-line shipped-kg counting.
@@ -795,7 +795,7 @@ function buildShipmentFromSO__raw(so, opts, shipments, lots, contactsList = []) 
     const qty = (entered === undefined || entered === "") ? parseNum(it.qty) : parseNum(entered);
     return {
       id: gi + 1,
-      poRef: it.sourceType === "PO" ? it.sourceRef : lot?.poRef || "",
+      poRef: lot?.poRef || "",
       soRef: so.number,
       soLineId: it.id ?? idx + 1,   // v6.34.8: stamp the source SO line
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
@@ -1180,7 +1180,6 @@ export function cargoVariance(sh: any, types: any[]): { told: { pallets: number;
 
 export const th = { padding: "8px 8px", fontSize: 10, letterSpacing: "0.04em", textTransform: "uppercase", fontWeight: 800 };
 export const td = { padding: "9px 8px", verticalAlign: "top" };
-export function pillStyle(bg, color) { return { background: bg, color, padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 800 }; }
 export function ChecklistLine({ ok, label, warnText = "" }: any) {
   return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #F1F5F9" }}><div style={{ fontSize: 12, color: "#444" }}>{label}</div><div style={{ fontSize: 11, fontWeight: 800, color: ok ? "#16A34A" : "#D97706" }}>{ok ? "OK" : (warnText || "Open")}</div></div>;
 }

@@ -219,7 +219,7 @@ export function buildCostInvoice(row: StagedRow, tag: ImportTag, link: { shipmen
     positions: [], links,
     paymentStatus: "Issued", paidAmount: 0,   // v6.99.120 (AUD-18, owner rule 11): a received invoice, open until the BANK clears it — Fakturownia's paid flag is never read
     notes: `Imported from Fakturownia${row.description ? ` — ${row.description}` : ""}`,
-    attachment: null, creditNoteIds: [], allocation: null,
+    attachment: null, allocation: null,
     fakturownia: { exported: false, fktId: row.fktId ?? null },
     source: "fakturownia-import",
     createdAt: localTodayISO(),

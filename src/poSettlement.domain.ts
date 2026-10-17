@@ -28,10 +28,7 @@ export interface POSettlementRecord {
 function lotsOfPO(po: any, lots: any[]): any[] { return (lots || []).filter(l => String(l?.poRef) === String(po?.number)); }
 function sourcesLot(it: any, lot: any): boolean {
   if (it?.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) return true;
-  if (it?.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef)) {
-    if (it.sourceLineId != null && lot.poLineId != null) return String(it.sourceLineId) === String(lot.poLineId);
-    return S(it.product).toLowerCase() === S(lot.product).toLowerCase() && (!it.variety || !lot.variety || S(it.variety).toLowerCase() === S(lot.variety).toLowerCase());
-  }
+  
   return false;
 }
 

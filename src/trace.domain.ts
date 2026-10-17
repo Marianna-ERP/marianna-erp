@@ -79,14 +79,7 @@ export function buildTraceTree(lot: any, inp: { contacts?: any[]; pos?: any[]; o
       // poLineId is authoritative when both sides carry it. Otherwise, a stated
       // product/variety that differs proves it is another line; anything the
       // data cannot distinguish stays IN the report.
-      const lineDiffers = (it.sourceLineId != null && lot.poLineId != null)
-        ? String(it.sourceLineId) !== String(lot.poLineId)
-        : (!!it.product && !!lot.product &&
-           (String(it.product).trim().toLowerCase() !== String(lot.product).trim().toLowerCase() ||
-            (!!it.variety && !!lot.variety && String(it.variety).trim().toLowerCase() !== String(lot.variety).trim().toLowerCase())));
-      const sameLine = !lineDiffers;
-      const hits = (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) ||
-        (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef) && sameLine);
+      const hits = (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number));
       if (hits) sales.push({
         soNumber: o.number, client: o.client?.name || "(client)",
         qtyKg: parseFloat(it.qty) || 0, status: o.status,

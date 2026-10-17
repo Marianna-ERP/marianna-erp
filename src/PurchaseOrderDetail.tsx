@@ -13,7 +13,7 @@ import { isEstimatedLine } from "./so.domain";
 import { paymentText } from "./po.domain";   // v6.99.76 (A-PV-2)
 import { FlowBadge, LOCATION_TYPES, LifecycleTimeline, LinkRow, QUALITY_GRADES, QualityBadge, StatusBadge, TruckSettlementCard, VarianceBadge, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, plnTotal, totalQtyKg, usePoData } from "./PurchaseOrders";
 import { nextId } from "./ids";   // v7.17.5 (A-RV-06): extra packing-list lines take the one counter
-import { isIncoterm2020, deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
+import { deliveredAtDestination } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 // ── v6.99.36 (A-R25-6, owner): the supplier's truck is registered in ONE window, confirmed before anything is created ──
 // ── v6.99.50 (TO-2, owner): THE PRODUCER'S PACKING LIST in one window — final kilos per line, a size the order did not
@@ -250,7 +250,7 @@ export function OrderDetail({ termsFindings = [], users = [], userName = "", sup
                 <SectionTitle>LINKED DOCUMENTS</SectionTitle>
                 <LinkRow label="Sales orders" items={computedSOs} color="#16A34A" bg="#DCFCE7" from={order.number} />
                 <LinkRow label="Shipments" items={computedShipments} color="#0284C7" bg="#E0F2FE" from={order.number} />
-                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === order.number) && isIncoterm2020(o.sellIncoterm)); void sos;
+                {(() => { const sos = (computedSOs || []); const direct = (ctxOrders || []).filter((o: any) => false); void sos;
                   return direct.length ? <div style={{ fontSize: 11, color: "#166534", background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 6, padding: "4px 8px", marginBottom: 8 }} title="v6.94.0 (PO-7): the pass-through flag is DERIVED — here is why">↗ Direct to client — because {direct.map((o: any) => `${o.number} sells ${o.sellIncoterm}`).join(", ")}; the goods never enter our warehouse</div> : null; })()}
                 <LinkRow label="Inventory lots" items={computedLots ?? order.linkedLots} color="#92400E" bg="#FEF3C7" from={order.number} />
                 {/* v6.79.0 (owner request): the DDP truck arrives with the PO number on the delivery

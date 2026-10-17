@@ -61,8 +61,7 @@ export default function SOMarginCard({
     const hits: any[] = [];
     (order.items || []).forEach((it: any) => {
       const lot = (lots || []).find((l: any) =>
-        (it.sourceType === "STOCK" && String(it.sourceRef) === String(l.number)) ||
-        (it.sourceType === "PO" && l.poRef && String(it.sourceRef) === String(l.poRef) && String(it.product || "").trim().toLowerCase() === String(l.product || "").trim().toLowerCase()));
+        (it.sourceType === "STOCK" && String(it.sourceRef) === String(l.number)));
       if (lot && lot.consignment && !hits.find(h => h.number === lot.number)) hits.push(lot);
     });
     return hits;

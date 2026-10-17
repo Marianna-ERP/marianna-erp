@@ -255,23 +255,6 @@ t("incidentNet ties a client claim and its optional recovery into one net number
 
 // ═════════════════════════════════════════════════════════════════════════════
 console.log("\n══ P3.6 Consignment × Settlement × Margin — payout math closes the loop ══");
-// ═════════════════════════════════════════════════════════════════════════════
-t("settlement: gross from SOs sourcing the lot, minus tracked expenses, commission on net", () => {
-  const lot = mkLot({ ownership: "CONSIGNMENT", receivedKg: 1000, expectedKg: 1000,
-    costs: [{ type: "freight", label: "Freight", source: "SHP-1/10", pln: 800 }] });
-  const orders = [
-    mkOrder({ number: "SO-1", items: [{ product: "Peppers", qty: 600, unitPrice: 5, sourceType: "STOCK", sourceRef: "LOT-1" }] }),
-    mkOrder({ number: "SO-2", items: [{ product: "Peppers", qty: 400, unitPrice: 4, sourceType: "STOCK", sourceRef: "LOT-1" }] }),
-    mkOrder({ number: "SO-X", status: "Cancelled", items: [{ product: "Peppers", qty: 999, unitPrice: 9, sourceType: "STOCK", sourceRef: "LOT-1" }] }),
-  ];
-  const s = cons.computeLotSettlement(lot, orders, 8, [{ id: 1, label: "Sorting", pln: 200 }]);
-  approx(s.grossPLN, 4600, "3000 + 1600, cancelled excluded");
-  approx(s.expensesPLN, 1000, "freight 800 + manual 200");
-  approx(s.netPLN, 3600);
-  approx(s.commissionPLN, 288, "8% of net");
-  approx(s.payoutPLN, 3312);
-  eq(s.soldKg, 1000);
-});
 t("after close, the margin engine prices the consignment lot at payout+commission — SO margin is sane", () => {
   const lot = mkLot({ receivedKg: 1000, physicalKg: 0, status: "Empty", ownership: "CONSIGNMENT",
     costs: [

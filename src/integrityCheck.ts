@@ -115,27 +115,7 @@ export function checkIntegrity(inp: IntegrityInputs): IntegrityResult {
         add("error", "ORPHAN_SO_LOT", "Sales Orders", o.number || "(unnumbered SO)",
           `Line "${it.product || "—"}" sources stock lot ${it.sourceRef}, which no longer exists. COGS cannot be computed.`);
       }
-      if (it.sourceType === "PO" && it.sourceRef) {
-        const po = poByNumber.get(String(it.sourceRef));
-        if (!po) {
-          add("error", "ORPHAN_SO_PO", "Sales Orders", o.number || "(unnumbered SO)",
-            `Line "${it.product || "—"}" sources PO ${it.sourceRef}, which no longer exists. COGS cannot be computed.`);
-        } else {
-          // v6.30.1: the old `|| po.items.length > 0` made this check dead — any PO
-          // with at least one line passed, so a missing line id was never flagged.
-          // Strict when the SO line names an explicit sourceLineId; a legacy line
-          // (sourceLineId null → defaulted) only requires the PO to have lines,
-          // because legacy PO line ids are timestamps and "1" would never match.
-          const hasLine = it.sourceLineId != null
-            ? arr(po.items).some((l: any) => String(l.id) === String(it.sourceLineId))
-            : arr(po.items).length > 0;
-          const lineId = it.sourceLineId ?? 1;
-          if (!hasLine) {
-            add("warning", "ORPHAN_SO_POLINE", "Sales Orders", o.number || "(unnumbered SO)",
-              `Line "${it.product || "—"}" references PO ${it.sourceRef} line ${lineId}, which is missing.`);
-          }
-        }
-      }
+      
       if (!it.sourceType || !it.sourceRef) {
         // unsourced lines are only a problem once the SO is committed
         if (o.status && o.status !== "Draft") {

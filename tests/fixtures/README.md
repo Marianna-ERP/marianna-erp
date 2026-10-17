@@ -9,6 +9,11 @@ numbers are kept: the tests check the code against them. Our own company's ident
 every document we send. Values the app's own code also writes (a few counterparties, places and plates) are kept too, so
 the files keep matching the code — they leave the code under A-RV-39. The table real → invented was never written down.
 
+**Brought up to today's form once (v7.24.2, FZ-01 step 1):** every sale line still "sourced from a PO" was pointed at the lot
+made from its PO line — what the app did on both copies before that conversion left the code (owner's files of 15 Oct: nothing
+left to convert). The 9 lines whose PO line has no lot stay as they were; they sit on two deleted sales (SO-2026-0008,
+SO-2026-0023). The 23 Sept v6.99.50 file predates lots and keeps its lines. Nothing else in the files changed.
+
 **Adding a real file:** anonymise it first, together with the suites that will name things from it —
 `node tests/anonymise.cjs <the new file> --tests tests/*.cjs tests/fixtures/README.md` — then write its tests against the
 invented names. Run it on the new file only: the files already here are anonymised.

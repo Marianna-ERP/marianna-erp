@@ -41,7 +41,7 @@ export function OrderForm({ order, setOrder, productSuggestions = [], suppliers 
   // unlinking every downstream document first, then deleting.
   const poNum = order.number;
   // v6.81.0 (D-54): a DRAFT sale is an intention, not a dependency — it must not lock the PO it draws from (Draft↔Draft deadlock, PO-2026-0031).
-  const hasLinkedSO = (allSOs || []).some((so: any) => so.status !== "Cancelled" && so.status !== "Draft" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+  const hasLinkedSO = false;
   const hasShipment = (allShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
   // v6.35.0: a lot whose linked shipments are ALL cancelled must not keep the PO locked —
   // otherwise cancelling everything to fix the PO leaves it permanently trapped. We treat a

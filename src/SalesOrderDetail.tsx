@@ -12,7 +12,7 @@ import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, quantityLabel, 
 import { localTodayISO, formatDMY } from "./dates";
 import { TermsFindingsBox } from "./TermsReview";   // v7.20.0 (A-INC-2)
 import { settlementState } from "./invoicePlus.domain";   // v7.16.5 (A-RV-14): the SO view shows our payment state, not Fakturownia's flag
-import { Inp, LOCATION_TYPES, LifecycleBar, QualityBadge, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, supplierNameForPO, useSalesData, lotColorationOf } from "./SalesOrders";
+import { Inp, LOCATION_TYPES, LifecycleBar, QualityBadge, Sel, SourceBadge, StatusBadge, buildInvoiceFromSO, computeLineAvailability, destinationDisplay, fmtDate, fmtMoney, fmtNum, locById, netTotal, nextSINVNumber, useSalesData, lotColorationOf } from "./SalesOrders";
 import { ruleOf } from "./incoterms.domain";   // v7.22.3 (FZ-21): the one incoterm table
 
 // ─── INVOICE CREATION MODAL ───────────────────────────────────────────────
@@ -294,7 +294,7 @@ export function OrderDetail({ order, soInvoices = [], financeNotes = [], canOpen
                       const av = availability[i] || {};
                       return (
                         <tr key={i} style={{ borderBottom: "1px solid #F9FAFB", background: av.hasOverage ? "#FFFBEB" : undefined }}>
-                          <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={it.sourceType === "PO" ? supplierNameForPO(it.sourceRef, sd) : ""} /></td>
+                          <td style={{ padding: "10px 6px" }}><SourceBadge sourceType={it.sourceType} sourceRef={it.sourceRef} supplierName={""} /></td>
                           <td style={{ padding: "10px 6px" }}>
                             <div style={{ fontWeight: 600 }}>{it.product}{it.variety ? <span style={{ fontWeight: 400, color: "#666" }}> — {it.variety}</span> : null}</div>
                             {(() => { const col = it.coloration || (it.sourceType === "STOCK" && it.sourceRef ? lotColorationOf(it.sourceRef, sd) : "");   /* v7.23.1 (A-SOL-2) */ return (it.size || col) ? <div style={{ fontSize: 10, color: "#AAA" }}>{[it.size, col].filter(Boolean).join(" · ")}</div> : null; })()}

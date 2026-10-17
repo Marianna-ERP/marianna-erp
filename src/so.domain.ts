@@ -31,15 +31,6 @@ export function lotAvailabilityByGrade(lot: any, orders: any[], excludeOrderId?:
   return { I, II, unsorted: Math.max(0, r0(num(lot?.physicalKg) - num(g.I) - num(g.II))) };
 }
 
-// ── SO-2: unit follows the PO line ────────────────────────────────────────────
-export function lineFromPOLine(poLine: any): { pricingUnit: string; boxes: any; kgPerBox: any; unit: string; coloration?: any; cnCode?: any; packaging?: any } {
-  const unit = String(poLine?.pricingUnit || "kg").toLowerCase() === "box" ? "box" : "kg";
-  return {
-    coloration: poLine?.coloration ?? "",   // v6.99.26 (owner): the sale inherits what was bought
-    cnCode: poLine?.cnCode ?? "",
-    packaging: poLine?.packaging ?? "", pricingUnit: unit, boxes: poLine?.boxes ?? null, kgPerBox: poLine?.kgPerBox ?? null, unit: unit === "box" ? "box" : "kg" };
-}
-
 // ── SO-3: the delivery EVENT depends on the sell incoterm ─────────────────────
 export type DeliveryEvent = "discharged" | "delivered" | "loaded";
 export function deliveryEventFor(sellIncoterm: any): { event: DeliveryEvent; where: string } {
@@ -169,8 +160,7 @@ export function planPackingResult(
   const byLine = new Map<string, Array<{ o: any; idx: number }>>();
   orders.forEach((o: any) => { if (!o || String(o.status) === "Cancelled") return; (o.items || []).forEach((it: any, idx: number) => {
     let pl = "";
-    if (it.sourceType === "PO" && String(it.sourceRef) === String(po.number)) pl = it.sourceLineId != null ? String(it.sourceLineId) : byFacts(it);
-    else if (it.sourceType === "STOCK" && poLots.has(String(it.sourceRef))) { const l = poLots.get(String(it.sourceRef)); pl = l?.poLineId != null ? String(l.poLineId) : byFacts(it); }
+    if (it.sourceType === "STOCK" && poLots.has(String(it.sourceRef))) { const l = poLots.get(String(it.sourceRef)); pl = l?.poLineId != null ? String(l.poLineId) : byFacts(it); }
     if (!pl) return; if (!byLine.has(pl)) byLine.set(pl, []); byLine.get(pl)!.push({ o, idx });
   }); });
   const soChanges: string[] = [], questions: PackingPlan["questions"] = [], unpriced: string[] = [];

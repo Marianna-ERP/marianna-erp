@@ -182,7 +182,7 @@ export function MovementModal({ lot, liveSOs = [], editing = null, initialMode =
                 {/* Also allow any non-cancelled SO that sources this lot, even if not currently reserving */}
                 {(liveSOs || [])
                   .filter((o: any) => !(reservationState.reservations || []).some((r: any) => r.soNumber === o.number))
-                  .filter((o: any) => (o.items || []).some((it: any) => (it.sourceType === "STOCK" && it.sourceRef === lot.number) || (it.sourceType === "PO" && it.sourceRef === lot.poRef)))
+                  .filter((o: any) => (o.items || []).some((it: any) => (it.sourceType === "STOCK" && it.sourceRef === lot.number)))
                   .map((o: any) => <option key={o.number} value={o.number}>{o.number}{o.client?.name ? ` · ${o.client.name}` : ""}</option>)}
               </select>
             </div>

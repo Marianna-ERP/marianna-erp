@@ -18,7 +18,7 @@
 // carve-out is removed with the rule it was patching.
 //
 // A purchase order is consumed by SALES ORDERS, and that ledger already exists
-// and is correct (salesOrders.domain poLineReservations — per line, excluding
+// and is correct (a sale line names its lot — v7.24.2 — so nothing reserves a PO line, excluding
 // Draft and Cancelled SOs). Nothing here duplicates it.
 //
 // What genuinely constrains a shipment is physical, and this module holds it:

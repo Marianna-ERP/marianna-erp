@@ -393,7 +393,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                 <div style={{ padding: "8px 10px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 13, background: "#F8FAFC" }}>{(draft.poRefs || []).join(", ")} <span style={{ color: "#94A3B8", fontSize: 11 }}>· purchase{(() => { const p = (pos || []).find((x: any) => (draft.poRefs || []).includes(x.number)); return p ? ` · ${p.buyIncoterm || ""} · ${p.supplier?.name || ""}` : ""; })()}</span></div>
                 <Sel value={draft.governingSoRef || ""} onChange={e => sf("governingSoRef", e.target.value || "")} title="the sale these goods go to — sets the client side; leave empty when the truck comes to our warehouse">
                   <option value="">— no sale: to our warehouse —</option>
-                  {(orders || []).filter((o: any) => o.status !== "Cancelled" && (String(draft.governingSoRef) === String(o.number) || (o.items || []).some((it: any) => (it.sourceType === "PO" && (draft.poRefs || []).includes(String(it.sourceRef))) || (it.sourceType === "STOCK" && (draft.goods || []).some((g: any) => String(g.lotRef) === String(it.sourceRef)))))).map((o: any) => <option key={o.number} value={o.number}>{o.number} · {o.client?.name || "(client)"}</option>)}
+                  {(orders || []).filter((o: any) => o.status !== "Cancelled" && (String(draft.governingSoRef) === String(o.number) || (o.items || []).some((it: any) => (it.sourceType === "STOCK" && (draft.goods || []).some((g: any) => String(g.lotRef) === String(it.sourceRef)))))).map((o: any) => <option key={o.number} value={o.number}>{o.number} · {o.client?.name || "(client)"}</option>)}
                 </Sel>
               </div>
             </div>}
@@ -406,7 +406,7 @@ export function EditShipmentModal({ shipment, contacts, lots = [], pos = [], ord
                 </div>
               ) : (<div style={{ display: "flex", gap: 6, alignItems: "center" }}><div style={{ flex: 1 }}><Sel value={draft.governingSoRef || ""} onChange={e => sf("governingSoRef", e.target.value || "")} title="Which client's truck this is. Sets the destination and, with the producer's country, the trade direction. Change it if this shipment was attributed to the wrong sales order.">
                 <option value="">None — to our warehouse</option>
-                {(orders || []).filter((o: any) => o.status !== "Cancelled" && ((draft.soRefs || []).includes(o.number) || String(draft.governingSoRef) === String(o.number) || (draft.goods || []).some((g: any) => String(g.soRef) === String(o.number)) || (draft.poRefs || []).some((pr: string) => (o.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === pr)) || (draft.lotRefs || []).some((lr: string) => (o.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(lr))))).map((o: any) => (
+                {(orders || []).filter((o: any) => o.status !== "Cancelled" && ((draft.soRefs || []).includes(o.number) || String(draft.governingSoRef) === String(o.number) || (draft.goods || []).some((g: any) => String(g.soRef) === String(o.number)) || (draft.lotRefs || []).some((lr: string) => (o.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(lr))))).map((o: any) => (
                   <option key={o.number} value={o.number}>{o.number} · {o.client?.name || "(client)"}</option>
                 ))}
               </Sel></div>

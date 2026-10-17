@@ -1,6 +1,7 @@
 import React from "react";
 import { exportAllData } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
+import { fileLabel } from "./remoteStore";   // v7.24.0 (A-BK-7)
 
 // Catches render-time errors anywhere below it and shows a reassuring recovery
 // screen instead of a blank page. Crucially it tells the user their data is
@@ -27,7 +28,7 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
       const a = document.createElement("a");
       a.href = url;
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      a.download = `marianna-erp_recovery_${stamp}.json`;
+      a.download = `marianna-erp${fileLabel()}_recovery_${stamp}.json`;   // v7.24.0 (A-BK-7)
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

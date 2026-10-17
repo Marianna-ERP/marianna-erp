@@ -2,7 +2,7 @@ import { useConfirm } from "./ui";   // v7.22.5 (A-RV-17)
 // v7.4.2 (A-REC-1, owner 6–7 Oct): "Recover from a backup" — compare, tick, bring back with what each record needs; nothing removed.
 import React, { useEffect, useState } from "react";
 import { compareBackup, planRecovery, applyRecovery, labelOf, StoreDiff } from "./recovery.domain";
-import { listSnapshots, readSnapshot, readSharedNow, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession } from "./remoteStore";
+import { listSnapshots, readSnapshot, readSharedNow, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession , fileLabel } from "./remoteStore";
 import { STORAGE_VERSION } from "./useLocalStoredState";
 import { APP_VERSION } from "./version";
 import { recordAudit } from "./audit";
@@ -38,7 +38,7 @@ export default function RecoveryPanel({ onClose }: { onClose: () => void }) {
     try {
       const next = applyRecovery(current, plan);
       {   // v7.21.0 (A-RV-19): recovery writes into the shared data — there is no other
-        const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION); const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `marianna-shared-copy-before-recovery-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
+        const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION); const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `marianna-shared-copy${fileLabel()}-before-recovery-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
         await replaceSharedStores(next, readSession()?.email || "");
       }
       recordAudit({ module: "System", docType: "Recovery", docNumber: source.label, action: "updated", summary: `recovered ${plan.take.length} record(s): ${plan.take.map(t => labelOf(t.rec)).join(", ").slice(0, 700)}` });

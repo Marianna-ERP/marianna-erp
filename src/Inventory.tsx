@@ -157,8 +157,7 @@ export function journeyForLot(lot: any, shipments: any[] = [], orders: any[] = [
   // stored value), sell from the governing SO that draws on this lot/PO.
   const lotBuyIncoterm = lot.buyIncoterm || lot.purchaseIncoterm || "";
   const govSo = (orders || []).find((o: any) => o.status !== "Cancelled" && (o.items || []).some((it: any) =>
-    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) ||
-    (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
+    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))));
   const lotSellIncoterm = govSo?.sellIncoterm || "";
   // Phase C: prefer a stored journey, then one DERIVED FROM REAL SHIPMENTS, and only
   // then fall back to the legacy flow template (for old lots with neither).
@@ -356,33 +355,7 @@ export const MOVEMENT_TYPES: Record<string, any> = {
 export const today = localTodayISO();
 
 export function locById(id) { return locationById(id) as any; } // v6.86.0: one resolver
-export const countryOfLot = (id: any): string => String((locById(id) || {}).country || "");   // v7.12.1 (A-TD-2): a place's country, for the trade-direction rule
-
-// ─── SO STUB ────────────────────────────────────────────────────────────────
-// Mirrors the 5 seed SOs from SalesOrders.tsx so reservations show up realistically
-// in this standalone module. Replaced with live SO state on integration.
-// Reserving semantics: SO_PRE_DISPATCH_STATUSES in ./types, applied by salesOrders.domain (B0-2 resolved:
-// the old 7-status set here was dead code — availability always used the 3-status pre-dispatch set).
-
-function getSOsStub() {
-  return [
-    { id: 1, number: "SO-2026-0094", status: "Delivered", clientName: "Biedronka",
-      items: [{ product: "Golden Delicious", qty: 8000, sourceType: "STOCK", sourceRef: "LOT-2026-0091" }] },
-    { id: 2, number: "SO-2026-0088", status: "Invoiced", clientName: "Lidl Polska",
-      items: [{ product: "Golden Delicious", qty: 2400, sourceType: "STOCK", sourceRef: "LOT-2026-0091" }] },
-    { id: 3, number: "SO-2026-0091", status: "Shipped", clientName: '"Euro-Papryka" Paweł Myziak',
-      items: [
-        { product: "Papryka Kapia",      qty: 6000, sourceType: "STOCK", sourceRef: "LOT-2026-0086" },
-        { product: "Yellow Bell Pepper", qty: 3600, sourceType: "STOCK", sourceRef: "LOT-2026-0099" },
-        { product: "Red Bell Pepper",    qty: 1200, sourceType: "STOCK", sourceRef: "LOT-2026-0095" },
-      ] },
-    { id: 4, number: "SO-2026-0102", status: "Confirmed", clientName: "Biedronka",
-      items: [{ product: "Red Bell Pepper", qty: 5000, sourceType: "PO", sourceRef: "PO-2026-0121", sourceLineId: 1 }] },
-    { id: 5, number: "SO-2026-0105", status: "Draft", clientName: "Metro Cash & Carry",
-      items: [{ product: "Papryka Kapia", qty: 12000, sourceType: "PO", sourceRef: "PO-2026-0117", sourceLineId: 1 }] },
-  ];
-}
-const SOS = getSOsStub();
+export const countryOfLot = (id: any): string => String((locById(id) || {}).country || "");
 
 const productsMatch = domainProductsMatch; // Batch 1
 const _soClientName = soClientName; // Batch 1
@@ -409,14 +382,14 @@ export function lotReservations(lot, sourceSOs, ctx) {
 // Returns array of SO references this lot has ever been linked to
 // (across all statuses including Shipped+ historical).
 export function soRefsFor(lot, sourceSOs, shipmentsList = []) {
-  const list = sourceSOs ?? SOS;
+  const list = sourceSOs ?? [];   // v7.24.2 (A-RV-15 d): no sample orders written into the code — the live sales only
   const refs = [];
   list.forEach(o => {
     if (o.status === "Cancelled") return;
     if (o.status === "Draft") return;
     (o.items || []).forEach(it => {
       const matchesStock = it.sourceType === "STOCK" && it.sourceRef === lot.number;
-      const matchesPOBackedLot = it.sourceType === "PO" && lot.poRef === it.sourceRef && productsMatch(it.product, lot.product);
+      const matchesPOBackedLot = false;
       if (!matchesStock && !matchesPOBackedLot) return;
       if (!productsMatch(it.product, lot.product)) return;
       if (!refs.find(r => r.number === o.number)) {
@@ -523,12 +496,12 @@ export function LotDirectionBadge({ lot, shipments = [], orders = [], pos = [], 
   let dir = "";
   // v6.99.81 (A-IN-5, owner): a lot that has not moved yet still has a flow when its PO and its sale are known — derived
   // below from the two documents, exactly as for a moved lot; only a lot with neither shows nothing
-  const hasDocs = !!(pos || []).find((p: any) => String(p.number) === String(lot.poRef)) && (orders || []).some((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
+  const hasDocs = !!(pos || []).find((p: any) => String(p.number) === String(lot.poRef)) && (orders || []).some((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))));
   if (!shs.length && !(lot.movements || []).length && !hasDocs) return null;
   // v7.12.1 (A-TD-2, owner 8 Oct): the LOT'S journey is its first movement — from its producer to where its sale finally takes it
   // (or to us when unsold) — asked of the one rule (tradeFlow.shipmentTradeEnds). No stored direction is read any more.
   const so = (orders || []).find((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) =>
-    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef)))) || null;
+    (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)))) || null;
   const ends = shipmentTradeEnds({ poRefs: lot.poRef ? [lot.poRef] : [], governingSoRef: so?.number || "", purpose: "INBOUND" }, { pos, orders, countryOf: countryOfLot });
   dir = ends.direction;
   if (!dir) return null;
@@ -723,10 +696,6 @@ export function printHtmlNodeInv(nodeId, title, notify = null) {
     setTimeout(() => { iframe.remove(); document.title = prevTitle; }, 1000);
   }, 150);
 }
-
-
-
-export function normName(v: any) { return String(v || "").trim().toLowerCase(); }
 
 // ─── v6.5: SORTING EVENT MODAL ──────────────────────────────────────────────
 // Logs a warehouse sorting service on the lot (kg sorted on a date). No stock
@@ -1049,8 +1018,8 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
   const lastIns = ins[0];
   const lotClaims = (claims || []).filter((c: any) => (c.subjects || []).some((s: any) => String(s.ref || s.number) === String(lot.number)) || (c.rootDoc && String(c.rootDoc.number) === String(lot.poRef)));
   const g = gradeSplit(lot);
-  const sales = (orders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))));
-  const soldKg = sales.reduce((s: number, o: any) => s + (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))).reduce((a: number, it: any) => a + num(it.qty), 0), 0);
+  const sales = (orders || []).filter((o: any) => o.status !== "Cancelled" && o.status !== "Draft" && (o.items || []).some((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))));
+  const soldKg = sales.reduce((s: number, o: any) => s + (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))).reduce((a: number, it: any) => a + num(it.qty), 0), 0);
   const settlement = (settlements || []).find((s: any) => String(s.poNumber) === String(lot.poRef));
   const supplier = (contacts || []).find((c: any) => (c.type === "Supplier" || (c.roles || []).includes("Supplier")) && S(c.name) && (arrival?.supplierId != null ? String(c.id) === String(arrival.supplierId) : false));
   const reportDays = num(supplier?.reportDays) || num(supplier?.agreement?.qualityReportDays) || 0;
@@ -1082,7 +1051,7 @@ export function LotWorkbench({ lot, shipments = [], inspections = [], claims = [
         {/* v6.99.17 (A-R13-7): RECEIPT tile removed — the quantity breakdown already shows expected / received / variance */}
         {tile("QUALITY", lastIns ? <>{lastIns.stage} {lastIns.date}<br />defects <b>{inspectionTotals(lastIns).totalPct}%</b> · <b style={{ color: lastIns.verdict === "Rejected" ? "#DC2626" : lastIns.verdict === "Sort" ? "#B45309" : "#16A34A" }}>{lastIns.verdict}</b><br />{ins.length} inspection(s){lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</> : <span style={{ color: dueQC ? "#B45309" : "#94A3B8" }}>no inspection{dueQC ? ` — QC report due ${dueQC}` : ""}{lotClaims.length ? ` · ${lotClaims.length} claim(s)` : ""}</span>, lastIns ? "#111" : "#94A3B8")}
         {!lotIsDirect(lot) && tile("STOCK — AVAILABLE NOW", (() => { const a = lotAvailabilityByGrade(lot, orders); return <><div>class I <b>{a.I.toLocaleString("pl-PL")}</b> kg</div><div>class II <b>{a.II.toLocaleString("pl-PL")}</b> kg</div>{a.unsorted > 0 ? <div>unsorted {a.unsorted.toLocaleString("pl-PL")} kg</div> : null}<div style={{ color: "#94A3B8" }}>waste {g.waste.toLocaleString("pl-PL")} kg</div></>; })())}
-        {tile("SALES", <>{sales.length ? sales.map((o: any) => { const kg = (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number)) || (it.sourceType === "PO" && lot.poRef && String(it.sourceRef) === String(lot.poRef))).reduce((a: number, it: any) => a + num(it.qty), 0); return <div key={o.number}>{o.number} · <b>{Math.round(kg).toLocaleString("pl-PL")} kg</b>{o.items?.some((it: any) => it.grade === "II") ? " · II" : ""} · {o.status}</div>; }) : <span style={{ color: "#94A3B8" }}>no sales yet</span>}<span style={{ color: num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "#16A34A" : "#B45309" }}>{num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "fully sold" : `${Math.max(0, Math.round(num(lot.receivedKg) - soldKg - g.waste)).toLocaleString("pl-PL")} kg to sell`}</span></>)}
+        {tile("SALES", <>{sales.length ? sales.map((o: any) => { const kg = (o.items || []).filter((it: any) => (it.sourceType === "STOCK" && String(it.sourceRef) === String(lot.number))).reduce((a: number, it: any) => a + num(it.qty), 0); return <div key={o.number}>{o.number} · <b>{Math.round(kg).toLocaleString("pl-PL")} kg</b>{o.items?.some((it: any) => it.grade === "II") ? " · II" : ""} · {o.status}</div>; }) : <span style={{ color: "#94A3B8" }}>no sales yet</span>}<span style={{ color: num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "#16A34A" : "#B45309" }}>{num(lot.receivedKg) > 0 && soldKg + g.waste >= num(lot.receivedKg) - 1 ? "fully sold" : `${Math.max(0, Math.round(num(lot.receivedKg) - soldKg - g.waste)).toLocaleString("pl-PL")} kg to sell`}</span></>)}
         {tile("SETTLEMENT (on the PO)", settlement ? <>{settlement.number ? settlement.number + " · " : ""}<b style={{ color: settlement.status === "Closed" ? "#16A34A" : "#B45309" }}>{settlement.status}</b>{settlement.closedAt ? ` · closed ${settlement.closedAt}` : ""}<br />{settlement.commissionInvoiceId ? "commission invoice issued" : settlement.status === "Closed" ? "commission not yet invoiced — waiting for the Monday commission run" : "closes on the PO when the truck is sold"}</> : <span style={{ color: "#94A3B8" }}>{lot.poRef ? `not opened yet — on ${lot.poRef}` : "—"}</span>)}
       </div>
       <div style={{ marginTop: 8, fontSize: 10, color: "#94A3B8" }}>Actions live below in their owning sections: Receive · Inspect · Sort · Count · Move · Return · Claim; the settlement, its reports and the commission run are on the PO. This strip stores nothing — it reads what each module owns.</div>
@@ -1296,8 +1265,7 @@ export default function Inventory({ archive = null, initialSelectedNumber = "", 
     const dependentSOs = (liveSOs || []).filter((o: any) =>
       o.status !== "Cancelled" &&
       (o.items || []).some((it: any) =>
-        (it.sourceType === "STOCK" && String(it.sourceRef) === String(lotNo)) ||
-        (it.sourceType === "PO" && selected.poRef && String(it.sourceRef) === String(selected.poRef))
+        (it.sourceType === "STOCK" && String(it.sourceRef) === String(lotNo))
       )
     ).map((o: any) => o.number);
 

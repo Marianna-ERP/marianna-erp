@@ -71,7 +71,7 @@ export interface Invoice {
   paidAmount: number;
   notes: string;
   attachment: { name: string; size?: string } | null;
-  creditNoteIds: number[];          // ids of credit/debit notes against this invoice
+  creditNoteIds?: number[];         // retired (IV-5): the notes point at their invoice — no new invoice writes it (v7.24.3)
   allocation: any | null;           // written by the cost-allocation engine (v6.19)
   fakturownia: { exported: boolean; ref?: string | number; legalNumber?: string };
   source: string;                   // provenance, e.g. "SO:SO-2026-0091", "migrated:warehouseInvoice"
@@ -164,25 +164,11 @@ export function salesInvoiceFromSODraft(order: any, pi: any): Invoice {
     paymentStatus: (pi.paymentStatus as PaymentStatus) || "Draft",
     paidAmount: n(pi.paidAmount),
     notes: pi.notes || "", attachment: pi.attachment || null,
-    creditNoteIds: [], allocation: null,
+    allocation: null,
     fakturownia: { exported: !!pi.fktMatched, ref: pi.fktId, legalNumber: pi.fktMatched ? pi.number : undefined },
     source: salesInvoiceSourceTag(order.number, pi.number || pi.id),
     createdAt: pi.createdAt || pi.issueDate || "", locked: pi.paymentStatus === "Sent" || !!pi.fktMatched,
   } as Invoice;
-}
-
-// v6.33.0 (A3-6): once the register owns an SO's invoices, the legacy
-// order.pendingInvoices arrays are stripped. Pure; returns the SAME array
-// reference when there is nothing to strip so React effects don't loop.
-export function stripPendingInvoices(orders: any[]): { orders: any[]; changed: boolean } {
-  let changed = false;
-  const out = arr(orders).map((o: any) => {
-    if (!o || !o.pendingInvoices || !o.pendingInvoices.length) return o;
-    changed = true;
-    const { pendingInvoices, ...rest } = o;
-    return rest;
-  });
-  return { orders: changed ? out : orders, changed };
 }
 
 export function migrateLegacyInvoices(opts: {
@@ -241,7 +227,7 @@ export function migrateLegacyInvoices(opts: {
         positions: [], links: [],
         paymentStatus: (w.status === "Approved" ? "Issued" : (w.status as PaymentStatus)) || "Issued",
         paidAmount: 0, notes: w.notes || "", attachment: null,
-        creditNoteIds: [], allocation: w.allocatedLots ? { method: w.allocationMethod || "by_kg_days", lots: w.allocatedLots } : null,
+        allocation: w.allocatedLots ? { method: w.allocationMethod || "by_kg_days", lots: w.allocatedLots } : null,
         fakturownia: { exported: false },
         source: src, createdAt: w.date || "",
       };
@@ -276,7 +262,7 @@ export function migrateLegacyInvoices(opts: {
         positions: [], links: [],
         paymentStatus: (c.status as PaymentStatus) || "Issued", paidAmount: 0,
         notes: c.notes || c.description || "", attachment: null,
-        creditNoteIds: [], allocation: null, fakturownia: { exported: false },
+        allocation: null, fakturownia: { exported: false },
         source: src, createdAt: c.date || "",
       };
     });
@@ -414,37 +400,4 @@ export function pushBlockers(inv: Invoice): string[] {
     if (g > 0 && Math.abs(sum - g) > 0.02) out.push(`the lines add up to ${sum.toLocaleString("pl-PL", { minimumFractionDigits: 2 })} but the invoice says ${g.toLocaleString("pl-PL", { minimumFractionDigits: 2 })}`);
   }
   return out;
-}
-
-
-// ── v7.21.4 (A-ST-10, owner 9 Oct batch): ONE PLACE FOR A WAREHOUSE INVOICE — THE REGISTER ─────────────────────────────────
-// The separate warehouse-invoices store held the same documents the register already holds (folded by migrateLegacyInvoices:
-// source migrated:warehouseInvoice:<id>, or a twin by number and party). This moves what only the store still knew — the
-// warehouse's id, the month, an allocation to lots — onto the register invoice, points the lots' cost lines (WHINV-<store id>)
-// at it (WHINV-<register id>), and empties the store. It waits while an entry has no register invoice yet (the fold runs first).
-// An empty store changes nothing; a second pass changes nothing.
-export function foldWarehouseInvoiceStore(input: { store: any[]; invoices: any[]; lots: any[] }): { store: any[]; invoices: any[]; lots: any[]; moved: string[]; waiting: string[] } {
-  const store = arr(input.store), reg = arr(input.invoices);
-  if (!store.length) return { store: [], invoices: reg, lots: arr(input.lots), moved: [], waiting: [] };
-  const normNo = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, "");
-  const normParty = (v: any) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 24);
-  const homeOf = (w: any) => reg.find((i: any) => i && i.source === `migrated:warehouseInvoice:${w.id}`)
-    || reg.find((i: any) => i && i.kind === "COST" && i.paymentStatus !== "Cancelled" && normNo(i.number) === normNo(w.invoiceNo) && normParty(i.counterparty?.name) === normParty(w.warehouseName));
-  const waiting = store.filter((w: any) => !homeOf(w)).map((w: any) => String(w.invoiceNo || w.id));
-  if (waiting.length) return { store, invoices: reg, lots: arr(input.lots), moved: [], waiting };
-  const moveTo = new Map<string, string>(); let invoices = reg;
-  store.forEach((w: any) => {
-    const h: any = homeOf(w); moveTo.set(`WHINV-${w.id}`, `WHINV-${h.id}`);
-    const patch: any = {};
-    if (w.warehouseId != null && w.warehouseId !== "" && (h.counterparty || {}).id == null) patch.counterparty = { ...(h.counterparty || {}), id: w.warehouseId };
-    if (!h.periodFrom && w.period) patch.periodFrom = `${w.period}-01`;
-    if (!h.allocation && Array.isArray(w.allocatedLots) && w.allocatedLots.length) patch.allocation = { method: w.allocationMethod || "by_expected_charges", lots: w.allocatedLots };
-    if (Object.keys(patch).length) invoices = invoices.map((i: any) => i.id === h.id ? { ...i, ...patch } : i);
-  });
-  const lots = arr(input.lots).map((l: any) => {
-    let changed = false;
-    const costs = (l?.costs || []).map((c: any) => { const to = moveTo.get(String(c?.source || "")); if (!to) return c; changed = true; return { ...c, source: to }; });
-    return changed ? { ...l, costs } : l;
-  });
-  return { store: [], invoices, lots, moved: store.map((w: any) => String(w.invoiceNo || w.id)), waiting: [] };
 }

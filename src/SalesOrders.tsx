@@ -12,7 +12,7 @@ import { PACKAGING_SEED } from "./packaging.domain";
 import { effectiveSoStatus } from "./statusOwnership.domain";
 import { lineTotal as lineTotalPU, pricingUnit as pricingUnitOf, kgPerBoxForLine, effectiveCounts } from "./pricingUnit.domain";
 import { SO_STATUSES } from "./types";
-import { productsMatch, isPOUsableForConfirmedSO, lotReservationsForPicker, poLineReservations as domainPoLineReservations, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
+import { isPOUsableForConfirmedSO, lotReservationsForPicker, computeLineAvailability as domainComputeLineAvailability } from "./salesOrders.domain";
 import { salesInvoiceFromSODraft } from "./invoicing";
 import { nextId } from "./ids";
 import { nextClaimNumber, blankClaim } from "./claims.domain";
@@ -134,7 +134,7 @@ function _adaptLotsFromInventory(invLots: any[], inspections: any[] = []) {
 // Convert POs from the PO module shape into the SalesOrders source-picker shape.
 // PO has supplier:{name,country,...}, expectedDeliveryDate; SO wants flat supplierName, expectedDelivery.
 // PO items lack an 'available' field — SO needs it for the picker. We set it to qty (full line),
-// and let poLineReservations subtract live SO commitments downstream.
+// (v7.24.2: a sale line names its lot — nothing reserves a PO line downstream).
 function _adaptPOsFromModule(pos) {
   return (pos || []).map(po => ({
     number: po.number,
@@ -302,7 +302,7 @@ export function validatePOReadinessForSO(items: any[], sd: SalesData) {
   const blocked: any[] = [];
   (items || []).forEach((it: any, idx: number) => {
     // v6.99.127 (A-ONE-1): a line sells a LOT — its readiness is its PO's; the PO path stays for the old lines left on it
-    const poNumber = it.sourceType === "PO" ? it.sourceRef : it.sourceType === "STOCK" && it.sourceRef ? ((sd.rawLots || []).find((l: any) => String(l.number) === String(it.sourceRef)) || {}).poRef : null;
+    const poNumber = it.sourceType === "STOCK" && it.sourceRef ? ((sd.rawLots || []).find((l: any) => String(l.number) === String(it.sourceRef)) || {}).poRef : null;
     if (!poNumber) return;
     const lot = it.sourceType === "STOCK" ? (sd.rawLots || []).find((l: any) => String(l.number) === String(it.sourceRef)) : null;
     if (lot && (parseNum(lot.physicalKg) > 0 || parseNum(lot.receivedKg) > 0)) return;   // received goods are ours whatever the PO says
@@ -333,11 +333,6 @@ export function lotReservations(lot, allOrders, excludeOrderId, sd: SalesData) {
   return lotReservationsForPicker(lot, allOrders, excludeOrderId, reserveCtx(sd)); // engine: salesOrders.domain (Batch 1)
 }
 
-// Same idea for a PO line — reservations from non-Draft, non-Cancelled SOs.
-export function poLineReservations(po, poLine, allOrders, excludeOrderId, sd: SalesData) {
-  return domainPoLineReservations(po, poLine, allOrders, excludeOrderId, reserveCtx(sd)); // engine (Batch 1)
-}
-
 // Availability check — for each line, compute how much of its demanded qty is
 // actually available across stock + PO sources matching the line's product, net of
 // what OTHER non-Cancelled non-Draft SOs have already reserved from the same lots/POs.
@@ -356,9 +351,7 @@ export function sameSoDuplicateSources(soItems) {
   const groups = {};
   (soItems || []).forEach((it, idx) => {
     if (!it.sourceType || !it.sourceRef) return;
-    const key = it.sourceType === "PO"
-      ? `PO::${it.sourceRef}::${it.sourceLineId ?? 1}`
-      : `STOCK::${it.sourceRef}`;
+    const key = `STOCK::${it.sourceRef}`;
     if (!groups[key]) groups[key] = { indices: [], totalQty: 0, sourceType: it.sourceType, sourceRef: it.sourceRef, sourceLineId: it.sourceLineId ?? 1 };
     groups[key].indices.push(idx);
     groups[key].totalQty += parseFloat(it.qty) || 0;
@@ -416,12 +409,6 @@ export function SourceBadge({ sourceType, sourceRef, supplierName }: any) {
       {!isStock && supplierName && <span style={{ fontSize: 10, color: "#166534", paddingLeft: 2 }}>{supplierName}</span>}
     </span>
   );
-}
-
-// Resolve the supplier name for a PO-sourced line (from the SO's PO references)
-export function supplierNameForPO(poRef: any, sd: SalesData): string {
-  const po: any = (sd.poRefs || []).find((p: any) => p.number === poRef);
-  return po?.supplierName || po?.supplier?.name || "";
 }
 
 
@@ -867,10 +854,7 @@ function SalesOrdersScreen({ archive = null,
         let matchesLot = false;
         if (it.sourceType === "STOCK" && it.sourceRef === lot.number) matchesLot = true;
         // v6.32.0 (A1): poLineId-first + variety-aware (was product-name only)
-        if (it.sourceType === "PO" && lot.poRef === it.sourceRef) {
-          if (it.sourceLineId != null && lot.poLineId != null) { if (String(it.sourceLineId) === String(lot.poLineId)) matchesLot = true; }
-          else if (productsMatch(it.product, lot.product, it.variety, lot.variety)) matchesLot = true;
-        }
+        
         if (!matchesLot) return;
 
         const shippedForSO = (lot.movements || [])
@@ -950,18 +934,6 @@ function SalesOrdersScreen({ archive = null,
         // v6.92.0 (A-R8-3, owner ruling): import permit and ACID numbers are UNIQUE per SO — a hard block, no override.
         await uiAlert({ tone: "danger", title: "Duplicate import document number", message: `${lines}\n\nImport permits and ACID numbers are single-use: this SO cannot be saved with a number already used on another order. Correct the number.` });
         return;
-        // (legacy override kept unreachable for reference)
-        // eslint-disable-next-line no-unreachable
-        const ok = await uiConfirm({
-          tone: "danger",
-          title: "Duplicate import document number",
-          message: `${lines}\n\nImport permits and ACID numbers are normally single-use. Saving this SO with a number that was already used may cause customs rejection at destination.\n\nOverride and save anyway? (the override is recorded in the SO notes)`,
-          confirmLabel: "Override & save", cancelLabel: "Go back",
-        });
-        if (!ok) return;
-        const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
-        const overrideNote = `[${stamp}] OVERRIDE: saved despite duplicate ${conflicts.map(c => `${label(c.field)} "${c.value}" (also on ${c.soNumber})`).join("; ")}.`;
-        o = { ...o, notes: o.notes ? `${o.notes}\n${overrideNote}` : overrideNote };
       }
     }
     // Sourcing rule guard — defensive, even though the UI already blocks this
@@ -1361,8 +1333,7 @@ function SalesOrdersScreen({ archive = null,
         const lotsAll = extInvLots || [];
         const linked = lotsAll.filter((l: any) =>
           (l.movements || []).some((m: any) => m && !m.voided && m.type === "SHIP_OUT" && String(m.soRef) === String(soDoc.number)) ||
-          (soDoc.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(l.number)) ||
-          (soDoc.items || []).some((it: any) => it.sourceType === "PO" && l.poRef && String(it.sourceRef) === String(l.poRef)));
+          (soDoc.items || []).some((it: any) => it.sourceType === "STOCK" && String(it.sourceRef) === String(l.number)));
         const pool = linked.length ? linked : lotsAll;
         const inp = { width: "100%", border: "1px solid #E5E7EB", borderRadius: 7, padding: "7px 10px", fontSize: 13 } as any;
         const canSave = cc.lotId && parseFloat(cc.value) > 0;

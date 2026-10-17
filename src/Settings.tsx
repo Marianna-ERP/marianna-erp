@@ -6,7 +6,7 @@ import { COMPANY_DEFAULTS, clearAllData, STORAGE_VERSION, storageUsage, startFre
 import { APP_VERSION } from "./version";
 import RecoveryPanel from "./RecoveryPanel";   // v7.4.2 (A-REC-1)
 import { useUnsavedGuard } from "./unsaved";   // v7.2.0
-import { isTestCopy, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, ENV_LABEL } from "./remoteStore";   // v7.0.0 (A-SH-1)
+import { isTestCopy, replaceSharedStores, sharedCopyAsExport, storesFromExport, readSession, ENV_LABEL , fileLabel } from "./remoteStore";   // v7.0.0 (A-SH-1)
 import { userBySignIn, usersDiff, usersSaveProblems, rolesOrDefault, materializeUser, rightsSummary } from "./permissions.domain";   // v7.1.0 (A-USR-1) · v7.2.0 (A-SET-1)
 import { AutoBackupCard } from "./BackupPanel";   // v6.99.70 (A-BK-1)
 import { downloadAllData, flushFolderBackup } from "./autoBackup";
@@ -97,7 +97,7 @@ function SeasonsPanel({ refStores = {}, seasonSettings, setSeasonSettings, archi
   function reopen(season: string) { setArchivedSeasons((prev: string[]) => (prev || []).filter(s => s !== season)); recordAudit({ module: "System", docType: "Season", docNumber: season, action: "status", summary: `Season ${season} re-opened` }); }
   function exportSeason(season: string) {
     const fileObj = sliceSeason({ ...data, ...Object.fromEntries(MASTER_KEYS.map(k => [k, readStoreValue(k)])) }, season, st, MASTER_KEYS, { app: "marianna-erp", version: STORAGE_VERSION, exportedBy: "Settings → Seasons" });
-    const blob = new Blob([JSON.stringify(fileObj)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `marianna-archive_${season.replace("/", "-")}_${today}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+    const blob = new Blob([JSON.stringify(fileObj)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `marianna-archive${fileLabel()}_${season.replace("/", "-")}_${today}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 2000);
     recordAudit({ module: "System", docType: "Season", docNumber: season, action: "exported", summary: `Season ${season} exported to its own archive file` });
   }
   async function removeExported(season: string) {
@@ -763,7 +763,7 @@ function NumberingPanel({ numbering: savedNumbering = {}, setNumbering: saveNumb
 async function pushStoresToShared(keys: string[], what: string): Promise<string> {
   const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION);
   const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-  a.download = `marianna-shared-copy-before-${what.replace(/\s+/g, "-")}-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
+  a.download = `marianna-shared-copy${fileLabel()}-before-${what.replace(/\s+/g, "-")}-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
   const stores: Record<string, any> = {}; keys.forEach(k => { stores[k] = readStoreValue(k); });
   const n = await replaceSharedStores(stores, readSession()?.email || "");
   return `${n} store(s) replaced in the shared data${ENV_LABEL ? ` (${ENV_LABEL})` : ""}; the shared copy as it was is in your downloads`;
@@ -919,7 +919,7 @@ export default function Settings({ roles = [], setRoles = null,
         const word = (await uiPrompt({ message: `RESTORE this file into the SHARED data${ENV_LABEL ? ` (${ENV_LABEL})` : ""} — for everyone?\n\nFile: ${file.name}\nExported: ${String(parsed.meta?.exportedAt || "?").replace("T", " ").slice(0, 16)}, app ${parsed.meta?.appVersion || "?"}\nIt holds: ${parsed.summary}\n\nEvery colleague's screen will show this data. The shared copy as it is now will be downloaded first.\n\nType RESTORE to go ahead:`, defaultValue: "" }));
         if (String(word || "").trim().toUpperCase() !== "RESTORE") { setMessage({ kind: "info", text: "Restore not done (the confirmation word was not typed)." }); return; }
         try {
-          const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION); const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `marianna-shared-copy-before-restore-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
+          const json = await sharedCopyAsExport(APP_VERSION, STORAGE_VERSION); const blob = new Blob([json], { type: "application/json" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `marianna-shared-copy${fileLabel()}-before-restore-${localTodayISO()}.json`; document.body.appendChild(a); a.click(); a.remove();
           const n = await replaceSharedStores(parsed.stores, readSession()?.email || ""); recordAudit({ module: "System", docType: "Restore", docNumber: file.name, action: "updated", summary: `Shared data restored from ${file.name} (${parsed.summary}); ${n} stores replaced` });
           setMessage({ kind: "success", text: `Restored into the shared data: ${n} stores from ${file.name}. Reloading…` }); setTimeout(() => window.location.reload(), 1400);
         } catch (x: any) { setMessage({ kind: "error", text: `Restore failed: ${String(x?.message || x)}` }); }

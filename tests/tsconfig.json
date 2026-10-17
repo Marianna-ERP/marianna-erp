@@ -19,12 +19,15 @@
     "../src/docLinks.domain.ts",
     "../src/documents.domain.ts",
     "../src/fakturowniaImport.domain.ts",
-    "../src/fx.ts", "../src/fxNbp.domain.ts", "../src/storeMerge.domain.ts",
+    "../src/fx.ts",
+    "../src/fxNbp.domain.ts",
+    "../src/storeMerge.domain.ts",
     "../src/ids.ts",
     "../src/integrityCheck.ts",
     "../src/inventory.domain.ts",
     "../src/invoicing.ts",
-    "../src/ledger.ts", "../src/masterData.domain.ts",
+    "../src/ledger.ts",
+    "../src/masterData.domain.ts",
     "../src/loadingProtocol.domain.ts",
     "../src/marginCalculations.ts",
     "../src/numbers.ts",
@@ -82,6 +85,7 @@
     "../src/format.ts",
     "../src/autoBackup.domain.ts",
     "../src/customsImport.domain.ts",
-    "../src/lotView.domain.ts"
+    "../src/lotView.domain.ts",
+    "../src/storeShapes.ts"
   ]
 }

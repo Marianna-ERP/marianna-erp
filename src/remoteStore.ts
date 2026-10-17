@@ -187,6 +187,9 @@ export function clearConflict(key: string) { emit({ conflicts: state.conflicts.f
 // with NEW versions, so every signed-in tab takes them on its next poll; colleagues' unsaved edits to those stores lose the race
 // and are told so (the usual conflict notice).
 export const isTestCopy = () => /^test$/i.test(ENV_LABEL);
+/** v7.24.0 (A-BK-7, owner 15 Oct): the copy's mark in every backup file's NAME — "-TEST" on the test copy, nothing on the real one —
+ *  so two exports of the same version can be told apart without opening them. */
+export const fileLabel = (): string => { const l = ENV_LABEL.toUpperCase().replace(/[^A-Z0-9]/g, ""); return l ? `-${l}` : ""; };
 export async function replaceSharedStores(stores: Record<string, any>, by: string): Promise<number> {
   const current = await fetchRows("key,version"); const ver = new Map(current.map(r => [r.key, r.version]));
   const now = new Date().toISOString(); let n = 0;
@@ -202,7 +205,7 @@ export async function replaceSharedStores(stores: Record<string, any>, by: strin
 }
 /** The whole shared copy as a Marianna export file (for the download taken before any replacement). */
 export async function sharedCopyAsExport(appVersion: string, storageVersion: number): Promise<string> {
-  const rows = await fetchRows(); const out: any = { _meta: { app: "marianna-erp", version: storageVersion, appVersion, exportedAt: new Date().toISOString(), source: "shared copy" + (ENV_LABEL ? ` (${ENV_LABEL})` : "") } };
+  const rows = await fetchRows(); const out: any = { _meta: { app: "marianna-erp", version: storageVersion, appVersion, exportedAt: new Date().toISOString(), source: "shared copy" + (ENV_LABEL ? ` (${ENV_LABEL})` : ""), copy: ENV_LABEL.toUpperCase() || "REAL" } };   // v7.24.0 (A-BK-7)
   rows.forEach(r => { out[r.key] = r.data; }); return JSON.stringify(out);
 }
 

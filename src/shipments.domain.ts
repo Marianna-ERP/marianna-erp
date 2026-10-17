@@ -263,7 +263,7 @@ export function buildCollectionShipment(so: any, lots: any[], shipments: any[], 
     const lot = findLotForSOLine(lots, it);
     return {
       id: deps.nextId(),
-      poRef: it.sourceType === "PO" ? it.sourceRef : (lot?.poRef || ""),
+      poRef: (lot?.poRef || ""),
       soRef: so.number,
       lotRef: lot?.number || (it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product, variety: it.variety || "", cnCode: it.cnCode || "",
@@ -306,7 +306,7 @@ export function appendSourceGoods(sh: any, kind: "PO" | "SO", doc: any, lots: an
       : (lots || []).find(l => l.poRef === doc.number && norm(l.product) === norm(it.product)) || null;
     return {
       id: deps.nextId(),
-      poRef: kind === "PO" ? doc.number : (it.sourceType === "PO" ? it.sourceRef : (lot?.poRef || "")),
+      poRef: kind === "PO" ? doc.number : ((lot?.poRef || "")),
       soRef: kind === "SO" ? doc.number : "",
       lotRef: lot?.number || (kind === "SO" && it.sourceType === "STOCK" ? it.sourceRef : ""),
       product: it.product, variety: it.variety || "", cnCode: it.cnCode || "",

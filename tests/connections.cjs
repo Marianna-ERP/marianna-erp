@@ -160,7 +160,7 @@ const T = h => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;
     });
     await t("A-TD-3: no 'manual override stored' line any more (SHP-2026-0007 still carries an old IMPORT in the 2 Oct file)", async () => {
       ok(!/manual override stored/.test(T(edH(shp("SHP-2026-0007")))), "the old line is still drawn");
-      ok(/HEAL-7\.12\.2/.test(fs.readFileSync(path.resolve("./src/App.tsx"), "utf8")), "no one-time clear in App");
+      // v7.24.1 (FZ-01): the one-time clear ran on both copies (no stored direction left, 15 Oct) and went
     });
     await t("A-TD-4: the editor shows the countries actually used and where each comes from", async () => {
       const h = T(edH(shp("SHP-2026-0007"))); ok(/Slovenia \(starting place\) → Poland \(client's country\)/.test(h), "got: " + (h.match(/Trade direction.{0,160}/) || [""])[0]);

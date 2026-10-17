@@ -152,28 +152,6 @@ export function unmarkLedgerPaid(inv: any): any | null {
   return next;
 }
 
-/** One-time conversion of legacy settledRefs: INV:<id> and SINV:<number> flags
- *  become tagged payment events on their invoices; other refs pass through. */
-export function convertSettledRefsToEvents(invoices: any[], settledRefs: string[], deps: { todayISO: () => string; nextId: () => any }): { invoices: any[]; settledRefs: string[]; converted: number } {
-  let converted = 0;
-  let nextInvoices = invoices || [];
-  const keep: string[] = [];
-  (settledRefs || []).forEach(ref => {
-    const r = String(ref);
-    let inv: any = null;
-    if (r.startsWith("INV:")) inv = nextInvoices.find((i: any) => String(i.id) === r.slice(4));
-    else if (r.startsWith("SINV:")) inv = nextInvoices.find((i: any) => i.kind === "SALES" && String(i.number) === r.slice(5));
-    if (!inv) { keep.push(r); return; }
-    converted++;
-    if (outstandingAmount(inv) > 0 && inv.paymentStatus !== "Paid") {
-      const marked = markInvoicePaidViaLedger(inv, deps.todayISO(), deps.nextId);
-      nextInvoices = nextInvoices.map((i: any) => i.id === inv.id ? marked : i);
-    }
-    // ref dropped either way — the invoice now carries/derives its own paid state
-  });
-  return { invoices: nextInvoices, settledRefs: keep, converted };
-}
-
 
 // ── v6.68.0 (F-2): REALIZED FX DIFFERENCES ────────────────────────────────────
 /** Realized FX gain (+) / loss (−) in PLN across an invoice's payment events.

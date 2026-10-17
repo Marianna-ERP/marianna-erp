@@ -903,7 +903,7 @@ PO ${po.number} was cancelled. Lot excluded from expected procurement availabili
     if (!extSetSOs || !po?.number) return;
     const today = localTodayISO();
     extSetSOs((prevSOs: any[]) => (prevSOs || []).map((so: any) => {
-      const usesPO = (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === po.number);
+      const usesPO = false;
       if (!usesPO) return so;
       const terminal = new Set(["Shipped", "Delivered", "Invoiced", "Closed", "Cancelled"]);
       const nextStatus = terminal.has(so.status) ? so.status : "Draft";
@@ -947,7 +947,7 @@ ${blockNote}`.trim(),
     }
     // BP-57 Phase B: the internal flow is composed from the terms + the SALES
     // reality — a governing SO that sends goods onward makes this PO direct.
-    if (o.buyIncoterm) o = { ...o, directFlow: poDirectFromSOs(o, extSOs) }; // v6.37.0: flow key retired — direct-ness derives live from the governing sale
+    if (o.buyIncoterm) o = { ...o, directFlow: poDirectFromSOs(o, extSOs, extLots || []) };   /* v7.24.2 (A-RV-41): the PO's lots */ // v6.37.0: flow key retired — direct-ness derives live from the governing sale
 
     // Guard: prevent duplicate PO numbers (in case the user manually edited it)
     const previous = orders.find(p => p.id === o.id);
@@ -1080,7 +1080,7 @@ ${blockNote}`.trim(),
   // names the dependent documents by number so they can be deleted first.
   function poDependants(po: any): string[] {
     const poNum = po.number; const out: string[] = [];
-    (extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "PO" && it.sourceRef === poNum) || (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(poNum))))).forEach((so: any) => out.push(so.number));
+    (extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(poNum))))).forEach((so: any) => out.push(so.number));
     (extShipments || []).filter((sh: any) => sh.status !== "Cancelled" && ((sh.poRefs || []).includes(poNum) || (sh.goods || []).some((g: any) => String(g.poRef) === String(poNum)))).forEach((sh: any) => out.push(sh.number));
     (extLots || []).filter((l: any) => String(l.poRef) === String(poNum) && !/Cancelled/.test(String(l.status)) && ((parseFloat(l.receivedKg) > 0) || (parseFloat(l.physicalKg) > 0) || (l.movements || []).some((m: any) => m && !m.voided))).forEach((l: any) => out.push(l.number));
     (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled" && (i.links || []).some((l: any) => l.type === "PO" && String(l.number) === String(poNum))).forEach((i: any) => out.push(i.number));
@@ -1091,7 +1091,7 @@ ${blockNote}`.trim(),
     if (deps.length) { await uiAlert({ tone: "warn", title: `${selected.number} can't be deleted`, message: `These documents depend on it — delete them first:\n\n${deps.join("\n")}` }); return; }
     // v6.18.14 (#3): a PO can only be removed once nothing depends on it.
     const poNum = selected.number;
-    const hasLinkedSO = (extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === poNum));
+    const hasLinkedSO = false;
     const hasShipment = (extShipments || []).some((sh: any) => (sh.poRefs || []).includes(poNum) && sh.status !== "Cancelled");
     // v6.35.0: a lot whose linked shipments are ALL cancelled must not keep the PO locked —
   // otherwise cancelling everything to fix the PO leaves it permanently trapped. We treat a
@@ -1224,7 +1224,7 @@ ${blockNote}`.trim(),
           }}
           computedShipments={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled").map((s: any) => s.number)}
           supplierTrucks={(extShipments || []).filter((s: any) => (s.poRefs || []).includes(selected.number) && s.status !== "Cancelled" && String(s.arrangedBy || "").toUpperCase() === "SUPPLIER")}   // v6.99.42 (hotfix): the box needs the shipment OBJECTS, not their numbers
-          computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "PO" && it.sourceRef === selected.number) || (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(selected.number))))).map((so: any) => so.number)}   /* v6.99.102 (A-PV-4): also the sales from the PO's lots */
+          computedSOs={(extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => (it.sourceType === "STOCK" && (extLots || []).some((l: any) => String(l.number) === String(it.sourceRef) && String(l.poRef) === String(selected.number))))).map((so: any) => so.number)}   /* v6.99.102 (A-PV-4): also the sales from the PO's lots */
           computedLots={(extLots || []).filter((l: any) => String(l.poRef) === String(selected.number)).map((l: any) => l.number)}
           computedInvoices={computedPOLinks(selected, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }).linkedInvoices}
           onBack={() => { setView("list"); setSelected(null); }}
@@ -1378,7 +1378,7 @@ ${blockNote}`.trim(),
                   {/* v6.34.1 (item 3): show the linked DOCUMENT NUMBERS, not counts. */}
                   {/* v6.45.0: SOs are DERIVED (any order sourcing from this PO) — they
                       were missing entirely from this column. */}
-                  {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)).map((so: any) => so.number))); return sos.length ? <div title="Sales orders">{sos.map((n: any) => <div key={String(n)} style={{ whiteSpace: "nowrap", lineHeight: 1.5 }}><DocRef num={n} cancelledSet={cancelledRefs} /></div>)}</div> : null;   /* v7.23.3 (A-UI-1): links, no icon */ })()}
+                  {(() => { const sos = Array.from(new Set((extSOs || []).filter((so: any) => false).map((so: any) => so.number))); return sos.length ? <div title="Sales orders">{sos.map((n: any) => <div key={String(n)} style={{ whiteSpace: "nowrap", lineHeight: 1.5 }}><DocRef num={n} cancelledSet={cancelledRefs} /></div>)}</div> : null;   /* v7.23.3 (A-UI-1): links, no icon */ })()}
                   {(() => { const cl = computedPOLinks(o, { shipments: extShipments, lots: extLots, invoices: (extInvoices || []).filter((i: any) => i.paymentStatus !== "Cancelled"), orders: extSOs }); return (<>
                   <LinkedDocNumbers nums={cl.linkedSalesOrders} cancelledSet={cancelledRefs} title="Sales orders" />{/* v7.1.4 (A-PV-5) */}
                   <LinkedDocNumbers nums={cl.linkedShipments} cancelledSet={cancelledRefs} title="Shipments" />
@@ -1389,7 +1389,7 @@ ${blockNote}`.trim(),
                       now render the same way, as in the SO. */}
                   <LinkedDocNumbers nums={cl.linkedLots} cancelledSet={cancelledRefs} title="Lots" />
                   <LinkedDocNumbers nums={cl.linkedInvoices} cancelledSet={cancelledRefs} title="Invoices" />
-                  {!cl.linkedShipments?.length && !cl.linkedLots?.length && !cl.linkedInvoices?.length && !(extSOs || []).some((so: any) => so.status !== "Cancelled" && (so.items || []).some((it: any) => it.sourceType === "PO" && it.sourceRef === o.number)) && <span style={{ color: "#CCC" }}>—</span>}
+                  {!cl.linkedShipments?.length && !cl.linkedLots?.length && !cl.linkedInvoices?.length && <span style={{ color: "#CCC" }}>—</span>}
                   </>); })()}
                 </div>
               </div>

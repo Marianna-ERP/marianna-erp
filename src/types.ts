@@ -157,6 +157,7 @@ export interface SOLine {
   packagingId?: string | null;   // v7.22.6 (FZ-20): stored in the data, now declared
   priceToAgree?: boolean;   // v7.22.6 (FZ-20): stored in the data, now declared
   pricingUnit?: string;   // v7.22.6 (FZ-20): stored in the data, now declared
+  migratedFromPO?: string;   // v7.24.2 (FZ-20): the PO an old line was sold from, kept when it was pointed at its lot (A-ONE-1)
 }
 
 export interface SOrder {

@@ -19,6 +19,7 @@ import { primeIdsFrom } from "./ids";   // v7.21.13 (FZ-15): every store raises 
 import { useState, useEffect } from "react";
 import { APP_VERSION } from "./version";
 import { addressWithCountry } from "./counterparty.domain";   // v7.19.6 (A-TD-5)
+declare const process: any;   // v7.24.0 (A-BK-7): the build replaces process.env.REACT_APP_* literals
 
 export const STORAGE_VERSION = 2; // v6.37.0: flow-model retirement (migration 2)
 // v6.99.70 (A-BK-3): the planning budget of the browser store, in characters — the same conservative figure the Settings
@@ -189,6 +190,7 @@ export function exportAllData(pretty: boolean = true): string {
       version: STORAGE_VERSION,
       appVersion: APP_VERSION,
       exportedAt: new Date().toISOString(),
+      copy: String(process.env.REACT_APP_ENV_LABEL || "").trim().toUpperCase() || "REAL",   /* the literal is replaced at build time, as in remoteStore */   // v7.24.0 (A-BK-7): which copy the file came from
     },
   };
   for (const key of DATA_KEYS) {

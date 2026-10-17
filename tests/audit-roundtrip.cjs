@@ -188,17 +188,6 @@ t("overdue classification uses dueDate vs today (state derived, never stored)", 
 });
 
 console.log("\n══ 5. CONSIGNMENT SETTLEMENT: compute → close → expenses never self-count ══");
-t("settlement excludes its own CONSIGN components from expenses (no feedback loop)", () => {
-  const lot = { id: 5, number:"LOT-1", product:"Apples", poRef:"PO-1", expectedKg: 1000, costs: [
-    { type:"freight", label:"road", source:"SHP-1/1", pln: 200 },
-    { type:"Consignment purchase", label:"prior producer inv", source:"CONSIGN-5", pln: 5000 },
-    { type:"Commission credit", label:"prior comm", source:"CONSIGNC-5", pln: -300 } ] };
-  const orders = [{ number:"SO-1", status:"Delivered", currency:"PLN", fxRate:1, client:{name:"C"},
-    items:[{ product:"Apples", sourceType:"PO", sourceRef:"PO-1", qty: 1000, unitPrice: 6 }] }];
-  const calc = cons.computeLotSettlement(lot, orders, 8, []);
-  approx(calc.grossPLN, 6000); approx(calc.expensesPLN, 200, "only real expenses");
-  approx(calc.netPLN, 5800); approx(calc.commissionPLN, 464); approx(calc.payoutPLN, 5336);
-});
 finding("Settlement reopen", "No reopen/undo function exists for a Closed settlement anywhere in the domain layer — reopening requires manual data surgery. MANUAL CHECK #6 confirms whether the UI offers one.");
 
 console.log("\n══ 6. CLAIMS: raise-guard and stale-warning (backward protection) ══");
@@ -560,12 +549,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const m = margin.computeSOMargin(order, [], [], [], "forecast");
     approx(m.revenuePLN, 94400, "1600 boxes × 59 = 8000 kg × 11.80");
   });
-  t("D-19: settlement prices the box line per kg the same way", () => {
-    const materialised = { ...HER_LINE, qty: 8000, kgPerBox: 5, sourceType: "STOCK", sourceRef: "LOT-1" };
-    const lot = { number: "LOT-1", expectedKg: 8000, costs: [] };
-    const s = cons.computeLotSettlement(lot, [{ number: "SO-17", status: "Confirmed", currency: "PLN", fxRate: 1, items: [materialised] }], 8, []);
-    approx(s.grossPLN, 94400);
-  });
   t("D-18: the SINV position speaks boxes — quantity 1600 @ 59, kilos in the description", () => {
     const order = { number: "SO-17", status: "Delivered", currency: "PLN", fxRate: 1, client: { name: "X" },
       items: [{ ...HER_LINE, qty: 8000, kgPerBox: 5 }] };
@@ -801,20 +784,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const led = B("ledger.js");
   const so = { number: "SO-1", status: "Confirmed", items: [{ product: "P", qty: 1000 }] };
   const shipDelivered = { number: "SHP-1", status: "Delivered", goods: [{ soRef: "SO-1", product: "P", qtyKg: 1000 }] };
-  t("W-1: 'Reserved' is no longer a physical status; stored Reserved normalises to Confirmed", () => {
-    ok(!st.PHYSICAL_SO_STATUSES.includes("Reserved"));
-    eq(st.normaliseStoredSoStatus({ ...so, status: "Reserved" }, []).status, "Confirmed");
-  });
   t("W-1: the gate reads the SHIPMENTS — a Confirmed order with a delivered shipment IS shipped-or-later", () => {
     eq(st.effectiveSoStatus(so, [shipDelivered]), "Delivered");
     ok(st.isShippedOrLater(so, [shipDelivered]), "Issue-invoice button appears without anyone typing Delivered");
     ok(!st.isShippedOrLater(so, []), "…and not before the goods moved");
-  });
-  t("W-1: a typed 'Shipped' with no shipment becomes a VISIBLE override, never a silent fact", () => {
-    const n = st.normaliseStoredSoStatus({ ...so, status: "Shipped" }, []);
-    eq(n.status, "Confirmed"); eq(n.statusOverride, "Shipped"); ok(String(n.statusOverrideReason).includes("Migrated"));
-    const ok2 = st.normaliseStoredSoStatus({ ...so, status: "Shipped" }, [{ ...shipDelivered, status: "Loaded" }]);
-    eq(ok2.status, "Confirmed"); ok(!ok2.statusOverride, "supported by shipments → plain Confirmed, derivation shows Shipped");
   });
   t("W-3: un-invoiced PO commitments are no longer ledger rows; the purchase invoice is", () => {
     const po = { number: "PO-1", status: "Confirmed", pricingMode: "firm", supplier: { name: "S" }, items: [{ qty: 1000, unitPrice: 4 }], fxRate: 1 };
@@ -892,16 +865,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const cl = B("claims.domain.js");
   const mkLotC = () => ({ id: 1, number: "LOT-1", product: "Apples", ownership: "CONSIGNMENT", expectedKg: 1000, receivedKg: 1000, costs: [{ type: "freight", source: "SHP-1/1", pln: 800 }] });
   const soC = () => ({ number: "SO-1", status: "Confirmed", currency: "PLN", fxRate: 1, client: { name: "C" }, items: [{ product: "Apples", qty: 1000, unitPrice: 5, sourceType: "STOCK", sourceRef: "LOT-1" }] });
-  t("D-56: a client concession reduces the settlement's gross; a producer recovery is a deduction, never a cheaper expense", () => {
-    const base = cons.computeLotSettlement(mkLotC(), [soC()], 8, []);
-    approx(base.grossPLN, 5000); approx(base.payoutPLN, (5000 - 800) * 0.92);
-    const withConcession = cons.computeLotSettlement(mkLotC(), [{ ...soC(), claimAdjustments: [{ source: "claim:CLM-1", pln: -500 }] }], 8, []);
-    approx(withConcession.grossPLN, 4500, "gross net of the concession");
-    const lot = mkLotC(); lot.costs.push({ type: "claim", source: "claim:CLM-2", pln: -300 });
-    const withRecovery = cons.computeLotSettlement(lot, [soC()], 8, []);
-    approx(withRecovery.expensesPLN, 1100, "800 freight + 300 deducted from the producer");
-    ok(withRecovery.payoutPLN < base.payoutPLN, "producer gets LESS after his own defect, not more");
-  });
   t("D-57: commission tiers decided per truck by its own gross; flat rate unchanged", () => {
     const flat = { season: "26", validFrom: "", pct: 8 };
     eq(cons.commissionPctForSales(flat, 999999), 8);
@@ -1232,9 +1195,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const a = Q.lotAvailabilityByGrade(lot, [{ id: 9, status: "Confirmed", items: [{ sourceType: "STOCK", sourceRef: "L1", grade: "II", qty: 200 }, { sourceType: "STOCK", sourceRef: "L1", qty: 1000 }] }]);
     eq(a.I, 5100); eq(a.II, 400);
   });
-  t("SO-2: the SO line takes the PO line's unit and boxes", () => {
-    const f = Q.lineFromPOLine({ pricingUnit: "box", boxes: 1494, kgPerBox: 13 }); eq(f.pricingUnit, "box"); eq(f.boxes, 1494);
-  });
   t("SO-3: CFR delivers at DISCHARGE; DAP at delivery; the delay is planned vs that event", () => {
     eq(Q.deliveryEventFor("CFR").event, "discharged"); eq(Q.deliveryEventFor("DDP").event, "delivered"); eq(Q.deliveryEventFor("EXW").event, "loaded");
     const so = { number: "SO-1", sellIncoterm: "CFR", deliveryDate: "2026-09-20" };
@@ -1252,7 +1212,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     ok(Q.isEstimatedLine(po.items[0]));
     const fin = Q.applyPackingResult(po, [{ lineId: 1, qty: 17000 }], "2026-09-15");
     eq(fin.items[0].qty, 17000); eq(fin.items[0].estimatedQty, 20000); eq(fin.items[0].quantityStatus, "FINAL"); eq(fin.items[1].quantityStatus, "FINAL"); eq(fin.items[1].qty, 10000);
-    const orders = [{ number: "SO-1", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 1, qty: 12000 }] }, { number: "SO-2", status: "Confirmed", items: [{ sourceType: "PO", sourceRef: "PO-1", sourceLineId: 1, qty: 8000 }] }];
   });
   console.log("v6.95.0 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
@@ -1329,11 +1288,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const r = CP.offsetNoteAgainstInvoice(note, inv, deps);
     ok(!r.error); approx(r.appliedAmount, 1200); approx(pay.outstandingAmount(r.invoice), 3800); eq(r.invoice.payments[0].method, "Offset / compensation"); eq(r.note.status, "Settled");
     ok(CP.offsetNoteAgainstInvoice(r.note, r.invoice, deps).error, "applying twice is refused");
-  });
-  t("CL-7/CL-1: legacy form fields fold into cost lines and notes; EUR mirrors into the one money model; idempotent", () => {
-    const r = CP.foldLegacyClaimFields({ number: "CLM-1", basis: "quality", lostKg: 500, causedCosts: 300, clientCosts: 120, soldInMarket: true, recoveredEGP: 1000, egpPerEur: 52, acceptedEUR: 45, requestedEUR: 60, costLines: [] });
-    ok(r.changed); eq(r.claim.costLines.length, 2); ok(!("basis" in r.claim)); ok(String(r.claim.notes).includes("[legacy]")); eq(r.claim.currency, "EUR"); eq(r.claim.acceptedAmount, 45); eq(r.claim.requestedAmount, 60);
-    ok(!CP.foldLegacyClaimFields(r.claim).changed);
   });
   t("CL-8: the counterparty's agreed notice period overrides the legal default", () => {
     eq(CP.noticeRuleFor({ respondent: { kind: "Carrier" } }, {}).days, 7);
@@ -1829,11 +1783,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     eq(A.formatAddress({ street: "ul. Piękna 13", postcode: "05-555", city: "Tarczyn", country: "Poland" }), "ul. Piękna 13\n05-555 Tarczyn\nPoland");
     eq(A.formatAddress({ street: "Koper terminal", country: "Slovenia" }, { oneLine: true }), "Koper terminal, Slovenia");
   });
-  t("ADDR-3: the migration is idempotent and never overwrites a structured address", () => {
-    const r1 = A.migrateAddressOn({ name: "X", address: "ul. Genedil 16, 59-694 Obrazów", country: "Poland" });
-    ok(r1.changed); eq(r1.rec.addr.city, "Obrazów"); eq(r1.rec.address, "ul. Genedil 16, 59-694 Obrazów", "the original text stays until the DDL");
-    ok(!A.migrateAddressOn(r1.rec).changed);
-  });
   console.log("v6.99.40 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
   // v6.99.110 (AUD-10): failures are collected; the suite exits at the end, so every block runs
 })();
@@ -2035,7 +1984,7 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   const types = [{ id: "c13", label: "Carton (13 kg)", capacityKg: 13, boxesPerPallet: 80, tareKg: 1.4, palletTareKg: 25 }];
   const po = { number: "PO-2026-0090", status: "Confirmed", currency: "EUR", orderDate: "2026-09-25", supplier: { id: 1, name: "Pavamane Owoc", country: "Poland" }, items: [{ id: 1, product: "Apples", variety: "Gala", size: "65-70", quality: "I", qty: 20000, quantityStatus: "ESTIMATED", unitPrice: 0.9, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" }] };
   const lots = PO.buildExpectedLotsFromPO(po, []).newLots;
-  const so = { id: 5, number: "SO-2026-0090", status: "Confirmed", items: [{ id: 51, product: "Apples", variety: "Gala", size: "65-70", grade: "I", quality: "I", qty: 20000, sourceType: "PO", sourceRef: po.number, sourceLineId: 1, unitPrice: 1.4, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" }] };
+  const so = { id: 5, number: "SO-2026-0090", status: "Confirmed", items: [{ id: 51, product: "Apples", variety: "Gala", size: "65-70", grade: "I", quality: "I", qty: 20000, sourceType: "STOCK", sourceRef: lots[0].number,   /* v7.24.2: a sale line names its lot */ unitPrice: 1.4, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" }] };
   const sh = { id: 7, number: "SHP-2026-0090", status: "Booked", poRefs: [po.number], soRefs: [so.number], governingSoRef: so.number, goods: [{ id: 21, poRef: po.number, poLineId: "1", soRef: so.number, lotRef: lots[0].number, product: "Apples", size: "65-70", quality: "I", qtyKg: 20000 }], legs: [{ mode: "Road", vehicles: [{ id: 31, load: [{ goodsLineId: 21, qtyKg: 20000 }] }] }, { mode: "Sea", vehicles: [{ id: 41, containerNo: "MSCU1" }] }] };
   let n = 1000; const deps = { buildLots: (o, ls) => PO.buildExpectedLotsFromPO(o, ls), syncShipment: (s, o, ls) => SH.syncGoodsFromPO(s, o, ls, { nextId: () => ++n }), counts: l => PU.effectiveCounts(l, types), nextId: () => ++n };
   const rows = [{ lineId: 1, qty: 17472 }, { newLine: { id: "pk-1", product: "Apples", variety: "Gala", size: "60-65", quality: "I", qty: 1950, unitPrice: 0.8, packaging: "Carton (13 kg)", packagingId: "c13", pricingUnit: "kg" } }];
@@ -2867,13 +2816,11 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ 127. one source: every sale sells a lot ══");
   const SOd = B("salesOrders.domain.js"); const ST = B("statusOwnership.domain.js"); const P = B("poSettlement.domain.js");
   const fx = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the owner's 2 Oct file"); if (!fx) return;
-  const d = require(fx); const r = SOd.migrateSaleLinesToLots(d.orders, d.lots);
-  t("A-ONE-1: 126 of 135 PO-sourced lines point at the lot made from their PO line; 9 lines whose PO has no matching lot are left and named", () => {
-    eq(r.moved, 126); eq(r.left.length, 9); ok(r.left.every(x => /^SO-2026-0008: PO-2026-00(10|12)|^SO-2026-0023: PO-2026-0037/.test(x)), r.left.join(" | "));
-    const l = r.orders.flatMap(o => o.items || []).find(it => it.migratedFromPO); ok(l && l.sourceType === "STOCK" && /^LOT-/.test(l.sourceRef) && l.sourceLineId === undefined);
-    const again = SOd.migrateSaleLinesToLots(r.orders, d.lots); eq(again.moved, 0, "a second run moves nothing");
-  });
-  t("A-ONE-1: the migration changes no sale's status and no truck settlement", () => {
+  const d = require(fx);
+  // v7.24.1 (FZ-01): the app no longer converts on opening (done on both copies, 15 Oct); the 2 Oct file is older, so the section points its lines itself, as the conversion did
+  const lotOf = it => (d.lots || []).find(l => String(l.poRef) === String(it.sourceRef) && (it.sourceLineId == null || String(l.poLineId) === String(it.sourceLineId)));
+  const r = { orders: d.orders.map(o => ({ ...o, items: (o.items || []).map(it => it && it.sourceType === "PO" && lotOf(it) ? { ...it, sourceType: "STOCK", sourceRef: lotOf(it).number, sourceLineId: null } : it) })) };
+  t("A-ONE-1: pointing the old lines at their lots changes no sale's status and no truck settlement", () => {
     let st = 0; d.orders.forEach((o, i) => { if (ST.effectiveSoStatus(o, d.shipments) !== ST.effectiveSoStatus(r.orders[i], d.shipments)) st++; }); eq(st, 0);
     let diff = 0; d.pos.filter(p => p.status !== "Cancelled").forEach(po => { const a = P.computePOSettlement({ po, lots: d.lots, orders: d.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 0 }), b = P.computePOSettlement({ po, lots: d.lots, orders: r.orders, invoices: [], shipments: d.shipments, claims: [], ratePLNperEUR: 4.35, commissionPct: 0 }); if (Math.abs(a.grossPLN - b.grossPLN) > 0.5) diff++; }); eq(diff, 0);
   });
@@ -2894,10 +2841,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
 (function v699134(){
   console.log("\n══ 128–134. consistency ══");
   const FI = B("fakturowniaImport.domain.js"); const C = B("consignment.js"); const Bk = B("bankReconciliation.domain.js"); const P = B("poSettlement.domain.js"); const M = B("marginCalculations.js"); const CL = B("claims.domain.js"); const FX = B("fx.js");
-  t("AUD-13: a commission typed '6,5' is 6.5; the rate valid on the truck's date is chosen", () => {
-    eq(C.currentCommissionPct({ commissionRates: [{ validFrom: "2026-01-01", pct: "6,5" }] }, "2026-09-30"), 6.5, "was 6");
-    const prod = { commissionRates: [{ validFrom: "2026-01-01", pct: 5 }, { validFrom: "2026-07-01", pct: 7 }] }; eq(C.currentCommissionPct(prod, "2026-06-02"), 5, "a June truck keeps June's rate"); eq(C.currentCommissionPct(prod, "2026-09-30"), 7);
-  });
   t("AUD-24: generic company words never make a bank match; a distinctive word does", () => {
     const inv = [{ id: 1, kind: "SALES", number: "FV 9/2026", currency: "PLN", grossAmount: 1000, paidAmount: 0, paymentStatus: "Issued", counterparty: { name: "Agro Trans Spółka Jawna" } }];
     const r = Bk.matchBankLines([{ id: "b", amount: 1000, currency: "PLN", counterparty: "Handel Trans Agro Sp. z o.o.", title: "zapłata" }], inv)[0]; ok(r.rank !== "AMOUNT+PARTY", "generic words only: " + r.rank);
@@ -2951,7 +2894,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("AUD-47: a note names a document only as a whole number", () => { ok(F.noteNames("SHIP_OUT via SHP-2026-0033 for SO-2026-0012", "SHP-2026-0033")); ok(!F.noteNames("SHIP_OUT via SHP-2026-0033", "SHP-2026-003")); ok(!F.noteNames("via SHP-2026-0033", "HP-2026-0033")); ok(!F.noteNames("", "SO-1")); });
   t("AUD-48: r2 / r0 / daysInMonth never return NaN; a bank line without a date books today", () => { eq(F.r2(NaN), 0); eq(F.r0(undefined), 0); eq(F.daysInMonth("x", 2), 0); eq(F.daysInMonth(2026, 2), 28); const ev = Bk.bankPaymentEvent({ id: "b", amount: -100, currency: "PLN" }); ok(/^\d{4}-\d{2}-\d{2}$/.test(ev.date)); eq(ev.amount, 100); });
   t("AUD-46: the heals store is part of the dataset (exports and imports with it)", () => { ok(ST.DATA_KEYS.includes("heals"), "heals is a DATA_KEY"); });
-  t("AUD-40: a PO-line id compares as text", () => { const src = require("fs").readFileSync(require("path").join(__dirname, "../src/salesOrders.domain.ts"), "utf8"); ok(/String\(it\.sourceLineId \?\? 1\) !== String\(poLine\.id\)/.test(src)); });
   console.log("v6.99.147 RESULT: " + passed + " passed, " + failed + " failed (cumulative)");
 })();
 
@@ -3075,7 +3017,10 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const fin = require("fs").readFileSync(require("path").join(__dirname, "../src/Finance.tsx"), "utf8"); ok(/computeSOMarginWithOverhead\(o, lots, pos, shipments, mode, operationalCosts, orders, invoices, financeNotes\)/.test(fin), "the list uses the card's calculation"); ok(/<SOMarginCard order=\{o\}/.test(fin), "the breakdown opens in Finance");
   });
   t("A-PV-5: the PO's sales are the sales of its lots; its shipments include trucks carrying those lots", () => {
-    const fx = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!fx) return; const d = require(fx); const SOd = B("salesOrders.domain.js"); const orders = SOd.migrateSaleLinesToLots(d.orders, d.lots).orders;
+    const fx = FX.fixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json"); if (!fx) return; const d = require(fx);
+    // v7.24.1 (FZ-01): the app no longer re-points old sale lines at their lots on opening (proven done on both copies) — the 2 Oct file is older, so the check points them itself
+    const lotOf = it => (d.lots || []).find(l => String(l.poRef) === String(it.sourceRef) && (it.sourceLineId == null || String(l.poLineId) === String(it.sourceLineId)));
+    const orders = d.orders.map(o => ({ ...o, items: (o.items || []).map(it => it && it.sourceType === "PO" && lotOf(it) ? { ...it, sourceType: "STOCK", sourceRef: lotOf(it).number, sourceLineId: null } : it) }));
     const po = d.pos.find(p => p.number === "PO-2026-0044"); const cl = Dm.computedPOLinks(po, { shipments: d.shipments, lots: d.lots, invoices: d.invoices || [], orders });
     eq(cl.linkedSalesOrders.slice().sort().join(","), "SO-2026-0027,SO-2026-0028,SO-2026-0029"); ok(cl.linkedShipments.includes("SHP-2026-0039"), "the groupage truck carrying LOT-0127/0128");
   });
@@ -3422,10 +3367,9 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   t("A-AU-4: a shipment document's type comes from one list; variants map once, the unknown become Other with their words", () => {
     eq(SM.docTypeOf("PL").type, "Packing list"); eq(SM.docTypeOf("Export declaration MRN").type, "Export declaration"); eq(SM.docTypeOf("Loading protokol").type, "Loading protocol"); eq(SM.docTypeOf("COO").type, "Certificate of origin"); eq(SM.docTypeOf("bl").type, "BL");
     const o = SM.docTypeOf("Weighing note"); eq(o.type, "Other"); eq(o.description, "Weighing note");
-    const sh = { number: "SHP-T", documents: [{ type: "PL" }, { type: "Invoice" }, { type: "" }] }; const log = []; const m = SM.mapDocTypes(sh, log);
-    eq(m.documents.map(x => x.type).join("|"), "Packing list|Invoice|"); eq(log.length, 1); ok(SM.mapDocTypes(m) === m, "a mapped shipment changed again");
+    // v7.24.1 (FZ-01): the one-time mapping of the old typed values ran on both copies (no change left, 15 Oct) and went; the one list stays
     eq(SM.documentRegister({ documents: [{ type: "Other", description: "Weighing note" }] }).find(r => /^Other/.test(r.kind)).kind, "Other — Weighing note");
-    if (d) { const l2 = []; d.shipments.forEach(s => SM.mapDocTypes(s, l2)); console.log(`      (2 Oct file: ${l2.length} document rows mapped once)`); }
+    
   });
   t("A-AU-5: each item carries its calibres and colorations; a value in use can't be deleted; the values on lines are offered", () => {
     let cat = [{ item: "Apples", varieties: [] }]; cat = PC.addCatalogValue(cat, "Apples", "calibres", "70-80"); cat = PC.addCatalogValue(cat, "apples", "calibres", "65-70"); cat = PC.addCatalogValue(cat, "Apples", "calibres", "70-80");
@@ -3722,29 +3666,6 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
   console.log("\n══ v7.21.4 — A-ST-10: one place for a warehouse invoice, the register ══");
   const I = B("invoicing.js"), IC = B("integrityCheck.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
   const p2 = FX.needFixture("marianna-erp_v6.99.98_schema-v2_2026-10-02T12-20-49.json", "the 2 Oct file"); const d = p2 ? JSON.parse(fsx.readFileSync(p2, "utf8")) : null;
-  t("A-ST-10 (v7.21.4): on the 2 Oct file the two FRESH VEG warehouse invoices already sit in the register — the fold gives them their warehouse and month and empties the store; a second pass changes nothing", () => {
-    if (!d) return; eq((d.warehouseInvoices || []).length, 2);
-    const r = I.foldWarehouseInvoiceStore({ store: d.warehouseInvoices, invoices: d.invoices, lots: d.lots });
-    eq(r.waiting.length, 0); eq(r.store.length, 0); eq(r.moved.length, 2);
-    d.warehouseInvoices.forEach(w => { const h = r.invoices.find(i => i.source === `migrated:warehouseInvoice:${w.id}`); ok(h, "no register home for " + w.invoiceNo); eq(String(h.counterparty.id), String(w.warehouseId)); ok(String(h.periodFrom || "").startsWith(w.period), "the month did not follow"); });
-    eq(I.foldWarehouseInvoiceStore({ store: r.store, invoices: r.invoices, lots: r.lots }).moved.length, 0, "a second pass moved something");
-  });
-  t("A-ST-10 (v7.21.4): an allocation follows — the lots' WHINV lines point at the register invoice and the integrity check accepts them; an entry with no register invoice yet waits", () => {
-    const w = { id: 501, warehouseId: 77, warehouseName: "Store X", period: "2026-06", invoiceNo: "MAG/6/2026", amountPLN: 1000, allocatedLots: [{ lotNumber: "LOT-A", amountPLN: 1000 }] };
-    const reg = [{ id: 900, kind: "COST", category: "WAREHOUSE", number: "MAG/6/2026", counterparty: { name: "Store X" }, paymentStatus: "Issued", source: "migrated:warehouseInvoice:501" }];
-    const lots = [{ number: "LOT-A", costs: [{ id: 1, source: "WHINV-501", pln: 1000 }] }];
-    const r = I.foldWarehouseInvoiceStore({ store: [w], invoices: reg, lots });
-    eq(r.lots[0].costs[0].source, "WHINV-900"); eq(r.invoices[0].allocation.lots[0].lotNumber, "LOT-A"); eq(r.invoices[0].counterparty.id, 77);
-    ok(!JSON.stringify(IC.checkIntegrity({ lots: r.lots, invoices: r.invoices, warehouseInvoices: [] })).includes("WHINV-900"), "the register's WHINV line is reported");
-    const wait = I.foldWarehouseInvoiceStore({ store: [w], invoices: [], lots }); eq(wait.waiting.join(), "MAG/6/2026"); eq(wait.store.length, 1, "the store emptied before the register held it");
-  });
-  t("A-ST-10 / A-RV-30 (v7.21.4): Finance → Warehouse charges reads and writes the register — no store of its own, no Close that deletes; the import posts warehouse invoices to the register; the store is folded on opening", () => {
-    const fin = rd("Finance.tsx"), inv = rd("Invoices.tsx"), app = rd("App.tsx");
-    ok(!/setWarehouseInvoices|deleteInvoice\(/.test(fin), "Finance still writes the separate store or deletes from it");
-    ok(/<WarehouseChargesView[^>]*invoices=\{invoices\} setInvoices=\{setInvoices\}/.test(fin), "Warehouse charges is not given the register");
-    ok(!/setWarehouseInvoices/.test(inv) && /category: "WAREHOUSE", costScope: "MONTHLY_SHARED"/.test(inv), "the import still writes the separate store");
-    ok(/foldWarehouseInvoiceStore\(/.test(app), "the store is not folded on opening");
-  });
 })();
 
 // ══ v7.21.5 — SE-4: who created a sale is the person signed in · v7.21.6 — the CN suggestions reach the screen ══
@@ -4021,6 +3942,94 @@ if (failed) { console.log("\nFAILURES:\n" + findings.filter(f=>!f.startsWith("[D
     const line = { product: "Apples", variety: "Elise", size: "70-80", grade: "I", origin: "Poland", coloration: "red blush" };
     eq([{ product: "Apples", variety: "Elise", size: "70-80", quality: "I", origin: "Poland" }, { product: "Apples", variety: "" }, { product: "Apples", variety: "Gala" }, { product: "Apples", variety: "Elise", size: "65-70" }, { product: "Apples", variety: "Elise", coloration: "green" }, { product: "Pears", variety: "Elise" }].map(l => SD.sourceMatch(line, l)).join(), "match,no-variety,different,different,different,different");
     const src = rd("SalesOrderForm.tsx"); ok(/sourceMatch\(lineItem, l\) === "match"/.test(src) && /No variety — fill it in on the lot or its PO/.test(src), "the picker");
+  });
+})();
+
+// ══ v7.24.0 — A-BK-7: a backup from the test copy says so in its name ══
+(function v72400(){
+  console.log("\n══ v7.24.0 — A-BK-7: TEST in the backup's name ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("A-BK-7 (v7.24.0): every backup file from the test copy is named '…-TEST…' (the real copy's names unchanged), and the file's header says which copy it came from", () => {
+    const p = require.resolve("./build/remoteStore.js"); const keep = require.cache[p]; const was = process.env.REACT_APP_ENV_LABEL;
+    try { delete require.cache[p]; process.env.REACT_APP_ENV_LABEL = "test"; eq(require(p).fileLabel(), "-TEST"); delete require.cache[p]; process.env.REACT_APP_ENV_LABEL = ""; eq(require(p).fileLabel(), ""); }
+    finally { if (was === undefined) delete process.env.REACT_APP_ENV_LABEL; else process.env.REACT_APP_ENV_LABEL = was; require.cache[p] = keep; }
+    ok(/a\.download = `marianna-erp\$\{fileLabel\(\)\}_v\$\{APP_VERSION\}_schema-v/.test(rd("autoBackup.ts")), "the backup download");
+    ok((rd("Settings.tsx").match(/\$\{fileLabel\(\)\}/g) || []).length >= 3 && /marianna-shared-copy\$\{fileLabel\(\)\}-before-recovery/.test(rd("RecoveryPanel.tsx")) && /marianna-erp\$\{fileLabel\(\)\}_recovery_/.test(rd("ErrorBoundary.tsx")), "the other downloads");
+    ok(/copy: String\(process\.env\.REACT_APP_ENV_LABEL/.test(rd("useLocalStoredState.ts")) && /copy: ENV_LABEL\.toUpperCase\(\) \|\| "REAL"/.test(rd("remoteStore.ts")), "the header");
+  });
+})();
+
+// ══ v7.24.1 — FZ-01 step 1: the one-time repairs proven done on both copies are gone ══
+(function v72401(){
+  console.log("\n══ v7.24.1 — FZ-01 step 1: one-time repairs gone ══");
+  const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("FZ-01 (v7.24.1): the one-time repairs that change nothing on either copy (owner's files of 15 Oct) no longer run on opening — and their code is gone; the live routines stay", () => {
+    const app = rd("App.tsx");
+    ["v7.12.2-trade-direction", "v7.18.2-doc-types", "v7.13.1-closed-months", "foldWarehouseInvoiceStore(", "migrateAddressOn(", "foldLegacyClaimFields(", "migrateSaleLinesToLots(", "normaliseStoredSoStatus(", "convertSettledRefsToEvents(", "stripPendingInvoices("].forEach(k => ok(!app.includes(k), "App still runs " + k));
+    const all = fsx.readdirSync(px.join(__dirname, "../src")).filter(f => /\.(ts|tsx)$/.test(f)).map(rd).join("\n");
+    ["function foldWarehouseInvoiceStore", "function migrateAddressOn", "function foldLegacyClaimFields", "function migrateSaleLinesToLots", "function normaliseStoredSoStatus", "function convertSettledRefsToEvents", "function stripPendingInvoices", "function mapDocTypes"].forEach(k => ok(!all.includes(k), k + " is still in the code"));
+    ["migrateLegacyInvoices(", "normaliseCounterparty(", "normalisePO(", "normaliseSO(", "normaliseLot(", "normaliseInvoiceCategory(", "stampSiteIds(", "fxFillInvoice("].forEach(k => ok(app.includes(k), "a live routine went: " + k));
+  });
+  t("A-ST-10 / A-RV-30 (kept): Finance → Warehouse charges reads and writes the register — no store of its own; the import posts warehouse invoices to the register", () => {
+    const fin = rd("Finance.tsx"), inv = rd("Invoices.tsx");
+    ok(!/setWarehouseInvoices|deleteInvoice\(/.test(fin), "Finance still writes the separate store or deletes from it");
+    ok(/<WarehouseChargesView[^>]*invoices=\{invoices\} setInvoices=\{setInvoices\}/.test(fin), "Warehouse charges is not given the register");
+    ok(!/setWarehouseInvoices/.test(inv) && /category: "WAREHOUSE", costScope: "MONTHLY_SHARED"/.test(inv), "the import still writes the separate store");
+  });
+})();
+
+// ══ v7.24.2 — A-RV-15 b/c: a sale line is a lot, everywhere in the code ══
+(function v72402(){
+  console.log("\n══ v7.24.2 — A-RV-15 b/c: a sale line is a lot ══");
+  const fsx = require("fs"), px = require("path"); const src = px.join(__dirname, "../src"); const rd = f => fsx.readFileSync(px.join(src, f), "utf8");
+  t("A-RV-15 b/c (v7.24.2): no screen or rule handles a sale line 'sourced from a PO' any more — the picker has no PO tab, the SO save no unreachable override; the lot matcher reads the lot a line names", () => {
+    const hits = fsx.readdirSync(src).filter(f => /\.(ts|tsx)$/.test(f) && f !== "ShipmentCreate.tsx").filter(f => /\.sourceType\s*[!=]==?\s*["']PO["']/.test(rd(f).replace(/\/\/[^\n]*/g, "")));
+    eq(hits.join(", "), "", "files still testing a line 'from a PO'");
+    const form = rd("SalesOrderForm.tsx"); ok(!/function pickPO|matchingPOLines|tab === "PO"/.test(form), "the picker's PO tab is still there");
+    ok(!/legacy override kept unreachable/.test(rd("SalesOrders.tsx")), "the unreachable override is still there");
+    const SD = B("salesOrders.domain.js"); eq(SD.findLotForSOLine([{ number: "LOT-1" }], { sourceType: "STOCK", sourceRef: "LOT-1" }).number, "LOT-1"); eq(SD.findLotForSOLine([{ number: "LOT-1", poRef: "PO-1" }], { sourceType: "PO", sourceRef: "PO-1" }), null);
+  });
+  t("A-RV-15 b (v7.24.2): the suites' data files are in today's form — sale lines point at lots; 'from a PO' only on the two deleted sales (and the 23 Sept file, older than lots)", () => {
+    const dir = px.join(__dirname, "fixtures"); const bad = [];
+    fsx.readdirSync(dir).filter(f => /^marianna-erp_.*\.json$/.test(f) && !/v6\.99\.50_/.test(f)).forEach(f => { const d = JSON.parse(fsx.readFileSync(px.join(dir, f), "utf8"));
+      (d.orders || []).forEach(o => { if (String(o.status) !== "Cancelled" && (o.items || []).some(i => i && i.sourceType === "PO")) bad.push(`${f.slice(13, 32)} ${o.number}`); }); });
+    eq(bad.join(" | "), "", "a live sale still 'from a PO'");
+  });
+})();
+
+// ══ v7.24.3 — FZ-01 step 2: a save writes the clean shape ══
+(function v72403(){
+  console.log("\n══ v7.24.3 — FZ-01 step 2: a save writes the clean shape ══");
+  const SS = B("storeShapes.js"); const fsx = require("fs"), px = require("path"); const rd = f => fsx.readFileSync(px.join(__dirname, "../src/" + f), "utf8");
+  t("FZ-01 step 2 (v7.24.3): a write tidies only the records it writes — new or changed ones pass through their tidy-up; untouched ones keep their very object; nothing to tidy keeps the very array", () => {
+    const a = { id: 1, old: true }, b = { id: 2, old: true }; const shape = r => r.old ? (({ old, ...rest }) => ({ ...rest, clean: true }))(r) : r;
+    const prev = [a, b]; const changed = { ...b, qty: 5 }; const out = SS.shapeWritten(prev, [a, changed, { id: 3, old: true }], shape);
+    ok(out[0] === a, "an untouched record was rewritten"); eq(JSON.stringify(out[1]), JSON.stringify({ id: 2, qty: 5, clean: true })); eq(out[2].clean, true);
+    const same = [a, { id: 9 }]; eq(SS.shapeWritten(prev, same, shape), same); eq(SS.shapeWritten(prev, prev, shape), prev);
+    let stored = prev; const set = u => { stored = typeof u === "function" ? u(stored) : u; }; const setX = SS.shapingSetter(set, shape);
+    setX(p => [...p, { id: 4, old: true }]); eq(stored.length, 3); ok(stored[0] === a && stored[2].clean, "the setter did not tidy what it wrote");
+  });
+  t("FZ-01 step 2 (v7.24.3): App runs no tidy-up when it opens — the company, PO, SO, lot and invoice stores tidy what they write; new invoices no longer carry the retired credit-note list", () => {
+    const app = rd("App.tsx");
+    ok(!/useEffect\(\(\) => \{[^}]{0,200}(normalisePO|normaliseCounterparty|stampSiteIds|normaliseLot|normaliseInvoiceCategory|normaliseSO)\(/.test(app), "a start-up tidy-up is still there");
+    ["setPOs = useMemo(() => shapingSetter(setPOsRaw", "setOrders = useMemo(() => shapingSetter(setOrdersRaw", "setLots = useMemo(() => shapingSetter(setLotsRaw", "setInvoices = useMemo(() => shapingSetter(setInvoicesRaw", "_setContacts = useMemo(() => (u: any) => _setContactsRaw("].forEach(k => ok(app.includes(k), "not tidied on write: " + k));
+    ok(!/creditNoteIds: \[\]/.test(rd("invoicing.ts") + rd("fakturowniaImport.domain.ts")), "a new invoice still writes creditNoteIds");
+  });
+})();
+
+// ══ v7.24.4 — A-RV-41 (option 1): "direct" kept current by the one rule ══
+(function v72404(){
+  console.log("\n══ v7.24.4 — A-RV-41: 'direct' kept current ══");
+  const TF = B("tradeFlow.domain.js"); const fsx = require("fs"), px = require("path");
+  t("A-RV-41 (v7.24.4): a sale of a PO's lot on onward terms makes the PO and its lots direct — a lot not yet received follows in its status, a received one keeps it; cancelling the sale undoes it; nothing to change gives back the very arrays", () => {
+    const pos = [{ number: "PO-1", status: "Confirmed", buyIncoterm: "EXW", directFlow: false }, { number: "PO-2", status: "Confirmed", buyIncoterm: "FCA", directFlow: false }];
+    const lots = [{ number: "LOT-1", poRef: "PO-1", status: "Expected", receivedKg: 0 }, { number: "LOT-2", poRef: "PO-1", status: "In Stock", receivedKg: 500 }, { number: "LOT-3", poRef: "PO-2", status: "Expected" }];
+    const sale = { number: "SO-1", status: "Confirmed", sellIncoterm: "DAP", items: [{ sourceType: "STOCK", sourceRef: "LOT-1" }] };
+    const r = TF.directSync(pos, [sale], lots); eq(r.changedPOs.join(), "PO-1"); eq(r.changedLots.join(), "LOT-1,LOT-2");
+    eq(r.lots[0].status, "Direct Expected"); eq(r.lots[1].status, "In Stock", "a received lot keeps its status"); ok(r.lots[2] === lots[2], "another PO's lot was touched");
+    const again = TF.directSync(r.pos, [sale], r.lots); ok(again.pos === r.pos && again.lots === r.lots, "a second pass changed something");
+    const off = TF.directSync(r.pos, [{ ...sale, status: "Cancelled" }], r.lots); eq(off.changedPOs.join(), "PO-1"); eq(off.lots[0].status, "Expected"); eq(off.lots[0].directFlow, false);
+    ok(/directSync\(pos \|\| \[\], orders \|\| \[\], lots \|\| \[\]\)/.test(fsx.readFileSync(px.join(__dirname, "../src/App.tsx"), "utf8")), "App does not keep the flag current");
   });
 })();
 

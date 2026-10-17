@@ -1,5 +1,5 @@
 {
- "version": "7.23.6",
+ "version": "7.24.4",
  "files": [
   ".npmrc",
   "HOW_TO_DEPLOY.md",
@@ -128,6 +128,7 @@
   "src/statement.domain.ts",
   "src/statusOwnership.domain.ts",
   "src/storeMerge.domain.ts",
+  "src/storeShapes.ts",
   "src/supplierRef.domain.ts",
   "src/tabLock.ts",
   "src/trace.domain.ts",

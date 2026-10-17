@@ -613,15 +613,3 @@ export function docTypeOf(typed: any): { type: string; description?: string } {
   const al = DOC_ALIASES[s.toLowerCase().replace(/\s+/g, " ")]; if (al) return { type: al };
   return { type: "Other", description: s };
 }
-/** Once per dataset: a shipment's typed document types mapped to the list (the same object when nothing changes). */
-export function mapDocTypes(sh: any, log?: string[] | null): any {
-  if (!sh || sh.deleted) return sh;
-  let changed = false;
-  const documents = (sh.documents || []).map((d: any) => {
-    const t = S(d?.type); if (!t) return d;
-    const r = docTypeOf(t); if (r.type === t) return d;
-    changed = true; if (log) log.push(`${sh.number}: "${t}" → ${r.type}${r.description ? ` (${r.description})` : ""}`);
-    return { ...d, type: r.type, ...(r.description ? { description: r.description } : {}) };
-  });
-  return changed ? { ...sh, documents } : sh;
-}
